@@ -265,6 +265,10 @@ pub(crate) fn process_loaded(identity: crate::processes::Identity) {
     record().process_loaded(identity);
 }
 
+pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
+    record().custom_process()
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip

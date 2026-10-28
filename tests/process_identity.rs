@@ -239,3 +239,99 @@ fn records_without_process_metadata_or_with_only_a_custom_name_still_read() {
         assert!(status.stdout.contains(label), "{}", status.stdout);
     }
 }
+
+#[test]
+fn a_parallel_custom_process_resume_keeps_its_own_process_identity() {
+    let scenario = Scenario::new();
+    let source = r#"
+version = 1
+description = "Dispatch a Ticket alongside a sibling session"
+
+[worktrees.publish]
+kind = "throwaway"
+[worktrees.side]
+kind = "throwaway"
+
+[[steps]]
+name = "publish"
+skill = "to-spec"
+worktree = "publish"
+
+[[steps]]
+name = "run"
+catalogue = "run-published-issue"
+worktree = "publish"
+parallel = "after"
+
+[[steps]]
+name = "side"
+skill = "code-review"
+worktree = "side"
+parallel = "after"
+"#;
+    write_process(&scenario, source);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title Ticket --body 'Build one widget')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(
+        8,
+        &format!(
+            r#"
+touch "$HOME/ticket-active"
+for attempt in $(seq 1 1000); do
+  test -f "$HOME/side-resumed" && break
+  sleep 0.01
+done
+test -f "$HOME/side-resumed"
+{}
+"#,
+            opens_pr(8, "main")
+        ),
+    );
+    scenario.agent_does(&format!(
+        r#"
+if test -f "$HOME/side-first"; then
+  touch "$HOME/side-resumed"
+  printf Done > "$FAKE_CLAUDE_FINAL_MESSAGE"
+else
+  touch "$HOME/side-first"
+  for attempt in $(seq 1 1000); do
+    test -f "$HOME/ticket-active" && break
+    sleep 0.01
+  done
+  test -f "$HOME/ticket-active"
+  printf Waiting > "$FAKE_CLAUDE_FINAL_MESSAGE"
+  {}
+fi
+"#,
+        support::leaves_running("sibling work")
+    ));
+
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let expected_hash = hash(source.as_bytes());
+    assert_record(
+        &scenario.command_record(PROCESS_LOGS),
+        "notes",
+        "custom",
+        Some(&expected_hash),
+    );
+    let resumed: Vec<_> = traces(&scenario, PROCESS_LOGS)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("-process-step-3-resume.")
+        })
+        .collect();
+    assert_eq!(resumed.len(), 2, "logs and spans for the sibling Resume");
+    for path in resumed {
+        assert_trace(&path, "notes", "custom", Some(&expected_hash));
+    }
+}

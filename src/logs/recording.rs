@@ -576,6 +576,10 @@ impl<O: Outside> Record<O> {
         self.custom_process = Some(identity);
     }
 
+    pub(super) fn custom_process(&self) -> Option<crate::processes::Identity> {
+        self.custom_process.clone()
+    }
+
     pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
         let owner = self.owner.as_ref()?;
         let (_, tree) = self.command_record.as_ref()?;
