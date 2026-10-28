@@ -34,6 +34,16 @@ it as a Custom process, which takes only the shared Pass lock, without the
 Architect run's other skip gates. Pickup has no Process file: it selects work
 and dispatches to a Ticket run (defaulting to `ticket-run`) or a Spec run.
 
+A Custom process can declare a `spec-branch` worktree and use `land-tickets`
+to push the Spec branch, run its Tickets in dependency order up to
+`spec.parallel` at once, and gather their work into a draft Spec PR with its
+Tickets checklist. Its `process` setting selects every child Ticket's Process,
+defaulting to `ticket-run`, with the same validation as `run-published-issue`.
+The file cannot also declare an `issue-branch` worktree. A Spec-branch file
+requires an issue with sub-issues; an Issue-branch file refuses one with them.
+The Claim precedes the worktree, and remains while the draft Spec PR waits.
+The Built-in Spec run still uses its existing sequence.
+
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
 Ticket run records its selected Process independently of its parent, defaulting

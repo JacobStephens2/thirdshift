@@ -13,6 +13,7 @@ pub(crate) fn run_custom(
     delivery: crate::delivery::Delivery<'_>,
     worktree: crate::worktree::Worktree,
     selection: &crate::branch::Selection,
+    spec_pr: Option<crate::child_run::SpecPr>,
 ) -> Result<crate::run::Reached, crate::failed_run::FailedRun> {
     use super::*;
 
@@ -68,7 +69,14 @@ pub(crate) fn run_custom(
         base_fix: delivery.base_fix,
         process: name,
         delivered: false,
-        pull_request: PullRequest::new(delivery.issue, &branch, delivery.base, GitHub::new()),
+        pull_request: {
+            let mut pull_request =
+                PullRequest::new(delivery.issue, &branch, delivery.base, GitHub::new());
+            if let Some(spec_pr) = spec_pr {
+                pull_request.gate_self_merge_on(spec_pr);
+            }
+            pull_request
+        },
         reviews: Vec::new(),
         child_asks: delivery.child_asks.clone(),
         failure: None,
@@ -119,7 +127,7 @@ pub(crate) fn steps() -> Result<Vec<Step>> {
     // This adapter uses the Command's already checked choices and held
     // worktree. Refuse settings it cannot carry out rather than ignore them.
     ensure!(
-        file.worktrees.len() == 1 && file.worktrees[0].issue_branch_line.is_some(),
+        file.worktrees.len() == 1 && file.worktrees[0].kind == super::WorktreeKind::IssueBranch,
         "ticket-run needs exactly one Issue-branch worktree"
     );
     file.steps

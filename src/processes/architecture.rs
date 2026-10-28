@@ -44,7 +44,7 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_worktree = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some());
+        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
     let mut pending_delivery = false;
     for step in &file.steps {
         if matches!(step.kind, DraftKind::Delivery { .. }) {
@@ -63,7 +63,7 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
         let reason = if step.parallel.is_some() {
             Some("architecture-review cannot be in a parallel group")
         } else if file.worktrees.iter().any(|worktree| {
-            worktree.issue_branch_line.is_some()
+            worktree.kind == WorktreeKind::IssueBranch
                 && step
                     .worktree
                     .as_ref()

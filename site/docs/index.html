@@ -930,7 +930,7 @@ worktree = &quot;fix&quot;
 thirdshift process ship issue 7
 thirdshift process ship issue 7 merge
 </code></pre>
-<p>A declared worktree&#39;s <code>kind</code> is <code>throwaway</code> or <code>issue-branch</code>. A throwaway
+<p>A declared worktree&#39;s <code>kind</code> is <code>throwaway</code>, <code>issue-branch</code> or <code>spec-branch</code>. A throwaway
 worktree is detached at the Base branch. An Issue-branch worktree is the
 Issue branch a Ticket run would use for the issue the command names:
 <code>issue-&lt;n&gt;</code>, then <code>issue-&lt;n&gt;-branch-&lt;k&gt;</code> for k ≥ 2. A Continuation reuses
@@ -938,6 +938,42 @@ the existing branch, and an open pull request&#39;s base is the Base branch.
 Session Steps in that checkout are told to build on its commits. A
 Process has at most one Issue-branch worktree. The Steps that name it run in
 that checkout. Any other declared worktree stays throwaway.</p>
+<p>A Spec-branch worktree uses the Spec&#39;s Issue branch and the same Continuation
+rules. A file can declare one Issue-branch or one Spec-branch worktree, never
+both. Both need an issue: a Spec-branch file requires sub-issues, and an
+Issue-branch file refuses an issue that has sub-issues, before any session.
+The Claim is made before acquiring either branch worktree.</p>
+<p><code>catalogue = &quot;land-tickets&quot;</code> runs the Spec run&#39;s whole Ticket loop on a
+Spec-branch worktree: push the Spec branch, start Tickets in dependency order,
+re-read the graph after each ending, and open a draft Spec PR on the first
+landing, updating its Tickets checklist. <code>spec.parallel</code> in the User config
+sets how many Tickets can run at once. Closed Tickets, Tickets in another
+repository, Unready Tickets, Specs, blocked Tickets and Tickets that fail the
+Trusted-account checks cannot start. A failed Ticket stops only its dependents;
+any Ticket not done fails the Step. The optional <code>process = &quot;&lt;name&gt;&quot;</code> setting
+selects every child Ticket&#39;s Process, defaulting to <code>ticket-run</code>; the named
+Process must exist and declare an Issue-branch worktree. Child Tickets inherit
+the Step&#39;s Harness, Model and Effort and the Process&#39;s Repair cap and protected
+paths. The Step is required, outside a parallel group, and returns the draft
+Spec PR URL after updating the local worktree from the landed Spec branch.
+It leaves the Claim while the Spec waits for completion.
+Spec-branch cleanup keeps uncommitted work and commits absent
+from the remote-tracking branches in the local worktree and branch, and names
+the retained path. Inspect and publish that work before retrying.</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Gather a Spec&#39;s Tickets&quot;
+
+[worktrees.spec]
+kind = &quot;spec-branch&quot;
+
+[[steps]]
+name = &quot;land&quot;
+catalogue = &quot;land-tickets&quot;
+worktree = &quot;spec&quot;
+process = &quot;ticket-run&quot;
+</code></pre>
+<p>Run it with <code>thirdshift process &lt;name&gt; issue &lt;spec&gt;</code>. This Step gathers the
+Tickets; it leaves the Spec PR draft for subsequent review and Delivery.</p>
 <p><code>catalogue = &quot;implement&quot;</code> runs the same implementation session as a Ticket
 run, using its fresh or Continuation prompt. It must name the Issue-branch
 worktree, and takes its own Harness, Model and Effort like other Steps.
@@ -1002,12 +1038,12 @@ repair_cap = 2
 self_merge = false
 protected_paths = [&quot;secrets/**&quot;, &quot;**/*.pem&quot;]
 </code></pre>
-<p>An Issue-branch worktree needs an issue. <code>thirdshift process &lt;name&gt;</code> and
+<p>An Issue-branch or Spec-branch worktree needs an issue. <code>thirdshift process &lt;name&gt;</code> and
 <code>thirdshift process check &lt;name&gt;</code> refuse the file before any session, any
 Claim and any branch, naming the <code>issue</code> rule and the file line. With an
 issue, the run makes the Claim when it starts, labelling the issue
-<code>in-progress</code> in place of <code>ready-for-agent</code>, and holds it until the end. A
-pull request left ready for review removes the Claim and does not put
+<code>in-progress</code> in place of <code>ready-for-agent</code>, and holds it until the end. On an
+Issue-branch worktree, a pull request left ready for review removes the Claim and does not put
 <code>ready-for-agent</code> back, so Pickup does not take an issue that already has an
 open pull request. A Step that fails before Delivery keeps the Issue-branch
 work as a Failed ticket run does, and the failure says where it stopped, what
@@ -1031,7 +1067,8 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 <code>check</code> prints cannot hide the command. <code>catalogue</code> names a
-built-in Step: <code>implement</code>, <code>security-review</code>, <code>delivery</code> or <code>self-merge</code>, described above, or <code>architecture-review</code> or <code>run-published-issue</code>.</p>
+built-in Step: <code>implement</code>, <code>security-review</code>, <code>delivery</code>, <code>self-merge</code> or
+<code>land-tickets</code>, described above, or <code>architecture-review</code> or <code>run-published-issue</code>.</p>
 <p><code>architecture-review</code> runs the Architecture review in its own throwaway worktree
 at the Base branch on origin, checks the final line and any plan, and applies
 <code>architect-plan</code> or <code>architect-idea</code> labels using the Architect run&#39;s rules.
@@ -1098,8 +1135,8 @@ A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a <code>together:</code> line for each group
 of Steps that run at the same time. A throwaway worktree is described as
-throwaway at the Base branch. An Issue-branch worktree is described as an
-Issue branch. When a limit tightens a built-in rule, <code>check</code> prints it: the
+throwaway at the Base branch. A branch worktree is described as an
+Issue branch or Spec branch. When a limit tightens a built-in rule, <code>check</code> prints it: the
 repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and <code>check</code> does not run it. A delivery Step shows
@@ -1108,7 +1145,7 @@ optional Step is marked <code>(optional)</code>. <code>check</code> performs the
 preflight as running, including a minimal Model test when the Harness needs
 one, and runs no Step. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and
 still creates no Issue branch and makes
-no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
+no Claim. Without an issue, either branch worktree is the refusal above, not
 a plan.</p>
 <p>Running the Process starts the Steps in its throwaway worktrees, detached at
 the Base branch and cleaned up as a standalone skill&#39;s worktree is. Every
