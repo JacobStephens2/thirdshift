@@ -12,6 +12,7 @@ use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::{ChildAsks, Kind, SpecPr};
 use crate::claim::{self, Claim};
+use crate::command_limit;
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
@@ -194,6 +195,13 @@ fn run(
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
+        // A slot only makes Passes count this Command: it is never refused one.
+        if let Err(error) = command_limit::hold_slot(&issue.repo()) {
+            progress::warn(
+                &error,
+                format_args!("this Command does not count toward the Command limit"),
+            );
+        }
         match trust::issue_trust(&GitHub::new(), issue) {
             Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
             Ok(None) => {}

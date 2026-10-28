@@ -2,9 +2,9 @@
 //! for the Ready issue at its order's end of the issue numbers in the
 //! repository, saying why it passed over each issue labelled
 //! `ready-for-agent` before it, then that issue dispatched as a Spec run or
-//! a Run. Only one Pass per repository runs at a time on a machine: one
-//! started while another Pass is still running is skipped, before any
-//! search. One that runs first makes the Sweep, and is then skipped if it
+//! a Run. One started while its repository is at its Command limit on this
+//! machine, or while a Pass that keeps the repository to itself runs, is
+//! skipped, before any search. One that runs first makes the Sweep, and is then skipped if it
 //! finds the repository at its Claim limit, or with no Ready issue.
 
 use std::fmt;
@@ -19,7 +19,7 @@ use crate::github::{GitHub, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::Edit;
-use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::ready::{PickupOrder, ReadyIssue};
@@ -117,9 +117,9 @@ impl fmt::Display for Skipped {
 /// while it is held.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
-/// skipped if another Pass on the same repository
-/// is still running on this machine. Otherwise this process is that
-/// repository's one such run until it exits, through whatever it dispatches.
+/// skipped if its repository is at `config`'s Command limit on this machine.
+/// Otherwise this process holds a slot there until it exits, through
+/// whatever it dispatches.
 /// A skip is recorded in the repository's Activity log. The rest, from the
 /// Sweep to the dispatch, is [`run_through`], with `config`'s Claim limit
 /// and `order`, through the Launch directory, GitHub, the logs and
@@ -136,10 +136,10 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base)? {
+    } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit)? {
         Start::Clear(launch) => launch,
         Start::AlreadyRunning(running) => {
-            logs::skipped(Pass::Pickup, &running.0, &running);
+            logs::skipped(Pass::Pickup, &running.repo, &running);
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
@@ -191,7 +191,7 @@ fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<
     Ok(())
 }
 
-/// [`run`], once it holds its repository's lock, on `repo` with the Base
+/// [`run`], once it holds a slot on its repository, on `repo` with the Base
 /// branch `base` and the Claim limit `limit`, through `outside`: its
 /// [`gates`], then `reserve` acquiring cross-machine ownership and refreshing
 /// the selection, with a skip recorded if either refuses it; then the line
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(calls, [CLOSED, CLAIMED, Call::ReadySearch]);
     }
 
-    /// A Pickup run on `repo`, past its lock, on the Base branch `main` with
+    /// A Pickup run on `repo`, past its slot, on the Base branch `main` with
     /// the Claim limit 3, its dispatched run ending ready for review: how it
     /// ended, and what it did outside itself.
     fn pickup(repo: InMemory) -> (Result<Outcome>, Vec<Call>) {

@@ -14,11 +14,11 @@
 //! run, on the issue the session Step before it published.
 //!
 //! A Process started with no issue is a Pass, unless it declares an
-//! Issue-branch worktree, which needs an issue. A Pass takes the repository's
-//! Pass lock and is skipped, before any worktree, while another Pass holds
-//! it. It does not take an Architect run's Ready-issue or Architect-idea
-//! gates. A Process started with an issue is not a Pass and does not take the
-//! lock.
+//! Issue-branch worktree, which needs an issue. A Pass keeps the repository
+//! to itself: it is skipped, before any worktree, while any other Command
+//! runs there. It does not take an Architect run's Ready-issue or
+//! Architect-idea gates. A Process started with an issue is not a Pass: it
+//! takes a slot toward the Command limit without counting.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -537,9 +537,10 @@ fn run(command: &ProcessRun) -> Result<String> {
     if let Err(error) = require_issue(&path, &file, issue.as_ref()) {
         return Err(failed_before_steps(notification, error));
     }
-    // No issue: a Pass. The Base branch is checked before the lock, so a bad
-    // checkout fails instead of being skipped, and a skip creates no worktree.
-    // The lock is then held until this process exits, through every Step.
+    // No issue: a Pass. The Base branch is checked before the Command limit,
+    // so a bad checkout fails instead of being skipped, and a skip creates no
+    // worktree. Its slot is then held until this process exits, through
+    // every Step.
     // `pass` holds the first lines, so a quiet skip prints nothing. A skip
     // sends no Run notification.
     if issue.is_none() {
@@ -553,7 +554,11 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        match launch::hold_pass(&repo) {
+        match crate::command_limit::hold_pass(
+            &repo,
+            config.command_limit,
+            launch::Sharing::Alone("a Custom process"),
+        ) {
             Ok(Some(running)) => {
                 let reason = running.to_string();
                 let choice = Choice::of(&command.asked, &config.harness);
@@ -589,6 +594,14 @@ fn run(command: &ProcessRun) -> Result<String> {
         return finish_run(name, &repo, prepared, notification);
     }
     let issue = issue.expect("an issue");
+    // Started with an issue, it counts toward the Command limit, but is
+    // never refused for it.
+    if let Err(error) = crate::command_limit::hold_slot(&issue.repo()) {
+        progress::warn(
+            &error,
+            format_args!("this Command does not count toward the Command limit"),
+        );
+    }
     let started = Utc::now() - crate::run::STARTED_MARGIN;
     if file_has_issue_branch(&file) {
         return run_issue_branch(command, &config, &path, file, issue, started, notification);

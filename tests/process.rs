@@ -3190,6 +3190,43 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
 }
 
 #[test]
+fn at_a_command_limit_of_2_a_process_with_no_issue_runs_alone_and_one_with_an_issue_fills_a_slot() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[pass]\ncommand_limit = 2\n");
+    waiting_process(&scenario, "review");
+    ready_issue(&scenario, 7);
+    scenario.agent_does(&agent_opens_pr(7));
+    let with_issue = scenario.run_until(&["process", "review", "issue", "7"], &[], "started");
+
+    let skipped = scenario.run(&["process", "review"]);
+
+    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr, "Process review starting"),
+        "thirdshift: 1 Command is running on acme/widgets, and this Pass runs only alone there\n"
+    );
+    release(&scenario);
+    let with_issue = with_issue.finish();
+    assert_eq!(with_issue.code, Some(0), "{}", with_issue.stderr);
+    fs::remove_file(scenario.path("started")).unwrap();
+    fs::remove_file(scenario.path("release")).unwrap();
+    let alone = scenario.run_until(&["process", "review"], &[], "started");
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr, "Pickup run starting"),
+        "thirdshift: a Custom process is running alone on acme/widgets\n"
+    );
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    release(&scenario);
+    let alone = alone.finish();
+    assert_eq!(alone.code, Some(0), "{}", alone.stderr);
+    assert_eq!(alone.stdout, "held\n");
+}
+
+#[test]
 fn a_process_started_with_an_issue_runs_while_a_pickup_run_holds_the_repository() {
     let scenario = Scenario::new();
     command_process(&scenario, "notes", "printf ran");

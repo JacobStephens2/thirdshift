@@ -59,6 +59,9 @@ pub struct UserConfig {
     /// `pickup.limit`: the Claim limit, how many open issues carrying a
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
+    /// `pass.command_limit`: the Command limit, how many live Commands on
+    /// one repository on this machine skip a Pass there, by default 1.
+    pub command_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
     /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
@@ -141,6 +144,7 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
+            command_limit: NonZeroUsize::MIN,
             pickup_wait: TimeDelta::minutes(5),
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
@@ -204,6 +208,7 @@ impl UserConfig {
                     | "email"
                     | "spec"
                     | "pickup"
+                    | "pass"
                     | "harness"
                     | "security"
                     | "trial"
@@ -277,6 +282,10 @@ impl UserConfig {
                     }
                     ("pickup", "limit", value) => {
                         config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    }
+                    ("pass", "command_limit", value) => {
+                        config.command_limit =
+                            whole_number_from_1(value, "pass.command_limit", &file)?
                     }
                     ("pickup", "wait_minutes", value) => {
                         config.pickup_wait = value
@@ -977,6 +986,9 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
 max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
 
+[pass]
+command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
+
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
@@ -1199,6 +1211,7 @@ mod tests {
                 "spec.parallel",
                 "resources.min_available_memory_mb",
                 "resources.max_load_per_cpu_percent",
+                "pass.command_limit",
                 "pickup.limit",
                 "pickup.wait_minutes",
                 "pickup.order",
@@ -1398,6 +1411,15 @@ mod tests {
         assert_eq!(config.pickup_limit.get(), 1);
         for text in ["", "[pickup]\n"] {
             assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn command_limit_is_read_and_defaults_to_1() {
+        let config = parse("[pass]\ncommand_limit = 2\n").unwrap();
+        assert_eq!(config.command_limit.get(), 2);
+        for text in ["", "[pass]\n"] {
+            assert_eq!(parse(text).unwrap().command_limit.get(), 1, "{text:?}");
         }
     }
 
@@ -1612,6 +1634,27 @@ mod tests {
             (
                 "[spec]\nparallel = \"2\"\n",
                 "spec.parallel must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncomand_limit = 2\n",
+                "unknown key pass.comand_limit",
+            ),
+            ("pass = 2\n", "pass must be the section [pass]"),
+            (
+                "[pass]\ncommand_limit = 0\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = -1\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = 2.5\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = \"2\"\n",
+                "pass.command_limit must be a whole number from 1 up",
             ),
             ("[pickup]\nlimt = 2\n", "unknown key pickup.limt"),
             ("pickup = 2\n", "pickup must be the section [pickup]"),
