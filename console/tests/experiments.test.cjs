@@ -154,6 +154,8 @@ test('Experiments update live through Trials, Verdict and rechecks and fit a 390
   assert.match(await page.locator('main').textContent(), /Provisionally inconclusive/);
   assert.match(await page.locator('main').textContent(), /8 more Eval tasks/);
   assert.match(await page.locator('#experiment-bar').textContent(), /Pass level80%.*Fail level95%/);
+  // Suite Verdicts are folded to one line; open them to read their intervals.
+  for (const summary of await page.locator('details.experiment-suite > summary').all()) await summary.click();
   assert.equal(await page.getByRole('img', { name: /^Accuracy · pass \(80%\):/ }).count(), 1);
   assert.equal(await page.getByRole('img', { name: /^Accuracy · fail \(95%\):/ }).count(), 1);
   assert.equal(await page.getByRole('img', { name: /^Wrong findings · pass \(80%\):/ }).count(), 1);
