@@ -175,7 +175,7 @@ impl<O: Outside> Record<O> {
                 && self.command != CommandKind::Issue
                 && matches!(work, Work::Run(_) | Work::SpecRun(_))
                 && let Some((_, tree)) = &mut self.command_record
-                && let Some(dispatched) = tree.dispatched.last_mut()
+                && let Some(dispatched) = tree.active_dispatch()
             {
                 // The launch checks have now established whether the issue is
                 // a Spec. The dispatch itself was kept before those checks.
@@ -234,9 +234,7 @@ impl<O: Outside> Record<O> {
         self.command_record
             .as_ref()?
             .1
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())?
+            .active_dispatch_ref()?
             .issue
             .as_ref()
             .map(|issue| issue.url.clone())

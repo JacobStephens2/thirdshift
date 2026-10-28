@@ -43,10 +43,12 @@ impl CommandTree {
     }
 
     pub fn active_ref(&self) -> &CommandRecord {
-        match self.active_dispatch_index() {
-            Some(index) => &self.dispatched[index],
-            None => &self.command,
-        }
+        self.active_dispatch_ref().unwrap_or(&self.command)
+    }
+
+    pub fn active_dispatch_ref(&self) -> Option<&CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&self.dispatched[index])
     }
 
     pub fn active_dispatch(&mut self) -> Option<&mut CommandRecord> {

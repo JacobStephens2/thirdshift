@@ -597,3 +597,100 @@ printf 'parent skills retained' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout.trim(), "parent skills retained");
 }
+
+#[test]
+fn a_base_fix_after_nested_dispatch_keeps_its_outer_ticket_parent() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base]\nfix = true\n");
+    let publish = PUBLISH_THEN_RUN.replacen(
+        "[[steps]]",
+        "[limits]\nprotected_paths = [\"issue-10.txt\"]\n\n[[steps]]",
+        1,
+    );
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{publish}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Dispatch a nested Ticket, then need a Base fix"
+
+[worktrees.ticket]
+kind = "issue-branch"
+
+[[steps]]
+name = "publish-nested"
+skill = "to-spec"
+worktree = "ticket"
+
+[[steps]]
+name = "run-nested"
+catalogue = "run-published-issue"
+worktree = "ticket"
+
+[[steps]]
+name = "change"
+worktree = "ticket"
+command = """
+echo contractor > contractor.txt
+git add contractor.txt
+git commit -qm contractor
+gh pr create --base main --head issue-8 --title Contractor --body 'Closes #8'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/main/test"}]'
+"""
+
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Outer --body 'Outer Ticket')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"url=$(gh issue create --title Nested --body 'Nested Ticket')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(9, &agent_lands_ticket(9, "main"));
+    scenario.agent_does_for(
+        10,
+        &format!(
+            r#"{}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}}]'
+"#,
+            agent_lands_ticket(10, "main")
+        ),
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("protected path issue-10.txt"),
+        "{}",
+        result.stderr
+    );
+    let base_fix = fs::read_dir(process_dir(&scenario))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".child.json"))
+        .map(|path| serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap()).unwrap())
+        .find(|record| record["issue"]["number"] == 10)
+        .expect("the Base fix must retain a child record");
+    let outer = scenario.issue_url(8);
+    assert_eq!(
+        base_fix["parent_dispatch"].as_str(),
+        Some(outer.as_str()),
+        "{base_fix}"
+    );
+}
