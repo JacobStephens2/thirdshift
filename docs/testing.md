@@ -26,13 +26,18 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 | Changed paths | Checks |
 | --- | --- |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
+| `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
+| `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
-| Several areas together | Full Rust suite plus any selected browser and release-generator checks; the full suite subsumes the targeted Rust checks |
+| Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
 
-Unknown paths print the reason for selecting the full Rust suite. The mappings
-are deliberately narrow: adding a new area cannot silently opt it out. For
-changes to the selector or other Python tooling, also run
+Unknown paths print the reason for selecting the full Rust suite, and Console
+paths print the reason for selecting the Console browser tests. The mappings
+are deliberately narrow: adding a new area cannot silently opt it out. When a
+Console browser test starts reading another file outside `console/`, add that
+file to the Console source paths in `scripts/affected-tests`. For changes to
+the selector or other Python tooling, also run
 `python3 -m unittest discover -s scripts -p 'test_*.py'`, as CI does.
 
 The full Rust suite uses `cargo nextest run` when `cargo nextest --version`
@@ -53,9 +58,11 @@ threads, for example `cargo test -- --test-threads=3` or
 `cargo nextest run --test-threads 3`.
 
 Set up browser dependencies following [the site instructions](../site/tests/README.md)
-before selecting site checks. A missing dependency fails visibly rather than
-dropping that check. Site generation checks remain part of `npm test`; regenerate
-prompt changes as described in [AGENTS.md](../AGENTS.md#generated-prompts).
+before selecting site checks, and [the Console instructions](../console/README.md)
+before selecting Console checks. A missing Node, npm or Playwright dependency
+fails visibly rather than dropping that check. Site generation checks remain
+part of `npm test`; regenerate prompt changes as described in
+[AGENTS.md](../AGENTS.md#generated-prompts).
 
 ## Local work and CI
 
@@ -69,8 +76,8 @@ this does not change Delivery or CI policy.
 Local selection shortens feedback; CI retains its broader checks on every PR,
 including Python tooling, formatting, clippy, site and Console browser tests,
 and the Linux Rust suite. The macOS gate/full-suite policy remains in
-[CI performance](ci-performance.md). This script selects Rust, site and release
-checks; it does not replace CI's cross-platform and Console browser coverage.
+[CI performance](ci-performance.md). This script selects Rust, site, Console
+browser and release checks; it does not replace CI's cross-platform coverage.
 
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 `/usr/bin/time -p cargo test` for the fallback), recording the command, result,
