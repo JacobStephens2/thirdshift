@@ -165,12 +165,7 @@ fn run_through(
             ..reached
         }),
         Err(mut failed) => {
-            let recovery = failed.recovery.get_or_insert_with(|| {
-                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
-            });
-            recovery.add_tickets(landed.progress, true);
-            recovery.add_child_work(landed.local_work);
-            failed.ticket_lines = landed.lines;
+            landed.record_failure(&mut failed);
             Err(failed)
         }
     }

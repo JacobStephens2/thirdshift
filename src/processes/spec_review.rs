@@ -14,8 +14,8 @@ pub(super) fn run(
         .as_ref()
         .context("spec-review needs land-tickets first")?;
     let text = prompt::spec_review(run.issue, run.base, run.branch, &tickets.pr_url);
-    run.pull_request.begin_delivery();
     run.pull_request.ensure_actionable(false)?;
+    run.pull_request.begin_delivery();
     let checkout = run
         .checkout
         .as_ref()

@@ -414,6 +414,8 @@ struct Prepared {
 struct CompletedRuns {
     resolutions: Vec<crate::run::Resolution>,
     failed: bool,
+    /// Direct branch Processes retain the same failure facts as dispatched Runs.
+    failed_run: Option<crate::failed_run::FailedRun>,
     /// The implement Step's early successful end.
     unreproduced_bug: Option<String>,
     /// Why architecture-review ended successfully without a child run.
@@ -750,23 +752,28 @@ fn notify(
     } else {
         Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
     };
+    let failed = completed.failed_run.as_ref();
     let account = Account {
-        recovery: None,
+        recovery: failed.and_then(|failed| failed.recovery.as_deref()),
         outcome: account_outcome,
         ended,
         interrupted: outcome == "interrupted",
-        pr_url: completed
-            .resolutions
-            .iter()
-            .rev()
-            .find_map(|resolution| match resolution {
-                crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
-                _ => None,
+        pr_url: failed
+            .and_then(|failed| failed.pr_url.as_deref())
+            .or_else(|| {
+                completed
+                    .resolutions
+                    .iter()
+                    .rev()
+                    .find_map(|resolution| match resolution {
+                        crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
+                        _ => None,
+                    })
             }),
         advice: &[],
         base_fix: None,
-        log: None,
-        ticket_lines: &[],
+        log: failed.and_then(|failed| failed.log.as_deref()),
+        ticket_lines: failed.map_or(&[], |failed| failed.ticket_lines.as_slice()),
         review: completed
             .architecture_end
             .as_ref()
@@ -921,6 +928,11 @@ fn run_issue_branch(
         };
         let result = execute_issue_steps(name, &prepared, &mut issue_run);
         delivered = issue_run.delivered;
+        prepared
+            .completed
+            .lock()
+            .expect("completed Runs")
+            .failed_run = issue_run.failure.take();
         result
     };
     let completed = prepared.completed.lock().expect("completed Runs");
@@ -1028,6 +1040,17 @@ fn execute_issue_steps(
             let _ = issue_run.pull_request.show_checklist(&tickets.checklist);
             if let Some(failed) = &mut issue_run.failure {
                 tickets.record_failure(failed);
+            }
+        }
+        if !issue_run.delivered {
+            let context = continuation(issue_run);
+            if let Some(failed) = &mut issue_run.failure
+                && let Some(recovery) = &mut failed.recovery
+            {
+                recovery.add_command_context(context, on_origin);
+                for line in recovery.lines() {
+                    progress::step(line);
+                }
             }
         }
     }
@@ -1707,9 +1730,6 @@ fn run_delivery(
                 issue_run.delivered = true;
             } else if let Some(recovery) = &mut failed.recovery {
                 recovery.add_command_context(continuation(issue_run), issue_run.on_origin);
-                for line in recovery.lines() {
-                    progress::step(line);
-                }
             }
             let url = failed.pr_url.clone().unwrap_or_default();
             // Keep the typed cause in the Step result, including any context
@@ -1756,9 +1776,6 @@ fn preserve_step_failure(
     let mut recovery = Recovery::new(stage, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
     recovery.add_command_context(context, on_origin);
-    for line in recovery.lines() {
-        progress::step(line);
-    }
     let mut failed: crate::failed_run::FailedRun = anyhow!("{error:#}").into();
     failed.recovery = Some(Box::new(recovery));
     match pull_request.finish_failed_run(false) {

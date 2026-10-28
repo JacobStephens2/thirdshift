@@ -327,3 +327,97 @@ fn spec_review_and_delivery_leave_the_spec_pr_ready_with_its_checklist() {
     );
     scenario.assert_cleaned_up("issue-7");
 }
+
+fn replacement_spec_review(failing_review: bool) -> (Scenario, RunResult) {
+    let scenario = prepare_spec(SPEC_DELIVERY);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            r#"
+gh fake pr issue-7 state '"CLOSED"'
+gh pr create --base main --head issue-7 --title Replacement --body 'Closes #7'
+{}
+"#,
+            if failing_review { "exit 9" } else { "true" }
+        ),
+    );
+
+    let result = scenario.run(&["process", "complete-spec", "issue", "7"]);
+    (scenario, result)
+}
+
+#[test]
+fn spec_review_can_replace_the_draft_before_delivery_captures_it() {
+    let (scenario, result) = replacement_spec_review(false);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let prs: Vec<_> = state["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|pr| pr["head"] == "issue-7")
+        .collect();
+    assert_eq!(prs.len(), 2);
+    assert_eq!(prs[0]["state"], "CLOSED");
+    assert_eq!(prs[1]["state"], "OPEN");
+    assert_eq!(prs[1]["isDraft"], false);
+    assert_eq!(result.stdout.trim(), prs[1]["url"].as_str().unwrap());
+    let body = prs[1]["body"].as_str().unwrap();
+    assert!(body.contains("- [x] #8"), "{body}");
+    assert!(body.contains("Built with claude"), "{body}");
+}
+
+#[test]
+fn spec_catalogue_review_accepts_a_replacement_pr_as_the_builtin_does() {
+    // A replacement also receives the final checklist when the review fails.
+    for failing_review in [false, true] {
+        let (scenario, result) = replacement_spec_review(failing_review);
+        assert_eq!(
+            result.code,
+            Some(i32::from(failing_review)),
+            "{}",
+            result.stderr
+        );
+        let pr = pr_from(&scenario, "issue-7");
+        assert_eq!(pr["state"], "OPEN");
+        assert_eq!(pr["isDraft"], failing_review);
+        assert!(pr["body"].as_str().unwrap().contains("- [x] #8"), "{pr}");
+    }
+}
+
+#[test]
+fn failed_spec_catalogue_review_keeps_progress_and_notification_recovery() {
+    let scenario = prepare_spec(SPEC_DELIVERY);
+    scenario.agent_does_for_in_session(7, 1, "echo unfinished > unfinished.txt\nexit 9");
+
+    let result = scenario.run(&["process", "complete-spec", "issue", "7", "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (_, notification) = saved_notification(&scenario, "process");
+    let expected = [
+        "Stopped at: Spec review",
+        "Progress: 1/1 Tickets landed; final review incomplete",
+        "Preserved: remotely on issue-7",
+        "Recovery: thirdshift process complete-spec issue",
+    ];
+    let missing_terminal: Vec<_> = expected
+        .iter()
+        .filter(|line| !result.stderr.contains(**line))
+        .collect();
+    let missing_notification: Vec<_> = expected
+        .iter()
+        .filter(|line| !notification.contains(**line))
+        .collect();
+    assert!(
+        missing_terminal.is_empty()
+            && missing_notification.is_empty()
+            && notification.contains("#8 landed"),
+        "missing from terminal: {missing_terminal:?}; missing from notification: \
+         {missing_notification:?}; ticket outcome present: {}\nterminal:\n{}\nnotification:\n{}",
+        notification.contains("#8 landed"),
+        result.stderr,
+        notification,
+    );
+}
