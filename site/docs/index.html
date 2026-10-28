@@ -483,7 +483,7 @@ thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepa
 thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond the base commit
 thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
 thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--json] [--yes]  # run or resume an Experiment
-thirdshift experiment --release &lt;commit&gt; [--json]  # use the last release tag and touched suites
+thirdshift experiment --release &lt;commit&gt; [--json] [--yes]  # use the last release tag and touched suites
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
 thirdshift experiments &lt;id&gt; --session &lt;session-id&gt; [--json]  # read a Trial&#39;s retained session from its inventory
 thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
@@ -532,10 +532,12 @@ task missing a <code>[trial]</code> table. This check also precedes the release 
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
 history, an estimate from the mean minutes of completed, non-void Trials in this
-machine&#39;s earlier Experiments. The total estimate appears only when every suite
+machine&#39;s earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
-stdin is a terminal it then asks <code>Run these Trials? [y/N]</code>; any answer but <code>y</code>
-exits without building an Arm or starting a Trial. <code>--yes</code> skips the question,
+stdin is a terminal it then asks <code>Run these Trials? [y/N]</code>; any answer but <code>y</code> or <code>yes</code>
+exits without building an Arm or starting a Trial, and a new Experiment
+leaves no record. In release mode the Baseline probe comes first and may build
+the last release&#39;s Arm. <code>--yes</code> skips the question,
 and so does a stdin that is not a terminal. <code>scripts/release.sh --with-experiment</code> passes <code>--yes</code>, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.</p>

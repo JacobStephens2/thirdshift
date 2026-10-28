@@ -119,7 +119,7 @@ pub(super) fn apply_scores(
     Ok(())
 }
 
-fn read_terminal(files: &impl Files, root: &Path) -> Result<Vec<Terminal>> {
+pub(super) fn read_terminal(files: &impl Files, root: &Path) -> Result<Vec<Terminal>> {
     let mut results = Vec::new();
     for entry in directory(files, &root.join("results"))? {
         if entry.kind.is_file() && entry.path.extension().is_some_and(|ext| ext == "json") {

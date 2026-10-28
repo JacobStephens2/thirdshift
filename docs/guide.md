@@ -524,7 +524,7 @@ thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway rep
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
 thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
 thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes]  # run or resume an Experiment
-thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
+thirdshift experiment --release <commit> [--json] [--yes]  # use the last release tag and touched suites
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
@@ -578,10 +578,12 @@ Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar's timeout, in session-minutes; and, for each suite and Harness that has
 history, an estimate from the mean minutes of completed, non-void Trials in this
-machine's earlier Experiments. The total estimate appears only when every suite
+machine's earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
-stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y`
-exits without building an Arm or starting a Trial. `--yes` skips the question,
+stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` or `yes`
+exits without building an Arm or starting a Trial, and a new Experiment
+leaves no record. In release mode the Baseline probe comes first and may build
+the last release's Arm. `--yes` skips the question,
 and so does a stdin that is not a terminal. `scripts/release.sh
 --with-experiment` passes `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials

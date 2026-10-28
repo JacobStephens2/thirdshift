@@ -2,13 +2,12 @@
 //! them runs. A terminal confirms it; `--yes` and piped stdin go ahead.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
-use super::trial_results::files::Native;
+use super::trial_results::files::{self, Files, Native};
 use super::{Arm, TrialResult, store, trial_results, workers};
 use crate::progress;
 use crate::trial::Outcome;
@@ -17,10 +16,14 @@ const QUESTION: &str = "Run these Trials? [y/N] ";
 
 /// Show the remaining Trials' cost, then ask on a terminal unless `yes`.
 /// Declining returns an error before any Arm is built.
-pub(super) fn confirm(experiment: &store::Stored, experiments: &Path, yes: bool) -> Result<()> {
+pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
+    let experiments = experiment
+        .directory
+        .parent()
+        .context("missing Experiments folder")?;
     let Some(plan) = Plan::new(
         experiment,
-        &history(experiments, &experiment.description.id),
+        &history(&Native, experiments, &experiment.description.id),
     ) else {
         return Ok(());
     };
@@ -43,73 +46,74 @@ pub(super) fn confirm(experiment: &store::Stored, experiments: &Path, yes: bool)
     }
 }
 
-/// Mean minutes per completed Trial, by suite and Harness.
-type History = BTreeMap<(String, String), Mean>;
+/// Completed Trials' minutes, by suite and Harness.
+type History = BTreeMap<(String, String), TrialMinutes>;
 
 #[derive(Clone, Copy, Default)]
-struct Mean {
-    minutes: f64,
+struct TrialMinutes {
+    total: f64,
     trials: usize,
 }
 
-impl Mean {
-    fn include(&mut self, minutes: f64) {
-        self.minutes += minutes;
+impl TrialMinutes {
+    fn add(&mut self, minutes: f64) {
+        self.total += minutes;
         self.trials += 1;
     }
 
-    fn get(self) -> f64 {
-        self.minutes / self.trials as f64
+    fn per_trial(self) -> f64 {
+        self.total / self.trials as f64
     }
 }
 
 /// Completed, non-void Trials of this machine's other Experiments. An
 /// unreadable Experiment only narrows the estimate, so it is left out.
-fn history(experiments: &Path, current: &str) -> History {
+fn history(files: &impl Files, experiments: &Path, current: &str) -> History {
     let mut history = History::new();
-    let Ok(entries) = fs::read_dir(experiments) else {
+    let Ok(entries) = files::directory(files, experiments) else {
         return history;
     };
-    for entry in entries.flatten() {
-        let Some(id) = entry.file_name().to_str().map(String::from) else {
+    for entry in entries {
+        let Some(id) = entry.path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
         if id == current {
             continue;
         }
-        let Ok(stored) = store::Stored::retained(&Native, experiments, &id) else {
+        let Ok(stored) = store::Stored::retained(files, experiments, id) else {
             continue;
         };
-        let Ok(results) = trial_results::terminal(&stored.directory) else {
+        let Ok(results) = trial_results::read_terminal(files, &stored.directory) else {
             continue;
         };
         for result in results.iter().map(trial_results::Terminal::result) {
-            let harness = match result.arm {
-                Arm::Baseline => &stored.description.baseline.harness,
-                Arm::Candidate => &stored.description.candidate.harness,
-            };
             if let Some(minutes) = completed_minutes(result) {
+                let harness = &stored.description.setup(result.arm).harness;
                 history
                     .entry((result.suite.clone(), harness.clone()))
                     .or_default()
-                    .include(minutes);
+                    .add(minutes);
             }
         }
     }
     history
 }
 
-/// The deciding attempt's minutes of a Trial that completed, not void.
+/// Every attempt's minutes of a Trial that completed, not void, as the
+/// Experiment's own Arm minutes count them.
 fn completed_minutes(result: &TrialResult) -> Option<f64> {
-    if result.outcome == Outcome::Void {
-        return None;
-    }
-    let attempt = result.attempts.last()?;
-    Some(attempt.timings.total_ms as f64 / 60_000.0)
+    (result.outcome != Outcome::Void).then(|| {
+        result
+            .attempts
+            .iter()
+            .map(|attempt| attempt.timings.total_ms as f64 / 60_000.0)
+            .sum()
+    })
 }
 
 struct Plan {
     id: String,
+    /// Every Trial the Experiment plans, finished or not.
     total: usize,
     timeout_minutes: f64,
     groups: Vec<Group>,
@@ -134,10 +138,8 @@ impl Plan {
         }
         let mut groups = Vec::new();
         for suite in &description.suites {
-            for (arm, setup) in [
-                (Arm::Baseline, &description.baseline),
-                (Arm::Candidate, &description.candidate),
-            ] {
+            for arm in [Arm::Baseline, Arm::Candidate] {
+                let setup = description.setup(arm);
                 let trials = remaining
                     .iter()
                     .filter(|trial| trial.task.suite == *suite && trial.arm == arm)
@@ -150,7 +152,7 @@ impl Plan {
                         trials,
                         mean: history
                             .get(&(suite.clone(), setup.harness.clone()))
-                            .map(|mean| mean.get()),
+                            .map(|minutes| minutes.per_trial()),
                     });
                 }
             }
@@ -233,5 +235,8 @@ fn trials(count: usize) -> String {
 /// Minutes to one decimal place, without a trailing `.0`.
 fn minutes(minutes: f64) -> String {
     let shown = format!("{minutes:.1}");
-    shown.strip_suffix(".0").map_or(shown.clone(), String::from)
+    match shown.strip_suffix(".0") {
+        Some(whole) => whole.to_owned(),
+        None => shown,
+    }
 }

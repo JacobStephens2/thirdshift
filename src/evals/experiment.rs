@@ -135,6 +135,15 @@ pub(crate) struct Description {
     pub prepared: Option<arms::Prepared>,
 }
 
+impl Description {
+    pub(crate) fn setup(&self, arm: Arm) -> &Setup {
+        match arm {
+            Arm::Baseline => &self.baseline,
+            Arm::Candidate => &self.candidate,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Task {
     suite: String,
@@ -222,6 +231,11 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    let fresh = !root
+        .join("experiments")
+        .join(&description.id)
+        .join("experiment.json")
+        .exists();
     let Some(mut experiment) =
         store::Stored::open(&root.join("experiments"), description, |description| {
             // The release Baseline probe can build an Arm too. Check new
@@ -247,7 +261,13 @@ pub fn run(options: Options) -> Result<()> {
         println!("{}", experiment.render(options.json)?);
         return Ok(());
     }
-    cost::confirm(&experiment, &root.join("experiments"), options.yes)?;
+    if let Err(error) = cost::confirm(&experiment, options.yes) {
+        // A declined new Experiment leaves no record to list as running.
+        if fresh {
+            experiment.discard()?;
+        }
+        return Err(error);
+    }
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
             Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));

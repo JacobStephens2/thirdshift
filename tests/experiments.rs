@@ -861,6 +861,19 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         self.scenario.run_with_env(&args, &NO_SANDBOX)
     }
 
+    /// [`Fixture::run`] with stdin and stderr on a terminal, typing
+    /// `keystrokes` at its questions.
+    fn run_on_terminal(
+        &self,
+        extra: &[&str],
+        keystrokes: &[support::Keystrokes],
+    ) -> support::TerminalResult {
+        let mut args = vec!["experiment", "candidate", "--json"];
+        args.extend_from_slice(extra);
+        self.scenario
+            .run_on_terminal(&args, &NO_SANDBOX, keystrokes)
+    }
+
     fn experiment(&self) -> Value {
         let listed = self.scenario.run(&["experiments", "--json"]);
         assert_eq!(listed.code, Some(0), "{}", listed.stderr);

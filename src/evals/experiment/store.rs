@@ -235,6 +235,12 @@ impl Stored {
         Ok(Some(stored))
     }
 
+    /// Remove an Experiment this command created and nothing has run in.
+    pub fn discard(self) -> Result<()> {
+        fs::remove_dir_all(&self.directory)?;
+        Ok(())
+    }
+
     pub fn save(&self) -> Result<()> {
         write(&self.directory.join("experiment.json"), self)
     }
