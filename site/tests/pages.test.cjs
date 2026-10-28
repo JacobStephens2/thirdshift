@@ -93,6 +93,12 @@ async function unfoldGuide(page) {
   }
 }
 
+test('the architecture page identifies the current Verdict method', async () => {
+  const page = await readFile(join(__dirname, '..', 'architecture', 'index.html'), 'utf8');
+  assert.doesNotMatch(page, /New Verdicts use <code>paired-dirichlet-v3<\/code>/);
+  assert.match(page, /New Verdicts use <code>paired-dirichlet-v4<\/code>/);
+});
+
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   for (const path of ['/', '/how-it-works/', '/architecture/', '/docs/']) {

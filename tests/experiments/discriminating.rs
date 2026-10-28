@@ -1,5 +1,64 @@
 use super::*;
 
+#[test]
+fn a_pre_trial_resume_uses_the_difficulty_that_selected_its_judged_tasks() {
+    let fixture = Fixture::new();
+    unmeasured(&fixture);
+    fixture.scenario.agent_does(review_reports_prelude());
+    let builds = fixture.scenario.path("home/.thirdshift/evals/builds");
+    fs::remove_dir_all(&builds).unwrap();
+    let cargo = fixture.scenario.path("bin/cargo");
+    fs::write(&cargo, "#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let saved = fixture.experiment();
+    assert_eq!(saved["state"], "paused");
+    assert_eq!(
+        saved["bar"]["discriminating_tasks"],
+        json!({"spec-review": []})
+    );
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        saved["id"].as_str().unwrap()
+    ));
+    assert!(!directory.join("started").exists());
+    assert!(fixture.trial_calls().is_empty());
+
+    difficulty(&fixture, "fixture", 3, 6);
+    let manifest_path = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap().replace(
+        &format!("commit = {:?}", fixture.baseline),
+        &format!("commit = {:?}", fixture.candidate),
+    );
+    fs::write(&manifest_path, manifest).unwrap();
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        let build = builds.join(commit);
+        fs::create_dir_all(&build).unwrap();
+        support::copy_executable(
+            std::path::Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            &build.join("thirdshift"),
+        );
+    }
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let saved: Value = serde_json::from_str(&resumed.stdout).unwrap();
+    assert_eq!(
+        saved["bar"]["discriminating_tasks"],
+        json!({"spec-review": ["fixture"]})
+    );
+    assert_eq!(
+        saved["verdict"]["suites"]["spec-review"]["counts"]["judged"],
+        1
+    );
+    assert_eq!(
+        saved["verdict"]["suites"]["spec-review"]["counts"]["other_setup"],
+        1
+    );
+}
+
 pub(super) fn unmeasured(fixture: &Fixture) {
     let path = fixture
         .scenario

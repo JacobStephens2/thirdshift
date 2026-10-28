@@ -392,6 +392,11 @@ fn unapproved_proposals_never_run_and_approval_only_changes_future_experiments()
     fs::create_dir(&proposed).unwrap();
     fs::copy(tasks.join("fixture/spec.md"), proposed.join("spec.md")).unwrap();
     let manifest = fs::read_to_string(tasks.join("fixture/task.toml")).unwrap();
+    // A newly approved unmeasured task leaves this Experiment's judged list
+    // unchanged. Approval only adds its measurement Trials to future ones.
+    let mut manifest = manifest.parse::<toml_edit::DocumentMut>().unwrap();
+    manifest.remove("difficulty");
+    let manifest = manifest.to_string();
     fs::write(
         proposed.join("task.toml"),
         manifest.replace("state = \"approved\"", "state = \"proposed\""),
@@ -1257,7 +1262,7 @@ esac
 }
 
 #[test]
-fn imported_code_review_suite_runs_three_trials_per_arm_and_reports_pass_cubed() {
+fn imported_code_review_suite_runs_three_trials_per_arm_as_measurement() {
     let fixture = Fixture::with_session("code-review", 3);
     fs::remove_dir_all(
         fixture
@@ -1331,7 +1336,16 @@ printf 'Spec report\n' > "$reports/spec.md"
     }
     assert_eq!(
         experiment["verdict"]["suites"]["code-review"]["pass_cubed"],
-        json!({"baseline": 1.0, "candidate": 1.0})
+        Value::Null
+    );
+    let suite = &experiment["verdict"]["suites"]["code-review"];
+    assert_eq!(
+        suite["counts"],
+        json!({"judged": 0, "measurement_only": 1, "void_dropped": 0, "other_setup": 0})
+    );
+    assert_eq!(
+        suite["measurement"][0]["trials"].as_array().unwrap().len(),
+        6
     );
 }
 

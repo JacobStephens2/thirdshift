@@ -226,6 +226,12 @@ impl Stored {
             }
             if stored.description.bar != description.bar {
                 ensure!(!started, "Bar cannot change after the first Trial");
+                // A newly accepted judged list must use the same Difficulty
+                // snapshots as initial creation, before any Trial is spent.
+                let Some(tasks) = tasks(&description)? else {
+                    return Ok(None);
+                };
+                stored.tasks = tasks;
                 stored.description.bar = description.bar;
             }
             stored
