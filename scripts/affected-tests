@@ -28,7 +28,10 @@ def main():
         return
     areas = set()
     for path in sorted(paths):
-        if path == b"src/console.rs" or path.startswith((b"src/console/", b"src/config/console/")):
+        if path.startswith((b"src/console/", b"src/config/console/")) or path in {
+            b"src/console.rs", b"src/config/console.rs", b"tests/console/scoring_fixture.py",
+            b"tests/fixtures/waterfall-logs.jsonl", b"tests/fixtures/waterfall-spans.jsonl",
+        }:
             areas.update({"console", "full"})
             print(f"Console browser tests and full Rust suite for {os.fsdecode(path)!r}.", flush=True)
         elif path.startswith(b"console/"):

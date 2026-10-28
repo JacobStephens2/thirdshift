@@ -11,15 +11,17 @@ any failed command fails the entry point.
 | --- | --- |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
-| `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console/**` | Console browser tests and the full Rust suite |
+| `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
 | Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
 
 Unknown paths print the reason for selecting the full Rust suite, and Console
 paths print the reason for selecting the Console browser tests. The mappings
-are deliberately narrow: adding a new area cannot silently opt it out. For
-changes to the selector or other Python tooling, also run
+are deliberately narrow: adding a new area cannot silently opt it out. When a
+Console browser test starts reading another file outside `console/`, add that
+file to the Console source paths in `scripts/affected-tests`. For changes to
+the selector or other Python tooling, also run
 `python3 -m unittest discover -s scripts -p 'test_*.py'`, as CI does.
 
 The full Rust suite uses `cargo nextest run` when `cargo nextest --version`
@@ -41,10 +43,10 @@ threads, for example `cargo test -- --test-threads=3` or
 
 Set up browser dependencies following [the site instructions](../site/tests/README.md)
 before selecting site checks, and [the Console instructions](../console/README.md)
-(`npm ci`; `npx playwright install --with-deps chromium`) before selecting Console
-checks. A missing Node, npm or Playwright dependency fails visibly rather than
-dropping that check. Site generation checks remain part of `npm test`; regenerate
-prompt changes as described in [AGENTS.md](../AGENTS.md#generated-prompts).
+before selecting Console checks. A missing Node, npm or Playwright dependency
+fails visibly rather than dropping that check. Site generation checks remain
+part of `npm test`; regenerate prompt changes as described in
+[AGENTS.md](../AGENTS.md#generated-prompts).
 
 ## Local work and CI
 

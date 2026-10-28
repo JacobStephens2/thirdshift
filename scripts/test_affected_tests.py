@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,14 @@ class AffectedTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return result, calls
 
+    def select_for_only(self, path):
+        self.git("branch", "-f", "base", "HEAD")
+        self.change(path)
+        result, calls = self.run_selector()
+        self.calls.unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result, calls
+
     def test_site_only_runs_browser_and_rust_site_checks(self):
         self.change("site/index.html")
         result, calls = self.run_selector()
@@ -91,32 +100,26 @@ class AffectedTests(unittest.TestCase):
         for path in ["console/tests/inbox.test.cjs", "console/tests/fixtures/experiments.cjs",
                      "console/package-lock.json"]:
             with self.subTest(path=path):
-                self.git("branch", "-f", "base", "HEAD")
-                self.change(path)
-                result, calls = self.run_selector()
-                self.assertEqual(result.returncode, 0, result.stderr)
+                result, calls = self.select_for_only(path)
                 self.assertEqual(calls, [
                     ["cargo", "build", "--locked"],
                     ["npm", "test", "--prefix", "console"],
                 ])
                 self.assertIn(f"Console browser tests for {path!r}.", result.stdout)
-                self.calls.unlink()
 
     def test_console_source_runs_the_console_browser_tests_and_full_rust_suite(self):
         for path in ["src/console.rs", "src/console/inbox.html", "src/console/assets/console.css",
-                     "src/console/assets/console.js", "src/config/console/themes.rs"]:
+                     "src/console/assets/console.js", "src/config/console.rs",
+                     "src/config/console/themes.rs", "tests/console/scoring_fixture.py",
+                     "tests/fixtures/waterfall-logs.jsonl", "tests/fixtures/waterfall-spans.jsonl"]:
             with self.subTest(path=path):
-                self.git("branch", "-f", "base", "HEAD")
-                self.change(path)
-                result, calls = self.run_selector()
-                self.assertEqual(result.returncode, 0, result.stderr)
+                result, calls = self.select_for_only(path)
                 self.assertEqual(calls, [
                     ["cargo", "build", "--locked"],
                     ["npm", "test", "--prefix", "console"],
                     ["cargo", "nextest", "run"],
                 ])
                 self.assertIn(f"Console browser tests and full Rust suite for {path!r}.", result.stdout)
-                self.calls.unlink()
 
     def test_console_and_site_changes_keep_both_browser_checks_and_the_full_suite(self):
         self.change("site/index.html", "console/tests/inbox.test.cjs")
@@ -134,7 +137,7 @@ class AffectedTests(unittest.TestCase):
         (self.tools / "npm").unlink()
         system = self.root / "system"
         system.mkdir()
-        (system / "git").symlink_to(subprocess.check_output(["which", "git"], text=True).strip())
+        (system / "git").symlink_to(shutil.which("git"))
         self.env["PATH"] = f"{self.tools}:{system}"
         result, calls = self.run_selector()
         self.assertNotEqual(result.returncode, 0)
@@ -146,13 +149,9 @@ class AffectedTests(unittest.TestCase):
                      "Cargo.toml", "Cargo.lock", ".github/workflows/ci.yml",
                      ".config/nextest.toml", "new-area/unknown file\nname"]:
             with self.subTest(path=path):
-                self.git("branch", "-f", "base", "HEAD")
-                self.change(path)
-                result, calls = self.run_selector()
-                self.assertEqual(result.returncode, 0, result.stderr)
+                result, calls = self.select_for_only(path)
                 self.assertEqual(calls, [["cargo", "nextest", "run"]])
                 self.assertIn("cargo nextest run", result.stdout)
-                self.calls.unlink()
 
     def test_mixed_site_release_and_rust_changes_keep_all_checks(self):
         self.change("site/index.html", "scripts/release.sh", "src/main.rs")
