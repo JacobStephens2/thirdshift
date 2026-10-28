@@ -737,7 +737,9 @@ The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
---json` shows one. The starting command's `--json` ends with one JSON line
+--json` shows one. Both use the versioned
+[Experiment results format](experiment-results.md), identified by `format: 1`.
+The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
 in USD where the Harness reports one. JSON keeps these under `usage.baseline`
