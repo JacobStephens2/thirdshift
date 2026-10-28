@@ -203,6 +203,10 @@ impl Stored {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
             let started = directory.join("started").exists();
+            if stored.description.bar.discriminating_tasks.is_none() {
+                // Pre-selection Experiments keep judging all retained tasks.
+                description.bar.discriminating_tasks = None;
+            }
             if started {
                 // Cause defaults belong to the installed runner, not a CLI
                 // override. Resume keeps the rules recorded before its Trials.
@@ -296,8 +300,12 @@ impl Stored {
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
-        let (verdict, pending) =
-            super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
+        let (verdict, pending) = super::grading::assess(
+            &self.tasks,
+            &self.results()?,
+            &self.description.bar,
+            &self.description.baseline,
+        )?;
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
         Ok(())
@@ -308,16 +316,16 @@ impl Stored {
             .pending_rechecks
             .iter()
             .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
-        if matches!(
-            self.description.bar.levels,
-            crate::verdict::Levels::Legacy { .. }
-        ) && self.verdict.is_some()
-        {
-            // A saved single-level Verdict is evidence, not an invitation to
+        if self.description.bar.discriminating_tasks.is_none() && self.verdict.is_some() {
+            // A saved pre-selection Verdict is evidence, not an invitation to
             // recalculate it under a newer runner's recheck policy.
             if self.state == State::Completed && missing_flip_verdicts {
-                let (_, pending) =
-                    super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
+                let (_, pending) = super::grading::assess(
+                    &self.tasks,
+                    &self.results()?,
+                    &self.description.bar,
+                    &self.description.baseline,
+                )?;
                 self.pending_rechecks = pending;
             }
             return Ok(());
@@ -393,7 +401,7 @@ impl Stored {
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
 Baseline: {}
-Candidate: {}{}",
+Candidate: {}{}{}",
                 self.description.id,
                 view.name,
                 self.state,
@@ -426,7 +434,8 @@ Candidate: {}{}",
                             .iter()
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
-                    .collect::<String>()
+                    .collect::<String>(),
+                self.verdict.as_ref().map_or(String::new(), |verdict| verdict.selection_report())
             ))
         }
     }

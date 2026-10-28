@@ -179,7 +179,7 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
     let accuracy = assess(&counts, bar, bar.seed, predictions)?;
     let wrong_findings = assess(&wrong_counts, bar, bar.seed.wrapping_add(1), predictions)?;
     let decisions = [accuracy.verdict, wrong_findings.verdict];
-    let verdict = if dropped_tasks > scores.len() / 10 {
+    let verdict = if scores.is_empty() || dropped_tasks > scores.len() / 10 {
         Decision::Inconclusive
     } else if decisions.contains(&Decision::Fail) {
         Decision::Fail
@@ -221,7 +221,6 @@ fn is_false(value: &bool) -> bool {
 }
 
 fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {
-    ensure!(!scores.is_empty(), "at least one Eval task is required");
     ensure!(
         matches!(bar.trials_per_task, 1 | 3),
         "Trials per Eval task must be one or three"

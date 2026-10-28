@@ -100,6 +100,7 @@ fn now(view: &View) -> String {
         ));
     }
     for (name, suite) in &verdict.suites {
+        let suite = &suite.statistics;
         if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 {
             reasons.push(format!(
                 "{name}: {} Eval tasks dropped",
@@ -367,6 +368,7 @@ fn list_intervals(view: &View) -> String {
         v.suites
             .iter()
             .map(|(name, suite)| {
+                let suite = &suite.statistics;
                 let (bounds, level, kind) = if suite.accuracy.verdict == Decision::Fail {
                     (
                         suite.accuracy.intervals.fail(),
@@ -403,6 +405,7 @@ fn verdict(view: &View) -> String {
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
     for (name, suite) in &verdict.suites {
+        let suite = &suite.statistics;
         // The gist shows the interval that decided each metric, as the list does.
         let decided = |assessment: &crate::verdict::Assessment| {
             if assessment.verdict == Decision::Fail {
@@ -1149,8 +1152,8 @@ fn bar(view: &View) -> String {
                     format!(
                         "<dt>{} method and version</dt><dd>{} · thirdshift {}</dd>",
                         esc(suite),
-                        esc(&v.method),
-                        esc(&v.thirdshift_version)
+                        esc(&v.statistics.method),
+                        esc(&v.statistics.thirdshift_version)
                     )
                 })
                 .collect::<String>()

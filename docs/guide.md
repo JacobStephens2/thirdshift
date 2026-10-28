@@ -633,6 +633,18 @@ readings and their `measured` and `discriminating` flags. `thirdshift evals`
 (or `evals list`, optionally `--json`) lists every Eval task's table or `null`,
 with the same flags. See [the manifest format](eval-tasks.md).
 
+Before the first Trial, the Bar saves each selected suite's list of
+discriminating Eval tasks from recorded Difficulty. Only that list is judged.
+Other approved Eval tasks still run and are graded; each suite reports their
+Trials per Eval task under `measurement`. These Trials change no interval,
+required recheck or prediction of how many more Eval tasks are needed.
+`experiments <id>` and `--json` show each suite's counts: judged,
+measurement-only, void-dropped and judged tasks measured on another setup
+(commit, Harness, Model or Effort) than the Baseline's. The first three counts
+partition the suite: a task with an exhausted Void Trial counts as void-dropped,
+including when it was only measurement. Difficulty from another setup still
+qualifies. A suite with no discriminating Eval tasks is inconclusive.
+
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar's timeout, in session-minutes; and, for each suite and Harness that has
@@ -785,7 +797,7 @@ grading without rerunning finished Trials,
 and reuses already validated Scores.
 
 The Verdict stays `waiting_on_rechecks` until you have rechecked every borderline
-Score and every decisive Score. A Score is decisive when flipping its pass/fail
+Score and every decisive Score on the Bar's judged list. A Score is decisive when flipping its pass/fail
 or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 `thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
@@ -844,7 +856,7 @@ One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
 Any failed suite fails the Experiment; otherwise any inconclusive
-suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
+suite makes it inconclusive. More than a tenth of judged Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
 The code-review suite runs three Trials per Arm per Eval task by default; the
@@ -852,14 +864,18 @@ Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
 `pass_cubed`: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
-`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v3`, and
-their Bar records `"pass_rule": "margin"`. Saved Experiments under
+`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v4`, and
+their Bar records `"pass_rule": "margin"` and `discriminating_tasks` per suite.
+Saved Experiments under `paired-dirichlet-v3` keep judging all their retained
+Eval tasks, with their stored Bar and Verdict. Saved Experiments under
 `paired-dirichlet-v2`, whose pass also needed the pass-level upper bound to
 reach zero, keep that rule and their stored Bar and Verdict when read, and
 when resumed with the same levels. Saved Experiments under `paired-dirichlet-v1`
 remain readable with their stored single-level Bar and Verdict unchanged. See
 [ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md) and
 [ADR-0025](adr/0025-a-pass-needs-only-the-margin.md).
+The judged-list decision is recorded in
+[ADR-0026](adr/0026-judge-the-recorded-discriminating-tasks.md).
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed `--credible-level`
 flag. Reading that command does not rewrite its stored Bar or Verdict.
@@ -876,6 +892,8 @@ resuming exhausted history finishes without replaying its old pause.
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
+That includes a changed discriminating list read from current Difficulty;
+a new reading inside the band that leaves the list unchanged can resume.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
 [Experiment results format](experiment-results.md), identified by `format: 2`.

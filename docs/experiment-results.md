@@ -29,6 +29,8 @@ two-level Bar: `pass_level`, `fail_level` and `pass_rule` in each Bar,
 `worse_within_margin`. It also added `decisive_verdicts` to pending rechecks
 and lets a saved single-level Verdict omit `provisional_verdict`. Experiments
 saved before the two-level Bar still show `credible_level` and `interval`.
+Before format 2's release, it also gained `bar.discriminating_tasks` and each
+suite's `counts` and `measurement` fields for `paired-dirichlet-v4`.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
 
@@ -126,6 +128,20 @@ Eval task counts and nullable `pass_cubed`. The latter is present as an object
 only for three-Trial suites: each Arm's share of retained Eval tasks for which
 all three Trials passed.
 
+New Experiments use `paired-dirichlet-v4`: only the names in the Experiment
+Bar's per-suite `discriminating_tasks` list enter the statistics, predictions
+and required rechecks. Each suite adds `counts`: `judged` counts retained listed
+tasks, `measurement_only` counts retained unlisted tasks, `void_dropped` counts
+all tasks dropped after exhausted Void retries, and `other_setup` counts judged
+tasks whose recorded Difficulty's commit, Harness, Model or Effort differs from
+the Baseline's. The first three partition the approved tasks. `retained_tasks`
+and `dropped_tasks` refer only to the judged list, including for dropout guards.
+`measurement` lists each unlisted task and its Trials: Arm, zero-based Trial
+index, outcome, effective passed/wrong-finding flags and original borderline
+flag. Full original Scores, rechecks and attempt evidence remain in `results`.
+An empty judged list gives an inconclusive suite. Older Experiments omit the
+list, counts and measurement, keeping their stored method, Bar and Verdict.
+
 Each assessment has `difference_counts`, ordered from -1 to +1 in steps of
 1 / Trials per Eval task, its intervals (`lower`, `upper`), decision and
 nullable `more_tasks` forecast. A two-level Bar gives `pass_interval` and
@@ -210,6 +226,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "margin": "number", "pass_level?": "number", "fail_level?": "number",
     "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
     "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
+    "discriminating_tasks?": {"*": ["string"]},
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
@@ -249,7 +266,9 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "SuiteVerdict": {
     "bar": "SuiteBar", "thirdshift_version": "string", "method": "string",
     "accuracy": "Assessment", "wrong_findings": "Assessment", "verdict": "Decision",
-    "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?"
+    "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?",
+    "counts?": {"judged": "integer", "measurement_only": "integer", "void_dropped": "integer", "other_setup": "integer"},
+    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
   },
   "SuiteBar": {
     "margin": "number", "pass_level?": "number", "fail_level?": "number",

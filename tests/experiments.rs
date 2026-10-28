@@ -19,6 +19,8 @@ mod cost;
 
 #[path = "experiments/difficulty.rs"]
 mod difficulty;
+#[path = "experiments/discriminating.rs"]
+mod discriminating;
 
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
@@ -83,6 +85,7 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
 }
 
 fn single_level_experiment(legacy: &mut Value) {
+    discriminating::pre_selection_experiment(legacy);
     let old_bar = |bar: &mut Value| {
         let bar = bar.as_object_mut().unwrap();
         let level = bar.remove("pass_level").unwrap();
@@ -121,6 +124,7 @@ fn saved_reaches_zero_experiments_keep_their_bar_and_verdict_when_read_and_resum
     ));
     let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["bar"]["pass_rule"], "margin");
+    discriminating::pre_selection_experiment(&mut saved);
     // A paired-dirichlet-v2 Experiment, saved before ADR-0025.
     saved["bar"].as_object_mut().unwrap().remove("pass_rule");
     for suite in saved["verdict"]["suites"]
@@ -172,6 +176,10 @@ fn legacy_resume_commands_keep_literal_model_arguments_and_the_recorded_levels()
         saved["bar"].as_object_mut().unwrap().remove("pass_level");
         saved["bar"].as_object_mut().unwrap().remove("fail_level");
         saved["bar"].as_object_mut().unwrap().remove("pass_rule");
+        saved["bar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("discriminating_tasks");
         saved["bar"]["credible_level"] = json!(0.8);
         saved["resume_command"] = json!(format!(
             "thirdshift 'experiment' 'candidate' '--candidate-model' '{}' '--credible-level' '0.8' '--json'",
@@ -222,7 +230,7 @@ fn experiment_fixes_both_levels_before_trials_and_refuses_changes() {
         suite["method"]
             .as_str()
             .unwrap()
-            .starts_with("paired-dirichlet-v3;")
+            .starts_with("paired-dirichlet-v4;")
     );
     assert_eq!(saved["bar"]["pass_rule"], "margin");
     for metric in ["accuracy", "wrong_findings"] {
@@ -1088,6 +1096,12 @@ issue_url = "https://github.com/acme/widgets/issues/7"
 base = "main"
 branch = "issue-7"
 pr_url = "https://github.com/acme/widgets/pull/1"
+[difficulty]
+passes = 3
+trials = 6
+experiment = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+commit = "{baseline}"
+harness = "claude"
 "#,
                 scenario.launch_dir()
             ),

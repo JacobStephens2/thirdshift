@@ -440,7 +440,7 @@ fn invalid_bars_and_incomplete_retained_pairs_are_rejected() {
     let mut bar = Bar::default();
     bar.prediction.max_additional_tasks = 1;
     assert!(judge(&[task(1, 1, 1)], &bar).is_err());
-    assert!(judge(&[], &bar).is_err());
+    assert_eq!(judge(&[], &bar).unwrap().verdict, Decision::Inconclusive);
     let scores = [task(3, 3, 3)];
     for invalid in [0, 2, 4] {
         assert!(

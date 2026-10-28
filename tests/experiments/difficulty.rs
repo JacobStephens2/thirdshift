@@ -104,6 +104,7 @@ echo '{{"type":"result","subtype":"error_during_execution","is_error":true,"erro
 #[test]
 fn evals_lists_unmeasured_tasks_and_the_fixed_discriminating_band() {
     let fixture = Fixture::new();
+    super::discriminating::unmeasured(&fixture);
     let suite = fixture
         .scenario
         .path("home/.thirdshift/evals/suites/spec-review");
