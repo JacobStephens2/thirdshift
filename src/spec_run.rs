@@ -362,7 +362,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.deliver(worktree, opening, &mut self.spec_pr, Some(checklist))
+        delivery.spec_review(worktree, opening.prompt, &mut self.spec_pr, checklist)
     }
 
     fn interrupted(&mut self) -> bool {
@@ -798,7 +798,7 @@ mod tests {
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.session.kind(),
-                catch_up: opening.session.catches_up_from_origin(),
+                catch_up: opening.session == OpeningSession::SpecReview,
                 prompt: opening.prompt,
             });
             let delivered = if self.script.review_fails {

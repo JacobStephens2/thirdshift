@@ -477,7 +477,8 @@ thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
-thirdshift process                      # list Custom processes (experimental)
+thirdshift process list                 # list Processes, marking Built-in processes (experimental)
+thirdshift process show &lt;name&gt;           # print a Process file exactly (experimental)
 thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
 thirdshift process check &lt;name&gt; [issue &lt;issue&gt;]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
@@ -811,6 +812,29 @@ Command record, Console entry or Session log is created for a standalone skill.<
 A Step is a skill session, a command, or a catalogue Step. It is
 experimental. Write <code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the
 file&#39;s stem.</p>
+<p><code>thirdshift process list</code> (or just <code>thirdshift process</code>) lists Processes with
+their descriptions, marking compiled-in Built-in processes as <code>(built-in)</code>.
+<code>thirdshift process show &lt;name&gt;</code> prints the file exactly, so it can be saved
+under a new name in <code>~/.thirdshift/processes/</code> as a starting point.
+Built-in process files live in the repository&#39;s <a href="https://github.com/JacobStephens2/thirdshift/blob/main/processes/"><code>processes/</code></a>
+folder and are compiled into the binary, like Factory skills (ADR-0001).
+They use the same format and validation as Custom processes. The built-in
+<code>ticket-run</code> runs <code>implement</code> → <code>security-review</code> → <code>delivery</code> → <code>self-merge</code>,
+inheriting the Command&#39;s Harness, Model and Effort, Child asks and Limits.
+Every Ticket run executes it, including those started by Spec, Architect
+and Security runs. The command and User
+config still decide whether the Security review and Self-merge run. The
+Command keeps its Ticket run identity, sessions and progress lines.
+Inspect it with <code>thirdshift process show ticket-run</code>, or validate it with
+<code>thirdshift process check ticket-run issue &lt;issue&gt;</code>. Save the printed file
+under a new name to run it as a Custom process.
+A Custom process cannot take a reserved Built-in process name.</p>
+<p>Every skill Step gets one Resume if its session ends with background work
+still running that was killed with it, using the same Session prompt and
+rules as a Ticket run. If the Resume ends the same way, a progress line
+names the killed work and the Process carries on. Following Steps decide
+the outcome; if the Process then fails, its cause names that work ahead of
+the failing Step. A Resume does not count against the Process&#39;s Repair cap.</p>
 <pre><code class="language-toml">version = 1
 description = &quot;Gather notes, then review them&quot;
 
@@ -881,7 +905,7 @@ kind = &quot;issue-branch&quot;
 
 [[steps]]
 name = &quot;implement&quot;
-skill = &quot;thirdshift-implement&quot;
+catalogue = &quot;implement&quot;
 worktree = &quot;fix&quot;
 
 [[steps]]
@@ -906,10 +930,33 @@ the existing branch, and an open pull request&#39;s base is the Base branch.
 Session Steps in that checkout are told to build on its commits. A
 Process has at most one Issue-branch worktree. The Steps that name it run in
 that checkout. Any other declared worktree stays throwaway.</p>
-<p><code>catalogue = &quot;delivery&quot;</code> publishes that Issue branch. It is Delivery with no
-opening session and no Security review: push, open a draft pull request when
-the branch has none, write the Built-with line, mark the pull request ready
-for review, and keep it mergeable with green or absent CI through the Repair
+<p><code>catalogue = &quot;implement&quot;</code> runs the same implementation session as a Ticket
+run, using its fresh or Continuation prompt. It must name the Issue-branch
+worktree, and takes its own Harness, Model and Effort like other Steps.
+On a <code>bug</code> issue it diagnoses before fixing, reproducing at the merge base
+when the Issue branch is ahead of the Base branch. A reproduced bug goes on
+to the later Steps. An unreproduced bug ends the Process successfully with
+triage notes and <code>needs-info</code>, skips all later Steps, ends the Claim and
+cleans up the Issue-branch worktree. Its result is the triage comment URL;
+the progress line and Ending say the bug was not reproduced. Only
+<code>implement</code> can end a Process early; there is no file setting for this.</p>
+<p><code>catalogue = &quot;security-review&quot;</code> runs the same Security review as a Ticket run.
+Place it on the Issue-branch worktree after its editing Steps and before
+<code>delivery</code>, outside any parallel group. The Step runs when <code>security-review</code>
+(or <code>--security-review</code>) on the command or <code>[security] review = true</code> asks;
+<code>no-security-review</code> overrides the config. Otherwise it prints that the review
+was skipped. Before the Process name, spell these flags with <code>--</code>; the bare
+words remain valid Custom process names. It uses <code>security.harness</code> when configured, including that
+Harness&#39;s Model and Effort, and keeps the Ticket run&#39;s default-Harness fallback.
+A Harness explicitly named by the Step must start at preflight, with no
+fallback. A refused or incomplete review, or unaddressed introduced findings,
+holds a following Self-merge while Delivery still leaves the PR ready and
+repairs conflicts and CI. The public review outcome is written to the PR;
+pre-existing findings stay private as in a Ticket run.</p>
+<p><code>catalogue = &quot;delivery&quot;</code> publishes that Issue branch after the earlier Steps&#39;
+editing sessions and any Security review. It pushes, opens a draft pull request
+when the branch has none, writes the Built-with line, marks the pull request ready
+for review, and keeps it mergeable with green or absent CI through the Repair
 loop. When thirdshift opens the pull request, its title is the issue&#39;s and its body
 starts <code>Closes #&lt;n&gt;</code>. Repairs run on the Command&#39;s Harness, Model and Effort.
 A Process has at most one delivery Step. It names the Issue-branch worktree,
@@ -976,7 +1023,7 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 <code>check</code> prints cannot hide the command. <code>catalogue</code> names a
-built-in Step: <code>delivery</code> or <code>self-merge</code>, described above, or <code>run-published-issue</code>.
+built-in Step: <code>implement</code>, <code>security-review</code>, <code>delivery</code> or <code>self-merge</code>, described above, or <code>run-published-issue</code>.
 <code>run-published-issue</code> starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session&#39;s final
 message ends with the issue&#39;s URL on its last non-blank line. Before it starts a
@@ -1000,14 +1047,15 @@ cannot share a worktree. The same group name after a Step that is not in the
 group starts a new group. <code>optional = true</code> records that Step&#39;s failure and
 the Process carries on. Without <code>optional</code>, or with <code>optional = false</code>, a
 failure stops the Process once the other Steps in its group have finished.</p>
-<pre><code class="language-sh">thirdshift process
+<pre><code class="language-sh">thirdshift process list
+thirdshift process show gather-review
 thirdshift process check gather-review
 thirdshift process check ship issue 7
 thirdshift process gather-review
 thirdshift process gather-review --harness claude --model opus --effort high
 thirdshift process ship issue 7
 </code></pre>
-<p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
+<p><code>thirdshift process list</code> lists each Process and its description. <code>check</code>
 validates the file and prints the plan: the description, the Command&#39;s Harness,
 Model and Effort, and each Step&#39;s choices, where each came from (<code>Step</code>,
 <code>command</code>, <code>User config</code> or <code>default</code>), and whether its Harness starts.
@@ -1020,7 +1068,7 @@ Issue branch. When a limit tightens a built-in rule, <code>check</code> prints i
 repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and <code>check</code> does not run it. A delivery Step shows
-<code>delivery</code>. A self-merge Step shows <code>self-merge</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
+<code>delivery</code>. A Security review Step shows <code>security-review</code>. A self-merge Step shows <code>self-merge</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
 optional Step is marked <code>(optional)</code>. <code>check</code> performs the same Harness
 preflight as running, including a minimal Model test when the Harness needs
 one, and runs no Step. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and
@@ -1079,7 +1127,8 @@ that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong <code>version</code>, an unknown key, an unknown Harness, a Step without exactly one of
 <code>skill</code>, <code>command</code> and <code>catalogue</code>, a command that is not a string or is empty,
-a catalogue value other than <code>delivery</code>, <code>run-published-issue</code> or <code>self-merge</code>, a
+a catalogue value other than <code>implement</code>, <code>delivery</code>, <code>run-published-issue</code>, <code>security-review</code> or <code>self-merge</code>, an
+<code>implement</code> Step outside an Issue-branch worktree, a
 <code>self-merge</code> Step that is not directly after <code>delivery</code>, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a
 self-merge Step on a worktree other than the Issue branch, a
