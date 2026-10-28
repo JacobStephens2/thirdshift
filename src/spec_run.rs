@@ -108,7 +108,7 @@ pub(crate) fn land(
     child_asks: &ChildAsks,
     parallel: NonZeroUsize,
     process: &str,
-) -> Result<String, FailedRun> {
+) -> Result<AccountedTickets, FailedRun> {
     let tickets = GitHub::new().tickets(spec)?;
     spec_pr.resume_spec()?;
     let mut outside = ChildRunsAndGitHub {
@@ -124,7 +124,7 @@ pub(crate) fn land(
     };
     let accounted = account_tickets(&mut outside, spec, tickets, parallel)?;
     outside.worktree().fast_forward_to_origin()?;
-    Ok(accounted.pr_url)
+    Ok(accounted)
 }
 
 /// Take `spec`, whose Tickets were last read as `tickets`, from its Spec
@@ -176,12 +176,24 @@ fn run_through(
     }
 }
 
-struct AccountedTickets {
-    checklist: String,
-    pr_url: String,
+pub(crate) struct AccountedTickets {
+    pub checklist: String,
+    pub pr_url: String,
     lines: Vec<String>,
     progress: TicketProgress,
     local_work: Vec<String>,
+}
+
+impl AccountedTickets {
+    /// Carry the Ticket loop's evidence into a later catalogue Step's failure.
+    pub(crate) fn record_failure(&self, failed: &mut FailedRun) {
+        let recovery = failed.recovery.get_or_insert_with(|| {
+            Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+        });
+        recovery.add_tickets(self.progress, true);
+        recovery.add_child_work(self.local_work.clone());
+        failed.ticket_lines = self.lines.clone();
+    }
 }
 
 fn account_tickets(

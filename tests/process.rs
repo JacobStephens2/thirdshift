@@ -10,6 +10,8 @@ mod land_tickets;
 mod published;
 #[path = "process/security_review.rs"]
 mod security_review;
+#[path = "process/spec_review.rs"]
+mod spec_review;
 mod support;
 #[path = "process/ticket_run.rs"]
 mod ticket_run;

@@ -60,6 +60,7 @@ use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trus
 mod architecture;
 mod catalog;
 mod identity;
+mod spec_review;
 pub(crate) use identity::Identity;
 pub(crate) mod ticket;
 use catalog::Catalog;
@@ -154,6 +155,7 @@ enum DraftKind {
     Command { command: String },
     Implement { line: usize },
     ArchitectureReview { line: usize },
+    SpecReview { line: usize },
     SecurityReview { line: usize },
     Delivery { line: usize },
     SelfMerge { line: usize },
@@ -188,6 +190,7 @@ impl ResolvedStep {
             StepKind::Command(_) => "command",
             StepKind::Implement => "implement",
             StepKind::ArchitectureReview => "architecture-review",
+            StepKind::SpecReview => "spec-review",
             StepKind::SecurityReview => "security-review",
             StepKind::Delivery => "delivery",
             StepKind::SelfMerge => "self-merge",
@@ -364,6 +367,7 @@ enum StepKind {
     Command(String),
     Implement,
     ArchitectureReview,
+    SpecReview,
     SecurityReview,
     Delivery,
     SelfMerge,
@@ -431,6 +435,7 @@ struct IssueRun<'a> {
     delivered: bool,
     pull_request: PullRequest,
     reviews: Vec<crate::security::review::Outcome>,
+    spec_tickets: Option<crate::spec_run::AccountedTickets>,
     /// Dispatch's asks, retained for Base fixes started during Delivery.
     child_asks: ChildAsks,
     /// The Step result carries the error; dispatch also needs its other facts.
@@ -910,6 +915,7 @@ fn run_issue_branch(
             delivered: false,
             pull_request: PullRequest::new(&issue, &branch, &base, GitHub::new()),
             reviews: Vec::new(),
+            spec_tickets: None,
             child_asks: ChildAsks::default(),
             failure: None,
         };
@@ -926,7 +932,7 @@ fn run_issue_branch(
     drop(completed);
     if result.is_ok() && not_reproduced {
         claim.needs_info();
-    } else if !prepared.spec_branch && (result.is_ok() || delivered) && !ended_before_delivery {
+    } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
     } else {
         claim.release();
@@ -1003,19 +1009,26 @@ fn execute_issue_steps(
         checkout.keep_unpublished_on_cleanup();
     }
     let result = execute_steps(process, prepared, Some(&mut *issue_run));
-    if let Err(error) = &result
-        && !prepared.spec_branch
-    {
+    if let Err(error) = &result {
         let context = continuation(issue_run);
         let on_origin = issue_run.on_origin;
-        if let Some(checkout) = issue_run.checkout.as_mut() {
+        if issue_run.failure.is_none()
+            && let Some(checkout) = issue_run.checkout.as_mut()
+        {
             issue_run.failure = Some(preserve_step_failure(
                 checkout,
                 &mut issue_run.pull_request,
                 context,
                 on_origin,
                 error,
+                recovery::Stage::Implementation,
             ));
+        }
+        if let Some(tickets) = &issue_run.spec_tickets {
+            let _ = issue_run.pull_request.show_checklist(&tickets.checklist);
+            if let Some(failed) = &mut issue_run.failure {
+                tickets.record_failure(failed);
+            }
         }
     }
     result
@@ -1146,7 +1159,16 @@ fn execute_groups(
         let outcomes = if group.len() == 1 {
             let started = Instant::now();
             let began_at = Utc::now();
-            let outcome = if matches!(group[0].kind, StepKind::SecurityReview) {
+            let outcome = if matches!(group[0].kind, StepKind::SpecReview) {
+                spec_review::run(
+                    prepared,
+                    &group[0],
+                    range.start,
+                    issue_run
+                        .as_deref_mut()
+                        .context("spec-review has no Spec branch")?,
+                )
+            } else if matches!(group[0].kind, StepKind::SecurityReview) {
                 run_security_review(
                     prepared,
                     &group[0],
@@ -1568,7 +1590,11 @@ fn run_land_tickets(
         config.spec_parallel,
         process,
     ) {
-        Ok(url) => Ok(url),
+        Ok(tickets) => {
+            let url = tickets.pr_url.clone();
+            run.spec_tickets = Some(tickets);
+            Ok(url)
+        }
         Err(failed) => {
             let error = anyhow!("{:#}", failed.error);
             run.failure = Some(failed);
@@ -1637,7 +1663,15 @@ fn run_delivery(
         repair_cap: prepared.limits.repair_cap,
         protected_paths: protected,
     })
-    .publish(checkout, &mut issue_run.pull_request, &issue_run.reviews);
+    .publish(
+        checkout,
+        &mut issue_run.pull_request,
+        &issue_run.reviews,
+        issue_run
+            .spec_tickets
+            .as_ref()
+            .map(|tickets| tickets.checklist.as_str()),
+    );
     match published {
         Ok(url) => {
             issue_run.delivered = true;
@@ -1712,13 +1746,14 @@ fn preserve_step_failure(
     context: recovery::Continuation,
     on_origin: bool,
     error: &anyhow::Error,
+    stage: recovery::Stage,
 ) -> crate::failed_run::FailedRun {
     let reason = Cause::of(error).first_line().to_string();
     let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || {
         pull_request.ensure_preservable()
     });
     let preservation = recovery::preservation_of(preserved, progress::step);
-    let mut recovery = Recovery::new(recovery::Stage::Implementation, preservation);
+    let mut recovery = Recovery::new(stage, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
     recovery.add_command_context(context, on_origin);
     for line in recovery.lines() {
@@ -1747,6 +1782,7 @@ fn run_step_in(
     match &step.kind {
         StepKind::Implement => run_implement(run, cwd, step),
         StepKind::ArchitectureReview => architecture::run(run, step),
+        StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
         StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
         StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
         StepKind::Skill { name, path } => {
@@ -2228,6 +2264,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
         StepKind::Delivery => format!("{}: delivery", step.name),
         StepKind::Implement => format!("{}: implement", step.name),
         StepKind::ArchitectureReview => format!("{}: architecture-review", step.name),
+        StepKind::SpecReview => format!("{}: spec-review", step.name),
         StepKind::SecurityReview => format!("{}: security-review", step.name),
         StepKind::SelfMerge => format!("{}: self-merge", step.name),
         StepKind::RunPublishedIssue { process } if process != "ticket-run" => {
@@ -2256,6 +2293,7 @@ fn load(name: &str) -> Result<(PathBuf, ProcessFile, Identity)> {
 fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     let file = parse(path, text)?;
     refuse_spec_branch(path, &file)?;
+    spec_review::validate(path, &file)?;
     refuse_security_review(path, &file)?;
     refuse_worktrees(path, &file)?;
     refuse_implement(path, &file)?;
@@ -2535,7 +2573,7 @@ fn refuse_self_merge(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_branch = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
+        .find(|worktree| worktree.branch_line().is_some());
     let mut seen = false;
     for (index, step) in file.steps.iter().enumerate() {
         let DraftKind::SelfMerge { line } = step.kind else {
@@ -2602,7 +2640,7 @@ fn refuse_security_review(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_branch = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
+        .find(|worktree| worktree.branch_line().is_some());
     let delivery_at = file
         .steps
         .iter()
@@ -2670,10 +2708,22 @@ fn refuse_security_review(path: &Path, file: &ProcessFile) -> Result<()> {
 }
 
 fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
+    // Gathering Tickets alone intentionally leaves a draft Spec PR.
+    if file
+        .worktrees
+        .iter()
+        .any(|worktree| worktree.kind == WorktreeKind::SpecBranch)
+        && !file
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, DraftKind::Delivery { .. }))
+    {
+        return Ok(());
+    }
     let mut issue_branches = file
         .worktrees
         .iter()
-        .filter(|worktree| worktree.kind == WorktreeKind::IssueBranch);
+        .filter(|worktree| worktree.branch_line().is_some());
     let Some(issue_branch) = issue_branches.next() else {
         for step in &file.steps {
             if let DraftKind::Delivery { line } = &step.kind {
@@ -2898,6 +2948,7 @@ fn resolve(
         DraftKind::Command { command } => StepKind::Command(command.clone()),
         DraftKind::Implement { .. } => StepKind::Implement,
         DraftKind::ArchitectureReview { .. } => StepKind::ArchitectureReview,
+        DraftKind::SpecReview { .. } => StepKind::SpecReview,
         DraftKind::SecurityReview { .. } => StepKind::SecurityReview,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
@@ -3418,6 +3469,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
     let kind = match value {
         "implement" => DraftKind::Implement { line },
         "architecture-review" => DraftKind::ArchitectureReview { line },
+        "spec-review" => DraftKind::SpecReview { line },
         "delivery" => DraftKind::Delivery { line },
         "security-review" => DraftKind::SecurityReview { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
@@ -3428,7 +3480,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
                 path,
                 line,
                 "catalogue",
-                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, self-merge or land-tickets",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge or land-tickets",
             ));
         }
     };
