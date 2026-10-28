@@ -17,6 +17,9 @@ mod code_graders;
 #[path = "experiments/cost.rs"]
 mod cost;
 
+#[path = "experiments/difficulty.rs"]
+mod difficulty;
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 

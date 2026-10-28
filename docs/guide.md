@@ -546,6 +546,7 @@ thirdshift experiment --release <commit> [--json] [--yes]  # use the last releas
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift experiments <id> --name <text> [--json]  # rename an Experiment; --name '' brings back its default name
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
+thirdshift experiments <id> --record-difficulty [--json]  # replace each Eval task's Difficulty from a completed A/A
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift recheck <id> --pending [--json]  # review pending Scores and their fingerprint
 thirdshift recheck <id> --batch <fingerprint> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
@@ -614,6 +615,23 @@ and Trial path (the commit's cached build may be reused), with separate Trials,
 Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
 identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
 The ordinary resume rules below still apply.
+
+After it completes, `thirdshift experiments <id> --record-difficulty` pools
+both Arms' retained, non-void Trials for each Eval task and replaces its
+optional `[difficulty]` table. It records passes, Trials, the Experiment ID,
+commit, Harness, Model and Effort, using the latest rechecked Scores. An
+unfinished Experiment, or Arms differing in any of those setup choices, is
+refused before writing. Each manifest is written atomically under the suite
+lock shared with approval; comments and Trial inputs are preserved. The saved
+Experiment and its Verdict stay unchanged.
+
+The command prints each Eval task's Difficulty as passes / Trials and whether
+it is **discriminating**: at least 6 Trials, with Difficulty between 0.15 and
+0.95 inclusive. Fewer than 6 Trials counts as **unmeasured**, as does a missing
+table. The band is fixed by the method, not a Bar flag. Add `--json` for the
+readings and their `measured` and `discriminating` flags. `thirdshift evals`
+(or `evals list`, optionally `--json`) lists every Eval task's table or `null`,
+with the same flags. See [the manifest format](eval-tasks.md).
 
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the

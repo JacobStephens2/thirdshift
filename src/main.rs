@@ -104,7 +104,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
-       thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it
+       thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs

@@ -2,6 +2,7 @@
 //! recording stays in the ordinary logs; private Eval data stays here.
 
 mod cost;
+mod difficulty;
 mod evidence;
 mod execution;
 mod grading;
@@ -97,7 +98,7 @@ impl Default for Bar {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Setup {
     pub commit: String,
     pub harness: String,
@@ -376,6 +377,11 @@ pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
     let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag] = positional.as_slice()
+        && flag.as_str() == "--record-difficulty"
+    {
+        return difficulty::record(&root, id, json);
+    }
     if let [id, flag, name] = positional.as_slice()
         && flag.as_str() == "--name"
     {
@@ -395,7 +401,7 @@ pub fn show(args: &[String]) -> Result<String> {
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
     store::show(&root, positional.first().map(|id| id.as_str()), json)
 }

@@ -1,6 +1,7 @@
 //! Versioned, deliberately strict manifests. Grader data never enters a Trial.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -34,6 +35,33 @@ pub(super) struct Task {
     pub checks: Vec<Vec<String>>,
     pub inputs: BTreeMap<String, String>,
     pub trial: Option<crate::trial::Inputs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<Difficulty>,
+}
+
+/// One replaceable A/A reading, with the setup that produced it.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Difficulty {
+    pub passes: usize,
+    pub trials: usize,
+    pub experiment: String,
+    pub commit: String,
+    pub harness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+impl Difficulty {
+    pub fn measured(&self) -> bool {
+        self.trials >= 6
+    }
+
+    pub fn discriminating(&self) -> bool {
+        self.measured() && (0.15..=0.95).contains(&(self.passes as f64 / self.trials as f64))
+    }
 }
 
 impl Task {
@@ -43,6 +71,13 @@ impl Task {
         version(task.format)?;
         commit_id(&task.base)?;
         commit_id(&task.change)?;
+        if let Some(difficulty) = &task.difficulty {
+            anyhow::ensure!(
+                difficulty.passes <= difficulty.trials,
+                "Difficulty passes exceed Trials"
+            );
+            commit_id(&difficulty.commit)?;
+        }
         if task.repository.trim().is_empty() || task.criteria.trim().is_empty() {
             bail!(
                 "{}: repository and criteria must not be empty",
@@ -72,6 +107,17 @@ pub(super) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("can't read {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("invalid manifest {}", path.display()))
+}
+
+/// Publish one edited manifest atomically, preserving its TOML formatting.
+/// The caller holds the owning suite's lock across reading and writing.
+pub(super) fn write(path: &Path, document: &toml_edit::DocumentMut) -> Result<()> {
+    let mut file =
+        tempfile::NamedTempFile::new_in(path.parent().context("missing Eval task folder")?)?;
+    file.write_all(document.to_string().as_bytes())?;
+    file.flush()?;
+    file.persist(path)?;
+    Ok(())
 }
 
 pub(super) fn version(version: u32) -> Result<()> {
