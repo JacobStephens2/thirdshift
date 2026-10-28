@@ -116,12 +116,6 @@ impl OpeningSession {
         }
     }
 
-    /// Whether the branch is first fast-forwarded to its head on origin, as
-    /// the Spec branch is to the Tickets landed there.
-    pub fn catches_up_from_origin(self) -> bool {
-        self == Self::SpecReview
-    }
-
     fn stage(self) -> Stage {
         match self {
             Self::Implementation | Self::BugDiagnosis => Stage::Implementation,
@@ -505,13 +499,8 @@ impl Route<'_> {
         opening: &Opening,
     ) -> Result<Option<Resolution>> {
         let session = opening.session;
-        if session.catches_up_from_origin() {
-            outside.catch_up()?;
-        }
         outside.stage(session.stage());
-        if session == OpeningSession::SpecReview {
-            outside.session(session.kind(), &opening.prompt)?;
-        } else if let crate::implement::Completed::NotReproduced(comment_url) =
+        if let crate::implement::Completed::NotReproduced(comment_url) =
             crate::implement::run(self.issue, opening, |prompt| {
                 outside.session(session.kind(), prompt)
             })?

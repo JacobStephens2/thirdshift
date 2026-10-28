@@ -742,7 +742,7 @@ mod tests {
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.session.kind(),
-                catch_up: opening.session.catches_up_from_origin(),
+                catch_up: opening.session == OpeningSession::SpecReview,
                 prompt: opening.prompt,
             });
             let delivered = if self.script.review_fails {
