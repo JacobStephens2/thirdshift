@@ -29,7 +29,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
@@ -2149,6 +2149,32 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     refuse_self_merge(path, &file)?;
     refuse_issue_branch(path, &file)?;
     refuse_published(path, &file.steps)?;
+    Ok(file)
+}
+
+/// Load a compiled adapter's Process, refusing settings it cannot inherit
+/// from the already checked Command. Each adapter checks its own Step kinds
+/// and worktree rules after these shared choices and limits.
+fn load_inherited_builtin(name: &str) -> Result<ProcessFile> {
+    let (path, text) = Catalog::installed()?.source(name)?;
+    let file = validated(&path, &text)?;
+    ensure!(
+        file.limits.repair_cap == delivery::MAX_REPAIRS
+            && !file.limits.forbid_self_merge
+            && file.limits.protected_paths.is_empty(),
+        "{name} inherits the Command's limits"
+    );
+    for step in &file.steps {
+        ensure!(
+            step.harness.is_none()
+                && step.model.is_none()
+                && step.effort.is_none()
+                && !step.optional
+                && step.parallel.is_none(),
+            "{name} Step {} must inherit the Command's choices and run in sequence",
+            step.name
+        );
+    }
     Ok(file)
 }
 

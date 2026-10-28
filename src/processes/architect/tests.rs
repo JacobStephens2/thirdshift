@@ -1,36 +1,8 @@
-use super::*;
-use crate::github;
-use crate::pass::{Call, InMemory, ready_for_review, widgets};
 use std::path::Path;
 
-const ORIGIN: &str = "git@github.com:acme/widgets.git";
-
-fn started() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("2026-10-04T09:00:00.750Z")
-        .unwrap()
-        .to_utc()
-}
-
-fn viewed(open: bool, after: i64, labels: &[&str]) -> github::Issue {
-    github::Issue {
-        title: None,
-        is_open: open,
-        labels: labels.iter().copied().collect(),
-        created: started() + chrono::Duration::seconds(after),
-    }
-}
-
-fn url(number: u64) -> String {
-    format!("https://github.com/acme/widgets/issues/{number}")
-}
-
-fn message(line: &str) -> String {
-    format!("Reviewed the codebase.\n\n{line}{}\n", url(8))
-}
-
-fn step(line: &str) -> Call {
-    Call::Step(line.to_string())
-}
+use super::*;
+use crate::architect::test_support::*;
+use crate::pass::{Call, InMemory, ready_for_review, widgets};
 
 /// An Architect run on `repo`, past its lock and gates, with no focus, no pull,
 /// and no plan-only, on the Base branch `main`, except as `asked`
@@ -39,15 +11,7 @@ fn step(line: &str) -> Call {
 fn architect(repo: InMemory, asked: impl FnOnce(&mut ArchitectRun<'_>)) -> (Outcome, Vec<Call>) {
     let mut repo = repo.dispatched_ending(ready_for_review());
     let widgets = widgets();
-    let mut architect_run = ArchitectRun {
-        repo: &widgets,
-        base: "main",
-        origin: ORIGIN,
-        focus: None,
-        started: started(),
-        pull: false,
-        plan_only: false,
-    };
+    let mut architect_run = request(&widgets);
     asked(&mut architect_run);
     let outcome = run(&mut repo, &architect_run);
     (outcome, repo.calls)

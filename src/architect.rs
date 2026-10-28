@@ -40,6 +40,9 @@ use crate::run::Ended;
 
 mod conclusion;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// The label thirdshift marks an Architect plan with, which a later Architect
 /// run finds an open one by.
 const ARCHITECT_PLAN: Label = Label::new(
@@ -535,9 +538,9 @@ fn check_plan(
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
-    use crate::github;
-    use crate::pass::{Call, InMemory, ready_for_review, widgets};
+    use crate::pass::{Call, InMemory, widgets};
 
     const URL: &str = "https://github.com/acme/widgets/issues/8";
 
@@ -588,11 +591,6 @@ mod tests {
             Decision::GoAhead => (None, Vec::new()),
         };
         (line, urls, repo.calls)
-    }
-
-    /// The URL of issue `number` in `acme/widgets`.
-    fn url(number: u64) -> String {
-        format!("https://github.com/acme/widgets/issues/{number}")
     }
 
     const PLANS: Call = Call::Open("architect-plan");
@@ -726,32 +724,6 @@ mod tests {
         assert_eq!(urls, [url(6)]);
     }
 
-    const ORIGIN: &str = "git@github.com:acme/widgets.git";
-
-    /// When the Architect run started.
-    fn started() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-10-04T09:00:00.750Z")
-            .unwrap()
-            .to_utc()
-    }
-
-    /// An issue as viewed: open or not, created `after` seconds after the
-    /// Architect run started, labelled `labels`.
-    fn viewed(open: bool, after: i64, labels: &[&str]) -> github::Issue {
-        github::Issue {
-            title: None,
-            is_open: open,
-            labels: labels.iter().copied().collect(),
-            created: started() + chrono::Duration::seconds(after),
-        }
-    }
-
-    /// The final message of a review whose last line is `line` and the URL
-    /// of issue 8.
-    fn message(line: &str) -> String {
-        format!("Reviewed the codebase.\n\n{line}{}\n", url(8))
-    }
-
     /// The Architect run's conclusion on `final_message`, through `repo`:
     /// how the review ended, or the cause it failed with, and what it did.
     fn concluded(mut repo: InMemory, final_message: &str) -> (Result<String, String>, Vec<Call>) {
@@ -759,10 +731,6 @@ mod tests {
             .map(|reviewed| reviewed.to_string())
             .map_err(|error| format!("{error:#}"));
         (ended, repo.calls)
-    }
-
-    fn step(line: &str) -> Call {
-        Call::Step(line.to_string())
     }
 
     fn edit(issue: u64, off: &[&'static str], on: &[&'static str], labels: &[&str]) -> Call {
@@ -1061,30 +1029,6 @@ mod tests {
         assert_eq!(repo.calls, []);
     }
 
-    /// An Architect run on `repo`, past its lock, with no focus, no pull,
-    /// and no plan-only, on the Base branch `main`, except as `asked`
-    /// changes them, its dispatched run ending ready for review: how it
-    /// ended, and what it did outside itself.
-    fn architect(
-        repo: InMemory,
-        asked: impl FnOnce(&mut ArchitectRun<'_>),
-    ) -> (Outcome, Vec<Call>) {
-        let mut repo = repo.dispatched_ending(ready_for_review());
-        let widgets = widgets();
-        let mut architect_run = ArchitectRun {
-            repo: &widgets,
-            base: "main",
-            origin: ORIGIN,
-            focus: None,
-            started: started(),
-            pull: false,
-            plan_only: false,
-        };
-        asked(&mut architect_run);
-        let outcome = run_through(&mut repo, &architect_run);
-        (outcome, repo.calls)
-    }
-
     #[test]
     fn a_skipped_architect_run_records_its_reason_with_no_harness_check_start_pull_or_review() {
         for (repo, gates_read) in [
@@ -1095,9 +1039,14 @@ mod tests {
             ),
             (InMemory::default().ready(5, false), 3),
         ] {
-            let repo = repo.reviewed(&message(prompt::PLAN_LINE));
-
-            let (outcome, calls) = architect(repo, |run| run.pull = true);
+            let mut repo = repo.reviewed(&message(prompt::PLAN_LINE));
+            let widgets = widgets();
+            let request = ArchitectRun {
+                pull: true,
+                ..request(&widgets)
+            };
+            let outcome = run_through(&mut repo, &request);
+            let calls = repo.calls;
 
             let Outcome::Skipped(skipped) = outcome else {
                 panic!("the Architect run was not skipped");

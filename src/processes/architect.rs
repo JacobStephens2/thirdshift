@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 
-use super::{Catalog, DraftKind, validated};
+use super::{DraftKind, load_inherited_builtin};
 use crate::architect::{Outcome, Reviewed, conclude};
 use crate::failed_run::FailedRun;
 use crate::issue::Repo;
@@ -105,31 +105,18 @@ fn review(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Reviewed
 }
 
 fn steps() -> Result<Vec<DraftKind>> {
-    let (path, text) = Catalog::installed()?.source("architect-run")?;
-    let file = validated(&path, &text)?;
+    let file = load_inherited_builtin("architect-run")?;
     // The adapter retains the Pass's checked choices and specialized review
     // worktree. Refuse settings it cannot carry out rather than ignore them.
     ensure!(
         file.worktrees.is_empty(),
         "architect-run owns its review worktree"
     );
-    ensure!(
-        file.limits.repair_cap == crate::delivery::MAX_REPAIRS
-            && !file.limits.forbid_self_merge
-            && file.limits.protected_paths.is_empty(),
-        "architect-run inherits the Command's limits"
-    );
     file.steps
         .into_iter()
         .map(|step| {
             ensure!(
-                step.harness.is_none()
-                    && step.model.is_none()
-                    && step.effort.is_none()
-                    && !step.optional
-                    && step.parallel.is_none()
-                    && step.worktree.is_none()
-                    && step.process.is_none(),
+                step.worktree.is_none() && step.process.is_none(),
                 "architect-run Step {} must inherit the Command's choices and run in sequence",
                 step.name
             );
