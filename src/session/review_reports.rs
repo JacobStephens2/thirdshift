@@ -1,11 +1,12 @@
 //! Opaque review reports and summary, kept beside the Session trace.
 
 use std::cell::OnceCell;
-use std::fs;
-use std::io::ErrorKind;
+use std::fs::{self, OpenOptions};
+use std::io::{self, ErrorKind};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
 use crate::{git::Git, prompt, skills};
@@ -38,8 +39,9 @@ impl ReviewReports {
     }
 
     /// Copy whichever reports exist without reading or interpreting them.
-    /// Missing reports and failures to keep them are progress lines, never
-    /// changes to the session's outcome.
+    /// A report is kept only when it is a regular file. A symlink or any
+    /// other non-regular file is refused in a progress line. A missing
+    /// report stays skipped. None of these change the session's outcome.
     pub fn keep(&self, log: &Path) -> Vec<String> {
         let mut lines = Vec::new();
         let mut found = false;
@@ -59,15 +61,27 @@ impl ReviewReports {
             ("summary", "summary.json", summary.clone()),
         ] {
             let report = self.directory.path().join(file);
-            match fs::metadata(&report) {
+            match fs::symlink_metadata(&report) {
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => {
                     lines.push(format!("could not find {name} report: {error}"));
                     continue;
                 }
+                Ok(metadata) if metadata.is_symlink() => {
+                    found = true;
+                    lines.push(format!("{name} report is a symlink; not keeping it"));
+                    continue;
+                }
+                Ok(metadata) if !metadata.is_file() => {
+                    found = true;
+                    lines.push(format!(
+                        "{name} report is not a regular file; not keeping it"
+                    ));
+                    continue;
+                }
                 Ok(_) => found = true,
             }
-            if let Err(error) = fs::copy(&report, &kept) {
+            if let Err(error) = copy_regular_file(&report, &kept) {
                 lines.push(format!("could not keep {}: {error}", kept.display()));
             }
         }
@@ -76,4 +90,46 @@ impl ReviewReports {
         }
         lines
     }
+}
+
+/// Copy `report` onto `kept` without following a symlink at either path.
+/// The session has already exited, so following a symlink would read or
+/// write a host path outside the report directory.
+fn copy_regular_file(report: &Path, kept: &Path) -> Result<()> {
+    let mut source = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(report)
+    {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            bail!("{} is a symlink", report.display())
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let pinned = source.metadata()?;
+    let current = fs::symlink_metadata(report)?;
+    if !pinned.is_file()
+        || !current.is_file()
+        || current.dev() != pinned.dev()
+        || current.ino() != pinned.ino()
+    {
+        bail!("{} is not a regular file", report.display());
+    }
+    let mut destination = match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(kept)
+    {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            bail!("{} is a symlink", kept.display())
+        }
+        Err(error) => return Err(error.into()),
+    };
+    io::copy(&mut source, &mut destination)?;
+    destination.set_permissions(pinned.permissions())?;
+    Ok(())
 }
