@@ -55,6 +55,8 @@ use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 mod catalog;
+mod identity;
+pub(crate) use identity::Identity;
 pub(crate) mod ticket;
 use catalog::Catalog;
 
@@ -515,10 +517,11 @@ fn run(command: &ProcessRun) -> Result<String> {
         &config.email,
         About::Process { name },
     )?;
-    let (path, mut file) = match load(name) {
+    let (path, mut file, identity) = match load(name) {
         Ok(loaded) => loaded,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    logs::process_loaded(identity);
     file.goal = goal;
     file.security_review = Flags {
         security_review: command.security_review,
@@ -1993,10 +1996,10 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
     line
 }
 
-fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
+fn load(name: &str) -> Result<(PathBuf, ProcessFile, Identity)> {
     let (path, text) = Catalog::installed()?.custom(name)?;
     let file = validated(&path, &text)?;
-    Ok((path, file))
+    Ok((path, file, Identity::custom(name, Some(&text))))
 }
 
 fn validated(path: &Path, text: &str) -> Result<ProcessFile> {

@@ -34,6 +34,7 @@ pub(super) struct Record<O: Outside> {
     activity_started: Option<Started>,
     activity_warned: bool,
     command_record: Option<(PathBuf, CommandTree)>,
+    custom_process: Option<crate::processes::Identity>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
@@ -90,6 +91,7 @@ impl<O: Outside> Record<O> {
             activity_started: None,
             activity_warned: false,
             command_record: None,
+            custom_process: None,
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
@@ -178,6 +180,7 @@ impl<O: Outside> Record<O> {
                 // The launch checks have now established whether the issue is
                 // a Spec. The dispatch itself was kept before those checks.
                 dispatched.kind = work.kind().to_string();
+                dispatched.process = work.process();
                 if let Some(stage) = tree.command.stages.last_mut()
                     && StageName::is_dispatch(&stage.name)
                 {
@@ -254,6 +257,11 @@ impl<O: Outside> Record<O> {
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if matches!(work, Work::Process { .. })
+            && let Some(identity) = &self.custom_process
+        {
+            facts.process = identity.clone();
+        }
         facts.hostname = self.outside.hostname();
         facts.process_start = self
             .outside
@@ -562,6 +570,10 @@ impl<O: Outside> Record<O> {
                 .clone()
                 .unwrap_or_else(|| "Command logging has not allocated an owner".into())
         })
+    }
+
+    pub(super) fn process_loaded(&mut self, identity: crate::processes::Identity) {
+        self.custom_process = Some(identity);
     }
 
     pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
