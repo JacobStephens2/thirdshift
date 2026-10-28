@@ -276,12 +276,43 @@ test("homepage accessible names use steps in place of press units", async (t) =>
   assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
 });
 
-test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
+test("the homepage keeps six workflows compact and expandable without JavaScript", async (t) => {
+  const names = ["Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Scoring run"];
+  for (const width of [320, 390, 768, 1280]) {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/`);
+    const manual = await (await page.request.get(`${origin}/docs/`)).text();
+    await page.evaluate(() => document.fonts.ready);
+    const section = page.locator("#grows");
+    const height = await section.evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(height < (width < 600 ? 1600 : 1100), `${width}px: closed workflows occupy ${height}px`);
+    assert.deepEqual(await section.locator(".workflow-name").allTextContents(), names);
+    assert.equal(await section.locator("details[open]").count(), 0);
+    for (const fold of await section.locator("details").all()) {
+      const summary = fold.locator(":scope > summary");
+      const content = fold.locator(":scope > .workflow-content");
+      await content.waitFor({ state: "hidden" });
+      await summary.focus();
+      await page.keyboard.press("Enter");
+      await content.waitFor({ state: "visible" });
+      for (const link of await content.locator('a[href^="/docs/#"]').all()) {
+        const href = await link.getAttribute("href");
+        assert.ok(manual.includes(`id="${href.split("#")[1]}"`), href);
+      }
+      await assertFits(page, "#grows, #grows details", `${width}px: expanded workflow fits`);
+      await summary.focus();
+      await page.keyboard.press("Space");
+      await content.waitFor({ state: "hidden" });
+    }
+  }
+});
+
+test("the homepage explains Ticket runs and six workflows in plain words", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/`);
   assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
   for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
-    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Five workflows",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Six workflows",
     "Examples", "Real pull requests", "About the name"]) {
     assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
   }
@@ -290,10 +321,6 @@ test("the homepage explains Ticket runs and five workflows in plain words", asyn
   assert.match(opening, /each agent's plan or account/);
   assert.match(opening, /Claude Code.*subscription.*usage allowance/);
   assert.match(opening, /free and open source/);
-  assert.deepEqual(await page.locator(".floor .line-label").allTextContents(), [
-    "1 · TICKET RUN", "2 · SPEC RUN", "3 · ARCHITECT RUN", "4 · PICKUP RUN", "5 · SECURITY RUN",
-  ]);
-  assert.doesNotMatch(await page.locator(".floor").textContent(), /INSTALLED|MERGE RUN/);
   assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
 });
 
