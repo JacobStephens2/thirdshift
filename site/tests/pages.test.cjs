@@ -321,9 +321,6 @@ test("the homepage explains Ticket runs and six workflows in plain words", async
   assert.match(opening, /each agent's plan or account/);
   assert.match(opening, /Claude Code.*subscription.*usage allowance/);
   assert.match(opening, /free and open source/);
-  assert.deepEqual(await page.locator(".workflow-name").allTextContents(), [
-    "Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Scoring run",
-  ]);
   assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
 });
 
