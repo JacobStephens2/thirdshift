@@ -281,8 +281,18 @@ fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
 }
 
 #[test]
+fn two_machines_racing_for_two_ready_issues_each_take_one() {
+    pickup_race(PickupRace::TwoIssues);
+}
+
+#[test]
 fn delayed_selector_after_failed_winner_still_starts_only_one_run() {
     pickup_race(PickupRace::FailedWinner);
+}
+
+#[test]
+fn delayed_selector_after_failed_winner_passes_over_its_stale_selection_for_the_next() {
+    pickup_race(PickupRace::FailedWinnerThenNext);
 }
 
 #[test]
@@ -294,25 +304,43 @@ enum PickupRace {
     Issue,
     Spec,
     SuccessfulWinner,
+    /// Issue, with #9 Ready too, which the loser takes.
+    TwoIssues,
     FailedWinner,
+    /// FailedWinner, with #9 Ready too, which the loser takes once its
+    /// selection of #7 went stale.
+    FailedWinnerThenNext,
     ActiveClaimHistory,
 }
 
+/// Two machines' Pickup runs both select #7 before either reserves it. The
+/// selector held back, the loser, loses the reservation or finds its
+/// selection stale, and moves on: to #9 when that is Ready too, otherwise
+/// to a skip with no Ready issue it can reserve.
 fn pickup_race(race: PickupRace) {
-    let (is_spec, winner_finishes_first, winner_fails, active_history) = match race {
-        PickupRace::Issue => (false, false, false, false),
-        PickupRace::Spec => (true, false, false, false),
-        PickupRace::SuccessfulWinner => (false, true, false, false),
-        PickupRace::FailedWinner => (false, true, true, false),
-        PickupRace::ActiveClaimHistory => (false, true, true, true),
+    let (is_spec, winner_finishes_first, winner_fails, active_history, next_ready) = match race {
+        PickupRace::Issue => (false, false, false, false, false),
+        PickupRace::Spec => (true, false, false, false, false),
+        PickupRace::SuccessfulWinner => (false, true, false, false, false),
+        PickupRace::TwoIssues => (false, false, false, false, true),
+        PickupRace::FailedWinner => (false, true, true, false, false),
+        PickupRace::FailedWinnerThenNext => (false, true, true, false, true),
+        PickupRace::ActiveClaimHistory => (false, true, true, true, false),
     };
     let scenario = Scenario::new();
     // The generation check must protect even a repository that disables
     // settling, regardless of timestamp precision or either host's clock.
-    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+    scenario.user_config_is(&format!("[pickup]\nwait_minutes = 0\n{EMAIL_ALWAYS}"));
+    // Only the loser can send a Run notification here: the winner's User
+    // config asks for none.
+    let resend = ResendStandIn::replying(200, ACCEPTED);
     ready_issue(&scenario, 7, &[]);
     if is_spec {
         scenario.spec_has_tickets(7, &[(8, &[])]);
+    }
+    if next_ready {
+        ready_issue(&scenario, 9, &[]);
+        scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
     }
     fs::create_dir_all(scenario.path("machine-2")).unwrap();
     scenario.launch_git(&[
@@ -397,7 +425,11 @@ exec "$(dirname "$0")/real/gh" "$@"
     } else {
         "tmp/ready-read"
     };
-    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], started);
+    let stale = scenario.run_until(
+        &["pickup"],
+        &[[("HOLD_READY_READ", "1")].as_slice(), &resend_env(&resend)].concat(),
+        started,
+    );
     let other_home = scenario.path("other-home");
     let winner = std::panic::catch_unwind(|| {
         scenario.run_from_until(
@@ -436,15 +468,28 @@ exec "$(dirname "$0")/real/gh" "$@"
     } else {
         None
     };
-    let labels = scenario.issue_labels(7);
-    let branches = scenario.origin_git(&["show-ref"]);
-    let prs = scenario.gh_state()["prs"].clone();
+    // What the loser could change of #7: its labels, refs and pull requests.
+    let of_7 = || {
+        let refs: Vec<String> = scenario
+            .origin_git(&["show-ref"])
+            .lines()
+            .filter(|line| line.ends_with("issue-7") || line.ends_with("pickup/7"))
+            .map(String::from)
+            .collect();
+        let prs: Vec<serde_json::Value> = scenario.gh_state()["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|pr| pr["head"] == "issue-7")
+            .cloned()
+            .collect();
+        (scenario.issue_labels(7), refs, prs)
+    };
+    let before = of_7();
     fs::write(scenario.path("tmp/release-ready"), "").unwrap();
     fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
     let stale = stale.finish();
-    let labels_after = scenario.issue_labels(7);
-    let branches_after = scenario.origin_git(&["show-ref"]);
-    let prs_after = scenario.gh_state()["prs"].clone();
+    let after = of_7();
     fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
     if let Some(winner) = winner {
         winner.finish();
@@ -463,11 +508,51 @@ exec "$(dirname "$0")/real/gh" "$@"
             winner.stderr
         );
     }
-    assert!(stale.stdout.is_empty(), "{}", stale.stdout);
-    assert_eq!(scenario.claude_calls().len(), 1, "{}", stale.stderr);
-    assert_eq!(labels_after, labels);
-    assert_eq!(branches_after, branches);
-    assert_eq!(prs_after, prs);
+    // With the winner's Claim active in its history, or its pull request
+    // open, the loser's search passes #7 over without reserving it.
+    let skipped = if active_history || (winner_finishes_first && !winner_fails) {
+        "thirdshift: no Ready issue on acme/widgets"
+    } else {
+        assert!(stale.stderr.contains(&unreservable(7)), "{}", stale.stderr);
+        "thirdshift: no Ready issue on acme/widgets it can reserve, past #7; \
+         check refs/heads/thirdshift/pickup/7 on origin if it stays reserved"
+    };
+    assert_eq!(after, before);
+    let sessions: Vec<String> = scenario
+        .claude_calls()
+        .iter()
+        .map(|call| call["prompt"].as_str().unwrap().to_string())
+        .collect();
+    let issue_of = |prompt: &String, number: u32| {
+        let url = scenario.issue_url(number);
+        prompt.contains(&format!("{url}\n")) || prompt.ends_with(&url)
+    };
+    if next_ready {
+        assert_ended_with_pr(&stale, &pr_from(&scenario, "issue-9"), "ready for review");
+        assert_eq!(sessions.len(), 2, "{sessions:?}");
+        assert_eq!(
+            sessions.iter().filter(|prompt| issue_of(prompt, 7)).count(),
+            1,
+            "{sessions:?}"
+        );
+        assert_eq!(
+            sessions.iter().filter(|prompt| issue_of(prompt, 9)).count(),
+            1,
+            "{sessions:?}"
+        );
+        assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+        assert_eq!(resend.requests().len(), 1, "{}", stale.stderr);
+    } else {
+        assert!(stale.stdout.is_empty(), "{}", stale.stdout);
+        assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+        assert_eq!(sessions.len(), 1, "{}", stale.stderr);
+        assert_eq!(
+            stale.stderr.lines().last(),
+            Some(skipped),
+            "{}",
+            stale.stderr
+        );
+    }
 }
 
 #[test]
@@ -515,22 +600,268 @@ fn pickup_reservation_does_not_publish_unrelated_local_head() {
     );
 }
 
+/// Reserve issue `number` on origin as another host's Pickup run would, its
+/// reservation commit's message `message`.
+fn reserved_elsewhere(scenario: &Scenario, number: u32, message: &str) {
+    let tree = scenario.launch_git(&["mktree"]);
+    let token = scenario.launch_git(&["commit-tree", tree.trim(), "-m", message]);
+    scenario.launch_git(&[
+        "push",
+        "origin",
+        &format!("{}:refs/heads/thirdshift/pickup/{number}", token.trim()),
+    ]);
+}
+
+/// Reserve issue `number` on origin as a live Pickup run on another host
+/// would.
+fn reserved_by_another_host(scenario: &Scenario, number: u32) {
+    reserved_elsewhere(
+        scenario,
+        number,
+        &format!(
+            "thirdshift Pickup reservation for {}\n\nToken: other-token\nHost: other-host\nLaunch: /other/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
+            scenario.issue_url(number)
+        ),
+    );
+}
+
+/// The line a Pickup run gives Ready issue `number`, which it could not
+/// reserve.
+fn unreservable(number: u32) -> String {
+    format!(
+        "thirdshift: #{number} is reserved by another Pickup run or is no longer Ready; \
+         check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved\n"
+    )
+}
+
+#[test]
+fn a_ready_issue_another_host_reserved_is_passed_over_for_the_next_in_its_order() {
+    for (order, reserved, taken) in [("lowest-first", 7, 9), ("highest-first", 9, 7)] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        ready_issue(&scenario, 8, &["needs-info"]);
+        ready_issue(&scenario, 9, &[]);
+        reserved_by_another_host(&scenario, reserved);
+        let reservation = scenario.origin_git(&[
+            "rev-parse",
+            &format!("refs/heads/thirdshift/pickup/{reserved}"),
+        ]);
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+
+        let result = scenario.run(&["pickup", order]);
+
+        let pr = pr_from(&scenario, &format!("issue-{taken}"));
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        let url = scenario.issue_url(taken);
+        assert!(
+            after_start(&result.stderr).starts_with(&format!(
+                "{}thirdshift: #8 labelled needs-info\n\
+                 thirdshift: taking Ready issue #{taken} \"Issue {taken}\", as thirdshift {url} would\n",
+                unreservable(reserved)
+            )),
+            "{order}: {}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1, "{order}");
+        assert_eq!(
+            scenario.issue_labels(reserved),
+            [READY_FOR_AGENT],
+            "{order}"
+        );
+        assert!(scenario.origin_log(&format!("issue-{reserved}")).is_none());
+        // The other host's reservation is never released or replaced.
+        assert_eq!(
+            scenario.origin_git(&[
+                "for-each-ref",
+                "--format=%(objectname) %(refname)",
+                "refs/heads/thirdshift/pickup"
+            ]),
+            format!(
+                "{} refs/heads/thirdshift/pickup/{reserved}\n",
+                reservation.trim()
+            ),
+            "{order}"
+        );
+    }
+}
+
+#[test]
+fn with_every_ready_issue_reserved_elsewhere_the_pass_is_skipped_with_no_notification() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    reserved_by_another_host(&scenario, 9);
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &format!(
+            "{}{}thirdshift: no Ready issue on acme/widgets it can reserve, past #7 and #9; \
+             check refs/heads/thirdshift/pickup/7, refs/heads/thirdshift/pickup/9 on origin \
+             if one stays reserved\n",
+            unreservable(7),
+            unreservable(9)
+        ),
+    );
+    assert!(resend.requests().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_issue_that_stopped_being_ready_once_reserved_is_released_and_the_next_taken() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    // The Day shift takes ready-for-agent off #7 just after it is reserved.
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+"{git}" "$@" || exit $?
+case "$1 $*" in
+push*' '[0-9a-f]*:refs/heads/thirdshift/pickup/7) gh fake labels 7 '[]' ;;
+esac
+"#,
+        )
+    });
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-9"), "ready for review");
+    assert!(
+        after_start(&result.stderr).starts_with(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(scenario.issue_labels(7).is_empty());
+    assert!(scenario.origin_log("issue-7").is_none());
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+}
+
+#[test]
+fn the_next_ready_issue_tried_is_reserved_recording_the_host_holding_it() {
+    let scenario = Scenario::new();
+    let hostname = std::process::Command::new("hostname").output().unwrap();
+    assert!(hostname.status.success());
+    let hostname = String::from_utf8(hostname.stdout).unwrap();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let held = scenario.run_until(&["pickup"], &[], "started");
+    let message = scenario.origin_git(&[
+        "show",
+        "-s",
+        "--format=%B",
+        "refs/heads/thirdshift/pickup/9",
+    ]);
+    release(&scenario);
+    held.finish();
+
+    assert!(
+        message
+            .lines()
+            .any(|line| line == format!("Host: {}", hostname.trim())),
+        "reservation did not identify its host: {message}"
+    );
+}
+
+#[test]
+fn a_rejected_reservation_of_the_next_ready_issue_fails_before_any_claim_or_session() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    let hook = scenario.origin_dir().join("hooks/pre-receive");
+    write_executable(
+        &hook,
+        "#!/bin/sh\nif grep -q refs/heads/thirdshift/pickup/9; then echo 'reservations forbidden' >&2; exit 1; fi\n",
+    );
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("could not reserve refs/heads/thirdshift/pickup/9"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_uncertain_push_reserving_the_next_ready_issue_retains_it_without_dispatching() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+case "$*" in
+*refs/heads/thirdshift/pickup/9*)
+    if [ "$1" = push ]; then
+        "{git}" "$@" || exit $?
+        echo 'lost push acknowledgement' >&2
+        exit 1
+    fi
+    ;;
+esac
+exec "{git}" "$@"
+"#,
+        )
+    });
+
+    let failed = scenario.run(&["pickup"]);
+
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed.stderr.contains("check origin by hand"),
+        "{}",
+        failed.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    assert!(
+        !scenario
+            .origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup/9"])
+            .is_empty()
+    );
+    assert!(scenario.origin_log("issue-9").is_none());
+}
+
 #[test]
 fn a_legacy_reservation_without_a_host_is_not_stolen() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
-    let tree = scenario.launch_git(&["mktree"]);
-    let token = scenario.launch_git(&[
-        "commit-tree",
-        tree.trim(),
-        "-m",
+    reserved_elsewhere(
+        &scenario,
+        7,
         "thirdshift Pickup reservation for https://github.com/acme/widgets/issues/7\n\nToken: old-token\nLaunch: /old/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
-    ]);
-    scenario.launch_git(&[
-        "push",
-        "origin",
-        &format!("{}:refs/heads/thirdshift/pickup/7", token.trim()),
-    ]);
+    );
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 

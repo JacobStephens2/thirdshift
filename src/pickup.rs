@@ -5,7 +5,9 @@
 //! a Run. Only one Pass per repository runs at a time on a machine: one
 //! started while another Pass is still running is skipped, before any
 //! search. One that runs first makes the Sweep, and is then skipped if it
-//! finds the repository at its Claim limit, or with no Ready issue.
+//! finds the repository at its Claim limit, or with no Ready issue it can
+//! reserve: one another Pickup run reserved, or whose selection went stale, is
+//! passed over for the next.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -62,8 +64,10 @@ pub enum Skipped {
     },
     /// The repository has no Ready issue.
     NoReadyIssue(Repo),
-    /// A Ready issue was reserved by another host or ceased to be Ready.
-    IssueUnavailable(IssueUrl),
+    /// Each Ready issue it found, `tried` in its order, was reserved by
+    /// another Pickup run or ceased to be Ready once reserved, and none is
+    /// left past them.
+    NoneReservable { repo: Repo, tried: Vec<u64> },
 }
 
 impl fmt::Display for Skipped {
@@ -76,16 +80,7 @@ impl fmt::Display for Skipped {
                 limit,
             } => {
                 write!(f, "at the Claim limit on {}: ", repo.slug())?;
-                for (index, number) in claimed.iter().enumerate() {
-                    let separator = if index == 0 {
-                        ""
-                    } else if index == claimed.len() - 1 {
-                        " and "
-                    } else {
-                        ", "
-                    };
-                    write!(f, "{separator}#{number}")?;
-                }
+                write_numbers(f, claimed)?;
                 let verb = if claimed.len() == 1 { "is" } else { "are" };
                 write!(
                     f,
@@ -94,14 +89,47 @@ impl fmt::Display for Skipped {
                 )
             }
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
-            Self::IssueUnavailable(issue) => write!(
-                f,
-                "#{} is reserved by another Pickup run or is no longer Ready; \
-                 check refs/heads/thirdshift/pickup/{} on origin if it stays reserved",
-                issue.number, issue.number
-            ),
+            Self::NoneReservable { repo, tried } => {
+                write!(f, "no Ready issue on {} it can reserve, past ", repo.slug())?;
+                write_numbers(f, tried)?;
+                f.write_str("; check ")?;
+                for (index, number) in tried.iter().enumerate() {
+                    let separator = if index == 0 { "" } else { ", " };
+                    write!(f, "{separator}refs/heads/thirdshift/pickup/{number}")?;
+                }
+                let stays = if tried.len() == 1 {
+                    "it stays"
+                } else {
+                    "one stays"
+                };
+                write!(f, " on origin if {stays} reserved")
+            }
         }
     }
+}
+
+/// `numbers` as "#7", "#7 and #9" or "#7, #8 and #9".
+fn write_numbers(f: &mut fmt::Formatter, numbers: &[u64]) -> fmt::Result {
+    for (index, number) in numbers.iter().enumerate() {
+        let separator = if index == 0 {
+            ""
+        } else if index == numbers.len() - 1 {
+            " and "
+        } else {
+            ", "
+        };
+        write!(f, "{separator}#{number}")?;
+    }
+    Ok(())
+}
+
+/// The line on Ready issue `number`, passed over because another Pickup run
+/// reserved it or it ceased to be Ready once reserved.
+fn unreservable(number: u64) -> String {
+    format!(
+        "#{number} is reserved by another Pickup run or is no longer Ready; \
+         check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved"
+    )
 }
 
 /// Take the Ready issue at `order`'s end of the issue numbers in the Launch
@@ -114,7 +142,8 @@ impl fmt::Display for Skipped {
 /// Launch directory's checkout, nor on the issue taken: the run it is
 /// dispatched as makes the Claim. An auxiliary origin ref reserves the
 /// issue across hosts before dispatch; a stale Ready selection is rechecked
-/// while it is held.
+/// while it is held. An issue another Pickup run reserved, or whose selection
+/// went stale, is passed over for the next Ready issue in `order`.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if another Pass on the same repository
@@ -194,38 +223,54 @@ fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<
 /// [`run`], once it holds its repository's lock, on `repo` with the Base
 /// branch `base` and the Claim limit `limit`, through `outside`: its
 /// [`gates`], then `reserve` acquiring cross-machine ownership and refreshing
-/// the selection, with a skip recorded if either refuses it; then the line
-/// naming the issue taken; then the check of its Harness, failing before
-/// any work if it can't run; then the record that it started work on the
-/// issue, which keeps its Command log; then the issue dispatched, a Spec
-/// run on a Spec and a Run otherwise, on `base`.
+/// the selection. An issue either refuses gets a line saying so, and the
+/// search goes on past it in `order`, with a skip recorded once no Ready
+/// issue is left. Then the line naming the issue taken; then the check of
+/// its Harness, failing before any work if it can't run; then the record
+/// that it started work on the issue, which keeps its Command log; then the
+/// issue dispatched, a Spec run on a Spec and a Run otherwise, on `base`.
 fn run_through<R>(
     outside: &mut impl Outside,
     repo: &Repo,
     base: &str,
     limit: NonZeroUsize,
     order: PickupOrder,
-    reserve: impl FnOnce(ReadyIssue) -> Result<Option<(ReadyIssue, R)>>,
+    mut reserve: impl FnMut(ReadyIssue) -> Result<Option<(ReadyIssue, R)>>,
 ) -> Result<Outcome> {
-    let ready = match gates(outside, repo, limit, order)? {
+    let mut ready = match gates(outside, repo, limit, order)? {
         Decision::Take(ready) => ready,
         Decision::Skip(skipped) => {
             outside.skipped(Pass::Pickup, &skipped);
             return Ok(Outcome::Skipped(skipped));
         }
     };
-    let unavailable = Skipped::IssueUnavailable(ready.listed.issue.clone());
+    let mut tried = Vec::new();
     // A reservation spans dispatch, including Claim ending and Failed run
     // preservation. No start is recorded and no Claim made by a losing host.
-    let Some((
+    // One refused is released before the next issue is tried.
+    let (
         ReadyIssue {
             listed, is_spec, ..
         },
         _reservation,
-    )) = reserve(ready)?
-    else {
-        outside.skipped(Pass::Pickup, &unavailable);
-        return Ok(Outcome::Skipped(unavailable));
+    ) = loop {
+        let number = ready.listed.issue.number;
+        if let Some(taken) = reserve(ready)? {
+            break taken;
+        }
+        outside.step(unreservable(number));
+        tried.push(number);
+        match outside.ready_issue(order, Some(number))? {
+            Some(next) => ready = next,
+            None => {
+                let skipped = Skipped::NoneReservable {
+                    repo: repo.clone(),
+                    tried,
+                };
+                outside.skipped(Pass::Pickup, &skipped);
+                return Ok(Outcome::Skipped(skipped));
+            }
+        }
     };
     outside.step(format!(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
@@ -278,7 +323,7 @@ fn gates(
             limit,
         }));
     }
-    Ok(match outside.ready_issue(order)? {
+    Ok(match outside.ready_issue(order, None)? {
         Some(ready) => Decision::Take(ready),
         None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
     })
@@ -551,6 +596,30 @@ mod tests {
         (outcome, repo.calls)
     }
 
+    /// [`pickup`] in `order`, with `reserve` reserving each Ready issue
+    /// the run tries: how it ended, and what it did outside itself.
+    fn pickup_reserving(
+        repo: InMemory,
+        order: PickupOrder,
+        reserve: impl FnMut(ReadyIssue) -> Result<Option<(ReadyIssue, ())>>,
+    ) -> (Result<Outcome>, Vec<Call>) {
+        let mut repo = repo.dispatched_ending(ready_for_review());
+        let limit = NonZeroUsize::new(3).unwrap();
+        let outcome = run_through(&mut repo, &widgets(), "main", limit, order, reserve);
+        (outcome, repo.calls)
+    }
+
+    /// A reservation of each Ready issue but those numbered in `refused`,
+    /// which another Pickup run holds or whose selection went stale.
+    fn refusing(refused: &[u64]) -> impl FnMut(ReadyIssue) -> Result<Option<(ReadyIssue, ())>> {
+        move |ready| Ok((!refused.contains(&ready.listed.issue.number)).then_some((ready, ())))
+    }
+
+    /// The line on Ready issue `number`, which the run could not reserve.
+    fn unreservable_line(number: u64) -> Call {
+        Call::Step(unreservable(number))
+    }
+
     /// The line naming Ready issue #9 as taken.
     fn taking_9() -> Call {
         Call::Step(
@@ -665,5 +734,103 @@ mod tests {
         assert_eq!(took.title, "Issue 9");
         let reached = took.ended.outcome.ok().expect("the dispatched run failed");
         assert_eq!(reached.resolution.url(), PR_URL);
+    }
+
+    #[test]
+    fn a_ready_issue_it_cannot_reserve_is_passed_over_for_the_next_in_its_order() {
+        let repo = InMemory::default().ready(7, false).ready(9, false);
+
+        let (outcome, calls) = pickup_reserving(repo, PickupOrder::LowestFirst, refusing(&[7]));
+
+        assert!(matches!(outcome, Ok(Outcome::Took(Took { ref issue, .. })) if issue.number == 9));
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::ReadySearch,
+                unreservable_line(7),
+                Call::ReadySearchPast(7),
+                taking_9(),
+                Call::HarnessCheck,
+                Call::Started(Some(9)),
+                Call::DispatchReadyIssue {
+                    issue: 9,
+                    is_spec: false,
+                    base: "main".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn highest_first_moves_on_downward_from_a_ready_issue_it_cannot_reserve() {
+        let repo = InMemory::default()
+            .ready(7, false)
+            .ready(8, false)
+            .ready(9, false);
+
+        let (outcome, calls) = pickup_reserving(repo, PickupOrder::HighestFirst, refusing(&[9, 8]));
+
+        assert!(matches!(outcome, Ok(Outcome::Took(Took { ref issue, .. })) if issue.number == 7));
+        assert_eq!(
+            calls[2..7],
+            [
+                Call::ReadySearch,
+                unreservable_line(9),
+                Call::ReadySearchPast(9),
+                unreservable_line(8),
+                Call::ReadySearchPast(8),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_ready_issue_it_can_reserve_left_the_pass_is_skipped_naming_each_tried() {
+        let repo = InMemory::default().ready(7, false).ready(9, false);
+
+        let (outcome, calls) = pickup_reserving(repo, PickupOrder::LowestFirst, refusing(&[7, 9]));
+
+        assert!(matches!(
+            outcome,
+            Ok(Outcome::Skipped(Skipped::NoneReservable { ref tried, .. })) if tried == &[7, 9]
+        ));
+        assert_eq!(
+            calls,
+            [
+                CLOSED,
+                CLAIMED,
+                Call::ReadySearch,
+                unreservable_line(7),
+                Call::ReadySearchPast(7),
+                unreservable_line(9),
+                Call::ReadySearchPast(9),
+                Call::Skipped(
+                    "no Ready issue on acme/widgets it can reserve, past #7 and #9; check \
+                     refs/heads/thirdshift/pickup/7, refs/heads/thirdshift/pickup/9 on origin \
+                     if one stays reserved"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reservation_that_fails_on_the_next_ready_issue_fails_the_pass_before_any_work() {
+        let repo = InMemory::default().ready(7, false).ready(9, false);
+
+        let (outcome, calls) = pickup_reserving(repo, PickupOrder::LowestFirst, |ready| {
+            if ready.listed.issue.number == 9 {
+                anyhow::bail!("could not reserve refs/heads/thirdshift/pickup/9");
+            }
+            Ok(None)
+        });
+
+        let error = outcome.err().expect("the pass did not fail");
+        assert_eq!(
+            format!("{error:#}"),
+            "could not reserve refs/heads/thirdshift/pickup/9"
+        );
+        assert_eq!(calls.last(), Some(&Call::ReadySearchPast(7)));
     }
 }

@@ -49,6 +49,14 @@ impl PickupOrder {
             _ => None,
         }
     }
+
+    /// Whether issue `number` comes after issue `past` in `self`.
+    pub fn comes_after(self, number: u64, past: u64) -> bool {
+        match self {
+            Self::LowestFirst => number > past,
+            Self::HighestFirst => number < past,
+        }
+    }
 }
 
 impl std::fmt::Display for PickupOrder {
@@ -86,17 +94,22 @@ enum Settling {
 /// stderr for each issue labelled `ready-for-agent` passed over before it,
 /// with why. Nothing is changed, on GitHub or in `launch`.
 /// `wait` is the User config's settling window since the latest shaping
-/// event.
+/// event. With `past`, the number of an issue already tried, only the issues
+/// after it in `order` are considered, so a Pickup run that could not
+/// reserve one moves on to the next.
 pub fn first(
     launch: &Git,
     repo: &Repo,
     wait: TimeDelta,
     order: PickupOrder,
+    past: Option<u64>,
 ) -> Result<Option<ReadyIssue>> {
-    Ok(match search(launch, repo, wait, Settling::Wait, order)? {
-        Some(PriorityIssue::Ready(ready)) => Some(ready),
-        _ => None,
-    })
+    Ok(
+        match search(launch, repo, wait, Settling::Wait, order, past)? {
+            Some(PriorityIssue::Ready(ready)) => Some(ready),
+            _ => None,
+        },
+    )
 }
 
 /// The lowest-numbered issue that is Ready or would be Ready once settled.
@@ -112,6 +125,7 @@ pub fn before_architect(
         wait,
         Settling::Include,
         PickupOrder::LowestFirst,
+        None,
     )
 }
 
@@ -121,6 +135,7 @@ fn search(
     wait: TimeDelta,
     settling: Settling,
     order: PickupOrder,
+    past: Option<u64>,
 ) -> Result<Option<PriorityIssue>> {
     let reads = GitHubAndOrigin {
         launch,
@@ -130,6 +145,7 @@ fn search(
         .github
         .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
     Search::new(&reads, candidates, Utc::now(), wait, order, progress::step)
+        .past(past)
         .first_priority(settling)
 }
 
@@ -252,8 +268,13 @@ enum Reason {
 struct Search<'a, R, P> {
     /// What it reads of each issue beyond its listing.
     reads: &'a R,
+    /// Which end of the issue numbers it starts from.
+    order: PickupOrder,
     /// The issues, in the order they are considered.
     candidates: Vec<ListedIssue>,
+    /// Where in `candidates` the search starts: those before it were tried
+    /// already. They are still read for a Ticket's line on its Spec.
+    start: usize,
     /// Where each stands, in the same order, once it has been worked out.
     standings: Vec<Option<Standing>>,
     /// The time of the pass, which settling is measured to.
@@ -283,7 +304,9 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         let standings = vec![None; candidates.len()];
         Search {
             reads,
+            order,
             candidates,
+            start: 0,
             standings,
             now,
             wait,
@@ -292,9 +315,23 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         }
     }
 
+    /// Start the search after issue `past`, if it is given, in the
+    /// candidates' order, whether or not that issue is still listed.
+    fn past(mut self, past: Option<u64>) -> Self {
+        if let Some(past) = past {
+            let order = self.order;
+            self.start = self
+                .candidates
+                .iter()
+                .position(|candidate| order.comes_after(candidate.issue.number, past))
+                .unwrap_or(self.candidates.len());
+        }
+        self
+    }
+
     fn first_priority(mut self, settling: Settling) -> Result<Option<PriorityIssue>> {
         self.settling = settling;
-        for at in 0..self.candidates.len() {
+        for at in self.start..self.candidates.len() {
             match self.standing(at)? {
                 Standing::Ready {
                     is_spec,
@@ -730,6 +767,17 @@ mod tests {
         facts: Vec<(u64, Facts)>,
         order: PickupOrder,
     ) -> (Option<(u64, bool)>, Vec<Seen>) {
+        search_past(candidates, facts, order, None)
+    }
+
+    /// [`search_ordered`], considering only the issues after `past` in
+    /// `order`, if it is given.
+    fn search_past(
+        candidates: Vec<ListedIssue>,
+        facts: Vec<(u64, Facts)>,
+        order: PickupOrder,
+        past: Option<u64>,
+    ) -> (Option<(u64, bool)>, Vec<Seen>) {
         let seen = RefCell::new(Vec::new());
         let reads = InMemory {
             facts: facts.into_iter().collect(),
@@ -744,6 +792,7 @@ mod tests {
             order,
             sink,
         )
+        .past(past)
         .first_priority(Settling::Wait)
         .unwrap()
         .map(|priority| {
@@ -1460,6 +1509,88 @@ mod tests {
                 started_20,
                 Seen::TicketsRead(20),
             ]
+        );
+    }
+
+    #[test]
+    fn a_search_past_an_issue_takes_the_next_ready_issue_in_its_order_reading_none_before_it() {
+        for (order, past, taken) in [
+            (PickupOrder::LowestFirst, 7, 9),
+            (PickupOrder::HighestFirst, 9, 7),
+        ] {
+            let (ready, seen) = search_past(
+                vec![listed(7, &[]), listed(8, &["needs-info"]), listed(9, &[])],
+                Vec::new(),
+                order,
+                Some(past),
+            );
+
+            assert_eq!(ready, Some((taken, false)), "{order}");
+            let [candidate, started] = every_read(taken);
+            assert_eq!(
+                seen,
+                [passed_over("#8 labelled needs-info"), candidate, started],
+                "{order}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_search_past_an_issue_no_longer_listed_starts_after_where_it_would_be() {
+        for (order, past, taken) in [
+            (PickupOrder::LowestFirst, 8, 9),
+            (PickupOrder::HighestFirst, 8, 7),
+        ] {
+            let (ready, _) = search_past(
+                vec![listed(7, &[]), listed(9, &[])],
+                Vec::new(),
+                order,
+                Some(past),
+            );
+
+            assert_eq!(ready, Some((taken, false)), "{order}");
+        }
+    }
+
+    #[test]
+    fn a_search_past_the_last_ready_issue_finds_none() {
+        for (order, past) in [
+            (PickupOrder::LowestFirst, 9),
+            (PickupOrder::HighestFirst, 7),
+        ] {
+            let (ready, seen) = search_past(
+                vec![listed(7, &[]), listed(9, &[])],
+                Vec::new(),
+                order,
+                Some(past),
+            );
+
+            assert_eq!(ready, None, "{order}");
+            assert_eq!(seen, [], "{order}");
+        }
+    }
+
+    #[test]
+    fn a_search_past_a_ready_spec_gives_its_tickets_after_it_no_line() {
+        let ticket = || Facts {
+            parent: Some(url(7)),
+            ..Facts::default()
+        };
+        let spec = Facts {
+            sub_issue_is_open: vec![true],
+            ..Facts::default()
+        };
+        let (ready, seen) = search_past(
+            vec![listed(7, &[]), listed(8, &[]), listed(9, &[])],
+            vec![(7, spec), (8, ticket())],
+            PickupOrder::LowestFirst,
+            Some(7),
+        );
+
+        assert_eq!(ready, Some((9, false)));
+        assert!(
+            !seen.iter().any(|seen| matches!(seen, Seen::Line(_))),
+            "{seen:?}"
         );
     }
 }
