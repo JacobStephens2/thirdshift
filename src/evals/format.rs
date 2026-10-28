@@ -34,6 +34,33 @@ pub(super) struct Task {
     pub checks: Vec<Vec<String>>,
     pub inputs: BTreeMap<String, String>,
     pub trial: Option<crate::trial::Inputs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<Difficulty>,
+}
+
+/// One replaceable A/A reading, with the setup that produced it.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Difficulty {
+    pub passes: usize,
+    pub trials: usize,
+    pub experiment: String,
+    pub commit: String,
+    pub harness: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+impl Difficulty {
+    pub fn measured(&self) -> bool {
+        self.trials >= 6
+    }
+
+    pub fn discriminating(&self) -> bool {
+        self.measured() && (0.15..=0.95).contains(&(self.passes as f64 / self.trials as f64))
+    }
 }
 
 impl Task {
@@ -43,6 +70,13 @@ impl Task {
         version(task.format)?;
         commit_id(&task.base)?;
         commit_id(&task.change)?;
+        if let Some(difficulty) = &task.difficulty {
+            anyhow::ensure!(
+                difficulty.passes <= difficulty.trials,
+                "Difficulty passes exceed Trials"
+            );
+            commit_id(&difficulty.commit)?;
+        }
         if task.repository.trim().is_empty() || task.criteria.trim().is_empty() {
             bail!(
                 "{}: repository and criteria must not be empty",

@@ -42,7 +42,7 @@ pub(crate) fn approve(suite: &str, task: &str) -> Result<Approval> {
     let directory = crate::config::home()?
         .join(".thirdshift/evals/suites")
         .join(suite);
-    suite::Manifest::load(&directory)?;
+    let _lock = suite::lock(&directory)?;
     let directory = directory.join("tasks").join(task);
     let manifest = format::Task::load(&directory)?;
     if manifest.state == format::State::Proposed {
