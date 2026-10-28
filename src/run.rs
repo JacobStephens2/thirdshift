@@ -196,12 +196,7 @@ fn run(
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
         // A slot only makes Passes count this Command: it is never refused one.
-        if let Err(error) = command_limit::hold_slot(&issue.repo()) {
-            progress::warn(
-                &error,
-                format_args!("this Command does not count toward the Command limit"),
-            );
-        }
+        command_limit::hold_slot(&issue.repo());
         match trust::issue_trust(&GitHub::new(), issue) {
             Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
             Ok(None) => {}

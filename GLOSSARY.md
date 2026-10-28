@@ -48,7 +48,7 @@ The number of live **Commands** on one repository on one machine at which a **Pa
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
-A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for the lock makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
+A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
 _Avoid_: cleanup, garbage collection
 
 ### Repository and branches

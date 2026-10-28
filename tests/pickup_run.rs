@@ -1753,6 +1753,35 @@ fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_
 }
 
 #[test]
+fn at_a_command_limit_of_2_a_pass_from_before_the_command_limit_and_a_pickup_run_fill_the_repository()
+ {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+
+    let second = scenario.run(&["pickup"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(after_start(&second.stderr), at_command_limit(2, 2));
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &first.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    drop(old_pass);
+}
+
+#[test]
 fn at_a_command_limit_of_2_a_pass_that_runs_alone_is_skipped_beside_a_pickup_run_and_skips_every_pass_itself()
  {
     let scenario = Scenario::new();

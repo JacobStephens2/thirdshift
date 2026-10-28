@@ -39,6 +39,7 @@ use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::ChildAsks;
 use crate::claim::{self, Claim};
+use crate::command_limit;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::GitHub;
@@ -554,10 +555,10 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        match crate::command_limit::hold_pass(
+        match command_limit::hold_pass(
             &repo,
             config.command_limit,
-            launch::Sharing::Alone("a Custom process"),
+            command_limit::Sharing::Alone("a Custom process"),
         ) {
             Ok(Some(running)) => {
                 let reason = running.to_string();
@@ -596,12 +597,7 @@ fn run(command: &ProcessRun) -> Result<String> {
     let issue = issue.expect("an issue");
     // Started with an issue, it counts toward the Command limit, but is
     // never refused for it.
-    if let Err(error) = crate::command_limit::hold_slot(&issue.repo()) {
-        progress::warn(
-            &error,
-            format_args!("this Command does not count toward the Command limit"),
-        );
-    }
+    command_limit::hold_slot(&issue.repo());
     let started = Utc::now() - crate::run::STARTED_MARGIN;
     if file_has_issue_branch(&file) {
         return run_issue_branch(command, &config, &path, file, issue, started, notification);

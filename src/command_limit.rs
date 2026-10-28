@@ -9,7 +9,7 @@
 //!
 //! A Pass also tries the lock a thirdshift from before the Command limit
 //! takes, and keeps it when it is free, so that the two still keep each
-//! other out: one held counts as a Command running. An Architect run, a
+//! other out: one held by such a thirdshift counts as a Command running. An Architect run, a
 //! Security run or an issue-less Custom process keeps the repository to
 //! itself: it is skipped while any other Command runs there, and holds a
 //! lock of its own that skips every Pass while it runs.
@@ -36,35 +36,36 @@ pub enum Sharing {
     Alone(&'static str),
 }
 
-/// Why a Pass is skipped at its start, on `repo`. Its `Display` is the
-/// reason, as the skipped run gives it.
+/// Why a Pass is skipped at its start, on `repo`, at the Command `limit`.
+/// Its `Display` is the reason, as the skipped run gives it.
 #[derive(Debug)]
 pub struct AlreadyRunning {
     pub repo: Repo,
+    limit: NonZeroUsize,
     why: Why,
 }
 
 #[derive(Debug)]
 enum Why {
-    /// `running` Commands are running, `limit` the Command limit.
-    AtLimit { running: usize, limit: NonZeroUsize },
+    /// `running` Commands are running, at or over the limit.
+    AtLimit { running: usize },
     /// This Pass keeps the repository to itself, and `running` other
     /// Commands are running there.
     NotAlone { running: usize },
     /// A Pass that keeps the repository to itself, named, is running.
-    Alone(String),
+    HeldAlone(String),
 }
 
 impl fmt::Display for AlreadyRunning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let repo = self.repo.slug();
+        let (repo, limit) = (self.repo.slug(), self.limit);
+        // At the default limit every skip says what it said when one Pass at
+        // a time held the repository.
+        if limit.get() == 1 {
+            return write!(f, "another Pass is already running on {repo}");
+        }
         match &self.why {
-            // At the default limit every skip says what it said when one
-            // Pass at a time held the repository.
-            Why::AtLimit { limit, .. } if limit.get() == 1 => {
-                write!(f, "another Pass is already running on {repo}")
-            }
-            Why::AtLimit { running, limit } => write!(
+            Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
                 commands_running(*running)
@@ -74,7 +75,7 @@ impl fmt::Display for AlreadyRunning {
                 "{} on {repo}, and this Pass runs only alone there",
                 commands_running(*running)
             ),
-            Why::Alone(kind) => write!(f, "{kind} is running alone on {repo}"),
+            Why::HeldAlone(kind) => write!(f, "{kind} is running alone on {repo}"),
         }
     }
 }
@@ -87,15 +88,23 @@ fn commands_running(n: usize) -> String {
     }
 }
 
-/// Take a slot on `repo` for this process, a Command started on an Issue
-/// URL, without counting the slots held: such a Command is never refused.
-/// It holds the slot until it exits.
-pub fn hold_slot(repo: &Repo) -> Result<()> {
-    let slots = Slots::of(repo)?;
-    let _counting = slots.counting()?;
-    let free = slots.count()?.free;
-    slots.take(free)?;
-    Ok(())
+/// Take a slot on `repo` for this process, a Command started with an issue,
+/// without counting the slots held: such a Command is never refused. It
+/// holds the slot until it exits. One it can't take is a warning: the
+/// Command runs all the same, only Passes don't count it.
+pub fn hold_slot(repo: &Repo) {
+    let taken = (|| {
+        let slots = Slots::of(repo)?;
+        let _counting = slots.counting()?;
+        let free = slots.count()?.free;
+        slots.take(free)
+    })();
+    if let Err(error) = taken {
+        crate::progress::warn(
+            &error,
+            format_args!("this Command does not count toward the Command limit"),
+        );
+    }
 }
 
 /// Take a slot on `repo` for this process, a Pass that shares it as
@@ -112,27 +121,23 @@ pub fn hold_pass(
     let skipped = |why| {
         Ok(Some(AlreadyRunning {
             repo: repo.clone(),
+            limit,
             why,
         }))
     };
-    let alone = slots.alone()?;
-    let Some(alone) = alone else {
-        if limit.get() == 1 {
-            return skipped(Why::AtLimit { running: 1, limit });
-        }
-        return skipped(Why::Alone(slots.alone_kind()));
+    let Some(alone) = slots.try_alone()? else {
+        return skipped(Why::HeldAlone(slots.alone_kind()));
     };
     let held = slots.count()?;
     let legacy = try_lock(&legacy_path(repo)?)?;
-    // A thirdshift from before the Command limit takes no slot, so its lock
-    // held is one Command running at least.
-    let running = held.held.max(usize::from(legacy.is_none()));
+    let marker = try_lock(&slots.dir.join(LEGACY_HELD))?;
+    // A thirdshift from before the Command limit takes no slot, so the lock
+    // it takes, held while no Pass from after holds the marker, is one more
+    // Command running.
+    let running = held.held + usize::from(legacy.is_none() && marker.is_some());
     match sharing {
         Sharing::UpToTheLimit if running >= limit.get() => {
-            return skipped(Why::AtLimit { running, limit });
-        }
-        Sharing::Alone(_) if running >= 1 && limit.get() == 1 => {
-            return skipped(Why::AtLimit { running, limit });
+            return skipped(Why::AtLimit { running });
         }
         Sharing::Alone(_) if running >= 1 => return skipped(Why::NotAlone { running }),
         Sharing::UpToTheLimit => drop(alone),
@@ -147,11 +152,16 @@ pub fn hold_pass(
         }
     }
     slots.take(held.free)?;
-    if let Some(legacy) = legacy {
+    if let (Some(legacy), Some(marker)) = (legacy, marker) {
+        hold(marker);
         hold(legacy);
     }
     Ok(None)
 }
+
+/// The lock file a Pass from after the Command limit holds while it holds
+/// the lock a thirdshift from before takes, so that the two are told apart.
+const LEGACY_HELD: &str = "legacy-held.lock";
 
 /// The lock file that a Pass keeping the repository to itself holds.
 const ALONE: &str = "alone.lock";
@@ -228,7 +238,7 @@ impl Slots {
 
     /// The lock that a Pass keeping the repository to itself holds, if no
     /// such Pass holds it now.
-    fn alone(&self) -> Result<Option<File>> {
+    fn try_alone(&self) -> Result<Option<File>> {
         try_lock(&self.dir.join(ALONE))
     }
 

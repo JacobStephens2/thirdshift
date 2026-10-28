@@ -9,8 +9,8 @@
 //!
 //! A Run's opening first makes the Origin match and checks that its issue is
 //! open. A run with no Issue URL instead fails on an `origin` that isn't on
-//! GitHub, settles its Base branch at once, then tries a lock, so only one
-//! of them per repository runs at a time on a machine.
+//! GitHub, settles its Base branch at once, then takes a slot on its
+//! repository, unless it is at its Command limit on this machine.
 
 use std::fmt;
 use std::num::NonZeroUsize;
