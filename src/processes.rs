@@ -54,6 +54,7 @@ use crate::run_ending::{Account, Cause};
 use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
+mod architecture;
 mod catalog;
 mod identity;
 pub(crate) use identity::Identity;
@@ -76,6 +77,7 @@ struct ProcessFile {
     /// this ready for review; `check` never merges.
     goal: Goal,
     security_review: bool,
+    plan_only: bool,
 }
 
 /// Limits a file may set. Each one is at least as tight as the built-in rule.
@@ -124,6 +126,7 @@ enum DraftKind {
     Skill { skill: String, line: usize },
     Command { command: String },
     Implement { line: usize },
+    ArchitectureReview { line: usize },
     SecurityReview { line: usize },
     Delivery { line: usize },
     SelfMerge { line: usize },
@@ -156,6 +159,7 @@ impl ResolvedStep {
             StepKind::Skill { .. } => "skill",
             StepKind::Command(_) => "command",
             StepKind::Implement => "implement",
+            StepKind::ArchitectureReview => "architecture-review",
             StepKind::SecurityReview => "security-review",
             StepKind::Delivery => "delivery",
             StepKind::SelfMerge => "self-merge",
@@ -330,6 +334,7 @@ enum StepKind {
     Skill { name: String, path: PathBuf },
     Command(String),
     Implement,
+    ArchitectureReview,
     SecurityReview,
     Delivery,
     SelfMerge,
@@ -360,6 +365,7 @@ struct Prepared {
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
     security_review: bool,
+    plan_only: bool,
     completed: Mutex<CompletedRuns>,
     /// Killed work retained across session Steps, ordered by Step even when
     /// a parallel group completes out of order.
@@ -371,8 +377,10 @@ struct Prepared {
 struct CompletedRuns {
     resolutions: Vec<crate::run::Resolution>,
     failed: bool,
-    /// Only this Process's implement Step can end the Process early.
+    /// The implement Step's early successful end.
     unreproduced_bug: Option<String>,
+    /// Why architecture-review ended successfully without a child run.
+    architecture_end: Option<String>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -426,6 +434,7 @@ impl Drop for HeldClaim<'_> {
 /// What one Step needs from the Process, shared by a parallel group.
 struct StepRun<'a> {
     process: &'a str,
+    plan_only: bool,
     goal: Goal,
     limits: &'a Limits,
     completed: &'a Mutex<CompletedRuns>,
@@ -522,7 +531,19 @@ fn run(command: &ProcessRun) -> Result<String> {
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
     logs::process_loaded(identity);
+    if command.plan_only
+        && !file
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, DraftKind::ArchitectureReview { .. }))
+    {
+        return Err(failed_before_steps(
+            notification,
+            anyhow!("--plan-only needs an architecture-review Step"),
+        ));
+    }
     file.goal = goal;
+    file.plan_only = command.plan_only;
     file.security_review = Flags {
         security_review: command.security_review,
         ..Flags::default()
@@ -670,7 +691,10 @@ fn notify(
     let ended = if outcome == "succeeded" {
         Ok(match not_reproduced {
             Some(url) => format!("bug not reproduced: {url}"),
-            None => account_outcome.to_string(),
+            None => completed
+                .architecture_end
+                .clone()
+                .unwrap_or_else(|| account_outcome.to_string()),
         })
     } else {
         Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
@@ -692,7 +716,15 @@ fn notify(
         base_fix: None,
         log: None,
         ticket_lines: &[],
-        review: None,
+        review: completed
+            .architecture_end
+            .as_ref()
+            .map(|line| crate::run_ending::Review {
+                title: None,
+                strength: None,
+                line: line.clone(),
+                dispatched: None,
+            }),
         failed_reproduction: None,
         pre_audit_failure: None,
         security_findings: None,
@@ -724,7 +756,10 @@ fn finish_run(
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     drop(prepared);
     logs::ended(outcome);
-    logs::complete(outcome, cause.as_deref());
+    logs::complete(
+        outcome,
+        cause.as_deref().or(completed.architecture_end.as_deref()),
+    );
     notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
@@ -867,7 +902,10 @@ fn run_issue_branch(
             Some(&format!("bug not reproduced: {comment_url}")),
         );
     } else {
-        logs::complete(outcome, cause.as_deref());
+        logs::complete(
+            outcome,
+            cause.as_deref().or(completed.architecture_end.as_deref()),
+        );
     }
     notify(notification, outcome, cause.as_deref(), &completed);
     result
@@ -1059,6 +1097,17 @@ fn execute_groups(
             return Err(skip_remaining(&prepared.steps[range.end..], name, error));
         }
         let completed = prepared.completed.lock().expect("completed Runs");
+        if let Some(message) = &completed.architecture_end {
+            progress::step(message);
+            for step in &prepared.steps[range.end..] {
+                progress::step(format_args!(
+                    "step {}: 0s skipped: {message} ({})",
+                    step.log_name(),
+                    step.log_context()
+                ));
+            }
+            return Ok(last);
+        }
         if let Some(comment_url) = &completed.unreproduced_bug {
             let message = format!("bug not reproduced: {comment_url}");
             progress::step(&message);
@@ -1156,6 +1205,7 @@ fn run_parallel(
                 };
                 let run = StepRun {
                     process: &process,
+                    plan_only: prepared.plan_only,
                     goal,
                     limits,
                     completed,
@@ -1248,6 +1298,7 @@ fn run_step(
     let (checkout, continuing) = held_issue_branch(issue_run);
     let run = StepRun {
         process,
+        plan_only: prepared.plan_only,
         goal: prepared.goal,
         limits: &prepared.limits,
         completed: &prepared.completed,
@@ -1518,6 +1569,7 @@ fn run_step_in(
     crate::resources::wait()?;
     match &step.kind {
         StepKind::Implement => run_implement(run, cwd, step),
+        StepKind::ArchitectureReview => architecture::run(run, step),
         StepKind::RunPublishedIssue => run_published(run, step, prior),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
@@ -1983,6 +2035,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
         }
         StepKind::Delivery => format!("{}: delivery", step.name),
         StepKind::Implement => format!("{}: implement", step.name),
+        StepKind::ArchitectureReview => format!("{}: architecture-review", step.name),
         StepKind::SecurityReview => format!("{}: security-review", step.name),
         StepKind::SelfMerge => format!("{}: self-merge", step.name),
         StepKind::RunPublishedIssue => format!("{}: run-published-issue", step.name),
@@ -2007,6 +2060,7 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     refuse_security_review(path, &file)?;
     refuse_worktrees(path, &file)?;
     refuse_implement(path, &file)?;
+    architecture::validate(path, &file)?;
     refuse_self_merge(path, &file)?;
     refuse_issue_branch(path, &file)?;
     refuse_published(path, &file.steps)?;
@@ -2079,6 +2133,7 @@ fn prepare_from(
         limits: file.limits,
         goal: file.goal,
         security_review: file.security_review,
+        plan_only: file.plan_only,
         completed: Mutex::new(CompletedRuns::default()),
         killed_work: Mutex::default(),
     })
@@ -2501,8 +2556,10 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
             continue;
         };
         let follows = index.checked_sub(1).is_some_and(|previous| {
-            matches!(steps[previous].kind, DraftKind::Skill { .. })
-                && !same_group(&steps[previous], step)
+            matches!(
+                steps[previous].kind,
+                DraftKind::Skill { .. } | DraftKind::ArchitectureReview { .. }
+            ) && !same_group(&steps[previous], step)
         });
         if !follows {
             return Err(rule(
@@ -2541,6 +2598,7 @@ fn resolve(
         },
         DraftKind::Command { command } => StepKind::Command(command.clone()),
         DraftKind::Implement { .. } => StepKind::Implement,
+        DraftKind::ArchitectureReview { .. } => StepKind::ArchitectureReview,
         DraftKind::SecurityReview { .. } => StepKind::SecurityReview,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
@@ -2620,6 +2678,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         limits,
         goal: Goal::ReadyForReview,
         security_review: false,
+        plan_only: false,
     })
 }
 
@@ -3037,6 +3096,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
     };
     let kind = match value {
         "implement" => DraftKind::Implement { line },
+        "architecture-review" => DraftKind::ArchitectureReview { line },
         "delivery" => DraftKind::Delivery { line },
         "security-review" => DraftKind::SecurityReview { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
@@ -3046,7 +3106,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
                 path,
                 line,
                 "catalogue",
-                "catalogue must be implement, delivery, run-published-issue, security-review or self-merge",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review or self-merge",
             ));
         }
     };

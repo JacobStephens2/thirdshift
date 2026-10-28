@@ -96,6 +96,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
        thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security-review flags match a Ticket run (experimental)
+       thirdshift process <name> --plan-only      Publish an Architect plan and skip later Steps (experimental)
        thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
@@ -142,7 +143,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.
-  --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
+  --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
   https://thirdshift.app/docs/
 ";
