@@ -458,11 +458,15 @@ struct PriorSteps<'a> {
     began: &'a [(String, DateTime<Utc>)],
 }
 
-struct WrittenGuard;
+struct WrittenGuard {
+    remove_on_drop: bool,
+}
 
 impl Drop for WrittenGuard {
     fn drop(&mut self) {
-        skills::remove_written();
+        if self.remove_on_drop {
+            skills::remove_written();
+        }
     }
 }
 
@@ -926,10 +930,13 @@ fn execute_issue_steps(
         let context = continuation(issue_run);
         let on_origin = issue_run.on_origin;
         if let Some(checkout) = issue_run.checkout.as_mut() {
-            let recovery = preserve_step_failure(checkout, context, on_origin, error);
-            let mut failed: crate::failed_run::FailedRun = anyhow!("{error:#}").into();
-            failed.recovery = Some(Box::new(recovery));
-            issue_run.failure = Some(failed);
+            issue_run.failure = Some(preserve_step_failure(
+                checkout,
+                &mut issue_run.pull_request,
+                context,
+                on_origin,
+                error,
+            ));
         }
     }
     result
@@ -1543,12 +1550,15 @@ fn continuation(issue_run: &IssueRun<'_>) -> recovery::Continuation {
 
 fn preserve_step_failure(
     checkout: &mut Worktree,
+    pull_request: &mut PullRequest,
     context: recovery::Continuation,
     on_origin: bool,
     error: &anyhow::Error,
-) -> Recovery {
+) -> crate::failed_run::FailedRun {
     let reason = Cause::of(error).first_line().to_string();
-    let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || Ok(()));
+    let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || {
+        pull_request.ensure_preservable()
+    });
     let preservation = recovery::preservation_of(preserved, progress::step);
     let mut recovery = Recovery::new(recovery::Stage::Implementation, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
@@ -1556,7 +1566,15 @@ fn preserve_step_failure(
     for line in recovery.lines() {
         progress::step(line);
     }
-    recovery
+    let mut failed: crate::failed_run::FailedRun = anyhow!("{error:#}").into();
+    failed.recovery = Some(Box::new(recovery));
+    match pull_request.finish_failed_run(false) {
+        Ok(url) => failed.pr_url = url,
+        Err(error) => progress::step(format_args!(
+            "warning: could not finish the failed PR: {error:#}"
+        )),
+    }
+    failed
 }
 
 fn run_step_in(
@@ -2136,7 +2154,9 @@ fn prepare_from(
         worktrees,
         declared,
         issue_worktree,
-        _written: WrittenGuard,
+        _written: WrittenGuard {
+            remove_on_drop: true,
+        },
         choice: command.choice,
         description: file.description,
         steps,

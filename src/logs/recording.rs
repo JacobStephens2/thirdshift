@@ -443,7 +443,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
-            && let Some(dispatched) = tree.dispatched.last_mut()
+            && let Some(dispatched) = tree.active_dispatch()
         {
             dispatched.finish(
                 account,
@@ -590,12 +590,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
         let owner = self.owner.as_ref()?;
         let (_, tree) = self.command_record.as_ref()?;
-        let active = tree
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())
-            .unwrap_or(&tree.command);
-        Some(super::trace::Context::from_record(owner, active))
+        Some(super::trace::Context::from_record(owner, tree.active_ref()))
     }
 
     /// Child Runs carry the owning CommandKind, so private Security and

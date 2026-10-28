@@ -384,3 +384,216 @@ printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         "{record}"
     );
 }
+
+#[test]
+fn custom_child_failed_before_delivery_drafts_its_pr() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Fail after implementation"
+
+[worktrees.ticket]
+kind = "issue-branch"
+
+[[steps]]
+name = "implement"
+catalogue = "implement"
+worktree = "ticket"
+
+[[steps]]
+name = "verify"
+command = "exit 23"
+worktree = "ticket"
+
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(
+        pr["isDraft"], true,
+        "a failed Ticket must return its PR to draft: {pr}"
+    );
+    let record = process_record(&scenario);
+    assert_eq!(
+        record["dispatched"][0]["pull_request"], pr["url"],
+        "{record}"
+    );
+}
+
+#[test]
+fn a_nested_selected_child_keeps_its_delivery_identity() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Dispatch another Ticket before delivering this one"
+
+[worktrees.ticket]
+kind = "issue-branch"
+
+[[steps]]
+name = "publish-nested"
+skill = "to-spec"
+worktree = "ticket"
+
+[[steps]]
+name = "run-nested"
+catalogue = "run-published-issue"
+worktree = "ticket"
+
+[[steps]]
+name = "change"
+worktree = "ticket"
+command = """
+echo contractor > contractor.txt
+git add contractor.txt
+git commit -qm contractor
+gh pr create --base main --head issue-8 --title Contractor --body 'Closes #8'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+"""
+
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Outer --body 'Outer Ticket')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"url=$(gh issue create --title Nested --body 'Nested Ticket')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(9, &agent_lands_ticket(9, "main"));
+    scenario.agent_does_in_session(
+        4,
+        r#"echo repaired > repaired.txt
+git add repaired.txt
+git commit -qm repaired
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","url":"https://ci.example/test"}]'
+printf repaired > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+
+    let repair = fs::read_dir(process_dir(&scenario))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.starts_with("8-") && name.ends_with("-repair-1.logs.jsonl")
+        })
+        .expect("the outer Ticket must have a Delivery Repair trace");
+
+    for line in fs::read_to_string(repair).unwrap().lines() {
+        let request: serde_json::Value = serde_json::from_str(line).unwrap();
+        for batch in request["resourceLogs"].as_array().unwrap() {
+            let name = batch["resource"]["attributes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|attribute| attribute["key"] == "thirdshift.process.name")
+                .and_then(|attribute| attribute["value"]["stringValue"].as_str());
+            assert_eq!(name, Some("contractor"), "{batch}");
+        }
+    }
+
+    let record = process_record(&scenario);
+    assert_eq!(
+        record["dispatched"][0]["outcome"], "ready for review",
+        "{record}"
+    );
+    assert_eq!(
+        record["dispatched"][1]["pull_request"],
+        pr_from(&scenario, "issue-9")["url"],
+        "{record}"
+    );
+}
+
+#[test]
+fn a_custom_child_keeps_the_parents_factory_skills_until_the_command_ends() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        &format!(
+            r#"{PUBLISH_THEN_RUN}process = "contractor"
+
+[[steps]]
+name = "confirm"
+skill = "code-review"
+"#
+        ),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Command-only Ticket"
+[worktrees.ticket]
+kind = "issue-branch"
+[[steps]]
+name = "change"
+command = "echo contractor > contractor.txt; git add contractor.txt; git commit -qm contractor; gh pr create --base main --head issue-8 --title Contractor --body 'Closes #8'"
+worktree = "ticket"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"readlink .claude/skills/thirdshift-code-review > "$HOME/parent-skill-source"
+url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"test -r "$(cat "$HOME/parent-skill-source")/SKILL.md" || exit 23
+printf 'parent skills retained' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), "parent skills retained");
+}

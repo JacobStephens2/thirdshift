@@ -50,6 +50,9 @@ pub(crate) fn run_custom(
             base: delivery.base,
         },
     )?;
+    // The parent Command owns the shared Factory-skill folder until all
+    // its Steps, including parallel siblings and later sessions, finish.
+    prepared._written.remove_on_drop = false;
     prepared.dispatched = Some(identity);
     refuse_unstartable(&prepared)?;
     let branch = worktree.branch().to_string();
