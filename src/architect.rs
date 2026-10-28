@@ -37,6 +37,8 @@ use crate::prompt;
 use crate::ready::{PriorityIssue, ReadyIssue};
 use crate::run::Ended;
 
+mod conclusion;
+
 /// The label thirdshift marks an Architect plan with, which a later Architect
 /// run finds an open one by.
 const ARCHITECT_PLAN: Label = Label::new(
@@ -495,8 +497,8 @@ impl Report {
 /// call made, if the session had no final message or its last line is not
 /// one the prompt asks for, and fails if the plan can't be marked ready or
 /// the idea labelled.
-fn conclude(
-    outside: &mut impl Outside,
+pub(crate) fn conclude(
+    outside: &mut impl conclusion::Outside,
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
@@ -526,7 +528,7 @@ fn conclude(
 /// it puts on to the repository if it lacks it. Fails, changing no label, if
 /// the plan fails its checks. Returns its title, as viewed, if known.
 fn mark_plan_ready(
-    outside: &mut impl Outside,
+    outside: &mut impl conclusion::Outside,
     plan: &IssueUrl,
     origin: &str,
     started: DateTime<Utc>,
@@ -557,7 +559,7 @@ fn mark_plan_ready(
 /// added each to the repository if it lacks it. `needs-triage` goes back on
 /// an issue that had been triaged: the factory again takes it for the best
 /// next move. Returns its title, as viewed, if known.
-fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<Option<String>> {
+fn label_idea(outside: &mut impl conclusion::Outside, idea: &IssueUrl) -> Result<Option<String>> {
     if outside.interrupted() {
         bail!("interrupted");
     }
@@ -584,7 +586,7 @@ fn label_idea(outside: &mut impl Outside, idea: &IssueUrl) -> Result<Option<Stri
 /// Architect run `started`, and has no label but `needs-triage` that makes
 /// an Unready Ticket. Returns the issue, as viewed.
 fn check_plan(
-    outside: &mut impl Outside,
+    outside: &mut impl conclusion::Outside,
     plan: &IssueUrl,
     origin: &str,
     started: DateTime<Utc>,

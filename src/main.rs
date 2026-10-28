@@ -142,7 +142,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.
-  --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
+  --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
   https://thirdshift.app/docs/
 ";

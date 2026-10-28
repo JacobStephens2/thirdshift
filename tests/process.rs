@@ -1,5 +1,7 @@
 //! Custom processes through the CLI, real Git and fake Harnesses.
 
+#[path = "process/architecture_review.rs"]
+mod architecture_review;
 #[path = "process/implement.rs"]
 mod implement;
 #[path = "process/land_tickets.rs"]
@@ -928,7 +930,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, self-merge or land-tickets",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, self-merge or land-tickets",
             ),
             (
                 "review",
