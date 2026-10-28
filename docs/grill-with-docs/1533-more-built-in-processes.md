@@ -1,6 +1,6 @@
-# Grilling: (no issue yet), the other run types as Built-in process files
+# Grilling: #1533, the Spec, Architect and Security runs as Built-in process files
 
-Issue: none yet (see Q1.1). Renamed to `<n>-more-built-in-processes.md` once filed.
+Issue: https://github.com/JacobStephens2/thirdshift/issues/1533
 Research: #1456 (Spec: the Ticket run as a Built-in process file) and its grill `docs/grill-with-docs/1456-built-in-ticket-run.md`, #877, ADR-0024, ADR-0001, `processes/README.md`, related #1468 (Experiments with Custom processes as Arms), #118 (prompts and skills in configuration), #1484 (an implement Eval suite).
 
 ## Round 1 (answered)
@@ -220,7 +220,7 @@ Should the Spec be sliced like that?
 - The ten Tickets of Q3.5, each move Ticket updating `processes/README.md`, the guide and the hand-written site pages for its run type (Q3.5).
 - #1456's Testing Decisions apply. The Spec PR is left ready for review and never Self-merged until the Day shift's live checks pass on a test repository: an Architect run with a plan and one with only an idea, a Spec run with two Tickets, and a Security run that reproduces a finding (Q3.6).
 - No new ADR; ADR-0024 covers it (Q3.7).
-- The frontier is empty after Round 3. Next: publish the Spec with `to-spec` and its Tickets with `to-tickets`, once Jacob confirms.
+- The frontier is empty after Round 3. The Spec is #1533; its Tickets follow with `to-tickets`.
 - #1456's decisions stand: Built-in process files live in `processes/`, compiled in (ADR-0001), same format and validation as Custom processes, readable with `process show`, copied by hand, and a Custom process still can't take a Built-in name.
 - A Command that carries out a Built-in process keeps its run type's name (GLOSSARY "Built-in process").
 - ADR-0024 holds: the catalogue grows when a file needs a Step it lacks; safety rules stay inside catalogue Steps.
