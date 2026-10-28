@@ -1047,7 +1047,7 @@ the Step's Harness, Model and Effort and the Process's Repair cap and protected
 paths. The Step is required, outside a parallel group, and returns the draft
 Spec PR URL after updating the local worktree from the landed Spec branch.
 It leaves the Claim while the Spec waits for completion.
-If a Spec-branch Step fails, cleanup keeps uncommitted work and commits absent
+Spec-branch cleanup keeps uncommitted work and commits absent
 from the remote-tracking branches in the local worktree and branch, and names
 the retained path. Inspect and publish that work before retrying.
 

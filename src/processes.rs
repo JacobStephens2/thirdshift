@@ -958,14 +958,15 @@ fn execute_issue_steps(
     prepared: &Prepared,
     issue_run: &mut IssueRun<'_>,
 ) -> Result<String> {
+    if prepared.spec_branch
+        && let Some(checkout) = issue_run.checkout.as_mut()
+    {
+        checkout.keep_unpublished_on_cleanup();
+    }
     let result = execute_steps(process, prepared, Some(&mut *issue_run));
-    if let Err(error) = &result {
-        if prepared.spec_branch {
-            if let Some(checkout) = issue_run.checkout.as_mut() {
-                checkout.keep_unpublished_on_cleanup();
-            }
-            return result;
-        }
+    if let Err(error) = &result
+        && !prepared.spec_branch
+    {
         let context = continuation(issue_run);
         let on_origin = issue_run.on_origin;
         if let Some(checkout) = issue_run.checkout.as_mut() {

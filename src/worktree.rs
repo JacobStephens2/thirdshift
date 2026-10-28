@@ -229,7 +229,7 @@ impl Worktree {
     }
 
     /// A Process without Delivery must prove its work is published before
-    /// removing the checkout and local branch after failure.
+    /// removing the checkout and local branch.
     pub fn keep_unpublished_on_cleanup(&mut self) {
         if matches!(self.cleanup, Cleanup::Remove) {
             self.cleanup = Cleanup::KeepUnpublished;

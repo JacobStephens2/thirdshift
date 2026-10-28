@@ -435,3 +435,40 @@ worktree = "spec"
         result.stderr
     );
 }
+
+#[test]
+fn a_successful_spec_branch_keeps_work_added_after_land() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(7, &[(8, &[])]);
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "issue-7"));
+    let source = format!(
+        r#"{LAND_TICKETS}
+[[steps]]
+name = "finish"
+command = "echo proof > proof.txt; git add proof.txt; git commit -qm proof"
+worktree = "spec"
+"#
+    );
+    write_process(&scenario, "gather", &source);
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let preserved = scenario.origin_file("issue-7", "proof.txt").or_else(|| {
+        if scenario
+            .launch_git(&["branch", "--list", "issue-7"])
+            .trim()
+            .is_empty()
+        {
+            None
+        } else {
+            Some(scenario.launch_git(&["show", "issue-7:proof.txt"]))
+        }
+    });
+    assert_eq!(
+        preserved.as_deref().map(str::trim),
+        Some("proof"),
+        "the successful Spec-branch Step lost its committed work: {}",
+        result.stderr
+    );
+}
