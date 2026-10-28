@@ -17,6 +17,9 @@ mod code_graders;
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
+#[path = "experiments/names.rs"]
+mod names;
+
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
 
@@ -785,7 +788,10 @@ PY
             let build = scenario.path(&format!("home/.thirdshift/evals/builds/{commit}"));
             fs::create_dir_all(&build).unwrap();
             let binary = build.join("thirdshift");
-            fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+            support::copy_executable(
+                std::path::Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                &binary,
+            );
             // macOS scans a fresh copy on its first exec, for about a second.
             // Pay that here, outside the Trial deadline the tests time.
             let warmed = std::process::Command::new(&binary)

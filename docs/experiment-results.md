@@ -37,10 +37,15 @@ and name, without disclosing their private inputs or success criteria.
 
 `state` is `prepared`, `running`, `completed`, `interrupted` or `paused`.
 `completed` means grading finished; its Verdict can still wait on rechecks.
+`name` is the saved name when `name_set` is true, otherwise the readable default
+derived from the Arms (including `A/A at <ref>` and `Release <ref>`). Names can
+change in any state without changing the Experiment's identity, Bar or results.
 `created_at` and nullable `ended_at` bound the Experiment. Nullable `baseline_ref`,
 `candidate_ref` and `title` are display descriptions; `pause_reason`,
 `resume_command` and `command_log` supply recovery and factory-log context.
-They do not participate in Experiment identity or the Bar.
+`release` records whether `--release` has run for this Experiment and remains
+true on later resumes. These fields do not participate in Experiment identity
+or the Bar.
 
 `running_trials` gives active Trial IDs and start times. `sessions` inventories
 retained Trial Sessions: opaque Session ID, Trial ID, zero-based attempt index
@@ -148,6 +153,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
 {
   "Experiment": {
     "format": 1,
+    "name": "string",
+    "name_set": "boolean",
     "id": "string",
     "baseline": "Setup",
     "candidate": "Setup",
@@ -162,6 +169,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pause_reason": "string?",
     "resume_command": "string?",
     "command_log": "string?",
+    "release": "boolean",
     "created_at": "string",
     "tasks": [{"suite": "string", "name": "string"}],
     "running_trials": [{"id": "string", "started_at": "string"}],

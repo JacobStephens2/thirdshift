@@ -45,7 +45,7 @@ async fn show(id: Option<String>, csrf: String) -> Response {
         }
         let (title, html) = if detail {
             let view = &views[0];
-            (render::name(view), render::detail(view))
+            (view.name.clone(), render::detail(view))
         } else {
             ("Experiments".into(), render::list(&views))
         };

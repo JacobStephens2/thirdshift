@@ -1,4 +1,5 @@
-//! Atomic metadata and one result per Trial. An exclusive lock fences resumes.
+//! Atomic metadata and one result per Trial. An exclusive lock fences resumes;
+//! a short metadata lock fences each `experiment.json` write, renames included.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -21,6 +22,9 @@ pub(super) struct Stored {
     #[serde(flatten)]
     pub details: Details,
     pub(super) created_at: String,
+    /// The Day shift's name; unset means the default from the Arms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub verdict: Option<super::grading::Verdict>,
@@ -37,6 +41,8 @@ pub(super) struct Stored {
 #[derive(Serialize)]
 pub(crate) struct View {
     pub format: u32,
+    pub name: String,
+    pub name_set: bool,
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
@@ -73,6 +79,8 @@ pub(crate) struct Details {
     pub resume_command: Option<String>,
     #[serde(default)]
     pub command_log: Option<PathBuf>,
+    #[serde(default)]
+    pub release: bool,
 }
 
 #[derive(Serialize)]
@@ -221,6 +229,7 @@ impl Stored {
                 state: State::Prepared,
                 details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
+                name: None,
                 tasks,
                 verdict: None,
                 rechecks: BTreeMap::new(),
@@ -236,8 +245,33 @@ impl Stored {
         Ok(Some(stored))
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// A rename may land while a run holds the Experiment lock, so every
+    /// metadata write keeps the name saved on disk.
+    pub fn save(&mut self) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        let path = self.directory.join("experiment.json");
+        if path.exists() {
+            #[derive(Deserialize)]
+            struct Saved {
+                #[serde(default)]
+                name: Option<String>,
+            }
+            let saved: Saved = serde_json::from_slice(&fs::read(&path)?)?;
+            self.name = saved.name;
+        }
+        write(&path, self)
+    }
+
+    pub fn rename(&mut self, name: Option<String>) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        self.name = name;
         write(&self.directory.join("experiment.json"), self)
+    }
+
+    pub fn name(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| super::names::default(&self.description, &self.details))
     }
 
     pub fn results(&self) -> Result<Vec<TrialResult>> {
@@ -324,8 +358,9 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
+                "{} · {} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
                 self.description.id,
+                view.name,
                 self.state,
                 self.description.baseline.commit,
                 self.description.candidate.commit,
@@ -352,6 +387,13 @@ impl Stored {
             ))
         }
     }
+}
+
+/// Held only across one read-and-write of `experiment.json`, never for a run.
+fn metadata_lock(directory: &Path) -> Result<File> {
+    let lock = File::create(directory.join("metadata.lock"))?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -394,6 +436,21 @@ pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
         return Ok(vec![Stored::load(&root, id, false)?.view()?]);
     }
     list(&root)?.iter().map(Stored::view).collect()
+}
+
+/// Renames in any state: only the metadata lock fences this write, as it does
+/// a running Experiment's own.
+pub(super) fn rename(root: &Path, id: &str, name: Option<String>, json: bool) -> Result<String> {
+    let directory = Stored::directory(root, id)?;
+    let mut stored = {
+        let _metadata = metadata_lock(&directory)?;
+        let mut stored = Stored::metadata(&Native, directory, id)?;
+        stored.name = name;
+        write(&stored.directory.join("experiment.json"), &stored)?;
+        stored
+    };
+    stored.upgrade_verdict()?;
+    stored.render(json)
 }
 
 pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {

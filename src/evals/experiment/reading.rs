@@ -89,6 +89,8 @@ impl Observation {
     fn project(self, stored: &Stored) -> View {
         View {
             format: 1,
+            name: stored.name(),
+            name_set: stored.name.is_some(),
             description: stored.description.clone(),
             state: stored.state,
             details: stored.details.clone(),
