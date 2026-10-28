@@ -914,6 +914,15 @@ Inspect it with `thirdshift process show ticket-run`, or validate it with
 under a new name to run it as a Custom process.
 A Custom process cannot take a reserved Built-in process name.
 
+The built-in `architect-run` runs `architecture-review` → `run-published-issue`.
+Architect runs execute it after their Pass lock and skip gates. The first Step
+owns the review session and the plan-or-idea conclusion and labels; it ends
+successfully on an idea or with `--plan-only`. Otherwise the second Step runs
+the published plan. Inspect it with `thirdshift process show architect-run`
+and validate it with `thirdshift process check architect-run`. A copy saved
+under a new name runs as a Custom process, with only the shared Pass lock
+and without the Architect run's open-plan, waiting-idea or Ready-issue gates.
+
 Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
 rules as a Ticket run. If the Resume ends the same way, a progress line
@@ -1736,7 +1745,8 @@ attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
 the compiled-in file's hash by default. A `run-published-issue` Step that selects
 a Custom process records that name, Custom kind and loaded file's hash on its
 child instead. Custom processes record the file loaded for that
-run, so editing it changes the next run's hash. A Spec, Architect or Security
+run, so editing it changes the next run's hash. Architect runs record
+`architect-run` and its compiled-in file's hash. A Spec or Security
 run records its run type until its Built-in file lands; a run with no Process
 file has no hash. Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.
@@ -1920,6 +1930,12 @@ thirdshift architect --email you@example.com      # email how the Architect run 
 ```
 
 The focus is optional free text, given as one argument, anywhere among the flags; it goes into the Session prompt. `architect` is a command only as the first argument.
+
+After its Pass lock and skip gates, the Architect run carries out the Built-in
+process in `processes/architect-run.toml`: `architecture-review` →
+`run-published-issue`. The file owns that sequence; the Architect run keeps its
+name, progress lines, logs, endings, Run notification, Console view and Recovery.
+Use `thirdshift process show architect-run` to read or copy the file.
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>` (or the same with dashes) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. The [Harness, Model and Effort](#harness-model-and-effort) are the Architecture review's too. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email` or `email-unless-merged`, optionally followed by an address, and `no-email` (or the same with dashes) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` or `email-unless-merged` is the address only if it contains `@`, so a focus without one is never taken for it.
 

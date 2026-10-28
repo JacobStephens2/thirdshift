@@ -82,6 +82,28 @@ fn traces(scenario: &Scenario, folder: &str) -> Vec<std::path::PathBuf> {
 }
 
 #[test]
+fn architect_run_records_its_compiled_process_in_records_and_traces() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.agent_does(
+        "url=$(gh issue create --title 'Deepen sessions' --body Plan --label needs-triage)\nprintf 'Architecture review plan: %s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+    let result = scenario.run(&["architect", "--plan-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+    let expected_hash = hash(include_bytes!("../processes/architect-run.toml"));
+    assert_record(
+        &scenario.command_record(folder),
+        "architect-run",
+        "built-in",
+        Some(&expected_hash),
+    );
+    for path in traces(&scenario, folder) {
+        assert_trace(&path, "architect-run", "built-in", Some(&expected_hash));
+    }
+}
+
+#[test]
 fn ticket_run_records_its_compiled_process_in_records_and_traces() {
     let scenario = Scenario::new();
     scenario.agent_does(&opens_pr(7, "main"));

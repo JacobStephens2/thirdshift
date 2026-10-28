@@ -54,6 +54,7 @@ use crate::run_ending::{Account, Cause};
 use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
+pub(crate) mod architect;
 mod architecture;
 mod catalog;
 mod identity;
