@@ -1929,13 +1929,13 @@ Any scheduler that runs the command works; a systemd user timer needs lingering 
 
 #### On macOS, a LaunchAgent
 
-cron fires its lines on macOS too, but the passes it starts can't log in: `gh` and `claude` keep their logins in the macOS Keychain, and a cron job runs outside your login session, so it can't read the Keychain. `gh` then makes unauthenticated requests, and GitHub allows unauthenticated GraphQL none, so every pass that gets as far as choosing an issue fails, and the log file has a line such as:
+On macOS cron fires its lines too, but the passes it starts can't log in: `gh` and Claude Code (`claude`) keep their logins in the macOS Keychain, and a cron job runs outside your login session, so it can't read the Keychain. `gh` then makes unauthenticated requests, and GitHub gives unauthenticated GraphQL requests a rate limit of 0, so every pass that gets as far as choosing an issue fails, and the log file has a line such as:
 
 ```
 gh api graphql failed: gh: API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.) (HTTP 403)
 ```
 
-A pass skipped earlier, at the lock or the [Claim limit](#the-claim-limit), looks fine, and a pass that gets past `gh` can fail instead on the Harness's CLI not being logged in. The same command typed in a terminal works, since your shell is inside the login session.
+A pass skipped earlier, at the [lock](#one-at-a-time) or the [Claim limit](#the-claim-limit), looks fine, and a pass that gets past `gh` can fail instead on the Harness's CLI not being logged in. The same command typed in a terminal works, since your shell is inside the login session.
 
 A **LaunchAgent** runs inside your login session, so both can read their logins. This one starts a Pickup run every half hour, as the crontab line in [A Pickup run on a schedule](#a-pickup-run-on-a-schedule) does. Save it as `~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist`, with your own paths in place of `/Users/you` and `/Users/you/repos/widgets`:
 
@@ -1950,7 +1950,7 @@ A **LaunchAgent** runs inside your login session, so both can read their logins.
   <array>
     <string>/bin/zsh</string>
     <string>-c</string>
-    <string>cd /Users/you/repos/widgets &amp;&amp; thirdshift pickup base main &gt;&gt; /Users/you/.thirdshift/logs/cron.log 2&gt;&amp;1</string>
+    <string>cd /Users/you/repos/widgets &amp;&amp; thirdshift pickup base main >> /Users/you/.thirdshift/logs/cron.log 2>&amp;1</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -1965,11 +1965,11 @@ A **LaunchAgent** runs inside your login session, so both can read their logins.
 </plist>
 ```
 
-- **The command** is the crontab line's, given to `/bin/zsh -c`. A plist is XML, so each `&` in it is written `&amp;`, and each `>` here `&gt;`: `&&` is `&amp;&amp;`, and `2>&1` is `2&gt;&amp;1`. Write every path in full: launchd expands neither `~` nor `$HOME`.
-- **`PATH`** is set for the reason it is in a crontab: launchd reads no shell profile either. List every directory that holds `thirdshift`, the Harness's CLI, `gh`, `git` and the build tools; `type thirdshift claude gh git` in your own shell shows where they are. Homebrew on Apple Silicon installs into `/opt/homebrew/bin`.
-- **`StartInterval`** is the interval in seconds, here half an hour. launchd doesn't start a job again while its last start is still running, so a long pass simply delays the next one, which matches a Pass's own [one-at-a-time](#one-at-a-time) skip.
+- **The command** is the crontab line's, given to `/bin/zsh -c`. A plist is XML, so each `&` in it must be written `&amp;`: `&&` is `&amp;&amp;`, and `2>&1` is `2>&amp;1`. Write every path in full: launchd expands neither `~` nor `$HOME`.
+- **`PATH`** lists the same directories as the crontab's `PATH` line, since launchd reads no shell profile either. Homebrew on Apple Silicon installs into `/opt/homebrew/bin`.
+- **`StartInterval`** is the interval in seconds, here half an hour. launchd doesn't start a job again while its last start is still running, so a long pass simply delays the next one, which matches thirdshift's own [one-at-a-time](#one-at-a-time) skip.
 - **`RunAtLoad`** also starts a pass as soon as the LaunchAgent is loaded, and at each login.
-- **The log file's folder** must exist, as for cron: `mkdir -p ~/.thirdshift/logs`.
+- **The log file** is the one fixed file every line writes to, as for cron, named `cron.log` whatever starts the pass, and its folder must exist: `mkdir -p ~/.thirdshift/logs`.
 
 `plutil -lint ~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist` checks the file. Load it, check it, and unload it with:
 
@@ -2202,7 +2202,7 @@ PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 */30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
-The `PATH` line, the `cd` and `base main`, the log file's directory, the logins the Harness's CLI and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). On macOS, a pass cron starts can't read the Keychain logins of `gh` and `claude`, and fails with GitHub's unauthenticated rate limit (`HTTP 403`): start it from a LaunchAgent instead, as [On macOS, a LaunchAgent](#on-macos-a-launchagent) shows for this very line. What differs for a Pickup run:
+The `PATH` line, the `cd` and `base main`, the log file's directory, the logins the Harness's CLI and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). On macOS, start it from a LaunchAgent rather than cron: [On macOS, a LaunchAgent](#on-macos-a-launchagent) shows this very line. What differs for a Pickup run:
 
 - **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its [Claim limit](#the-claim-limit): each pull request left for review, and each failure left for you, holds a Claim, and at 3 of them, or the `pickup.limit` you set, the passes take nothing until you have dealt with one. An issue you have just labelled also waits five minutes by default, or the `pickup.wait_minutes` you set, until it is settled. A Ticket run you start by hand on an Issue URL is outside all this: it neither waits for a pass nor makes one skip.
 - **One line per repository.** thirdshift keeps no list of repositories. Each Pass on one repository skips while another is still running, the Spec run or Ticket run it dispatched included, so both lines can go in one crontab and two Passes never build that repository at once. Passes on different repositories do run at the same time: give their lines different minutes, such as `15,45`, if they would compete for the machine.
