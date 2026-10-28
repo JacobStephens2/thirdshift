@@ -6,6 +6,7 @@ mod execution;
 mod grading;
 mod integrity;
 mod model_grader;
+mod names;
 mod options;
 mod reading;
 mod rechecks;
@@ -37,6 +38,7 @@ use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
+pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use session_evidence::{SessionLog, read as read_session};
@@ -241,6 +243,9 @@ pub fn run(options: Options) -> Result<()> {
             options.json,
         );
     };
+    if let Some(name) = options.name {
+        experiment.rename(Some(name))?;
+    }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
@@ -257,11 +262,12 @@ pub fn run(options: Options) -> Result<()> {
             &experiment.description.candidate.commit,
         ])?);
     }
+    experiment.details.release |= options.release;
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
-                std::env::args()
-                    .skip(1)
+                resume_args(std::env::args().skip(1))
+                    .into_iter()
                     .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
             )
             .collect::<Vec<_>>()
@@ -357,6 +363,12 @@ pub fn run(options: Options) -> Result<()> {
 pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag, name] = positional.as_slice()
+        && flag.as_str() == "--name"
+    {
+        return store::rename(&root, id, names::parse(name)?, json);
+    }
     if let [id, flag, session] = positional.as_slice()
         && flag.as_str() == "--session"
     {
@@ -371,10 +383,26 @@ pub fn show(args: &[String]) -> Result<String> {
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)
+}
+
+/// The shown resume command leaves out `--name`, so following it keeps a
+/// later rename. Flags pair with values as `options::parse` reads them.
+fn resume_args(mut args: impl Iterator<Item = String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--json" || arg == "--release" || !arg.starts_with("--") {
+            kept.push(arg);
+        } else if arg == "--name" {
+            args.next();
+        } else {
+            kept.push(arg);
+            kept.extend(args.next());
+        }
+    }
+    kept
 }
 
 fn resolve(git: &Git, reference: &str) -> Result<String> {

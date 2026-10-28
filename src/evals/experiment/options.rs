@@ -18,6 +18,7 @@ pub struct Options {
     pub(super) trials_per_task: Option<usize>,
     pub(super) json: bool,
     pub(super) release: bool,
+    pub(super) name: Option<String>,
 }
 
 #[derive(Default)]
@@ -100,6 +101,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let baseline_setup = arm("baseline")?;
     let candidate_setup = arm("candidate")?;
     let baseline = flags.remove("--baseline").map(String::from);
+    let name = flags
+        .remove("--name")
+        .map(|name| super::names::parse(name)?.context("Experiment name must not be empty"))
+        .transpose()?;
     ensure!(
         !release || (baseline.is_none() && suites.is_empty()),
         "release mode selects its Baseline and touched suites; --baseline and --suite do not apply"
@@ -161,5 +166,6 @@ pub fn parse(args: &[String]) -> Result<Options> {
         trials_per_task,
         json,
         release,
+        name,
     })
 }
