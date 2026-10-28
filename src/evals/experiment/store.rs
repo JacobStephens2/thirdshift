@@ -40,6 +40,7 @@ pub(super) struct Stored {
 
 #[derive(Serialize)]
 pub(crate) struct View {
+    pub format: u32,
     pub name: String,
     pub name_set: bool,
     #[serde(flatten)]

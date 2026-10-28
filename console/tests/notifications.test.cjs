@@ -96,7 +96,8 @@ test('notifications ask on click, survive reload and open the Inbox for a rise',
     const notice = await page.evaluate(() => ({ title: notices[0].title, body: notices[0].options.body }));
     const host = await page.locator('header h1').textContent();
     assert.equal(notice.title, `2 need you · ${host}`);
-    assert.match(notice.body, /acme\/widgets#2.*Problem 2/);
+    // A narrow toast truncates the body, so the state comes before what it is about (#1493).
+    assert.equal(notice.body, 'Failed · acme/widgets#2 · Problem 2');
     const focused = await page.evaluate(() => { notices[0].onclick({ preventDefault() {} }); return focusCalls; });
     assert.equal(focused, 1);
     await page.waitForURL(`${origin}/?page=inbox`);

@@ -238,10 +238,11 @@ Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
 the same button turns it off across its open tabs. Keep a Console tab open
 (a pinned tab works): a rise in Needs you shows one browser notification with
-the count, machine and newest arriving item. Clicking it focuses the tab and
-opens the Inbox. Opening or reloading a tab never notifies for existing items,
-and several tabs share one notification per rise. Notifications work from the
-other Console pages too.
+the count, machine and newest arriving item. The item's state comes first, then
+what it is about and its title, so a toast cut short still says what happened.
+Clicking it focuses the tab and opens the Inbox. Opening or reloading a tab
+never notifies for existing items, and several tabs share one notification per
+rise. Notifications work from the other Console pages too.
 
 Notifications require HTTPS (or localhost), browser notification support,
 permission, browser storage and Web Locks for coordination between tabs. The

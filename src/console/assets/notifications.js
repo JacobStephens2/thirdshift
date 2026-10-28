@@ -56,7 +56,8 @@ async function observe(previous, currentGeneration) {
     let notification;
     try {
       notification = new Notification(`${rows.length} need you · ${host}`, {
-        body: `${text('.subject')} · ${text('.issue-title')} · ${text('.state')}`,
+        // Lead with the state: a narrow toast cuts the body off after a few words.
+        body: `${text('.state')} · ${text('.subject')} · ${text('.issue-title')}`,
         icon: '/assets/favicon-urgent.svg'
       });
     } catch {
