@@ -1,6 +1,6 @@
 # thirdshift never schedules itself: the operating system's scheduler starts each pass
 
-An **Architect run** and a **Pickup run** find their own work, so they are meant to run with nobody typing the command. thirdshift still has no daemon, no `watch` command and no `--every`: each is one pass, started by the operating system's scheduler from a crontab line per repository, and each is the same command a person would type. What makes a pass safe to start from a timer lives in the command, not in a scheduled mode: the Base branch named on the command line, one unattended run per repository at a time on a machine, and a skipped outcome that exits `0` when there is nothing to do.
+An **Architect run** and a **Pickup run** find their own work, so they are meant to run with nobody typing the command. thirdshift still has no daemon, no `watch` command and no `--every`: each is one pass, started by the operating system's scheduler from a crontab line per repository, and each is the same command a person would type. What makes a pass safe to start from a timer lives in the command, not in a scheduled mode: the Base branch named on the command line, one unattended run per repository at a time on a machine, and a skipped outcome that exits `0` when there is nothing to do. ([ADR 0026](0026-pickup-counts-failures-and-passes-share-a-repository-up-to-a-command-limit.md) replaces one run at a time with a Command limit per repository.)
 
 ## Considered Options
 

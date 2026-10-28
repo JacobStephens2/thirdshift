@@ -410,7 +410,7 @@ impl HeldClaim<'_> {
 
     fn release(&mut self) {
         if let Some(claim) = self.claim.take() {
-            claim.end(None);
+            claim.end(claim::Ending::Failed);
         }
     }
 }

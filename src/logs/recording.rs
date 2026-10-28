@@ -33,6 +33,9 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
+    /// The User config's warnings, until the Activity log of the command's
+    /// repository has them.
+    config_warnings: Vec<String>,
     command_record: Option<(PathBuf, CommandTree)>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
@@ -89,6 +92,7 @@ impl<O: Outside> Record<O> {
             command_log: Log::NotKept,
             activity_started: None,
             activity_warned: false,
+            config_warnings: Vec::new(),
             command_record: None,
             parent_record: None,
             parent_dispatch: None,
@@ -138,6 +142,26 @@ impl<O: Outside> Record<O> {
         if !config.quiet_skips {
             self.show_held();
         }
+        if !self.child {
+            for warning in &config.warnings {
+                self.step(format_args!("warning: {warning}"));
+            }
+            self.config_warnings = config.warnings.clone();
+        }
+    }
+
+    /// Record each of the User config's warnings in the Activity log under
+    /// `root`, once: each is written unless it is already the log's last
+    /// User config line, so it is recorded once per change, not once per
+    /// command.
+    fn record_config_warnings(&mut self, root: &Path) {
+        for warning in std::mem::take(&mut self.config_warnings) {
+            self.activity_write(
+                root,
+                &format!("{} warning: {warning}", Kind::UserConfig),
+                Some(Kind::UserConfig),
+            );
+        }
     }
 
     pub(super) fn pass_fired(&mut self, repo: &Repo) {
@@ -147,6 +171,7 @@ impl<O: Outside> Record<O> {
             CommandKind::Secure => Pass::Security,
             _ => return,
         };
+        self.record_config_warnings(&self.root(repo));
         let path = super::pass_starts::path(&self.root(repo), pass);
         let time = self.outside.now().to_rfc3339();
         // One atomic replacement per kind also keeps competing launches from
@@ -188,6 +213,7 @@ impl<O: Outside> Record<O> {
             return;
         }
         let root = self.root(&work.repo());
+        self.record_config_warnings(&root);
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(&root, work, &stamp);
@@ -317,6 +343,7 @@ impl<O: Outside> Record<O> {
         reason: &str,
     ) {
         let root = self.root(repo);
+        self.record_config_warnings(&root);
         self.activity_write(
             &root,
             &format!("Process {name} skipped: {reason}"),

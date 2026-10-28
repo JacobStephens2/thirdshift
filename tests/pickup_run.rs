@@ -7,9 +7,11 @@
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, with the repository at
-//! its Claim limit, or while an Architect run or another Pickup run on the
+//! its Failure limit, or while an Architect run or another Pickup run on the
 //! repository is still running, it is skipped. Each pass that gets the lock
-//! first sweeps `in-progress` off the repository's closed issues.
+//! first sweeps `in-progress` and `agent-failed` off the repository's closed
+//! issues, then takes `agent-failed` off each open issue the Day shift has
+//! acted on.
 //! Asked for a Run notification, a pass that took an issue sends one naming
 //! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
@@ -30,6 +32,10 @@ const READY_FOR_AGENT: &str = "ready-for-agent";
 /// The label of a Claimed issue, which the dispatched run swaps the issue's
 /// `ready-for-agent` for.
 const IN_PROGRESS: &str = "in-progress";
+
+/// The label of an issue a failed run kept its Claim on, which the Failure
+/// limit counts.
+const AGENT_FAILED: &str = "agent-failed";
 
 /// Make issue `number` open and labelled `ready-for-agent` on the fake
 /// GitHub, with `more` labels after it.
@@ -1106,7 +1112,8 @@ fn a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    // Ticket #8 can't start, so the Spec run fails and keeps its Claim.
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS, AGENT_FAILED]);
     assert_eq!(sessions(&scenario).first().map(String::as_str), Some("9"));
 }
 
@@ -2000,46 +2007,57 @@ fn a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_c
     }
 }
 
-/// Make each of `issues` open and labelled `in-progress` on the fake GitHub:
-/// an issue that carries a Claim.
-fn claimed_issues(scenario: &Scenario, issues: &[u32]) {
+/// Make each of `issues` open and labelled `in-progress` and `agent-failed`
+/// on the fake GitHub: an issue a failed run kept its Claim on.
+fn failed_issues(scenario: &Scenario, issues: &[u32]) {
     for issue in issues {
         scenario.issue_is(*issue, "OPEN");
-        scenario.issue_labelled(*issue, &[IN_PROGRESS]);
+        scenario.issue_labelled(*issue, &[IN_PROGRESS, AGENT_FAILED]);
     }
 }
 
 #[test]
-fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_requests() {
+fn a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_requests() {
     let scenario = Scenario::new();
-    claimed_issues(&scenario, &[953, 924, 936]);
+    failed_issues(&scenario, &[953, 924, 936]);
 
     let result = scenario.run(&["pickup"]);
 
-    let mut expected = vec![vec![
-        "api".to_string(),
-        "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
-    ]];
-    expected.extend(["closed", "open"].map(|state| vec![
+    let listing = |state: &str, label: &str| {
+        vec![
             "api".to_string(),
             "--paginate".into(),
             "--jq".into(),
             ".[]".into(),
-            format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
-        ]));
-    assert_eq!(scenario.gh_calls(), expected);
+            format!(
+                "repos/acme/widgets/issues?state={state}&labels={label}&sort=created&direction=desc&per_page=100"
+            ),
+        ]
+    };
+    assert_eq!(
+        scenario.gh_calls(),
+        [
+            vec![
+                "api".to_string(),
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
+            ],
+            listing("closed", IN_PROGRESS),
+            listing("closed", AGENT_FAILED),
+            listing("open", AGENT_FAILED),
+        ]
+    );
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #924, #936 and #953 are labelled \
-         in-progress, pickup.limit is 3\n",
+        "thirdshift: at the Failure limit on acme/widgets: #924, #936 and #953 are labelled \
+         agent-failed, pickup.failure_limit is 3\n",
     );
 }
 
 #[test]
-fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
+fn a_pass_skipped_for_the_failure_limit_sends_no_notification() {
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
+    failed_issues(&scenario, &[1, 2, 3]);
     scenario.user_config_is(EMAIL_ALWAYS);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -2048,67 +2066,173 @@ fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #1, #2 and #3 are labelled in-progress, \
-         pickup.limit is 3\n",
+        "thirdshift: at the Failure limit on acme/widgets: #1, #2 and #3 are labelled \
+         agent-failed, pickup.failure_limit is 3\n",
     );
     assert!(resend.requests().is_empty());
 }
 
 #[test]
-fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
-    // Raised, three Claims no longer stop the pass.
+fn pickup_failure_limit_in_the_user_config_raises_and_lowers_the_failure_limit() {
+    // Raised, three failures no longer stop the pass.
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
-    scenario.user_config_is("[pickup]\nlimit = 4\n");
+    failed_issues(&scenario, &[1, 2, 3]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 4\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
 
-    // Lowered, one Claim stops it.
+    // Lowered, one failure stops it.
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1]);
-    scenario.user_config_is("[pickup]\nlimit = 1\n");
+    failed_issues(&scenario, &[1]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #1 is labelled in-progress, \
-         pickup.limit is 1\n",
+        "thirdshift: at the Failure limit on acme/widgets: #1 is labelled agent-failed, \
+         pickup.failure_limit is 1\n",
     );
 }
 
 #[test]
-fn a_closed_issue_labelled_in_progress_does_not_count_against_the_claim_limit() {
+fn claims_whose_pull_requests_are_ready_draft_or_merged_never_count() {
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
-    scenario.issue_is(3, "CLOSED");
+    for (number, state, draft) in [(1, "OPEN", false), (2, "OPEN", true), (3, "MERGED", false)] {
+        scenario.issue_is(number, "OPEN");
+        scenario.issue_labelled(number, &[IN_PROGRESS]);
+        scenario.github_has_pr(&format!("issue-{number}"), "main", state);
+        if draft {
+            let mut github = scenario.gh_state();
+            github["prs"].as_array_mut().unwrap().last_mut().unwrap()["isDraft"] = true.into();
+            scenario.write_gh_state(&github);
+        }
+    }
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    for number in [1, 2, 3] {
+        assert_eq!(scenario.issue_labels(number), [IN_PROGRESS]);
+    }
 }
 
 #[test]
-fn a_pickup_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key() {
+fn a_closed_issue_labelled_agent_failed_does_not_count_and_is_swept() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[1, 2, 3]);
+    scenario.issue_is(3, "CLOSED");
+    scenario.issue_labelled(3, &["bug", IN_PROGRESS, AGENT_FAILED]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: taking in-progress and agent-failed off #3, which is closed\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(3), ["bug"]);
+}
+
+#[test]
+fn a_failure_the_day_shift_handed_back_or_took_over_loses_agent_failed_and_does_not_count() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[11, 12, 13, 14]);
+    // Handed back, with or without the Claim taken off: Ready, but above #7.
+    scenario.issue_labelled(11, &[IN_PROGRESS, AGENT_FAILED, READY_FOR_AGENT]);
+    scenario.issue_labelled(12, &[AGENT_FAILED, READY_FOR_AGENT]);
+    // Taken over: no Claim and no needs-triage left.
+    scenario.issue_labelled(13, &[AGENT_FAILED, "bug"]);
+    // Still waiting for triage, so still counted.
+    scenario.issue_labelled(14, &[AGENT_FAILED, "needs-triage"]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 2\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    for (number, acted) in [(11, "handed back"), (12, "handed back"), (13, "took over")] {
+        let line =
+            format!("thirdshift: taking agent-failed off #{number}, which the Day shift {acted}\n");
+        assert!(result.stderr.contains(&line), "stderr: {}", result.stderr);
+    }
+    assert_eq!(scenario.issue_labels(11), [IN_PROGRESS, READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(12), [READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(13), ["bug"]);
+    assert_eq!(scenario.issue_labels(14), [AGENT_FAILED, "needs-triage"]);
+}
+
+#[test]
+fn a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted() {
+    let scenario = ready_ticket();
+    scenario.issue_is(1, "OPEN");
+    scenario.issue_labelled(1, &[AGENT_FAILED, "bug"]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
+    scenario.gh_fails("api --method DELETE repos/acme/widgets/issues/1/labels/agent-failed");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: warning: could not take agent-failed off #1: "),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(1), [AGENT_FAILED, "bug"]);
+}
+
+#[test]
+fn a_pickup_failure_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key()
+ {
     for limit in ["0", "-1", "1.5", "\"3\"", "true"] {
         let scenario = ready_ticket();
-        let path = scenario.user_config_is(&format!("[pickup]\nlimit = {limit}\n"));
+        let path = scenario.user_config_is(&format!("[pickup]\nfailure_limit = {limit}\n"));
 
         let result = scenario.run(&["pickup"]);
 
         scenario.assert_rejected_before_any_work(
             &result,
             &format!(
-                "thirdshift: pickup.limit must be a whole number from 1 up in the User config {}\n",
+                "thirdshift: pickup.failure_limit must be a whole number from 1 up in the User \
+                 config {}\n",
                 path.display()
             ),
         );
         assert_eq!(result.code, Some(1), "{limit}: {}", result.stderr);
         assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
     }
+}
+
+#[test]
+fn an_old_pickup_limit_is_ignored_with_a_warning_naming_pickup_failure_limit() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[1]);
+    scenario.issue_is(2, "OPEN");
+    scenario.issue_labelled(2, &[IN_PROGRESS]);
+    let path = scenario.user_config_is("[pickup]\nlimit = 1\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let warning = format!(
+        "thirdshift: warning: pickup.limit is ignored: a Pickup run now counts the issues it \
+         failed on, up to pickup.failure_limit; remove pickup.limit from the User config {}\n",
+        path.display()
+    );
+    assert_eq!(
+        result.stderr.matches(&warning).count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 #[test]

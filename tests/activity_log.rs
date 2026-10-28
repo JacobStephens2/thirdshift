@@ -251,21 +251,21 @@ fn an_unchanged_skip_updates_last_fired_without_adding_activity_lines() {
 }
 
 #[test]
-fn a_claim_limit_skip_is_recorded_again_only_when_its_holders_change() {
+fn a_failure_limit_skip_is_recorded_again_only_when_its_failures_change() {
     let scenario = Scenario::new();
     for number in [6, 4, 5] {
         scenario.issue_is(number, "OPEN");
-        scenario.issue_labelled(number, &["in-progress"]);
+        scenario.issue_labelled(number, &["in-progress", "agent-failed"]);
     }
 
     for _ in 0..2 {
         let result = run_in_zone(&scenario, &["pickup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
     }
-    // Keep the count unchanged while handing the Claim on #4 back.
+    // Keep the count unchanged while the Day shift takes #4 over.
     scenario.issue_labelled(4, &[]);
     scenario.issue_is(8, "OPEN");
-    scenario.issue_labelled(8, &["in-progress"]);
+    scenario.issue_labelled(8, &["in-progress", "agent-failed"]);
     for _ in 0..2 {
         let result = run_in_zone(&scenario, &["pickup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -274,10 +274,10 @@ fn a_claim_limit_skip_is_recorded_again_only_when_its_holders_change() {
     assert_eq!(
         activity(&scenario),
         [
-            "Pickup run skipped: at the Claim limit on acme/widgets: #4, #5 and #6 are \
-             labelled in-progress, pickup.limit is 3",
-            "Pickup run skipped: at the Claim limit on acme/widgets: #5, #6 and #8 are \
-             labelled in-progress, pickup.limit is 3",
+            "Pickup run skipped: at the Failure limit on acme/widgets: #4, #5 and #6 are \
+             labelled agent-failed, pickup.failure_limit is 3",
+            "Pickup run skipped: at the Failure limit on acme/widgets: #5, #6 and #8 are \
+             labelled agent-failed, pickup.failure_limit is 3",
         ]
     );
     let result = scenario.run(&["status", "--json"]);
@@ -288,9 +288,49 @@ fn a_claim_limit_skip_is_recorded_again_only_when_its_holders_change() {
         serde_json::json!([{
             "repository": "acme/widgets",
             "kind": "Pickup run",
-            "reason": "at the Claim limit on acme/widgets: #5, #6 and #8 are labelled in-progress, pickup.limit is 3",
+            "reason": "at the Failure limit on acme/widgets: #5, #6 and #8 are labelled agent-failed, pickup.failure_limit is 3",
         }])
     );
+}
+
+#[test]
+fn an_ignored_pickup_limit_is_warned_of_by_every_command_and_recorded_once_per_change() {
+    let scenario = Scenario::new();
+    let config = scenario.user_config_is("[pickup]\nlimit = 10\n");
+    let warning = format!(
+        "pickup.limit is ignored: a Pickup run now counts the issues it failed on, up to \
+         pickup.failure_limit; remove pickup.limit from the User config {}",
+        config.display()
+    );
+
+    for _ in 0..2 {
+        let result = run_in_zone(&scenario, &["pickup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains(&format!("thirdshift: warning: {warning}\n")),
+            "{}",
+            result.stderr
+        );
+    }
+    let result = run_in_zone(&scenario, &["architect", "--plan-only"]);
+    assert!(
+        result
+            .stderr
+            .contains(&format!("thirdshift: warning: {warning}\n")),
+        "{}",
+        result.stderr
+    );
+
+    let lines = activity(&scenario);
+    let warned = format!("User config warning: {warning}");
+    assert_eq!(
+        lines.iter().filter(|line| **line == warned).count(),
+        1,
+        "{lines:?}"
+    );
+    assert_eq!(lines[0], warned, "{lines:?}");
 }
 
 #[test]

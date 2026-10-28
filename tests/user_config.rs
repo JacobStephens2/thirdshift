@@ -142,6 +142,30 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
 }
 
 #[test]
+fn an_old_pickup_limit_of_any_value_is_ignored_and_a_run_warns_of_it_naming_failure_limit() {
+    for config in ["[pickup]\nlimit = 10\n", "[pickup]\nlimit = 0\n"] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(&format!("{config}[merge]\nalways = true\n"));
+        scenario.agent_does(AGENT_OPENS_PR);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_merged(&scenario, &result);
+        let warning = format!(
+            "thirdshift: warning: pickup.limit is ignored: a Pickup run now counts the issues it \
+             failed on, up to pickup.failure_limit; remove pickup.limit from the User config {}\n",
+            path.display()
+        );
+        assert_eq!(
+            result.stderr.matches(&warning).count(),
+            1,
+            "{config}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn trial_memory_caps_reject_multiple_suffixes_before_work() {
     for value in ["2GG", "512KK", "1MK"] {
         let scenario = Scenario::new();

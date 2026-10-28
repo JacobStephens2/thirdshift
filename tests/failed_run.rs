@@ -1,6 +1,7 @@
 //! The Failed run path: whatever goes wrong after the worktree exists, the
 //! agent's work is committed and pushed, an open PR goes back to draft, the
-//! log path is reported, and cleanup still happens.
+//! log path is reported, and cleanup still happens. A failed run that keeps
+//! its Claim labels the issue `agent-failed`, for the Failure limit.
 
 mod support;
 
@@ -118,7 +119,7 @@ fn ownership_refusal_warns_without_replacing_the_failed_run_cause_or_changing_pr
         assert_eq!(scenario.origin_log("manual"), None);
         assert_eq!(scenario.origin_file("issue-7", "wip.txt"), None);
         assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
-        assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+        assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
     }
 }
 
@@ -375,20 +376,88 @@ fn an_interrupted_run_that_left_nothing_on_origin_releases_its_claim() {
     );
 }
 
+/// The line saying a failed run labelled #7 `agent-failed`.
+const LABELLING_FAILED: &str =
+    "thirdshift: labelling #7 agent-failed, so it waits for the Day shift\n";
+
 #[test]
-fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim() {
+fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim_and_labels_it_agent_failed() {
     let scenario = Scenario::new();
-    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.repo_has_labels(&["bug", "ready-for-agent", "in-progress"]);
     scenario.agent_does(AGENT_LEAVES_WORK_AND_EXITS_3);
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_failed(&scenario, &result, "");
     assert!(scenario.origin_log("issue-7").is_some());
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert_eq!(
+        scenario.issue_labels(7),
+        ["bug", "in-progress", "agent-failed"]
+    );
+    assert!(
+        scenario
+            .repo_labels()
+            .iter()
+            .any(|label| label == "agent-failed"),
+        "{:?}",
+        scenario.repo_labels()
+    );
     assert!(
         !result.stderr.contains("releasing the Claim"),
         "stderr: {}",
         result.stderr
     );
+    assert_eq!(
+        result.stderr.matches(LABELLING_FAILED).count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn an_interrupted_run_that_pushed_its_work_still_labels_its_issue_agent_failed() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(&format!(
+        "echo 'half done' > wip.txt\ntouch {}\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(&[&scenario.issue_url(7)], "agent-started", "INT");
+
+    assert_failed(&scenario, &result, "");
+    assert_eq!(
+        scenario.origin_log("issue-7").unwrap()[0],
+        "thirdshift: failed ticket run (interrupted)"
+    );
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
+    assert!(
+        result.stderr.contains(LABELLING_FAILED),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_run_on_an_issue_labelled_agent_failed_takes_the_label_off_with_its_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["in-progress", "agent-failed"]);
+    scenario.agent_does(
+        "echo feature > feature.txt\ngit add feature.txt\ngit commit -q -m 'Add feature'\n\
+         gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'\n",
+    );
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: taking agent-failed off #7, which is Claimed again\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
 }
