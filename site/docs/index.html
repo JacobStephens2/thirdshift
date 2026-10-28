@@ -1687,7 +1687,53 @@ thirdshift architect --email you@example.com      # email how the Architect run 
 </code></pre>
 <p>The first leaves the pull request for you to review, and the second stops at the Architect plan, for you to read and run with <code>thirdshift &lt;Issue URL&gt;</code>.</p>
 <p>A scheduled Architect run is skipped when another Pass on the repository is <a href="#one-at-a-time">still running</a>, the Spec run or Ticket run it dispatched included, when an <a href="#one-architect-plan-at-a-time">Architect plan is still open</a>, when an <a href="#an-architect-idea-waits-for-triage">Architect idea waits for triage</a>, or when the repository has a <a href="#a-ready-issue-goes-first">Ready issue</a>, so a <code>ready-for-agent</code> issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night&#39;s Architect plan is closed or loses its <code>architect-plan</code> label. Merging its pull request closes it; if its run failed, pick it up with <code>thirdshift &lt;plan URL&gt;</code> first. Closing the pull request alone leaves the Architect plan open. A skip exits <code>0</code>, so the scheduler sees no failure, and the repository&#39;s <a href="#logs">Activity log</a> has the line that says why, as does the log file unless <code>activity.quiet_skips</code> is set. With Run notifications on, by <code>email.always = true</code> in the User config or <code>email</code> on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes, as for <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a>, without flooding your inbox. A night without an email means it was skipped, or failed before the notification&#39;s checks passed: look in the log file.</p>
-<p>Any scheduler that runs the command works; a systemd user timer needs lingering on (<code>loginctl enable-linger</code>) to fire while you are logged out.</p>
+<p>Any scheduler that runs the command works; a systemd user timer needs lingering on (<code>loginctl enable-linger</code>) to fire while you are logged out. On macOS, use a LaunchAgent rather than cron: see <a href="#on-macos-a-launchagent">On macOS, a LaunchAgent</a>.</p>
+<details class="fold"><summary><h4>On macOS, a LaunchAgent</h4></summary>
+<div class="manual-content" id="on-macos-a-launchagent">
+<p>On macOS cron fires its lines too, but the passes it starts can&#39;t log in: <code>gh</code> and Claude Code (<code>claude</code>) keep their logins in the macOS Keychain, and a cron job runs outside your login session, so it can&#39;t read the Keychain. <code>gh</code> then makes unauthenticated requests, and GitHub gives unauthenticated GraphQL requests a rate limit of 0, so every pass that gets as far as choosing an issue fails, and the log file has a line such as:</p>
+<pre><code>gh api graphql failed: gh: API rate limit exceeded for 203.0.113.7. (But here&#39;s the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.) (HTTP 403)
+</code></pre>
+<p>A pass skipped earlier, at the <a href="#one-at-a-time">lock</a> or the <a href="#the-claim-limit">Claim limit</a>, looks fine, and a pass that gets past <code>gh</code> can fail instead on the Harness&#39;s CLI not being logged in. The same command typed in a terminal works, since your shell is inside the login session.</p>
+<p>A <strong>LaunchAgent</strong> runs inside your login session, so both can read their logins. This one starts a Pickup run every half hour, as the crontab line in <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a> does. Save it as <code>~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist</code>, with your own paths in place of <code>/Users/you</code> and <code>/Users/you/repos/widgets</code>:</p>
+<pre><code class="language-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
+&lt;plist version=&quot;1.0&quot;&gt;
+&lt;dict&gt;
+  &lt;key&gt;Label&lt;/key&gt;
+  &lt;string&gt;local.thirdshift.pickup.widgets&lt;/string&gt;
+  &lt;key&gt;ProgramArguments&lt;/key&gt;
+  &lt;array&gt;
+    &lt;string&gt;/bin/zsh&lt;/string&gt;
+    &lt;string&gt;-c&lt;/string&gt;
+    &lt;string&gt;cd /Users/you/repos/widgets &amp;amp;&amp;amp; thirdshift pickup base main &gt;&gt; /Users/you/.thirdshift/logs/cron.log 2&gt;&amp;amp;1&lt;/string&gt;
+  &lt;/array&gt;
+  &lt;key&gt;EnvironmentVariables&lt;/key&gt;
+  &lt;dict&gt;
+    &lt;key&gt;PATH&lt;/key&gt;
+    &lt;string&gt;/Users/you/.local/bin:/Users/you/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin&lt;/string&gt;
+  &lt;/dict&gt;
+  &lt;key&gt;StartInterval&lt;/key&gt;
+  &lt;integer&gt;1800&lt;/integer&gt;
+  &lt;key&gt;RunAtLoad&lt;/key&gt;
+  &lt;true/&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;
+</code></pre>
+<ul>
+<li><strong>The command</strong> is the crontab line&#39;s, given to <code>/bin/zsh -c</code>. A plist is XML, so each <code>&amp;</code> in it must be written <code>&amp;amp;</code>: <code>&amp;&amp;</code> is <code>&amp;amp;&amp;amp;</code>, and <code>2&gt;&amp;1</code> is <code>2&gt;&amp;amp;1</code>. Write every path in full: launchd expands neither <code>~</code> nor <code>$HOME</code>.</li>
+<li><strong><code>PATH</code></strong> lists the same directories as the crontab&#39;s <code>PATH</code> line, since launchd reads no shell profile either. Homebrew on Apple Silicon installs into <code>/opt/homebrew/bin</code>.</li>
+<li><strong><code>StartInterval</code></strong> is the interval in seconds, here half an hour. launchd doesn&#39;t start a job again while its last start is still running, so a long pass simply delays the next one, which matches thirdshift&#39;s own <a href="#one-at-a-time">one-at-a-time</a> skip.</li>
+<li><strong><code>RunAtLoad</code></strong> also starts a pass as soon as the LaunchAgent is loaded, and at each login.</li>
+<li><strong>The log file</strong> is the one fixed file every line writes to, as for cron, named <code>cron.log</code> whatever starts the pass, and its folder must exist: <code>mkdir -p ~/.thirdshift/logs</code>.</li>
+</ul>
+<p><code>plutil -lint ~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist</code> checks the file. Load it, check it, and unload it with:</p>
+<pre><code>launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist
+launchctl print gui/$(id -u)/local.thirdshift.pickup.widgets
+launchctl bootout gui/$(id -u)/local.thirdshift.pickup.widgets
+</code></pre>
+<p><code>launchctl print</code> shows the job&#39;s state, how many times it has run and its last exit code. To change the file, unload it and load it again. Write one LaunchAgent per line you would have put in a crontab, each with its own <code>Label</code> and file name: an Architect run&#39;s command is its crontab line&#39;s, given to <code>/bin/zsh -c</code> in the same way, with <code>StartInterval</code> set to <code>300</code> for <a href="#architect-runs-every-few-minutes">every five minutes</a>. A nightly run at a fixed hour uses <code>StartCalendarInterval</code>, such as <code>&lt;key&gt;StartCalendarInterval&lt;/key&gt;&lt;dict&gt;&lt;key&gt;Hour&lt;/key&gt;&lt;integer&gt;2&lt;/integer&gt;&lt;key&gt;Minute&lt;/key&gt;&lt;integer&gt;0&lt;/integer&gt;&lt;/dict&gt;</code> for 02:00, in place of <code>StartInterval</code>.</p>
+<p>A LaunchAgent runs only while you are logged in, and neither it nor cron fires while the Mac is asleep. <code>thirdshift cronjobs</code> and the Console&#39;s Cron jobs page list only crontab entries, not LaunchAgents. They, and <code>thirdshift status</code>, still show when each repository&#39;s Passes last fired, whatever started them.</p>
+</div></details>
 </div></details>
 <details class="fold"><summary><h3>Architect runs every few minutes</h3></summary>
 <div class="manual-content" id="architect-runs-every-few-minutes">
@@ -1857,7 +1903,7 @@ thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/com
 <pre><code>PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 */30 * * * * cd ~/repos/widgets &amp;&amp; thirdshift pickup base main &gt;&gt; ~/.thirdshift/logs/cron.log 2&gt;&amp;1
 </code></pre>
-<p>The <code>PATH</code> line, the <code>cd</code> and <code>base main</code>, the log file&#39;s directory, the logins the Harness&#39;s CLI and <code>gh</code> need, and schedulers other than cron are as for an Architect run: see its <a href="#on-a-schedule">On a schedule</a>. What differs for a Pickup run:</p>
+<p>The <code>PATH</code> line, the <code>cd</code> and <code>base main</code>, the log file&#39;s directory, the logins the Harness&#39;s CLI and <code>gh</code> need, and schedulers other than cron are as for an Architect run: see its <a href="#on-a-schedule">On a schedule</a>. On macOS, start it from a LaunchAgent rather than cron: <a href="#on-macos-a-launchagent">On macOS, a LaunchAgent</a> shows this very line. What differs for a Pickup run:</p>
 <ul>
 <li><strong>The interval</strong> sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so <code>*/30</code> starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its <a href="#the-claim-limit">Claim limit</a>: each pull request left for review, and each failure left for you, holds a Claim, and at 3 of them, or the <code>pickup.limit</code> you set, the passes take nothing until you have dealt with one. An issue you have just labelled also waits five minutes by default, or the <code>pickup.wait_minutes</code> you set, until it is settled. A Ticket run you start by hand on an Issue URL is outside all this: it neither waits for a pass nor makes one skip.</li>
 <li><strong>One line per repository.</strong> thirdshift keeps no list of repositories. Each Pass on one repository skips while another is still running, the Spec run or Ticket run it dispatched included, so both lines can go in one crontab and two Passes never build that repository at once. Passes on different repositories do run at the same time: give their lines different minutes, such as <code>15,45</code>, if they would compete for the machine.</li>
