@@ -1097,19 +1097,17 @@ fn execute_groups(
             return Err(skip_remaining(&prepared.steps[range.end..], name, error));
         }
         let completed = prepared.completed.lock().expect("completed Runs");
-        if let Some(message) = &completed.architecture_end {
-            progress::step(message);
-            for step in &prepared.steps[range.end..] {
-                progress::step(format_args!(
-                    "step {}: 0s skipped: {message} ({})",
-                    step.log_name(),
-                    step.log_context()
-                ));
-            }
-            return Ok(last);
-        }
-        if let Some(comment_url) = &completed.unreproduced_bug {
-            let message = format!("bug not reproduced: {comment_url}");
+        let early_end = completed
+            .architecture_end
+            .as_ref()
+            .map(|message| (message.clone(), last.as_str()))
+            .or_else(|| {
+                completed
+                    .unreproduced_bug
+                    .as_ref()
+                    .map(|url| (format!("bug not reproduced: {url}"), url.as_str()))
+            });
+        if let Some((message, result)) = early_end {
             progress::step(&message);
             for step in &prepared.steps[range.end..] {
                 progress::step(format_args!(
@@ -1118,7 +1116,7 @@ fn execute_groups(
                     step.log_context()
                 ));
             }
-            return Ok(comment_url.clone());
+            return Ok(result.to_string());
         }
         index += 1;
     }

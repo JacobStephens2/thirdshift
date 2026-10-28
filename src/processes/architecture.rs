@@ -41,7 +41,22 @@ pub(super) fn run(run: &StepRun<'_>, step: &ResolvedStep) -> Result<String> {
 }
 
 pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
+    let issue_worktree = file
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.issue_branch_line.is_some());
+    let mut pending_delivery = false;
     for step in &file.steps {
+        if matches!(step.kind, DraftKind::Delivery { .. }) {
+            pending_delivery = false;
+        } else if issue_worktree.is_some_and(|worktree| {
+            step.worktree
+                .as_ref()
+                .is_some_and(|(name, _)| name == &worktree.name)
+        }) && !matches!(step.kind, DraftKind::SelfMerge { .. })
+        {
+            pending_delivery = true;
+        }
         let DraftKind::ArchitectureReview { line } = step.kind else {
             continue;
         };
@@ -55,6 +70,8 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                     .is_some_and(|(name, _)| name == &worktree.name)
         }) {
             Some("architecture-review needs a throwaway worktree")
+        } else if pending_delivery {
+            Some("architecture-review cannot skip delivery of earlier Issue-branch work")
         } else {
             None
         };

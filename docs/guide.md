@@ -1135,6 +1135,8 @@ at the Base branch on origin, checks the final line and any plan, and applies
 It takes its own Harness, Model and Effort like any Step, and runs outside
 parallel groups. It cannot use an Issue-branch worktree. Follow it with
 `run-published-issue` to start a Ticket run or Spec run on a Strong plan.
+It must precede Issue-branch editing Steps or follow their Delivery, so an
+early end cannot discard unpublished work.
 An idea, including an open issue that already covers the recommendation, ends
 the Process successfully with that issue's URL and no child run. So does a plan
 when the command asks for `thirdshift process <name> --plan-only`. Later Steps

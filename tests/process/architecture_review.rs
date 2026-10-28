@@ -1,5 +1,114 @@
 use super::*;
 
+#[test]
+fn an_architecture_review_cannot_skip_delivery_of_issue_branch_work() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    write_process(
+        &scenario,
+        "unsafe-review",
+        r#"
+version = 1
+description = "Edit an issue, then review architecture before Delivery"
+
+[worktrees.fix]
+kind = "issue-branch"
+[worktrees.notes]
+kind = "throwaway"
+
+[[steps]]
+name = "edit"
+command = "printf pending > pending.txt"
+worktree = "fix"
+
+[[steps]]
+name = "architecture"
+catalogue = "architecture-review"
+worktree = "notes"
+
+[[steps]]
+name = "ship"
+catalogue = "delivery"
+worktree = "fix"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        &PUBLISH_PLAN
+            .replace("Strong", "Worth exploring")
+            .replace("review plan:", "review idea:"),
+    );
+
+    let result = scenario.run(&["process", "unsafe-review", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("architecture-review cannot skip delivery"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
+}
+
+#[test]
+fn an_early_architecture_end_preserves_earlier_issue_branch_work() {
+    let scenario = architecture_process();
+    write_process(
+        &scenario,
+        "architecture",
+        r#"
+version = 1
+description = "Edit, review architecture, then deliver"
+
+[worktrees.fix]
+kind = "issue-branch"
+[worktrees.notes]
+kind = "throwaway"
+
+[[steps]]
+name = "edit"
+command = '''
+printf '%s\n' "$PWD" > "$HOME/edited-checkout"
+printf valuable > valuable.txt
+'''
+worktree = "fix"
+
+[[steps]]
+name = "architecture"
+catalogue = "architecture-review"
+worktree = "notes"
+
+[[steps]]
+name = "ship"
+catalogue = "delivery"
+worktree = "fix"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        &PUBLISH_PLAN
+            .replace("Strong", "Worth exploring")
+            .replace("review plan:", "review idea:"),
+    );
+
+    let result = scenario.run(&["process", "architecture", "issue", "7"]);
+    let marker = scenario.path("home/edited-checkout");
+    if !marker.exists() {
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        return; // Refusal before editing is also safe.
+    }
+    let checkout = fs::read_to_string(marker).unwrap();
+    let local = fs::read_to_string(Path::new(checkout.trim()).join("valuable.txt")).ok();
+    let published = scenario.origin_file("issue-7", "valuable.txt");
+    assert!(
+        local.as_deref() == Some("valuable") || published.as_deref() == Some("valuable"),
+        "the early ending deleted unpublished Issue-branch work: {}",
+        result.stderr,
+    );
+}
+
 const ARCHITECTURE: &str = r#"
 version = 1
 description = "Review architecture, then run the Strong plan"
