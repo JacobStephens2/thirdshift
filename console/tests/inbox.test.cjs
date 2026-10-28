@@ -193,12 +193,16 @@ test('Command details opens with the Inbox subject and full title above its acti
     assert.equal(await pane.getByRole('link', { name: /^Issue #/ }).count(), 0);
     assert.equal(await heading.evaluate(el => Boolean(el.compareDocumentPosition(
       el.parentElement.querySelector('form[data-dismiss]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
-    const wrapped = await heading.locator('span').evaluate(el => ({
-      height: el.getBoundingClientRect().height,
-      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
-      fits: el.scrollWidth <= el.clientWidth,
-      whiteSpace: getComputedStyle(el).whiteSpace,
-    }));
+    // A live refresh replaces the pane, so look the title up and measure it in one step.
+    const wrapped = await page.evaluate(() => {
+      const el = document.querySelector('#peek-content > section[aria-label="Command details"] h2 span');
+      return {
+        height: el.getBoundingClientRect().height,
+        lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+        fits: el.scrollWidth <= el.clientWidth,
+        whiteSpace: getComputedStyle(el).whiteSpace,
+      };
+    });
     assert.ok(wrapped.height > wrapped.lineHeight, JSON.stringify({ width, wrapped }));
     assert.equal(wrapped.fits, true);
     assert.equal(wrapped.whiteSpace, 'normal');
