@@ -229,3 +229,106 @@ printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         (scenario.issue_url(8).as_str(), 2)
     );
 }
+
+#[test]
+fn a_selected_child_keeps_inherited_limits_on_its_base_fix() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[base]\nfix = true\n");
+    let publish = PUBLISH_THEN_RUN.replacen(
+        "[[steps]]",
+        "[limits]\nprotected_paths = [\"issue-9.txt\"]\n\n[[steps]]",
+        1,
+    );
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{publish}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        include_str!("../../processes/ticket-run.toml"),
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(
+        8,
+        &format!(
+            r#"{}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure","url":"https://ci.example/test"}}]'
+gh fake checks "$(git rev-parse origin/main)" '[{{"name":"test","conclusion":"failure","url":"https://ci.example/main/test"}}]'
+"#,
+            agent_lands_ticket(8, "main")
+        ),
+    );
+    scenario.agent_does_for(
+        9,
+        &format!(
+            r#"{}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}}]'
+"#,
+            agent_lands_ticket(9, "main")
+        ),
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("protected path issue-9.txt"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(pr_from(&scenario, "issue-9")["state"], "OPEN");
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+}
+
+#[test]
+fn a_selected_child_keeps_its_ready_pr_in_failure_accounting() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[merge]\nalways = true\n");
+    let publish = PUBLISH_THEN_RUN.replacen(
+        "[[steps]]",
+        "[limits]\nprotected_paths = [\"issue-8.txt\"]\n\n[[steps]]",
+        1,
+    );
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{publish}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        include_str!("../../processes/ticket-run.toml"),
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("protected path issue-8.txt"),
+        "{}",
+        result.stderr
+    );
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+    let record = process_record(&scenario);
+    assert_eq!(record["dispatched"][0]["outcome"], "failed", "{record}");
+    assert_eq!(
+        record["dispatched"][0]["pull_request"], pr["url"],
+        "{record}"
+    );
+}

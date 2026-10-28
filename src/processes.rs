@@ -392,6 +392,10 @@ struct IssueRun<'a> {
     delivered: bool,
     pull_request: PullRequest,
     reviews: Vec<crate::security::review::Outcome>,
+    /// Dispatch's asks, retained for Base fixes started during Delivery.
+    child_asks: ChildAsks,
+    /// The Step result carries the error; dispatch also needs its other facts.
+    failure: Option<crate::failed_run::FailedRun>,
 }
 
 /// Ends the Claim on drop unless the run removed it or ended it already.
@@ -831,15 +835,10 @@ fn run_issue_branch(
             delivered: false,
             pull_request: PullRequest::new(&issue, &branch, &base, GitHub::new()),
             reviews: Vec::new(),
+            child_asks: ChildAsks::default(),
+            failure: None,
         };
-        let result = execute_steps(name, &prepared, Some(&mut issue_run));
-        let context = continuation(&issue_run);
-        let kept_on_origin = issue_run.on_origin;
-        if let Err(error) = &result
-            && let Some(checkout) = issue_run.checkout.as_mut()
-        {
-            preserve_step_failure(checkout, context, kept_on_origin, error);
-        }
+        let result = execute_issue_steps(name, &prepared, &mut issue_run);
         delivered = issue_run.delivered;
         result
     };
@@ -910,6 +909,27 @@ fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
             step.choice.harness.name()
         ),
     ))
+}
+
+/// Preserve unfinished Issue-branch work consistently for direct and
+/// dispatched Custom processes.
+fn execute_issue_steps(
+    process: &str,
+    prepared: &Prepared,
+    issue_run: &mut IssueRun<'_>,
+) -> Result<String> {
+    let result = execute_steps(process, prepared, Some(&mut *issue_run));
+    if let Err(error) = &result {
+        let context = continuation(issue_run);
+        let on_origin = issue_run.on_origin;
+        if let Some(checkout) = issue_run.checkout.as_mut() {
+            let recovery = preserve_step_failure(checkout, context, on_origin, error);
+            let mut failed: crate::failed_run::FailedRun = anyhow!("{error:#}").into();
+            failed.recovery = Some(Box::new(recovery));
+            issue_run.failure = Some(failed);
+        }
+    }
+    result
 }
 
 fn execute_steps(
@@ -1421,7 +1441,11 @@ fn run_delivery(
     }
     let child_asks = ChildAsks {
         harness: step.choice.clone(),
-        ..ChildAsks::default()
+        delivery_limits: delivery::Limits {
+            repair_cap: prepared.limits.repair_cap,
+            protected_paths: prepared.limits.protected_paths.clone(),
+        },
+        ..issue_run.child_asks.clone()
     };
     let started = prepared.started;
     let protected = if merge {
@@ -1479,16 +1503,25 @@ fn run_delivery(
                 || failed.error.is::<crate::security::review::Hold>();
             if held {
                 issue_run.delivered = true;
-                let url = failed.pr_url.clone().unwrap_or_default();
-                return (Ok(url), Some(Err(failed.error)));
-            }
-            if let Some(recovery) = &mut failed.recovery {
+            } else if let Some(recovery) = &mut failed.recovery {
                 recovery.add_command_context(continuation(issue_run), issue_run.on_origin);
                 for line in recovery.lines() {
                     progress::step(line);
                 }
             }
-            (Err(failed.error), None)
+            let url = failed.pr_url.clone().unwrap_or_default();
+            // Keep the typed cause in the Step result, including any context
+            // execute_steps adds. run_custom rejoins it with these facts.
+            let error = std::mem::replace(
+                &mut failed.error,
+                anyhow!("the Step result carries the failure cause"),
+            );
+            issue_run.failure = Some(failed);
+            if held {
+                (Ok(url), Some(Err(error)))
+            } else {
+                (Err(error), None)
+            }
         }
     }
 }
@@ -1510,7 +1543,7 @@ fn preserve_step_failure(
     context: recovery::Continuation,
     on_origin: bool,
     error: &anyhow::Error,
-) {
+) -> Recovery {
     let reason = Cause::of(error).first_line().to_string();
     let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || Ok(()));
     let preservation = recovery::preservation_of(preserved, progress::step);
@@ -1520,6 +1553,7 @@ fn preserve_step_failure(
     for line in recovery.lines() {
         progress::step(line);
     }
+    recovery
 }
 
 fn run_step_in(

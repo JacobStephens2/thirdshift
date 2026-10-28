@@ -66,16 +66,22 @@ pub(crate) fn run_custom(
         delivered: false,
         pull_request: PullRequest::new(delivery.issue, &branch, delivery.base, GitHub::new()),
         reviews: Vec::new(),
+        child_asks: delivery.child_asks.clone(),
+        failure: None,
     };
-    let result = execute_steps(name, &prepared, Some(&mut issue_run));
-    if let Err(error) = &result {
-        let context = continuation(&issue_run);
-        let on_origin = issue_run.on_origin;
-        if let Some(checkout) = issue_run.checkout.as_mut() {
-            preserve_step_failure(checkout, context, on_origin, error);
+    if let Err(error) = execute_issue_steps(name, &prepared, &mut issue_run) {
+        let mut failed = match issue_run.failure.take() {
+            Some(mut failed) => {
+                failed.error = error;
+                failed
+            }
+            None => crate::failed_run::FailedRun::from(error),
+        };
+        if failed.pr_url.is_none() {
+            failed.pr_url = issue_run.pull_request.info().map(|pr| pr.url.clone());
         }
+        return Err(failed);
     }
-    result?;
     let own_pr = issue_run.pull_request.info().map(|pr| pr.url.clone());
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     let resolution = if let Some(comment_url) = completed.unreproduced_bug {
