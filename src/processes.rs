@@ -105,14 +105,20 @@ impl Limits {
 
 struct WorktreeDraft {
     name: String,
-    /// The `kind` line when this worktree is an Issue branch.
-    issue_branch_line: Option<usize>,
-    spec_branch_line: Option<usize>,
+    kind: WorktreeKind,
+    kind_line: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorktreeKind {
+    Throwaway,
+    IssueBranch,
+    SpecBranch,
 }
 
 impl WorktreeDraft {
     fn branch_line(&self) -> Option<usize> {
-        self.issue_branch_line.or(self.spec_branch_line)
+        (self.kind != WorktreeKind::Throwaway).then_some(self.kind_line)
     }
 }
 
@@ -132,6 +138,15 @@ struct StepDraft {
     effort: Option<String>,
 }
 
+impl StepDraft {
+    fn child_process(&self, catalogue_line: usize) -> (&str, usize) {
+        self.process
+            .as_ref()
+            .map(|(name, line)| (name.as_str(), *line))
+            .unwrap_or(("ticket-run", catalogue_line))
+    }
+}
+
 enum DraftKind {
     Skill { skill: String, line: usize },
     Command { command: String },
@@ -145,8 +160,7 @@ enum DraftKind {
 
 struct DeclaredWorktree {
     name: String,
-    issue_branch: bool,
-    spec_branch: bool,
+    kind: WorktreeKind,
 }
 
 struct ResolvedStep {
@@ -945,9 +959,13 @@ fn execute_issue_steps(
     issue_run: &mut IssueRun<'_>,
 ) -> Result<String> {
     let result = execute_steps(process, prepared, Some(&mut *issue_run));
-    if let Err(error) = &result
-        && !prepared.spec_branch
-    {
+    if let Err(error) = &result {
+        if prepared.spec_branch {
+            if let Some(checkout) = issue_run.checkout.as_mut() {
+                checkout.keep_unpublished_on_cleanup();
+            }
+            return result;
+        }
         let context = continuation(issue_run);
         let on_origin = issue_run.on_origin;
         if let Some(checkout) = issue_run.checkout.as_mut() {
@@ -2077,9 +2095,9 @@ fn plan(name: &str, prepared: &Prepared) -> String {
         chosen = prepared.choice.chosen_by,
     );
     for worktree in &prepared.declared {
-        if worktree.spec_branch {
+        if worktree.kind == WorktreeKind::SpecBranch {
             let _ = writeln!(text, "worktree {}: Spec branch", worktree.name);
-        } else if worktree.issue_branch {
+        } else if worktree.kind == WorktreeKind::IssueBranch {
             let _ = writeln!(text, "worktree {}: Issue branch", worktree.name);
         } else {
             let _ = writeln!(
@@ -2221,14 +2239,13 @@ fn prepare_from(
     let spec_branch = file
         .worktrees
         .iter()
-        .any(|worktree| worktree.spec_branch_line.is_some());
+        .any(|worktree| worktree.kind == WorktreeKind::SpecBranch);
     let declared = file
         .worktrees
         .iter()
         .map(|worktree| DeclaredWorktree {
             name: worktree.name.clone(),
-            issue_branch: worktree.issue_branch_line.is_some(),
-            spec_branch: worktree.spec_branch_line.is_some(),
+            kind: worktree.kind,
         })
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
@@ -2395,14 +2412,14 @@ fn refuse_worktrees(path: &Path, file: &ProcessFile) -> Result<()> {
 fn file_has_issue_branch(file: &ProcessFile) -> bool {
     file.worktrees
         .iter()
-        .any(|worktree| worktree.issue_branch_line.is_some())
+        .any(|worktree| worktree.kind == WorktreeKind::IssueBranch)
 }
 
 fn refuse_implement(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some());
+        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
     for step in &file.steps {
         if let DraftKind::Implement { line } = step.kind
             && !issue.is_some_and(|issue| {
@@ -2430,14 +2447,11 @@ fn require_issue(path: &Path, file: &ProcessFile, issue: Option<&IssueUrl>) -> R
     else {
         return Ok(());
     };
-    let kind = if worktree.spec_branch_line.is_some() {
-        "Spec"
-    } else {
-        "Issue"
-    };
+    let spec = worktree.kind == WorktreeKind::SpecBranch;
+    let kind = if spec { "Spec" } else { "Issue" };
     if let Some(issue) = issue {
         let tickets = GitHub::new().tickets(issue)?;
-        if worktree.spec_branch_line.is_some() == tickets.is_empty() {
+        if spec == tickets.is_empty() {
             return Err(rule(
                 path,
                 worktree.branch_line().expect("branch line"),
@@ -2466,7 +2480,7 @@ fn refuse_self_merge(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_branch = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some());
+        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
     let mut seen = false;
     for (index, step) in file.steps.iter().enumerate() {
         let DraftKind::SelfMerge { line } = step.kind else {
@@ -2533,7 +2547,7 @@ fn refuse_security_review(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_branch = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some());
+        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
     let delivery_at = file
         .steps
         .iter()
@@ -2604,7 +2618,7 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
     let mut issue_branches = file
         .worktrees
         .iter()
-        .filter(|worktree| worktree.issue_branch_line.is_some());
+        .filter(|worktree| worktree.kind == WorktreeKind::IssueBranch);
     let Some(issue_branch) = issue_branches.next() else {
         for step in &file.steps {
             if let DraftKind::Delivery { line } = &step.kind {
@@ -2621,7 +2635,7 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
     if let Some(second) = issue_branches.next() {
         return Err(rule(
             path,
-            second.issue_branch_line.expect("issue-branch line"),
+            second.kind_line,
             "issue-branch",
             "a Process has at most one Issue-branch worktree",
         ));
@@ -2699,7 +2713,7 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
         None if delivery_at.is_some() => Ok(()),
         None => Err(rule(
             path,
-            issue_branch.issue_branch_line.expect("issue-branch line"),
+            issue_branch.kind_line,
             "delivery",
             "an Issue-branch worktree needs a delivery Step after the last Step that uses it",
         )),
@@ -2716,7 +2730,7 @@ fn refuse_spec_branch(path: &Path, file: &ProcessFile) -> Result<()> {
         && file
             .worktrees
             .iter()
-            .any(|worktree| worktree.spec_branch_line.is_some())
+            .any(|worktree| worktree.kind == WorktreeKind::SpecBranch)
     {
         return Err(rule(
             path,
@@ -2730,7 +2744,7 @@ fn refuse_spec_branch(path: &Path, file: &ProcessFile) -> Result<()> {
             continue;
         };
         if !branch.is_some_and(|branch| {
-            branch.spec_branch_line.is_some()
+            branch.kind == WorktreeKind::SpecBranch
                 && step
                     .worktree
                     .as_ref()
@@ -2784,11 +2798,7 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
                 "run-published-issue must directly follow a session Step",
             ));
         }
-        let (name, line) = step
-            .process
-            .as_ref()
-            .map(|(name, line)| (name.as_str(), *line))
-            .unwrap_or(("ticket-run", line));
+        let (name, line) = step.child_process(line);
         let (child_path, text) = Catalog::installed()?
             .source(name)
             .map_err(|error| rule(path, line, "process", format!("{error:#}")))?;
@@ -2833,21 +2843,11 @@ fn resolve(
         DraftKind::SecurityReview { .. } => StepKind::SecurityReview,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
-        DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue {
-            process: step
-                .process
-                .as_ref()
-                .map(|(name, _)| name.as_str())
-                .unwrap_or("ticket-run")
-                .to_string(),
+        DraftKind::RunPublishedIssue { line } => StepKind::RunPublishedIssue {
+            process: step.child_process(*line).0.to_string(),
         },
-        DraftKind::LandTickets { .. } => StepKind::LandTickets {
-            process: step
-                .process
-                .as_ref()
-                .map(|(name, _)| name.as_str())
-                .unwrap_or("ticket-run")
-                .to_string(),
+        DraftKind::LandTickets { line } => StepKind::LandTickets {
+            process: step.child_process(*line).0.to_string(),
         },
     };
     let (choice, sources) = command.step(step);
@@ -3067,14 +3067,12 @@ fn parse_worktrees(
                 "a worktree must be a table",
             ));
         };
-        let mut saw_kind = false;
-        let mut issue_branch_line = None;
-        let mut spec_branch_line = None;
+        let mut kind = None;
         for (field, value) in body.iter() {
             let field_line = key_line(text, body.key(field));
             match field {
                 "kind" => {
-                    let Some(kind) = value.as_str() else {
+                    let Some(word) = value.as_str() else {
                         return Err(rule(
                             path,
                             field_line,
@@ -3082,28 +3080,30 @@ fn parse_worktrees(
                             "kind must be a string",
                         ));
                     };
-                    if kind != "throwaway" && kind != "issue-branch" && kind != "spec-branch" {
-                        return Err(rule(
-                            path,
-                            field_line,
-                            "worktree kind",
-                            "kind must be throwaway, issue-branch or spec-branch",
-                        ));
-                    }
-                    saw_kind = true;
-                    issue_branch_line = (kind == "issue-branch").then_some(field_line);
-                    spec_branch_line = (kind == "spec-branch").then_some(field_line);
+                    let parsed = match word {
+                        "throwaway" => WorktreeKind::Throwaway,
+                        "issue-branch" => WorktreeKind::IssueBranch,
+                        "spec-branch" => WorktreeKind::SpecBranch,
+                        _ => {
+                            return Err(rule(
+                                path,
+                                field_line,
+                                "worktree kind",
+                                "kind must be throwaway, issue-branch or spec-branch",
+                            ));
+                        }
+                    };
+                    kind = Some((parsed, field_line));
                 }
                 other => return Err(rule(path, field_line, "unknown key", other)),
             }
         }
-        if !saw_kind {
-            return Err(rule(path, name_line, "worktree kind", "kind is required"));
-        }
+        let (kind, kind_line) =
+            kind.ok_or_else(|| rule(path, name_line, "worktree kind", "kind is required"))?;
         worktrees.push(WorktreeDraft {
             name: key.to_string(),
-            issue_branch_line,
-            spec_branch_line,
+            kind,
+            kind_line,
         });
     }
     Ok(worktrees)

@@ -397,3 +397,41 @@ fn a_no_security_review_override_reaches_the_ticket_children() {
     assert_eq!(scenario.claude_calls().len(), 1);
     assert_eq!(pr_from(&scenario, "issue-8")["state"], "MERGED");
 }
+
+#[test]
+fn a_spec_branch_keeps_committed_work_when_a_step_before_land_fails() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(7, &[(8, &[])]);
+    let source = LAND_TICKETS.replacen(
+        "[[steps]]",
+        r#"[[steps]]
+name = "prepare"
+command = "echo proof > proof.txt; git add proof.txt; git commit -qm proof; exit 23"
+worktree = "spec"
+
+[[steps]]"#,
+        1,
+    );
+    write_process(&scenario, "gather", &source);
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let preserved = scenario.origin_file("issue-7", "proof.txt").or_else(|| {
+        if scenario
+            .launch_git(&["branch", "--list", "issue-7"])
+            .trim()
+            .is_empty()
+        {
+            None
+        } else {
+            Some(scenario.launch_git(&["show", "issue-7:proof.txt"]))
+        }
+    });
+    assert_eq!(
+        preserved.as_deref().map(str::trim),
+        Some("proof"),
+        "the failed Spec-branch Step lost its committed work: {}",
+        result.stderr
+    );
+}

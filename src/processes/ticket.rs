@@ -120,7 +120,7 @@ pub(crate) fn steps() -> Result<Vec<Step>> {
     // This adapter uses the Command's already checked choices and held
     // worktree. Refuse settings it cannot carry out rather than ignore them.
     ensure!(
-        file.worktrees.len() == 1 && file.worktrees[0].issue_branch_line.is_some(),
+        file.worktrees.len() == 1 && file.worktrees[0].kind == super::WorktreeKind::IssueBranch,
         "ticket-run needs exactly one Issue-branch worktree"
     );
     ensure!(
