@@ -110,7 +110,7 @@ fn a_passing_experiment_is_checked_before_any_push() {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0]["args"],
-            json!(["experiment", "--release", candidate, "--json"])
+            json!(["experiment", "--release", candidate, "--json", "--yes"])
         );
         assert_eq!(calls[0]["branch"], "");
         assert!(release.origin_tag("v0.2.0").is_some());
@@ -194,7 +194,7 @@ fn resume_reuses_the_content_commit_and_checks_a_pushed_branch_before_opening_it
     for call in &checked {
         assert_eq!(
             call["args"],
-            json!(["experiment", "--release", candidate, "--json"])
+            json!(["experiment", "--release", candidate, "--json", "--yes"])
         );
     }
     assert_ne!(checked[1]["branch"], "");
@@ -309,7 +309,7 @@ fn interrupted_release_before_push_keeps_its_experiment_when_main_moves() {
     assert_eq!(checked.len(), 2);
     assert_eq!(
         checked[0]["args"],
-        json!(["experiment", "--release", candidate, "--json"])
+        json!(["experiment", "--release", candidate, "--json", "--yes"])
     );
     assert_eq!(
         checked[1]["args"], checked[0]["args"],

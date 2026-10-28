@@ -245,6 +245,12 @@ impl Stored {
         Ok(Some(stored))
     }
 
+    /// Remove an Experiment this command created and nothing has run in.
+    pub fn discard(self) -> Result<()> {
+        fs::remove_dir_all(&self.directory)?;
+        Ok(())
+    }
+
     /// A rename may land while a run holds the Experiment lock, so every
     /// metadata write keeps the name saved on disk.
     pub fn save(&mut self) -> Result<()> {

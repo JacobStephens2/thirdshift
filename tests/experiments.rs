@@ -14,6 +14,9 @@ const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 #[path = "experiments/code_graders.rs"]
 mod code_graders;
 
+#[path = "experiments/cost.rs"]
+mod cost;
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
@@ -865,6 +868,19 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         // THIRDSHIFT_TRIAL_NO_SANDBOX. The sandbox itself is covered by the
         // sandbox module tests and the sandboxed Trial tests.
         self.scenario.run_with_env(&args, &NO_SANDBOX)
+    }
+
+    /// [`Fixture::run`] with stdin and stderr on a terminal, typing
+    /// `keystrokes` at its questions.
+    fn run_on_terminal(
+        &self,
+        extra: &[&str],
+        keystrokes: &[support::Keystrokes],
+    ) -> support::TerminalResult {
+        let mut args = vec!["experiment", "candidate", "--json"];
+        args.extend_from_slice(extra);
+        self.scenario
+            .run_on_terminal(&args, &NO_SANDBOX, keystrokes)
     }
 
     fn experiment(&self) -> Value {
