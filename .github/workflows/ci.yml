@@ -22,8 +22,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The runner images are pinned to the platforms thirdshift supports.
+# Job limits bound hangs in CI watch; measured runtimes and headroom are in
+# docs/ci-performance.md.
 jobs:
   console-test:
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +47,7 @@ jobs:
         working-directory: console
 
   site-test:
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -60,6 +64,7 @@ jobs:
       - run: npm test
 
   test:
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -91,6 +96,7 @@ jobs:
   # `test:macos`; the gate for any other PR into main; none for a PR into
   # another base, such as a Spec branch.
   macos-plan:
+    timeout-minutes: 5
     runs-on: ubuntu-24.04
     outputs:
       suite: ${{ steps.plan.outputs.suite }}
@@ -113,6 +119,7 @@ jobs:
   # macOS-specific code, which the macos-gate profile in .config/nextest.toml
   # selects.
   test-macos-gate:
+    timeout-minutes: 20
     needs: macos-plan
     if: ${{ needs.macos-plan.outputs.suite == 'gate' }}
     runs-on: macos-26
@@ -142,6 +149,7 @@ jobs:
       - run: cargo nextest run --profile macos-gate
 
   test-macos-shard:
+    timeout-minutes: 60
     needs: macos-plan
     if: ${{ needs.macos-plan.outputs.suite == 'full' }}
     runs-on: macos-26
@@ -186,6 +194,7 @@ jobs:
   # asked for: every shard passed, or the gate passed, or, with no macOS work,
   # both were skipped. A failed, cancelled or wrongly skipped job fails it.
   test-macos:
+    timeout-minutes: 5
     needs: [macos-plan, test-macos-gate, test-macos-shard]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
