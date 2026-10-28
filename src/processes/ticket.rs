@@ -1,10 +1,13 @@
 //! The compiled Ticket run's sequence, validated with the Custom process rules.
-//! Dispatch has already chosen and Claimed its Issue-branch worktree. Its
+//! Dispatch has already chosen its Issue-branch worktree and made any Claim. Its
 //! existing Delivery envelope supplies session identity and failure handling.
 
 use anyhow::{Result, bail, ensure};
 
 use super::{Catalog, DraftKind, validated};
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) enum Step {
     Implement,

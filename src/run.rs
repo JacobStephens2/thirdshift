@@ -223,7 +223,6 @@ fn run(
         issue_branch: None,
         child: started_by.child().is_some(),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
-        file_defined: matches!(started_by, StartedBy::Command | StartedBy::Pickup { .. }),
         started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
@@ -446,9 +445,6 @@ struct LaunchAndGitHub<'a> {
     child: bool,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
-    /// Issue URL and Pickup Ticket runs use the Built-in process. Other
-    /// starters keep their existing path until the next Ticket of #1456.
-    file_defined: bool,
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
@@ -595,13 +591,8 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
             base,
             GitHub::new(),
         );
-        if self.file_defined {
-            self.delivery(base)
-                .ticket_run(worktree, opening, &mut pull_request)
-        } else {
-            self.delivery(base)
-                .deliver(worktree, opening, &mut pull_request, None)
-        }
+        self.delivery(base)
+            .ticket_run(worktree, opening, &mut pull_request)
     }
 
     fn step(&mut self, line: String) {

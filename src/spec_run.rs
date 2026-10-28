@@ -347,7 +347,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.deliver(worktree, opening, &mut self.spec_pr, Some(checklist))
+        delivery.spec_review(worktree, opening.prompt, &mut self.spec_pr, checklist)
     }
 
     fn interrupted(&mut self) -> bool {
