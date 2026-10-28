@@ -857,9 +857,9 @@ Built-in process files live in the repository's [`processes/`](../processes/)
 folder and are compiled into the binary, like Factory skills (ADR-0001).
 They use the same format and validation as Custom processes. The built-in
 `ticket-run` runs `implement` → `security-review` → `delivery` → `self-merge`,
-inheriting the Command's Harness, Model and Effort. Ticket runs started from
-an Issue URL or by a Pickup run execute it; Spec, Architect and Security
-runs' Ticket runs keep their existing path for now. The command and User
+inheriting the Command's Harness, Model and Effort, Child asks and Limits.
+Every Ticket run executes it, including those started by Spec, Architect
+and Security runs. The command and User
 config still decide whether the Security review and Self-merge run. The
 Command keeps its Ticket run identity, sessions and progress lines.
 Inspect it with `thirdshift process show ticket-run`, or validate it with
