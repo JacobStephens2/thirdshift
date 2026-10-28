@@ -93,8 +93,38 @@ pub fn run(
     let branch = worktree.branch().to_string();
     let mut spec_pr = PullRequest::new(spec, &branch, base, GitHub::new());
     spec_pr.resume_spec()?;
-    let mut outside = ChildRunsAndGitHub::new(worktree, delivery, spec_pr);
+    let mut held = Some(worktree);
+    let mut outside = ChildRunsAndGitHub::new(&mut held, delivery, &mut spec_pr);
     run_through(&mut outside, spec, base, &branch, tickets, parallel)
+}
+
+/// The catalogue Step: gather Tickets and finish their accounting, retaining
+/// the Spec checkout and draft PR for later Steps. It shares the Built-in
+/// Spec run's scheduler, trust gates and failure accounting.
+pub(crate) fn land(
+    spec: &IssueUrl,
+    worktree: &mut Option<Worktree>,
+    spec_pr: &mut PullRequest,
+    child_asks: &ChildAsks,
+    parallel: NonZeroUsize,
+    process: &str,
+) -> Result<String, FailedRun> {
+    let tickets = GitHub::new().tickets(spec)?;
+    spec_pr.resume_spec()?;
+    let mut outside = ChildRunsAndGitHub {
+        spec,
+        children: Runs::default(),
+        active: std::collections::BTreeMap::new(),
+        worktree,
+        delivery: None,
+        base_fix: BaseFixAsk::Forbid,
+        child_asks,
+        spec_pr,
+        process,
+    };
+    let accounted = account_tickets(&mut outside, spec, tickets, parallel)?;
+    outside.worktree().fast_forward_to_origin()?;
+    Ok(accounted.pr_url)
 }
 
 /// Take `spec`, whose Tickets were last read as `tickets`, from its Spec
@@ -121,6 +151,45 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
+    let landed = account_tickets(outside, spec, tickets, parallel)?;
+    match review_and_deliver(
+        outside,
+        spec,
+        base,
+        branch,
+        &landed.checklist,
+        &landed.pr_url,
+    ) {
+        Ok(reached) => Ok(Reached {
+            ticket_lines: landed.lines,
+            ..reached
+        }),
+        Err(mut failed) => {
+            let recovery = failed.recovery.get_or_insert_with(|| {
+                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+            });
+            recovery.add_tickets(landed.progress, true);
+            recovery.add_child_work(landed.local_work);
+            failed.ticket_lines = landed.lines;
+            Err(failed)
+        }
+    }
+}
+
+struct AccountedTickets {
+    checklist: String,
+    pr_url: String,
+    lines: Vec<String>,
+    progress: TicketProgress,
+    local_work: Vec<String>,
+}
+
+fn account_tickets(
+    outside: &mut impl Outside,
+    spec: &IssueUrl,
+    tickets: Vec<Ticket>,
+    parallel: NonZeroUsize,
+) -> Result<AccountedTickets, FailedRun> {
     let Landing {
         lines: ticket_lines,
         failed_log,
@@ -134,49 +203,40 @@ fn run_through(
         let spec_pr_url = outside.landed(&checklist)?;
         Ok((checklist, spec_pr_url))
     });
-    let all_tickets_accounted = landed.is_ok();
     let spec_pr_changed = landed
         .as_ref()
         .is_err_and(|error| error.is::<SpecPrChanged>());
-    let ended = match landed {
-        Ok((checklist, spec_pr_url)) => {
-            review_and_deliver(outside, spec, base, branch, &checklist, &spec_pr_url)
-        }
+    match landed {
+        Ok((checklist, pr_url)) => Ok(AccountedTickets {
+            checklist,
+            pr_url,
+            lines: ticket_lines,
+            progress,
+            local_work,
+        }),
         Err(error) => {
             let interrupted = outside.interrupted();
+            let mut recovery = Recovery::new(
+                if pushed { Stage::Tickets } else { Stage::Push },
+                if pushed {
+                    Preservation::Remote
+                } else {
+                    Preservation::None
+                },
+            );
+            recovery.add_tickets(progress, false);
+            recovery.add_child_work(local_work);
+            if spec_pr_changed {
+                recovery.add_spec_pr_changed();
+            }
             Err(FailedRun {
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
                 log: failed_log,
                 interrupted,
-                ticket_lines: Vec::new(),
-                recovery: Some(Box::new(Recovery::new(
-                    if pushed { Stage::Tickets } else { Stage::Push },
-                    if pushed {
-                        Preservation::Remote
-                    } else {
-                        Preservation::None
-                    },
-                ))),
+                ticket_lines,
+                recovery: Some(Box::new(recovery)),
             })
-        }
-    };
-    match ended {
-        Ok(reached) => Ok(Reached {
-            ticket_lines,
-            ..reached
-        }),
-        Err(mut failed) => {
-            let recovery = failed.recovery.get_or_insert_with(|| {
-                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
-            });
-            recovery.add_tickets(progress, all_tickets_accounted);
-            recovery.add_child_work(local_work);
-            if spec_pr_changed {
-                recovery.add_spec_pr_changed();
-            }
-            failed.ticket_lines = ticket_lines;
-            Err(failed)
         }
     }
 }
@@ -260,27 +320,33 @@ struct ChildRunsAndGitHub<'a> {
     /// Full identities of local Tickets keyed by the child supervisor's number.
     active: std::collections::BTreeMap<u64, IssueUrl>,
     /// Held until the Delivery starts, which takes it.
-    worktree: Option<Worktree>,
+    worktree: &'a mut Option<Worktree>,
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
     child_asks: &'a ChildAsks,
-    spec_pr: PullRequest,
+    spec_pr: &'a mut PullRequest,
+    process: &'a str,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+    fn new(
+        worktree: &'a mut Option<Worktree>,
+        delivery: Delivery<'a>,
+        spec_pr: &'a mut PullRequest,
+    ) -> Self {
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
-            worktree: Some(worktree),
+            worktree,
             base_fix: delivery.base_fix.ask_of_tickets(),
             child_asks: delivery.child_asks,
             delivery: Some(delivery),
             spec_pr,
+            process: "ticket-run",
         }
     }
 
@@ -311,8 +377,13 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
-        self.children
-            .start(ticket, kind, self.base_fix.clone(), self.child_asks)?;
+        self.children.start(
+            ticket,
+            kind,
+            self.base_fix.clone(),
+            self.child_asks,
+            self.process,
+        )?;
         self.active.insert(ticket.number, ticket.clone());
         Ok(())
     }
@@ -362,7 +433,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.spec_review(worktree, opening.prompt, &mut self.spec_pr, checklist)
+        delivery.spec_review(worktree, opening.prompt, self.spec_pr, checklist)
     }
 
     fn interrupted(&mut self) -> bool {

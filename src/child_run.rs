@@ -89,6 +89,8 @@ pub struct SpecPr {
 /// What a child Run is given by the Run that starts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Given {
+    /// The Ticket Process selected for this child; Base fixes use the Built-in.
+    pub process: Option<String>,
     /// What it is, with its Base branch.
     pub kind: Kind,
     /// The start stamp of the command that started it, which its Session
@@ -133,6 +135,7 @@ const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
 const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
 const DELIVERY_LIMITS: &str = "--delivery-limits";
+const TICKET_PROCESS: &str = "--ticket-process";
 
 /// The hidden argument followed by the command that starts the Spec run
 /// again with a Base fix allowed, for the child Run to offer: it asks
@@ -195,6 +198,9 @@ impl Given {
             append_choice(&mut args, security, REVIEW_FLAGS);
         }
         let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        if let Some(process) = &self.process {
+            args.extend([TICKET_PROCESS.to_string(), process.clone()]);
+        }
         if let Some(spec_pr) = self.kind.spec_pr() {
             args.extend([
                 SPEC_PR.to_string(),
@@ -295,6 +301,7 @@ impl PendingChoice {
 /// takes itself.
 #[derive(Default)]
 pub struct Reader {
+    process: Option<String>,
     delivery_limits: Option<crate::delivery::Limits>,
     kind: Option<Kind>,
     spec_pr: Option<SpecPr>,
@@ -328,6 +335,14 @@ impl Reader {
             None => bail!("missing {missing}"),
         };
         match arg {
+            TICKET_PROCESS => {
+                not_yet_given(&self.process, arg)?;
+                let name = value("Ticket Process")?;
+                if !crate::args::one_path_component(&name) {
+                    bail!("{TICKET_PROCESS} must name a Process");
+                }
+                self.process = Some(name);
+            }
             DELIVERY_LIMITS => {
                 not_yet_given(&self.delivery_limits, arg)?;
                 let limits: crate::delivery::Limits =
@@ -427,7 +442,8 @@ impl Reader {
             (kind, None) => kind,
         };
         let Some(kind) = kind else {
-            if self.command.is_some()
+            if self.process.is_some()
+                || self.command.is_some()
                 || self.delivery_limits.is_some()
                 || self.stamp.is_some()
                 || self.base_fix.is_some()
@@ -457,6 +473,7 @@ impl Reader {
             .finish(SESSION_FLAGS, ChosenBy::Command)?
             .with_context(|| format!("missing {SESSIONS_HARNESS}"))?;
         Ok(Some(Given {
+            process: self.process,
             kind,
             stamp,
             command: self
@@ -532,7 +549,18 @@ pub fn start(
     base_fix: BaseFixAsk,
     asks: &ChildAsks,
 ) -> Result<Handle> {
+    start_process(issue, kind, base_fix, asks, "ticket-run")
+}
+
+pub(super) fn start_process(
+    issue: &IssueUrl,
+    kind: Kind,
+    base_fix: BaseFixAsk,
+    asks: &ChildAsks,
+    process: &str,
+) -> Result<Handle> {
     let given = Given {
+        process: (process != "ticket-run").then(|| process.to_string()),
         kind,
         stamp: logs::stamp(),
         command: logs::command_kind(),
@@ -925,6 +953,7 @@ mod tests {
     fn cause_of_not_starting_from(executable: &Path) -> String {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/248").unwrap();
         let given = Given {
+            process: None,
             kind: ticket(),
             stamp: STAMPED.to_string(),
             command: logs::CommandKind::Issue,
@@ -1027,6 +1056,7 @@ mod tests {
                     .flat_map(|base_fix| securities.map(|security| (base_fix.clone(), security)))
             {
                 let given = Given {
+                    process: None,
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     command: logs::CommandKind::Issue,
