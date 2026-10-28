@@ -15,13 +15,17 @@ point for a Custom process; a Custom process cannot take a Built-in name.
 
 `ticket-run.toml` defines `implement` → `security-review` → `delivery` →
 `self-merge`, inheriting the Command's Harness, Model and Effort, Child asks
-and Limits. Every Ticket run executes this file, including those started by
-Spec, Architect and Security runs. The optional Security review and Self-merge keep
+and Limits. Ticket runs execute this file by default, including those started by
+Spec, Architect and Security runs. A `run-published-issue` Step can select a
+different Ticket Process with `process = "<name>"`; the named Process must exist
+and declare an Issue-branch worktree. An issue with Tickets still starts a Spec
+run. The optional Security review and Self-merge keep
 their command and User config gates. Commands still appear as Ticket runs.
 
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
-Ticket run records `ticket-run` independently of its parent. Custom processes
+Ticket run records its selected Process independently of its parent, defaulting
+to `ticket-run`. Custom processes
 hash the file loaded for that run; Built-in processes hash the compiled-in
 file. Runs awaiting a Built-in file retain their run-type name without a hash.
 

@@ -4,6 +4,8 @@
 mod architecture_review;
 #[path = "process/implement.rs"]
 mod implement;
+#[path = "process/published.rs"]
+mod published;
 #[path = "process/security_review.rs"]
 mod security_review;
 mod support;

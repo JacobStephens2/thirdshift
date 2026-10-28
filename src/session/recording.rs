@@ -72,6 +72,12 @@ impl Recording {
         }
     }
 
+    /// A selected child captures its Process independently of the parent.
+    pub fn with_process(mut self, process: crate::processes::Identity) -> Self {
+        self.process = Some(process);
+        self
+    }
+
     /// Trial artifacts have their own empty output directory and no Command.
     pub fn for_trial() -> Self {
         Self {

@@ -28,11 +28,32 @@ fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRe
 }
 
 impl CommandTree {
+    fn active_dispatch_index(&self) -> Option<usize> {
+        self.dispatched
+            .iter()
+            .rposition(|dispatched| dispatched.outcome.is_none())
+    }
+
+    /// Completing a nested dispatch restores the unfinished outer run.
     pub fn active(&mut self) -> &mut CommandRecord {
-        match self.dispatched.last_mut() {
-            Some(dispatched) if dispatched.outcome.is_none() => dispatched,
-            _ => &mut self.command,
+        match self.active_dispatch_index() {
+            Some(index) => &mut self.dispatched[index],
+            None => &mut self.command,
         }
+    }
+
+    pub fn active_ref(&self) -> &CommandRecord {
+        self.active_dispatch_ref().unwrap_or(&self.command)
+    }
+
+    pub fn active_dispatch_ref(&self) -> Option<&CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&self.dispatched[index])
+    }
+
+    pub fn active_dispatch(&mut self) -> Option<&mut CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&mut self.dispatched[index])
     }
 }
 
