@@ -2,16 +2,56 @@
 """Run conservative affected checks for changes since a base's merge-base."""
 import argparse
 import os
+from pathlib import Path
+import re
 import subprocess
+import tempfile
+import time
 
 
 def git(*arguments):
     return subprocess.check_output(["git", *arguments])
 
 
+def print_failures(log_path):
+    panic = False
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        for line in log:
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).rstrip()
+            if "panicked at" in line:
+                print(line, flush=True)
+                panic = True
+            elif panic:
+                if not line or line.lstrip().startswith(("note:", "stack backtrace:", "---")):
+                    panic = False
+                else:
+                    print(line, flush=True)
+            elif re.match(
+                r"test .+ \.\.\. FAILED$|FAIL\s|TIMEOUT\s|error(?:\[|:)"
+                r"|not ok \d+ - |✖ (?!failing tests:)", line.strip(),
+            ):
+                print(line.strip(), flush=True)
+
+
 def run(*command):
-    print("+ " + " ".join(command), flush=True)
-    subprocess.run(command, check=True)
+    directory = Path(".affected-tests").resolve()
+    directory.mkdir(exist_ok=True)
+    name = re.sub(r"[^A-Za-z0-9_-]", "-", "-".join(command))[:120]
+    with tempfile.NamedTemporaryFile(dir=directory, prefix=name + "-", suffix=".log",
+                                     delete=False) as log:
+        print(f"+ {' '.join(command)} (log: {log.name})", flush=True)
+        started = time.monotonic()
+        try:
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+        except OSError as error:
+            log.write(f"error: {error}\n".encode())
+            result = subprocess.CompletedProcess(command, 1)
+    elapsed = time.monotonic() - started
+    status = "PASS" if result.returncode == 0 else "FAIL"
+    print(f"{status} {' '.join(command)} ({elapsed:.2f}s; log: {log.name})", flush=True)
+    if result.returncode:
+        print_failures(log.name)
+    result.check_returncode()
 
 
 def main():
