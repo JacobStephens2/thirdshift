@@ -876,15 +876,16 @@ fn run_issue_branch(
         delivered = issue_run.delivered;
         result
     };
-    let not_reproduced = prepared
-        .completed
-        .lock()
-        .expect("completed Runs")
-        .unreproduced_bug
-        .is_some();
+    let completed = prepared.completed.lock().expect("completed Runs");
+    let not_reproduced = completed.unreproduced_bug.is_some();
+    // An Architecture review that ends before Delivery did not publish the
+    // Issue branch. Release the Claim, as a run that published nothing does,
+    // instead of removing it the way a finished Delivery does.
+    let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
+    drop(completed);
     if result.is_ok() && not_reproduced {
         claim.needs_info();
-    } else if result.is_ok() || delivered {
+    } else if (result.is_ok() || delivered) && !ended_before_delivery {
         claim.remove();
     } else {
         claim.release();

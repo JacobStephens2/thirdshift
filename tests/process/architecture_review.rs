@@ -109,6 +109,71 @@ worktree = "fix"
     );
 }
 
+#[test]
+fn an_early_architecture_end_releases_the_claim_when_delivery_does_not_run() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&[
+        "bug",
+        "needs-triage",
+        "ready-for-agent",
+        "in-progress",
+        "architect-idea",
+    ]);
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    write_process(
+        &scenario,
+        "architecture",
+        r#"
+version = 1
+description = "Review architecture before editing the issue"
+
+[worktrees.notes]
+kind = "throwaway"
+[worktrees.fix]
+kind = "issue-branch"
+
+[[steps]]
+name = "architecture"
+catalogue = "architecture-review"
+worktree = "notes"
+
+[[steps]]
+name = "edit"
+command = "printf valuable > valuable.txt"
+worktree = "fix"
+
+[[steps]]
+name = "ship"
+catalogue = "delivery"
+worktree = "fix"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        &PUBLISH_PLAN
+            .replace("Strong", "Worth exploring")
+            .replace("review plan:", "review idea:"),
+    );
+
+    let result = scenario.run(&["process", "architecture", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("step ship: 0s skipped"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+    let mut labels = scenario.issue_labels(7);
+    labels.sort();
+    assert_eq!(
+        labels,
+        ["bug", "ready-for-agent"],
+        "the early ending removed the Claim instead of releasing it\n{}",
+        result.stderr
+    );
+}
+
 const ARCHITECTURE: &str = r#"
 version = 1
 description = "Review architecture, then run the Strong plan"
