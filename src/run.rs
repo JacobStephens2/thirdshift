@@ -150,8 +150,18 @@ impl<'a> StartedBy<'a> {
 /// Harness's names for them once checked. Its Run notification, if `asks`
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
+    run_process_to_end(issue, asks, started_by, "ticket-run")
+}
+
+/// Dispatch still chooses Spec or Ticket; only a Ticket runs `process`.
+pub(crate) fn run_process_to_end(
+    issue: &IssueUrl,
+    asks: &mut Asks,
+    started_by: StartedBy,
+    process: &str,
+) -> Ended {
     let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
-    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut outcome = run(issue, asks, started_by, &mut base_fix, process);
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
@@ -191,6 +201,7 @@ fn run(
     asks: &mut Asks,
     started_by: StartedBy,
     base_fix: &mut BaseFix,
+    process: &str,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
@@ -223,6 +234,7 @@ fn run(
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
+        process,
     };
     let outcome = start(
         &mut outside,
@@ -363,7 +375,7 @@ fn start_in_worktree<O: Outside>(
         session: OpeningSession::Implementation,
         prompt,
     };
-    outside.deliver(worktree, base, opening)
+    outside.deliver(worktree, base, opening, selection)
 }
 
 /// How a Run's worktree comes by its Issue branch: started fresh from the
@@ -420,6 +432,7 @@ trait Outside {
         worktree: Self::Worktree,
         base: &str,
         opening: Opening,
+        selection: &Selection,
     ) -> Result<Reached, FailedRun>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
@@ -449,6 +462,8 @@ struct LaunchAndGitHub<'a> {
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
+    /// The Process for this Ticket, after Spec dispatch has been decided.
+    process: &'a str,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -579,7 +594,17 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         worktree: Worktree,
         base: &str,
         opening: Opening,
+        selection: &Selection,
     ) -> Result<Reached, FailedRun> {
+        if self.process != "ticket-run" {
+            let process = self.process;
+            return crate::processes::ticket::run_custom(
+                process,
+                self.delivery(base),
+                worktree,
+                selection,
+            );
+        }
         let labels = self
             .diagnose_bugs
             .then(|| GitHub::new().issue_labels(self.issue))
@@ -801,6 +826,7 @@ mod tests {
             worktree: Checkout,
             base: &str,
             opening: Opening,
+            _selection: &Selection,
         ) -> Result<Reached, FailedRun> {
             assert_eq!(opening.session, OpeningSession::Implementation);
             self.calls

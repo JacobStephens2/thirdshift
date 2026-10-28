@@ -265,6 +265,11 @@ pub(crate) fn process_loaded(identity: crate::processes::Identity) {
     record().process_loaded(identity);
 }
 
+/// A selected Ticket Process belongs to the active dispatched run.
+pub(crate) fn process_running(identity: crate::processes::Identity) {
+    record().process_running(identity);
+}
+
 pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
     record().custom_process()
 }

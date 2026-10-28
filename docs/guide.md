@@ -905,7 +905,7 @@ folder and are compiled into the binary, like Factory skills (ADR-0001).
 They use the same format and validation as Custom processes. The built-in
 `ticket-run` runs `implement` → `security-review` → `delivery` → `self-merge`,
 inheriting the Command's Harness, Model and Effort, Child asks and Limits.
-Every Ticket run executes it, including those started by Spec, Architect
+Ticket runs execute it by default, including those started by Spec, Architect
 and Security runs. The command and User
 config still decide whether the Security review and Self-merge run. The
 Command keeps its Ticket run identity, sessions and progress lines.
@@ -1129,7 +1129,22 @@ group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
 built-in Step: `implement`, `security-review`, `delivery` or `self-merge`, described above, or `run-published-issue`.
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
-Tickets, on the issue the session Step before it published. That session's final
+Tickets, on the issue the session Step before it published. Its optional
+`process = "<name>"` setting selects the Process for a child Ticket run,
+defaulting to `ticket-run`. The named Process must exist and declare an
+Issue-branch worktree; `process check` refuses either problem before any
+session. An issue with Tickets still starts a Spec run through normal dispatch,
+regardless of this setting. For example, to use a Custom process named
+`contractor-ticket` after a publishing session:
+
+```toml
+[[steps]]
+name = "run"
+catalogue = "run-published-issue"
+process = "contractor-ticket"
+```
+
+The publishing session's final
 message ends with the issue's URL on its last non-blank line. Before it starts a
 run, thirdshift checks that the issue is in this repository, which it checks
 before viewing the issue, that the issue is open, that a Trusted account
@@ -1701,7 +1716,9 @@ Each Command record and child run records its Process in `process_name`,
 of the file's exact bytes). Session traces carry the same facts as
 `thirdshift.process.name`, `thirdshift.process.kind` and `thirdshift.process.hash`
 attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
-the compiled-in file's hash. Custom processes record the file loaded for that
+the compiled-in file's hash by default. A `run-published-issue` Step that selects
+a Custom process records that name, Custom kind and loaded file's hash on its
+child instead. Custom processes record the file loaded for that
 run, so editing it changes the next run's hash. A Spec, Architect or Security
 run records its run type until its Built-in file lands; a run with no Process
 file has no hash. Older records can omit these fields. Status, the Console,
