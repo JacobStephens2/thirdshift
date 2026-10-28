@@ -75,6 +75,12 @@ impl Logs {
         }
     }
 
+    /// A child Ticket's Steps must not overwrite its parent's Session traces.
+    pub fn for_child(mut self, issue: &IssueUrl) -> Self {
+        self.name = format!("{}-{}", issue.number, self.name);
+        self
+    }
+
     /// An isolated Trial's artifacts, with no Command owner or factory logs.
     pub fn of_trial(dir: &Path) -> Self {
         Logs {

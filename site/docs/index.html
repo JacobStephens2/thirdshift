@@ -821,7 +821,7 @@ folder and are compiled into the binary, like Factory skills (ADR-0001).
 They use the same format and validation as Custom processes. The built-in
 <code>ticket-run</code> runs <code>implement</code> → <code>security-review</code> → <code>delivery</code> → <code>self-merge</code>,
 inheriting the Command&#39;s Harness, Model and Effort, Child asks and Limits.
-Every Ticket run executes it, including those started by Spec, Architect
+Ticket runs execute it by default, including those started by Spec, Architect
 and Security runs. The command and User
 config still decide whether the Security review and Self-merge run. The
 Command keeps its Ticket run identity, sessions and progress lines.
@@ -1025,7 +1025,19 @@ group or a protected-path glob is refused before a step runs, so the plan
 <code>check</code> prints cannot hide the command. <code>catalogue</code> names a
 built-in Step: <code>implement</code>, <code>security-review</code>, <code>delivery</code> or <code>self-merge</code>, described above, or <code>run-published-issue</code>.
 <code>run-published-issue</code> starts a Ticket run, or a Spec run when the issue has
-Tickets, on the issue the session Step before it published. That session&#39;s final
+Tickets, on the issue the session Step before it published. Its optional
+<code>process = &quot;&lt;name&gt;&quot;</code> setting selects the Process for a child Ticket run,
+defaulting to <code>ticket-run</code>. The named Process must exist and declare an
+Issue-branch worktree; <code>process check</code> refuses either problem before any
+session. An issue with Tickets still starts a Spec run through normal dispatch,
+regardless of this setting. For example, to use a Custom process named
+<code>contractor-ticket</code> after a publishing session:</p>
+<pre><code class="language-toml">[[steps]]
+name = &quot;run&quot;
+catalogue = &quot;run-published-issue&quot;
+process = &quot;contractor-ticket&quot;
+</code></pre>
+<p>The publishing session&#39;s final
 message ends with the issue&#39;s URL on its last non-blank line. Before it starts a
 run, thirdshift checks that the issue is in this repository, which it checks
 before viewing the issue, that the issue is open, that a Trusted account

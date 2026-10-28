@@ -1,10 +1,98 @@
-//! The compiled Ticket run's sequence, validated with the Custom process rules.
+//! Built-in and Custom Ticket execution, validated with the Custom process rules.
 //! Dispatch has already chosen its Issue-branch worktree and made any Claim. Its
 //! existing Delivery envelope supplies session identity and failure handling.
 
 use anyhow::{Result, bail, ensure};
 
 use super::{Catalog, DraftKind, validated};
+
+/// Run a Custom Ticket Process in the worktree dispatch already acquired.
+/// The owning Command, Claim, Base branch and child outcome stay with dispatch.
+pub(crate) fn run_custom(
+    name: &str,
+    delivery: crate::delivery::Delivery<'_>,
+    worktree: crate::worktree::Worktree,
+    selection: &crate::branch::Selection,
+) -> Result<crate::run::Reached, crate::failed_run::FailedRun> {
+    use super::*;
+
+    let (path, mut file) = load(name)?;
+    let config = UserConfig::load()?;
+    file.goal = delivery.goal;
+    file.security_review = delivery.security_review;
+    file.limits.repair_cap = file.limits.repair_cap.min(delivery.repair_cap);
+    file.limits
+        .protected_paths
+        .extend_from_slice(delivery.protected_paths);
+    let choice = &delivery.child_asks.harness;
+    let asked = Asked {
+        harness: Some(choice.harness),
+        model_and_effort: harness::ModelAndEffort {
+            model: choice.model.clone(),
+            effort: choice.effort.clone(),
+        },
+    };
+    let commit = worktree
+        .launch()
+        .run(&["rev-parse", &format!("origin/{}", delivery.base)])?;
+    let mut prepared = prepare_from(
+        &path,
+        &config,
+        &asked,
+        file,
+        Some(delivery.issue.clone()),
+        delivery.started,
+        WorktreeSource {
+            git: worktree.launch(),
+            commit: &commit,
+            issue_checkout: Some(worktree.path()),
+            base: delivery.base,
+        },
+    )?;
+    prepared.dispatched = true;
+    refuse_unstartable(&prepared)?;
+    let branch = worktree.branch().to_string();
+    let mut held = Some(worktree);
+    let mut issue_run = IssueRun {
+        checkout: &mut held,
+        issue: delivery.issue,
+        branch: &branch,
+        base: delivery.base,
+        on_origin: matches!(selection, Selection::Continuation { .. }),
+        selection,
+        logs: delivery.logs,
+        base_fix: delivery.base_fix,
+        process: name,
+        delivered: false,
+        pull_request: PullRequest::new(delivery.issue, &branch, delivery.base, GitHub::new()),
+        reviews: Vec::new(),
+    };
+    let result = execute_steps(name, &prepared, Some(&mut issue_run));
+    if let Err(error) = &result {
+        let context = continuation(&issue_run);
+        let on_origin = issue_run.on_origin;
+        if let Some(checkout) = issue_run.checkout.as_mut() {
+            preserve_step_failure(checkout, context, on_origin, error);
+        }
+    }
+    result?;
+    let own_pr = issue_run.pull_request.info().map(|pr| pr.url.clone());
+    let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
+    let resolution = if let Some(comment_url) = completed.unreproduced_bug {
+        crate::run::Resolution::NotReproduced { comment_url }
+    } else {
+        completed
+            .resolutions
+            .into_iter()
+            .find(|resolution| Some(resolution.url()) == own_pr.as_deref())
+            .context("the Ticket Process ended without delivery")?
+    };
+    Ok(crate::run::Reached {
+        resolution,
+        log: None,
+        ticket_lines: Vec::new(),
+    })
+}
 
 #[cfg(test)]
 mod tests;
