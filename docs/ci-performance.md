@@ -31,6 +31,69 @@ gate before enabling that requirement. CI's stable `test-macos` aggregate stays
 unfiltered: it runs with `always()` on every run and passes only on the macOS
 work its event requires, as below.
 
+### Job execution bounds
+
+Every CI job and every PR-reachable Release job has a job-level
+`timeout-minutes` (#1496). This bounds a hung job while CI watch waits for
+its result; it does not add a deadline to CI watch or include runner queue
+time. GitHub's [default job timeout is 360 minutes](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).
+
+The limits below were sized on 2026-10-28 UTC using `gh run list --workflow
+<workflow> --status success` (separately filtering PR, push and schedule events),
+then `gh run view <id> --json jobs`. Durations are `completedAt - startedAt`
+for successful jobs, including setup and cleanup, excluding skipped jobs.
+
+CI samples: PR runs [40613734239](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734239),
+[40609348854](https://github.com/JacobStephens2/thirdshift/actions/runs/40609348854),
+[40608541526](https://github.com/JacobStephens2/thirdshift/actions/runs/40608541526);
+main pushes [40609570774](https://github.com/JacobStephens2/thirdshift/actions/runs/40609570774),
+[40606663194](https://github.com/JacobStephens2/thirdshift/actions/runs/40606663194),
+[40600192827](https://github.com/JacobStephens2/thirdshift/actions/runs/40600192827);
+and nightly [40503051764](https://github.com/JacobStephens2/thirdshift/actions/runs/40503051764).
+
+| CI job | Observed execution (seconds) | Limit (minutes) |
+| --- | --- | --- |
+| `console-test` | 98–182 | 15 |
+| `site-test` | 59–102 | 10 |
+| `test` (nextest and nightly cargo test) | 725–983 | 60 |
+| `macos-plan` | 3–4 | 5 |
+| `test-macos-gate` | 232–265 | 20 |
+| `test-macos-shard` (all four shards) | 627–934 | 60 |
+| `test-macos` | 3–4 | 5 |
+
+Release samples: PR runs [40614474450](https://github.com/JacobStephens2/thirdshift/actions/runs/40614474450),
+[40613734215](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734215),
+[40609348838](https://github.com/JacobStephens2/thirdshift/actions/runs/40609348838),
+[40608541663](https://github.com/JacobStephens2/thirdshift/actions/runs/40608541663);
+tag runs [40592949213](https://github.com/JacobStephens2/thirdshift/actions/runs/40592949213),
+[40547557482](https://github.com/JacobStephens2/thirdshift/actions/runs/40547557482),
+[40542265662](https://github.com/JacobStephens2/thirdshift/actions/runs/40542265662).
+The sampled PRs skipped Rocky and WSL, so their execution figures come from
+the tag runs of the same reusable workflow.
+
+| PR-reachable Release job | Observed execution (seconds) | Limit (minutes) |
+| --- | --- | --- |
+| `plan` | 19–26 | 5 |
+| `build-local-artifacts` (Linux musl and macOS ARM) | 180–319 | 20 |
+| `build-global-artifacts` | 20–30 | 5 |
+| `custom-release-smoke / gate` | 3–6 | 5 |
+| `custom-release-smoke / rocky` | 11–16 | 5 |
+| `custom-release-smoke / wsl` | 62–66 | 10 |
+
+Full Rust suites get at least 3.6 times the slowest observed execution;
+the browser jobs and macOS gate get at least 4.5 times. Release builds get
+at least 3.7 times. Small orchestration jobs have a five-minute floor to
+allow slow runner setup and artifact transfers; WSL has ten minutes for
+distribution provisioning. These are operating budgets with headroom,
+not guarantees against every possible healthy slowdown. Re-measure when
+the work in a job grows.
+
+GitHub does not accept `timeout-minutes` on a reusable-workflow call, so the
+smoke limits live on its concrete jobs in `release-smoke.yml`. `host`,
+`announce`, `custom-publish-crates` and `custom-release-notes` only execute
+on tag publication; their jobs cannot hold a PR's CI watch and are outside
+this change. Generated Release limits belong to `scripts/generate-release.py`.
+
 ### Linux test runner
 
 Issue [#1317](https://github.com/JacobStephens2/thirdshift/issues/1317) moves
@@ -135,10 +198,12 @@ it `test:macos`, so its own run shows the full suite green before it merges.
 Run `python3 scripts/generate-release.py` from the repository root; CI runs
 it with `--check`. Install the pinned cargo-dist from `dist-workspace.toml`.
 The generator checks that version, runs the real cargo-dist generator and adds
-only PR paths, concurrency copied from CI, and its regeneration header. It restores the exact
+PR paths, concurrency copied from CI, PR-job permissions and execution bounds,
+and its regeneration header. It restores the exact
 original config and workflow on generation failure; `--check` also restores the
 workflow before comparing. Build, smoke, host and publication jobs still come
-entirely from cargo-dist and its configured reusable-workflow hooks.
+from cargo-dist and its configured reusable-workflow hooks, with the PR-job
+policy applied by our generator.
 
 Cargo-dist 0.33 has no concurrency/path-filter configuration or template override.
 Its documented [`allow-dirty = ["ci"]`](https://github.com/axodotdev/cargo-dist/blob/v0.33.0/book/src/reference/config.md#allow-dirty)
