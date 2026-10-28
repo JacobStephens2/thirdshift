@@ -1,14 +1,15 @@
 # thirdshift
 
-> thirdshift is a free, open-source (MIT) command-line factory that turns GitHub issues into ready-for-review pull requests with unattended coding agents. It runs Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode, logged in as you, in isolated Git worktrees, Each change is implemented, reviewed against the issue and the repository's standards, and kept mergeable and passing CI.
+> thirdshift is a free, open-source (MIT) command-line factory that turns GitHub issues into ready-for-review pull requests with unattended coding agents. It runs Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode, logged in as you, in isolated Git worktrees. Each change is implemented, reviewed against the issue and the repository's standards, and kept mergeable and passing CI.
 
-The humans are the Day shift: they shape work into issues and review the pull requests. The agents work the third shift. A Ticket run takes one GitHub Issue URL and delivers one pull request; a Spec run works through a Spec's Tickets in dependency order into one Spec PR. Architect, Pickup and Security runs find, take and audit work on a schedule. thirdshift is a single Rust binary for x86_64 Linux (Rocky, Ubuntu and WSL2) and Apple Silicon macOS. It needs `git`, an authenticated `gh` and one supported coding agent CLI.
+The humans are the Day shift: they shape work into issues and review the pull requests. The agents work the third shift. A Ticket run takes one GitHub Issue URL and normally delivers one pull request; a Spec run works through a Spec's Tickets in dependency order into one Spec PR. Architect, Pickup and Security runs find, take and audit work when your operating system's scheduler starts them. thirdshift is a single Rust binary for x86_64 Linux (Rocky, Ubuntu and WSL2) and Apple Silicon macOS. It needs `git`, an authenticated `gh` and one supported coding agent CLI.
 
-Install and start:
+Install, then start a Ticket run from a clone of the issue's repository, on the branch you want the pull request to target:
 
 ```sh
 curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh
 thirdshift setup
+cd ~/repos/widgets
 thirdshift https://github.com/acme/widgets/issues/7
 ```
 
