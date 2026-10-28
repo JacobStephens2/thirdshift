@@ -806,7 +806,7 @@ mod tests {
         let ended = Ended {
             outcome: Err(FailedRun {
                 ticket_lines: tickets.clone(),
-                ..failed_run("Tickets not done: #22")
+                ..failed_run("Tickets not done: #22 (failed: claude exited 1)")
             }),
             base_fix: None,
             advice: Vec::new(),
@@ -815,7 +815,7 @@ mod tests {
             Account::of_run(&ended),
             Account {
                 ticket_lines: &tickets,
-                ..failed_account("Tickets not done: #22")
+                ..failed_account("Tickets not done: #22 (failed: claude exited 1)")
             }
         );
         let mut ended = reached(Goal::ReadyForReview);

@@ -1852,7 +1852,7 @@ thirdshift: 03:12:40 #24 unready: labelled needs-info; blocked by #99 (outside t
 thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec; ready-for-agent)
 thirdshift: 03:12:40 #26 in a cycle: #26 blocked by #27 blocked by #26
 thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
-thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27
+thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21), #24 (labelled needs-info; blocked by #99 (outside the Spec; ready-for-agent)), #25 (blocked by #99 (outside the Spec; ready-for-agent)), #26 (in a cycle: #26 blocked by #27 blocked by #26), #27 (in a cycle: #27 blocked by #26 blocked by #27)
 ```
 
 A Spec PR closed, merged or retargeted while the Spec run is working through its Tickets, as when the Day shift reshapes the Spec onto another Base branch, ends the Ticket loop. The Spec run checks its captured Spec PR before it starts each Ticket and whenever it writes the Tickets checklist; once the check fails it starts no further Ticket, waits for the Tickets already running, and fails with `the Spec PR <url> was closed under this Spec run` (or `merged`, or `retargeted from <base> to <other>`). It prints no Recovery command, since one would resume the Spec branch the Spec just left: decide the Spec's Base branch and Spec branch before starting it again. A Ticket started once the Spec PR was open checks it again just before its Self-merge, as does a Base fix that Ticket starts into the Spec branch, and fails with the same cause, its pull request back to a draft, rather than merge into a Spec branch the Spec has left. A Ticket started before the first landing opened the Spec PR has nothing to check and Self-merges as before.

@@ -2714,7 +2714,7 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
         "{text}"
     );
     for part in [
-        "Cause:        Tickets not done: #21, #22\n",
+        "Cause:        Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)\n",
         "#21 failed: claude exited 1 (session trace: ",
         "#22 blocked by #21\n",
         "#23 landed with https://github.com/acme/widgets/pull/1\n",
