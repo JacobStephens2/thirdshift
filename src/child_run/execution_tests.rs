@@ -162,6 +162,7 @@ impl Fixture {
             &self.0.path().join("run"),
             &IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap(),
             &Given {
+                process: None,
                 kind: Kind::Ticket {
                     spec_branch: "issue-237".to_string(),
                     spec_pr: None,

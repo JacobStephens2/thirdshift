@@ -598,11 +598,13 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     ) -> Result<Reached, FailedRun> {
         if self.process != "ticket-run" {
             let process = self.process;
+            let spec_pr = self.spec_pr.clone();
             return crate::processes::ticket::run_custom(
                 process,
                 self.delivery(base),
                 worktree,
                 selection,
+                spec_pr,
             );
         }
         let labels = self

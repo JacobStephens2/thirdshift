@@ -357,7 +357,11 @@ fn main() -> ExitCode {
     let started_by = given
         .as_ref()
         .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
-    let ended = run::run_to_end(&issue, &mut asks, started_by);
+    let process = given
+        .as_ref()
+        .and_then(|given| given.process.as_deref())
+        .unwrap_or("ticket-run");
+    let ended = run::run_process_to_end(&issue, &mut asks, started_by, process);
     started.built_with(&asks.harness);
     started.finish(Ending::Run(ended))
 }

@@ -60,7 +60,7 @@ The rule that the **Issue URL** must belong to the same GitHub repository as the
 The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
 
 **Worktree**:
-A [factory-owned checkout](docs/guide.md#worktree-ownership-and-cleanup), on an **Issue branch** for a **Ticket run** or detached for an **Architecture review**. It is retained whenever ownership is uncertain or the Ticket run's work could not be preserved elsewhere.
+A [factory-owned checkout](docs/guide.md#worktree-ownership-and-cleanup), on an **Issue branch** for a **Ticket run**, on a **Spec branch** for a **Spec run**, or detached for an **Architecture review**. It is retained whenever ownership is uncertain or the work could not be preserved elsewhere.
 
 **Issue branch**:
 A branch a **Ticket run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
@@ -116,7 +116,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and no Issue-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. A Custom process started with no issue and no Issue-branch worktree is skipped while another Pass on the same repository is still running on the machine, its Spec run or Ticket run included, and it does not take an Architect run's Ready-issue or Architect-idea gates. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, and is not a Pass. A Custom process started with an issue is not a Pass.
+An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped while another Pass on the same repository is still running on the machine, its Spec run or Ticket run included, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 **Process**:
@@ -127,7 +127,7 @@ _Avoid_: workflow, pipeline, recipe, run type
 A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, and whether it holds a **Claim**, is decided before its first Step.
 
 **Custom process**:
-A **Process** a person defines on their own machine and starts by name. It can't take a **Built-in process**'s name. Started with no issue and no Issue-branch worktree, it is a **Pass**. A file that declares an Issue-branch worktree is refused when no issue is given. Started with an issue, it is not a Pass. Its `self-merge` catalogue Step, directly after `delivery`, is the **Self-merge**, and only when the command or the **User config** asks. A file can only tighten limits, never loosen them.
+A **Process** a person defines on their own machine and starts by name; it can't take a **Built-in process**'s name, a file can only tighten limits, and its `self-merge` catalogue Step directly after `delivery` is the **Self-merge**, only when the command or **User config** asks. Started with no issue and neither an Issue-branch nor a Spec-branch worktree, it is a **Pass**; either branch worktree needs an issue, an Issue-branch worktree needs one without **Tickets**, and a Spec-branch worktree needs a **Spec**, with a **Claim** made before either worktree; started with an issue, it is not a Pass.
 _Avoid_: workflow, pipeline
 
 **Step**:
