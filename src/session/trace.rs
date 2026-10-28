@@ -69,6 +69,15 @@ impl Trace {
             attribute("thirdshift.command.identity", &context.identity),
             attribute("thirdshift.gen_ai.conventions.version", "1.44.0"),
         ];
+        if let Some(name) = &context.process.name {
+            attrs.push(attribute("thirdshift.process.name", name));
+        }
+        if let Some(kind) = context.process.kind {
+            attrs.push(attribute("thirdshift.process.kind", kind));
+        }
+        if let Some(hash) = &context.process.hash {
+            attrs.push(attribute("thirdshift.process.hash", hash));
+        }
         if let Some(model) = &choice.model {
             attrs.push(attribute("gen_ai.request.model", model));
         }

@@ -260,6 +260,15 @@ pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
 }
 
+/// Capture the Custom process's loaded source before recording its start or skip.
+pub(crate) fn process_loaded(identity: crate::processes::Identity) {
+    record().process_loaded(identity);
+}
+
+pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
+    record().custom_process()
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
@@ -438,6 +447,21 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 }
 
 impl<'a> Work<'a> {
+    fn process(self) -> crate::processes::Identity {
+        use crate::processes::Identity;
+        let file = match self {
+            Self::Run(_) | Self::BaseFix(_) => "ticket-run",
+            Self::SpecRun(_) => "spec-run",
+            Self::ArchitectRun(_) => "architect-run",
+            Self::SecurityRun(_) => "security-run",
+            Self::PickupRun(_) => "pickup-run",
+            Self::ScoringRun(_) => "scoring-run",
+            Self::Experiment(_) => "experiment",
+            Self::Process { name, .. } => return Identity::custom(name, None),
+        };
+        Identity::built_in(file, &self.kind().to_string())
+    }
+
     fn initial_stage(self) -> Option<Stage> {
         match self {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),

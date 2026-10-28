@@ -96,6 +96,7 @@
           <p>The <code>implement</code> catalogue Step runs the Ticket run's implementation session on an Issue-branch worktree, starting fresh or continuing existing work. On a <code>bug</code> issue it diagnoses first; if the bug is not reproduced, the Process ends successfully with triage notes and <code>needs-info</code>, skips later Steps and cleans up its Claim and worktree.</p>
           <p>The <code>security-review</code> catalogue Step reviews the Issue branch after editing and before <code>delivery</code>, when the command or User config asks. It keeps the Ticket run's Harness fallback, and a refused or incomplete review holds a following Self-merge.</p>
           <p>Every session Step gets one Resume when background work was killed as its turn ended. If the Resume leaves work running too, the Process names it and carries on; a later failure names that killed work first. A Resume does not spend a Repair.</p>
+          <p>Command records and Session traces keep each run's Process name, whether it is Built-in or Custom, and the SHA-256 hash of its file. Child Ticket runs record <code>ticket-run</code> independently of their parent. Runs awaiting a Built-in file keep their run-type name without a hash; the displayed run names stay the same.</p>
           <p class="more"><a href="/prompts/">Read every prompt and skill the agents get →</a></p></div>
       </div>
     </div>

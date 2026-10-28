@@ -1696,6 +1696,17 @@ The folder already names the repository, so no file name repeats it. `audits/` a
 
 Session traces share the owning command's folder, stamp and owner token: a Pickup run's dispatched Ticket run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and nested Base fixes inherit that same ownership too.
 
+Each Command record and child run records its Process in `process_name`,
+`process_kind` (`built-in` or `custom`) and `process_hash` (the lowercase SHA-256
+of the file's exact bytes). Session traces carry the same facts as
+`thirdshift.process.name`, `thirdshift.process.kind` and `thirdshift.process.hash`
+attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
+the compiled-in file's hash. Custom processes record the file loaded for that
+run, so editing it changes the next run's hash. A Spec, Architect or Security
+run records its run type until its Built-in file lands; a run with no Process
+file has no hash. Older records can omit these fields. Status, the Console,
+the Activity log and Run notifications keep their existing run-type names.
+
 When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.logs.jsonl`.

@@ -71,7 +71,7 @@ impl Logs {
         Logs {
             name: "process".to_string(),
             dir: logs::session_dir(repo),
-            recording: OnceCell::new(),
+            recording: recording::Recording::for_process().into(),
         }
     }
 
