@@ -165,12 +165,17 @@ impl TicketBoard {
         }
     }
 
-    /// The Tickets not done, the open ones, in the order they were read.
+    /// The open Tickets' names and reasons they are not done, in the order
+    /// they were read, without the unready prefix or Session trace paths.
     pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets
             .iter()
             .filter(|ticket| ticket.is_open)
-            .map(|ticket| self.name(&ticket.issue))
+            .map(|ticket| {
+                let standing = self.standing(ticket);
+                let reason = standing.strip_prefix("unready: ").unwrap_or(&standing);
+                format!("{} ({reason})", self.name(&ticket.issue))
+            })
             .collect()
     }
 
@@ -586,7 +591,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(board.not_done(), ["#23", "#22"]);
+        assert_eq!(board.not_done(), ["#23 (not started)", "#22 (not started)"]);
     }
 
     #[test]

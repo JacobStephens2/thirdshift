@@ -1049,22 +1049,27 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_sub_issue_is_unready_and_never_starts_a_run() {
+    fn an_unready_label_and_a_foreign_ticket_are_named_with_reasons_in_the_cause() {
         let mut foreign = open(21, &[]);
         foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
         let mut outside = Scripted::new(Script {
-            tickets: vec![foreign, open(22, &[])],
+            tickets: vec![foreign, labelled(22, "ready-for-human"), open(23, &[])],
             ..Script::default()
         });
 
         let failed = failed_of(spec_run(&mut outside, 2));
 
-        assert_eq!(outside.did_only(runs), [Did::Start(22), Did::Ended(22)]);
+        assert_eq!(outside.did_only(runs), [Did::Start(23), Did::Ended(23)]);
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: https://github.com/other/widgets/issues/21 (outside the Spec's repository), #22 (labelled ready-for-human)"
+        );
         assert_eq!(
             failed.ticket_lines,
             [
                 "https://github.com/other/widgets/issues/21 unready: outside the Spec's repository",
-                "#22 landed"
+                "#22 unready: labelled ready-for-human",
+                "#23 landed"
             ]
         );
         assert!(outside.did.iter().any(|did| matches!(did, Did::Landed(list)
@@ -1173,7 +1178,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 1);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)"
+        );
         let expected = [
             "#21 failed: claude exited 1 (session trace: /logs/session.jsonl)",
             "#22 blocked by #21",
@@ -1201,7 +1209,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (labelled needs-info), #22 (blocked by #21)"
+        );
         assert_eq!(
             lines,
             [
@@ -1223,7 +1234,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (blocked by #90 (outside the Spec))"
+        );
         assert_eq!(
             lines,
             ["#21 blocked by #90 (outside the Spec)", "#22 landed"]
@@ -1240,7 +1254,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (in a cycle: #21 blocked by #22 blocked by #21), #22 (in a cycle: #22 blocked by #21 blocked by #22)"
+        );
         assert_eq!(
             lines,
             [
@@ -1389,7 +1406,10 @@ mod tests {
 
         let (_, landed) = land(&mut outside, 2);
 
-        assert_eq!(error(landed), "Tickets not done: #22, #23");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #22 (failed: claude exited 1), #23 (blocked by #22)"
+        );
         assert_eq!(
             outside.did_only(spec_pr_calls),
             [
@@ -1430,7 +1450,10 @@ mod tests {
 
         let (_, landed) = land(&mut outside, 2);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (interrupted)"
+        );
         assert_eq!(
             outside.did_only(spec_pr_calls),
             [
@@ -1542,7 +1565,10 @@ mod tests {
 
         let failed = failed_of(spec_run(&mut outside, 1));
 
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21");
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: #21 (failed: claude exited 1)"
+        );
         assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
         assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
         assert!(!failed.interrupted);
@@ -1766,7 +1792,10 @@ mod tests {
             ..Script::default()
         });
         let failed = failed_of(spec_run(&mut outside, 1));
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)"
+        );
         assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
     }
 
@@ -1781,7 +1810,10 @@ mod tests {
             ..Script::default()
         });
         let failed = failed_of(spec_run(&mut outside, 1));
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (failed: claude exited 1)"
+        );
         assert_eq!(failed.log, None);
     }
 }
