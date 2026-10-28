@@ -2,6 +2,7 @@
 
 Issue: https://github.com/JacobStephens2/thirdshift/issues/877
 Decisions: [ADR-0024](../adr/0024-a-process-composes-steps-from-a-fixed-catalogue.md)
+Outcome: #877 was rewritten as the Spec, with Tickets #1380–#1390
 Research: [file-defined-factories.md](../research/file-defined-factories.md) (written for this grill: Warp, Archon, gh-aw, Anneal), [warp-factories-and-alternatives.md §3.1](../research/warp-factories-and-alternatives.md) ("factory as code"), [open-source-factories.md](../research/open-source-factories.md), [temporal-for-thirdshift.md](../research/temporal-for-thirdshift.md), #108 (factory primitives), #118 (prompts and skills in config), [ADR-0001](../adr/0001-rust-binary-with-embedded-skills.md), [ADR-0009](../adr/0009-the-operating-system-schedules-thirdshift.md), [ADR-0013](../adr/0013-every-harness-runs-unattended-and-fully-trusted.md)
 
 ## Round 1 (answered)
