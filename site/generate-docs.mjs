@@ -50,12 +50,12 @@ const page = `<!doctype html>
 <meta property="og:title" content="thirdshift documentation · Install, configure and run coding agents">
 <meta property="og:description" content="The thirdshift user manual: installation, commands, configuration, workflows, logs and scheduling.">
 <meta property="og:image" content="https://thirdshift.app/share-card.png">
-<meta property="og:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta property="og:image:alt" content="Your issues become pull requests overnight. Issue #663 passes through Step 1 · Prepare, Step 2 · Implement, Step 3 · Review and Step 4 · Finish, and comes out as pull request #665, merged.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="thirdshift documentation · Install, configure and run coding agents">
 <meta name="twitter:description" content="The thirdshift user manual: installation, commands, configuration, workflows, logs and scheduling.">
 <meta name="twitter:image" content="https://thirdshift.app/share-card.png">
-<meta name="twitter:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta name="twitter:image:alt" content="Your issues become pull requests overnight. Issue #663 passes through Step 1 · Prepare, Step 2 · Implement, Step 3 · Review and Step 4 · Finish, and comes out as pull request #665, merged.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 <link rel="stylesheet" href="/docs/docs.css">

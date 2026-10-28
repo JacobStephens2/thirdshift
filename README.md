@@ -6,7 +6,7 @@ Use **Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode**, 
 
 Each Ticket run implements the issue, reviews the change against the issue and your repository's standards, and keeps the pull request mergeable and passing CI. It leaves the pull request for your review, or merges it when asked. If a run fails, it reports what work was preserved and how to continue.
 
-Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/).
+Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/). Coding agents can start from [thirdshift.app/llms.txt](https://thirdshift.app/llms.txt), a Markdown index of the manual, the site and the source.
 
 ## Install
 
