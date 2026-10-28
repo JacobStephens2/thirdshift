@@ -88,12 +88,18 @@ impl Observation {
     // and the Experiment metadata already loaded by Stored.
     fn project(self, stored: &Stored) -> View {
         View {
-            format: 1,
+            format: 2,
             name: stored.name(),
             name_set: stored.name.is_some(),
             description: stored.description.clone(),
             state: stored.state,
-            details: stored.details.clone(),
+            details: {
+                let mut details = stored.details.clone();
+                details.resume_command = details.resume_command.as_deref().and_then(|command| {
+                    super::options::resume_command(command, stored.description.bar.levels)
+                });
+                details
+            },
             created_at: stored.created_at.clone(),
             tasks: stored
                 .tasks

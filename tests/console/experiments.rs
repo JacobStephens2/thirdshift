@@ -16,6 +16,49 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
     directory
 }
 
+#[test]
+fn legacy_paused_experiment_advertises_a_supported_resume_command() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["state"] = json!("paused");
+    saved["bar"]["credible_level"] = json!(0.8);
+    saved["resume_command"] = json!(
+        "thirdshift experiment candidate --baseline baseline --suite code-review --credible-level 0.8 --json"
+    );
+    fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    let resume = html
+        .split("Run the same command to resume: <code>")
+        .nth(1)
+        .unwrap()
+        .split("</code>")
+        .next()
+        .unwrap();
+    // This deliberately quote-free fixture allows executing the displayed
+    // words directly; no shell or HTML entity decoding is needed.
+    let attempted = Command::new(binary)
+        .env("HOME", home.path())
+        .args(resume.split_whitespace().skip(1))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&attempted.stderr);
+    assert!(
+        !stderr.contains("unknown Experiment flag: --credible-level"),
+        "displayed command is rejected by the CLI: {stderr}"
+    );
+    assert!(!resume.contains("--credible-level"), "{resume}");
+    assert!(
+        resume.contains("--pass-level") && resume.contains("--fail-level"),
+        "{resume}"
+    );
+}
+
 fn proposal(home: &Path, suite: &str, task: &str) {
     let directory = home.join(".thirdshift/evals/suites").join(suite);
     fs::create_dir_all(directory.join("tasks").join(task)).unwrap();
@@ -352,6 +395,72 @@ fn selected_session_evidence_survives_unrelated_corruption_and_legacy_verdicts()
             fs::remove_file(corrupt).unwrap();
         }
     }
+}
+
+#[test]
+fn a_pass_worse_within_the_margin_is_annotated_in_the_console_and_text() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "f".repeat(64);
+    let path = fixture(home.path(), &id, "2026-10-27T10:00:00Z").join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let bar = saved["bar"].as_object_mut().unwrap();
+    bar.remove("credible_level");
+    bar.insert("pass_level".into(), json!(0.7));
+    bar.insert("fail_level".into(), json!(0.95));
+    bar.insert("pass_rule".into(), json!("margin"));
+    let assessment = |upper: f64, worse: bool| {
+        let mut assessment = json!({
+            "difference_counts": [3, 27, 0], "verdict": "pass", "more_tasks": null,
+            "pass_interval": {"lower": -0.08, "upper": upper},
+            "fail_interval": {"lower": -0.2, "upper": 0.02},
+        });
+        if worse {
+            assessment["worse_within_margin"] = json!(true);
+        }
+        assessment
+    };
+    let mut suite_bar = saved["bar"].clone();
+    suite_bar["trials_per_task"] = json!(1);
+    suite_bar["prediction"] =
+        json!({"simulations": 200, "interval_draws": 512, "max_additional_tasks": 2000});
+    saved["state"] = json!("completed");
+    saved["verdict"] = json!({
+        "verdict": "pass", "provisional_verdict": "pass", "borderline_trials": 0,
+        "suites": {"code-review": {
+            "bar": suite_bar, "thirdshift_version": "test-version",
+            "method": "paired-dirichlet-v3; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles",
+            "accuracy": assessment(-0.01, true), "wrong_findings": assessment(0.04, false),
+            "verdict": "pass", "retained_tasks": 30, "dropped_tasks": 0, "pass_cubed": null,
+        }},
+    });
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let shown = Command::new(binary)
+        .env("HOME", home.path())
+        .args(["experiments", &id])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        stdout.contains("Verdict: pass (code-review accuracy: worse, within the margin)"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+
+    let console = Console::start(binary, home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert_eq!(
+        html.matches("worse, within the margin").count(),
+        1,
+        "{html}"
+    );
+    assert!(html.contains("The whole Accuracy interval at the pass level is below zero"));
+    assert!(html.contains(
+        "<dt>Pass rule</dt><dd>The pass-level interval's lower bound is above the margin.</dd>"
+    ));
+    assert!(!html.contains("margin and reaches zero or above"));
 }
 
 #[test]
