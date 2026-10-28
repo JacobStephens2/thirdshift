@@ -14,6 +14,7 @@ pub(in crate::harness) struct SessionExport {
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) summary: Option<String>,
     pub(in crate::harness) failure: Option<String>,
+    completed: bool,
     pub(in crate::harness) models: Vec<String>,
 }
 
@@ -70,6 +71,7 @@ impl SessionExport {
             message: None,
             summary: None,
             failure: None,
+            completed: outcome == "succeeded",
             models: Vec::new(),
         };
         let mut usage: Option<Usage> = None;
@@ -147,6 +149,7 @@ impl Retained for Completion {
             && let Some(export) = read(&self.worktree, id)?
         {
             facts.ended.final_message = export.message;
+            facts.ended.completed = export.completed;
             facts
                 .report
                 .retained_records

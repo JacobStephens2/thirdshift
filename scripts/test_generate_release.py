@@ -61,9 +61,12 @@ class GenerateRelease(unittest.TestCase):
             self.assertIn("  push:\n    tags: ['v*']", expected)
             self.assertIn(
                 "  plan:\n    permissions:\n      \"actions\": \"write\"\n"
-                "      \"contents\": \"read\"\n    runs-on: ubuntu-24.04",
+                "      \"contents\": \"read\"\n    timeout-minutes: 5\n"
+                "    runs-on: ubuntu-24.04",
                 expected,
             )
+            self.assertIn("    timeout-minutes: 20\n", expected)
+            self.assertEqual(expected.count("    timeout-minutes: 5\n"), 2)
             self.assertIn(
                 "  build-local-artifacts:\n    permissions:\n"
                 "      \"actions\": \"write\"\n      \"contents\": \"read\"\n",

@@ -92,16 +92,17 @@ hosts.
 
 The fresh home holds the login, and the user-level instructions, rules,
 settings and hooks a Run's session reads, those read-only. Codex's `auth.json`
-is bound read-write in place, so a refresh reaches the file production uses.
+is copied into the fresh home, so a refresh stays in that copy.
 Claude receives `CLAUDE_CODE_OAUTH_TOKEN` from the Credentials'
 `claude.setup_token`. Muse's `~/.config/muse/auth.json` and its
 `.auth.json.lock`, and agy's
-`~/.gemini/antigravity-cli/antigravity-oauth-token`, are each bound read-write
-in place. Grok Trials share a Trials home of their own at
+`~/.gemini/antigravity-cli/antigravity-oauth-token`, are each copied into the
+fresh home. Grok Trials use a Trials home of their own at
 `~/.thirdshift/trials/grok`, signed in once with
-`GROK_HOME=~/.thirdshift/trials/grok grok login` and wiped before each Trial
-down to its login and lock; Grok Trials run one at a time, and the Grok binary
-is bound outside that home. An OpenCode Trial's provider key comes only from
+`GROK_HOME=~/.thirdshift/trials/grok grok login`. Each Trial copies only its login
+and lock into the fresh home; Grok Trials run one at a time, and the Grok binary
+is bound outside that home. The sandbox clears ambient environment variables
+and hides Cargo registry credentials. An OpenCode Trial's provider key comes only from
 `opencode.api_key` in the Credentials, through its environment; it never sees
 production's `opencode.db`. The Trial's config sets that provider's `apiKey`
 to `{env:…}` naming the variable, so the Trial's Model names its provider as
@@ -188,6 +189,15 @@ The result version is independently identified by `version: 1`.
   Arm and drops an exhausted task from both Arms. More than a tenth dropped
   makes the Verdict inconclusive. Repeated `memory_cap` stops produce an Arm
   finding in `thirdshift experiments <id>`.
+  Fresh execution and recovery use the saved Bar's cause list and retry count:
+  only a latest Void result with an allowed cause and remaining budget retries.
+  A retained success, failure, missing or excluded Void cause, or exhausted
+  history finishes without another attempt, including after failed terminal
+  publication. Completed usage-limit, rate-limit and interrupted Void results
+  checkpoint before pausing; if terminal, they publish before returning the
+  pause. Recovery never re-emits a retained pause. Attempt results, pending
+  history and terminal results publish in that order while execution evidence
+  remains live; publication errors leave only the successfully saved prefix.
 - `cause`: failure diagnostic, or `null` on success.
 - `session_id`: the last session's Harness ID if available, otherwise `null`.
 - `log`: absolute path to the last session's `.logs.jsonl` Session trace, otherwise `null`.

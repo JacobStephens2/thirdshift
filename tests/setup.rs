@@ -233,6 +233,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[scoring]",
             "[trial]"
         ],
         "{text}"
@@ -271,6 +272,15 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
+    assert!(config["scoring"]["owners"].as_array().unwrap().is_empty());
+    assert_eq!(config["scoring"]["sample_size"].as_integer(), Some(10));
+    assert_eq!(config["scoring"]["harness"].as_str(), Some("claude"));
+    assert_eq!(config["scoring"]["model"].as_str(), Some(""));
+    assert_eq!(
+        config["scoring"]["fallback_harness"].as_str(),
+        Some("codex")
+    );
+    assert_eq!(config["scoring"]["fallback_model"].as_str(), Some(""));
     assert_eq!(config["trial"]["memory_high"].as_str(), Some("1G"));
     assert_eq!(config["trial"]["memory_max"].as_str(), Some("2G"));
     assert_eq!(config["trial"]["memory_swap_max"].as_str(), Some("1G"));
@@ -344,6 +354,7 @@ effort = 'high' # my Effort
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[scoring]",
             "[trial]",
         ],
         "{text}"
@@ -690,10 +701,18 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
                 "https://thirdshift.example.com",
             ),
             ("Allowed emails (comma-separated) [owner@example.com]", ""),
+            ("Other local accounts", "conductor,operator"),
         ],
     );
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["other_accounts"].as_array().unwrap(),
+        &[
+            toml::Value::from("conductor"),
+            toml::Value::from("operator")
+        ]
+    );
     assert_eq!(
         config["console"]["address"].as_str(),
         Some("https://thirdshift.example.com")
@@ -783,7 +802,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
 }
 
 #[test]
-fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes() {
+fn setup_keeps_fixing_opt_in_and_defaults_to_closing_merged_findings() {
     let scenario = Scenario::new();
     let result = setup_on_terminal(
         &scenario,
@@ -796,7 +815,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
-            (SECURITY_CLOSE, "y"),
+            (SECURITY_CLOSE, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
             (CLAUDE_TOKEN, ""),
@@ -810,6 +829,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
         result.stderr
     );
     assert!(result.stderr.contains(&format!("{SECURITY_FIX} [y/N]")));
+    assert!(result.stderr.contains(&format!("{SECURITY_CLOSE} [Y/n]")));
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["security"]["fix"].as_bool(), Some(true));
@@ -868,7 +888,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         let text = result.user_config.unwrap();
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
-        assert_eq!(config["security"]["close"].as_bool(), Some(false));
+        assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
         assert!(text.starts_with("# my Security settings\n[security]\n"));
         assert!(text.contains("# keep this choice\n"));

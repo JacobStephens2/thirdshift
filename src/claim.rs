@@ -5,7 +5,9 @@
 //! issue closed, kept while its pull request waits for review, and released
 //! when the run failed with nothing on origin to take over, except a failed
 //! Security fix, which stays with the Day shift. A Stop instead leaves the
-//! issue for triage, or explicitly releases it when asked to requeue.
+//! issue for triage, or explicitly releases it when asked to requeue. A
+//! Custom process's Delivery removes it when the pull request is ready for
+//! review, without putting `ready-for-agent` back.
 //!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
@@ -64,6 +66,17 @@ pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Cl
 }
 
 impl Claim<'_> {
+    /// A bug Ticket run handed reproduction back to the reporter. End its Claim
+    /// without making the issue Ready again, including in a Continuation.
+    pub fn needs_info(self) {
+        let launch = self.launch.completion();
+        self.claimed.needs_info(&mut OnGitHub {
+            launch: &launch,
+            github: GitHub::new().completion(),
+            branch: &self.branch,
+        });
+    }
+
     /// End the Claim once the Run or the Spec run that made it has ended,
     /// having reached `reached`, or none in a Failed run:
     ///
@@ -87,6 +100,20 @@ impl Claim<'_> {
             },
             reached,
         );
+    }
+
+    /// Take `in-progress` off the issue, whether or not it is open, and put
+    /// nothing back. A Delivery that left a pull request ready for review
+    /// ends this way: the issue is not Ready, so Pickup does not take it
+    /// again while that pull request is open. A failure is a warning naming
+    /// what to run by hand.
+    pub fn remove(self) {
+        let launch = self.launch.completion();
+        self.claimed.remove(&mut OnGitHub {
+            launch: &launch,
+            github: GitHub::new().completion(),
+            branch: &self.branch,
+        });
     }
 }
 
@@ -227,6 +254,34 @@ impl<'a> Claimed<'a> {
         Ok(claimed)
     }
 
+    /// [`Claim::needs_info`], through `outside`.
+    fn needs_info(&self, outside: &mut impl Outside) {
+        let issue = self.issue;
+        let result = (|| {
+            let edit = Edit::of(
+                issue,
+                outside.labels(issue)?,
+                &[IN_PROGRESS, READY_FOR_AGENT],
+                &[labels::NEEDS_INFO],
+            );
+            outside.apply(&edit)
+        })();
+        if let Err(error) = result {
+            outside.warn(
+                &error,
+                format!(
+                    "could not end the Claim on #{} after diagnosis; run: {}",
+                    issue.number,
+                    labels::by_hand(
+                        issue,
+                        &[IN_PROGRESS, READY_FOR_AGENT],
+                        &[labels::NEEDS_INFO]
+                    ),
+                ),
+            );
+        }
+    }
+
     /// [`Claim::end`], through `outside`.
     fn end(&self, outside: &mut impl Outside, reached: Option<Goal>) {
         if let Some(ending) = outside.stop() {
@@ -341,6 +396,34 @@ impl<'a> Claimed<'a> {
             &[]
         };
         (off, on)
+    }
+
+    /// Take `in-progress` off, open issue or not, and put nothing on. An issue
+    /// that is no longer `in-progress` is left as it is.
+    fn remove(&self, outside: &mut impl Outside) {
+        if let Err(error) = retry_if_interrupted(outside, |outside| self.take_off(outside)) {
+            outside.warn(
+                &error,
+                format!(
+                    "could not remove {IN_PROGRESS} from issue #{}, so remove it by hand: {}",
+                    self.issue.number,
+                    labels::by_hand(self.issue, &[IN_PROGRESS], &[])
+                ),
+            );
+        }
+    }
+
+    /// [`Claimed::remove`], its failure as `gh` gave it.
+    fn take_off(&self, outside: &mut impl Outside) -> Result<()> {
+        let edit = Edit::of(self.issue, outside.labels(self.issue)?, &[IN_PROGRESS], &[]);
+        if !edit.takes_off(IN_PROGRESS) {
+            return Ok(());
+        }
+        outside.step(format!(
+            "removing {IN_PROGRESS} from issue #{}",
+            self.issue.number
+        ));
+        outside.apply(&edit)
     }
 
     /// Remove the Claim if the Self-merge has left its issue closed:

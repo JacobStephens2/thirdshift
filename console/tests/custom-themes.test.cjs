@@ -5,7 +5,7 @@ const { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } = require('node:fs/p
 const { join, resolve } = require('node:path');
 const { tmpdir } = require('node:os');
 const { createInterface } = require('node:readline');
-const { chromium } = require('playwright');
+const { chromium } = require('./playwright.cjs');
 const { test } = require('node:test');
 
 test('editor saves, chooses and round-trips Themes without uploading files', async () => {

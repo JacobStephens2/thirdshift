@@ -2,7 +2,8 @@
 //!
 //! A result ends a turn, not necessarily the session: background sub-agents
 //! can resume it. Only the first init sets shared session fields, and only
-//! completion supplies the last result and any work killed since that result.
+//! completion supplies the last reply holding a completion line (otherwise
+//! the last result) and any work killed since the latest result.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -13,6 +14,7 @@ use super::{
     TurnOutcome,
 };
 use crate::progress::{bash, shorten};
+use crate::prompt;
 mod events;
 
 pub struct Stream {
@@ -21,6 +23,8 @@ pub struct Stream {
     /// Cumulative totals survive later results without a complete pair.
     turns_and_cost: Option<(u64, f64)>,
     final_message: Option<String>,
+    completion_message: Option<String>,
+    completed: bool,
     dialect: Dialect,
 }
 
@@ -117,6 +121,31 @@ fn message_text(event: &Value) -> Option<String> {
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
+/// Recognize handoffs here, leaving their payload validation to each reader.
+/// Keep the whole reply: Architecture reviews also carry a strength line.
+fn has_completion_line(message: &str) -> bool {
+    let line = message.trim_end().lines().last().unwrap_or("").trim();
+    matches!(
+        line,
+        prompt::BUG_REPRODUCED_LINE
+            | prompt::AUDIT_COMPLETE_LINE
+            | prompt::AUDIT_INCOMPLETE_LINE
+            | prompt::CLOSE_CHECK_PASSES_LINE
+    ) || [
+        prompt::BUG_NOT_REPRODUCED_LINE,
+        prompt::PLAN_LINE,
+        prompt::IDEA_LINE,
+        prompt::ALREADY_FILED_LINE,
+        prompt::CLOSE_CHECK_FAILS_PREFIX,
+        prompt::SECURITY_FIX_LINE,
+        prompt::SECURITY_FIX_SPEC_LINE,
+        "Security review: ",
+        "Security reproduction: ",
+    ]
+    .iter()
+    .any(|prefix| line.starts_with(prefix))
+}
+
 impl Dialect {
     /// Extract live facts before root-result and initialization guards. Grok
     /// shares assistant framing without Claude's usage or safeguard rules.
@@ -186,6 +215,8 @@ impl Stream {
             init: None,
             turns_and_cost: None,
             final_message: None,
+            completion_message: None,
+            completed: false,
             dialect,
         }
     }
@@ -205,6 +236,12 @@ impl Stream {
             Dialect::Claude(_) => totals(),
             Dialect::Grok(grok) if grok.cost_known => totals().or_else(|| grok.usage.clone()),
             Dialect::Grok(grok) => grok.usage.clone(),
+        }
+    }
+
+    fn remember_completion(&mut self, message: &str) {
+        if has_completion_line(message) {
+            self.completion_message = Some(message.to_string());
         }
     }
 
@@ -259,6 +296,14 @@ impl Stream {
                 vec!["session started".to_string()]
             }
             Some("assistant") => {
+                if event["parent_tool_use_id"].is_null() {
+                    self.completed = false;
+                    if !assistant_error(event)
+                        && let Some(message) = message_text(event)
+                    {
+                        self.remember_completion(&message);
+                    }
+                }
                 if let Dialect::Claude(claude) = &mut self.dialect {
                     claude.assistant(event);
                 }
@@ -284,7 +329,16 @@ impl Stream {
                 {
                     return Vec::new();
                 }
+                // A child result may replace the latest text, but it is not a
+                // root handoff. Remembering it would let that text outlive a
+                // later root reply that carries no completion line.
+                if event["parent_tool_use_id"].is_null()
+                    && let Some(message) = event["result"].as_str()
+                {
+                    self.remember_completion(message);
+                }
                 self.final_message = event["result"].as_str().map(String::from);
+                self.completed = true;
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
                     event["total_cost_usd"].as_f64(),
@@ -342,7 +396,14 @@ impl Decoder for Stream {
         let mut ended = Ended {
             session_id: self.init.and_then(|init| init.session_id),
             killed: Vec::new(),
-            final_message: self.final_message,
+            // A handoff can precede the sole result, but cannot supply a
+            // missing terminal result itself.
+            final_message: if self.completed {
+                self.completion_message.or(self.final_message)
+            } else {
+                self.final_message
+            },
+            completed: self.completed,
         };
         let (failed, diagnostic) = match self.dialect {
             Dialect::Claude(claude) => {

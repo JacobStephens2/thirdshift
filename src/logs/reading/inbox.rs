@@ -350,7 +350,7 @@ impl RefreshWork {
 struct Row<'a> {
     item: InboxItem<'a>,
     order: (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>),
-    failure: Option<(&'a str, bool)>,
+    failure: Option<(&'a str, bool, Option<&'a str>)>,
 }
 
 /// One operation's retained Inbox decisions. Projections read only this value;
@@ -442,12 +442,18 @@ pub(super) fn evaluate<'a>(
     let observations: Vec<_> = captured
         .iter()
         .flat_map(|outer| {
-            std::iter::once(outer).chain(
-                outer
-                    .dispatched
-                    .iter()
-                    .filter(|run| run.command.facts().ready),
-            )
+            // A ready dispatched run waits in its own row, unless its Pass
+            // is ready on the same pull request and already carries it.
+            let carried = outer
+                .command
+                .facts()
+                .ready
+                .then(|| record_pull_request(&outer.command))
+                .flatten();
+            std::iter::once(outer).chain(outer.dispatched.iter().filter(move |run| {
+                run.command.facts().ready
+                    && (carried.is_none() || record_pull_request(&run.command) != carried)
+            }))
         })
         .collect();
     let starts: Vec<_> = observations
@@ -689,7 +695,7 @@ pub(super) fn evaluate<'a>(
             failure: facts
                 .cause
                 .filter(|cause| failed && !cause.is_empty())
-                .map(|cause| (cause, dismissal.is_some())),
+                .map(|cause| (cause, dismissal.is_some(), command.account())),
             item: InboxItem {
                 command,
                 group,

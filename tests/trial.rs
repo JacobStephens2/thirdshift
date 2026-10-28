@@ -73,6 +73,25 @@ fn run_trial(scenario: &Scenario, request: &Path, extra: &[(&str, &str)]) -> Run
         .into_iter()
         .zip(paths.iter().map(String::as_str))
         .collect();
+    // The sandbox clears ambient variables. Put only the fake's recording
+    // paths in its own launcher, inside the bound repository.
+    let document: Value = serde_json::from_slice(&fs::read(request).unwrap()).unwrap();
+    if let Some(harness) = document["harness"].as_str() {
+        let executable = scenario.path(&format!("bin/{harness}"));
+        let fake = dir.join("bin").join(harness);
+        if executable.is_file() && !fake.exists() {
+            fs::create_dir_all(fake.parent().unwrap()).unwrap();
+            support::copy_executable(&executable, &fake);
+            fs::remove_file(&executable).unwrap();
+            let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+            let mut script = String::from("#!/bin/sh\n");
+            for (name, value) in &env {
+                script.push_str(&format!("export {name}={}\n", quote(value)));
+            }
+            script.push_str(&format!("exec {} \"$@\"\n", quote(fake.to_str().unwrap())));
+            support::write_executable(&executable, &script);
+        }
+    }
     env.extend_from_slice(extra);
     scenario.run_with_env(&args, &env)
 }
@@ -434,7 +453,7 @@ printf '{{"type":"session_meta","payload":{{"id":"fake-thread-1","cwd":"%s"}}}}\
 sleep 1.1
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
-sleep 0.5
+sleep 5
 touch '{}'
 "#, escaped.display()));
     let result = run_trial(&scenario, &request, &[]);
@@ -468,7 +487,7 @@ sleep 1.1
 touch '{}'
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
-sleep 0.5
+sleep 5
 touch '{}'
 "#, scenario.launch_dir().join("ignored-old-native-warning").display(), escaped.display()));
 
@@ -506,6 +525,32 @@ touch '{}'
     );
     assert!(
         support::session_trace::events(output["log"].as_str().unwrap()).contains("used_percent")
+    );
+}
+
+#[test]
+fn a_codex_capacity_error_is_a_rate_limited_void_trial() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    scenario.agent_does(
+        r#"
+printf 'Selected model is at capacity. Please try a different model.' > "$FAKE_CODEX_ERROR"
+exit 1
+"#,
+    );
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "rate_limit", "{output}");
+    assert_eq!(
+        output["cause"],
+        "codex exited 1: Selected model is at capacity. Please try a different model."
     );
 }
 
@@ -912,6 +957,26 @@ fn an_unlaunchable_passthrough_harness_is_a_void_trial() {
     let claude = scenario.path("bin/claude");
     fs::remove_file(&claude).unwrap();
     fs::write(&claude, b"not an executable format\n").unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = scenario.run_with_env(
+        &["--trial", request.to_str().unwrap()],
+        &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "session_unavailable", "{output}");
+}
+
+#[test]
+fn a_harness_the_shell_cannot_run_is_a_void_trial() {
+    // macOS runs a file it can't execute through /bin/sh, which exits 127.
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let claude = scenario.path("bin/claude");
+    fs::remove_file(&claude).unwrap();
+    fs::write(&claude, "#!/bin/sh\nexit 127\n").unwrap();
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
     let result = scenario.run_with_env(
         &["--trial", request.to_str().unwrap()],

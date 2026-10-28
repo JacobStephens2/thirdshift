@@ -44,7 +44,9 @@ uncertain push result or failed release names the ref and token for recovery.
   arbitrates competing Pickup runs, not every possible writer.
 - A crashed host can block an otherwise Ready issue until the Day shift confirms
   it stopped and deletes its reservation with the observed commit as the lease.
-  Read the commit message for launch path, process, start time and token.
+  Read the commit message for host, launch path, process, start time and token.
+  `Host:` records the OS hostname, or `unknown` if unavailable; older
+  reservations have no host field and remain valid reservations.
 - These auxiliary branches can appear in origin branch listings. Repository
   rules must allow their creation and deletion; permission failures stop pickup.
 - Releasing the reservation does not release a Claim. Existing hand-back and

@@ -37,6 +37,7 @@ pub(super) struct Record<O: Outside> {
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
 }
 
 enum Log<W> {
@@ -58,10 +59,14 @@ struct Started {
     root: PathBuf,
     kind: Kind,
     issue: Option<u64>,
+    process: Option<String>,
 }
 
 impl Started {
     fn subject(&self) -> String {
+        if let Some(name) = &self.process {
+            return format!("Process {name}");
+        }
         match self.issue {
             Some(number) => format!("{} #{number}", self.kind),
             None => self.kind.to_string(),
@@ -88,6 +93,7 @@ impl<O: Outside> Record<O> {
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
+            unaddressed_findings: None,
         }
     }
 
@@ -98,7 +104,9 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::ScoringRun => CommandKind::Scoring,
             Begin::Experiment => CommandKind::Experiment,
+            Begin::Process { .. } => CommandKind::Process,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -110,7 +118,9 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
+            Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
         let now = self.outside.now();
         self.stamp
@@ -127,6 +137,25 @@ impl<O: Outside> Record<O> {
         self.otlp_endpoint = config.otlp_endpoint.clone();
         if !config.quiet_skips {
             self.show_held();
+        }
+    }
+
+    pub(super) fn pass_fired(&mut self, repo: &Repo) {
+        let pass = match self.command {
+            CommandKind::Architect => Pass::Architect,
+            CommandKind::Pickup => Pass::Pickup,
+            CommandKind::Secure => Pass::Security,
+            _ => return,
+        };
+        let path = super::pass_starts::path(&self.root(repo), pass);
+        let time = self.outside.now().to_rfc3339();
+        // One atomic replacement per kind also keeps competing launches from
+        // truncating a reader's time or overwriting another kind's start.
+        if let Err(error) = self.outside.replace_record(&path, time.as_bytes()) {
+            self.show_held();
+            self.step(format_args!(
+                "warning: could not keep the Pass's last-fired time: {error:#}"
+            ));
         }
     }
 
@@ -178,6 +207,10 @@ impl<O: Outside> Record<O> {
             root: root.clone(),
             kind: work.kind(),
             issue: work.issue(),
+            process: match work {
+                Work::Process { name, .. } => Some((*name).to_string()),
+                _ => None,
+            },
         };
         let line = format!("{} started: {command_log}, on {harness}", started.subject());
         if self.activity_started.is_none() {
@@ -273,6 +306,37 @@ impl<O: Outside> Record<O> {
         );
     }
 
+    /// A skipped Custom process keeps the Activity log line and a Command
+    /// record. The record is what shows the skipped ending; the other Passes
+    /// drop the Command log they never kept.
+    pub(super) fn skipped_process(
+        &mut self,
+        repo: &Repo,
+        name: &str,
+        harness: &Choice,
+        reason: &str,
+    ) {
+        let root = self.root(repo);
+        self.activity_write(
+            &root,
+            &format!("Process {name} skipped: {reason}"),
+            Some(Kind::Process),
+        );
+        let stamp = self.stamp();
+        // Leave held lines unshown, so a quiet skip prints nothing. They are
+        // still the Command log.
+        self.retain(&root, Work::Process { repo, name }, &stamp, false);
+        self.start_record(Work::Process { repo, name }, harness);
+        self.outcome("skipped", Some(reason));
+    }
+
+    pub(super) fn activity(&mut self, message: impl Display) {
+        if let Some(started) = &self.activity_started {
+            let root = started.root.clone();
+            self.activity_write(&root, &message.to_string(), None);
+        }
+    }
+
     pub(super) fn ended(&mut self, outcome: impl Display) {
         self.show_held();
         if let Some(started) = &self.activity_started {
@@ -331,9 +395,22 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    pub(super) fn unaddressed_findings(
+        &mut self,
+        counts: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.unaddressed_findings = counts;
+    }
+
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, self.outside.now());
+            tree.command.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
@@ -345,7 +422,8 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+    /// How a Command ended when it has no Run account: an Experiment or a Process.
+    pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
             tree.command.cause = cause.map(String::from);
@@ -355,15 +433,26 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, self.outside.now());
+            dispatched.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
 
-    pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+    pub(super) fn dispatching(
+        &mut self,
+        work: Work,
+        harness: &Choice,
+        security_fix_findings: &[crate::security::RecordedFinding],
+    ) {
         // Entered while the pass is still the active record, timing the
         // dispatch. An Architect run keeps its Architecture review stage,
         // as #889 asked only for Pickup runs and Security runs.
@@ -372,11 +461,36 @@ impl<O: Outside> Record<O> {
         }
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        facts.security_fix_findings = security_fix_findings.to_vec();
         if let Some((_, tree)) = &mut self.command_record {
             facts.hostname = tree.command.hostname.clone();
             facts.process_start = tree.command.process_start.clone();
             tree.dispatched.push(facts);
             self.write_record();
+        }
+    }
+
+    fn usual_ranges(&mut self) -> super::usual_range::UsualRanges {
+        let Some((path, tree)) = &self.command_record else {
+            return super::usual_range::UsualRanges::default();
+        };
+        let root = self
+            .logs_dir
+            .as_ref()
+            .unwrap()
+            .join(&tree.command.repository);
+        match self.outside.command_records(&root) {
+            Ok(mut records) => {
+                // The Run being finished must not supply its own comparison times.
+                records.remove(path);
+                super::usual_range::UsualRanges::from_records(&records)
+            }
+            Err(error) => {
+                self.step(format_args!(
+                    "warning: could not read Usual ranges for Run metrics: {error:#}"
+                ));
+                super::usual_range::UsualRanges::default()
+            }
         }
     }
 
@@ -461,10 +575,10 @@ impl<O: Outside> Record<O> {
         Some(super::trace::Context::from_record(owner, active))
     }
 
-    /// Child Runs carry the owning CommandKind, so a Security run's entire
-    /// Session tree stays local even while it dispatches public fixes.
+    /// Child Runs carry the owning CommandKind, so private Security and
+    /// Scoring Session trees stay local, including public Security fixes.
     pub(super) fn otlp_endpoint(&self) -> Option<String> {
-        if self.command == CommandKind::Secure {
+        if matches!(self.command, CommandKind::Secure | CommandKind::Scoring) {
             None
         } else {
             self.otlp_endpoint.clone()
@@ -516,7 +630,17 @@ impl<O: Outside> Record<O> {
     }
 
     fn keep(&mut self, root: &Path, work: Work<'_>, stamp: &str) {
-        self.show_held();
+        self.retain(root, work, stamp, true);
+    }
+
+    /// Keep the Command log. `announce` shows lines held from the terminal and
+    /// names the log there. A skipped Custom process passes `false`: under
+    /// `activity.quiet_skips` those lines stay unprinted, and the log-path
+    /// line stays off the terminal either way.
+    fn retain(&mut self, root: &Path, work: Work<'_>, stamp: &str, announce: bool) {
+        if announce {
+            self.show_held();
+        }
         if !matches!(self.command_log, Log::Held { .. }) {
             return;
         }
@@ -546,8 +670,10 @@ impl<O: Outside> Record<O> {
                         .to_path_buf(),
                     writer,
                 };
-                let path = self.command_log_path().unwrap();
-                self.step(format_args!("logging this command to {}", path.display()));
+                if announce {
+                    let path = self.command_log_path().unwrap();
+                    self.step(format_args!("logging this command to {}", path.display()));
+                }
             }
             Err(error) => {
                 self.owner_error = Some(format!("{error:#}"));

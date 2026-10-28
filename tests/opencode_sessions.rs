@@ -189,7 +189,7 @@ fn opencode_runs_standalone_with_stdin_skills_and_usage_despite_a_dropped_last_s
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with opencode · provider/MiMo-V2.6-Pro · high")
+            .contains("Built with opencode 9.8.7 · provider/MiMo-V2.6-Pro · high")
     );
 }
 

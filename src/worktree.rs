@@ -21,6 +21,8 @@ mod acquisition_tests;
 #[cfg(test)]
 mod cleanup_tests;
 mod ownership;
+mod skill;
+pub use skill::SkillWorktree;
 #[cfg(test)]
 mod preservation_tests;
 #[cfg(test)]
@@ -239,19 +241,7 @@ impl Worktree {
     /// checkout under the synchronization lock, without staging or committing.
     pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
-            let entries = operation.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
-            Ok(!index_hides_tracked_work(&entries)
-                && operation.head()? == head
-                && operation
-                    .run(&[
-                        "-c",
-                        "core.fsmonitor=false",
-                        "status",
-                        "--porcelain",
-                        "--untracked-files=all",
-                        "--ignore-submodules=none",
-                    ])?
-                    .is_empty())
+            Ok(!uncommitted_changes(|args| operation.run(args))? && operation.head()? == head)
         })
     }
 
@@ -275,6 +265,19 @@ impl Worktree {
     pub fn merge_base_commit(&self, base: &str) -> Result<String> {
         self.checkout.ordinary(&self.launch, |operation| {
             operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])
+        })
+    }
+
+    /// The merge base with the published Base branch when this Issue branch
+    /// has commits that Base branch does not. `None` when this head is already
+    /// contained in the Base branch: a fresh branch, or a Continuation with
+    /// nothing beyond it. Bug diagnosis reproduces at this commit.
+    pub fn ahead_merge_base(&self, base: &str) -> Result<Option<String>> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let merge_base =
+                operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])?;
+            let head = operation.head()?;
+            Ok((merge_base != head).then_some(merge_base))
         })
     }
 
@@ -369,6 +372,22 @@ impl Worktree {
             Ok(!operation.merged(&origin.commit)?)
         })
     }
+}
+
+/// Use each caller's checked Git execution and interruption policy while
+/// sharing the evidence required to establish absence of uncommitted work.
+fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> {
+    let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+    Ok(index_hides_tracked_work(&entries)
+        || !run(&[
+            "-c",
+            "core.fsmonitor=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])?
+        .is_empty())
 }
 
 /// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.
@@ -523,7 +542,6 @@ fn lock_launch(launch: &Git) -> Result<File> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
     use std::time::Duration;
 
     use super::*;
@@ -533,11 +551,9 @@ mod tests {
     pub(super) fn launch_directory() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let git = |dir: &Path, args: &[&str]| {
-            let status = Command::new("git")
+            let status = crate::test_support::git_command()
                 .args(args)
                 .current_dir(dir)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .status()
                 .unwrap();
             assert!(status.success(), "git {args:?}");
@@ -562,6 +578,7 @@ mod tests {
             ("user.name", "Test Runner"),
             ("user.email", "runner@example.com"),
             ("commit.gpgSign", "false"),
+            ("tag.gpgsign", "false"),
             ("core.hooksPath", hooks.to_str().unwrap()),
         ] {
             git(&work, &["config", key, value]);

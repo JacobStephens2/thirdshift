@@ -254,6 +254,9 @@ use std::sync::Mutex;
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
 use crate::{die, git, python_list};
 
+#[path = "gh/scoring.rs"]
+mod scoring;
+
 static LOCK: Mutex<Option<File>> = Mutex::new(None);
 
 /// Wait for the state's lock and hold it until `unlock` or exit.
@@ -330,6 +333,17 @@ fn check_repo_is(state: &Json, repo: Option<&str>) {
         && repo != "{owner}/{repo}"
         && Path::new(repo) != origin_repo()
         && repo.to_lowercase() != state.at("repo").str().to_lowercase()
+        && !state
+            .get("scoring_prs")
+            .map(Json::items)
+            .unwrap_or_default()
+            .iter()
+            .any(|pr| {
+                pr.at("repository")
+                    .at("nameWithOwner")
+                    .str()
+                    .eq_ignore_ascii_case(repo)
+            })
     {
         die(&format!("fake gh: unknown repo {repo}"), 1);
     }
@@ -1092,6 +1106,19 @@ fn issue_create(state: &mut Json, flags: &Flags) {
     let labels = labels.into_iter().map(string).collect();
     state.entry("labels", object([])).set(&n, Array(labels));
     state.entry("created", object([])).set(&n, string(now()));
+    if issue_labels(state, &n)
+        .iter()
+        .any(|label| label.str().eq_ignore_ascii_case("ready-for-agent"))
+    {
+        state.entry("timeline", object([])).set(
+            &n,
+            Array(vec![object([
+                ("event", string("labeled")),
+                ("label", string("ready-for-agent")),
+                ("at", string(now())),
+            ])]),
+        );
+    }
     save(state);
     println!("https://github.com/{}/issues/{n}", state.at("repo").str());
 }
@@ -1464,7 +1491,8 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         assert_eq!(query["per_page"], "100");
         assert!(flags.contains_key("paginate"));
         assert_eq!(flag(flags, "jq"), Some(".[]"));
-        for (n, issue_state) in matching_issues(state, &wanted_state, Some(query["labels"])) {
+        for (n, issue_state) in matching_issues(state, &wanted_state, query.get("labels").copied())
+        {
             let mut issue = issue_fields(state, &n.to_string(), issue_state);
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
@@ -1481,6 +1509,63 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             "{}",
             object([("login", string("runner")), ("email", email)])
         );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && rest.starts_with("actions/runs?")
+        && rest.contains("event=push")
+    {
+        check_repo_is(state, Some(repo));
+        let branch = rest
+            .split("branch=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap();
+        let runs = state.get("runs").map(Json::items).unwrap_or_default();
+        let latest = runs.iter().rev().find(|run| {
+            run.get("head_branch").and_then(Json::as_str) == Some(branch)
+                && run.get("event").and_then(Json::as_str) == Some("push")
+        });
+        println!(
+            "{}",
+            object([(
+                "workflow_runs",
+                Array(latest.cloned().into_iter().collect())
+            )])
+        );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(id) = rest
+            .strip_prefix("actions/runs/")
+            .and_then(|rest| rest.strip_suffix("/jobs?per_page=100"))
+    {
+        check_repo_is(state, Some(repo));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".jobs[]"));
+        let run = state
+            .at("runs")
+            .items()
+            .iter()
+            .find(|run| run.at("id").python() == id)
+            .unwrap();
+        for job in run.at("jobs").items() {
+            println!("{job}");
+        }
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(id) = rest
+            .strip_prefix("actions/jobs/")
+            .and_then(|rest| rest.strip_suffix("/logs"))
+    {
+        check_repo_is(state, Some(repo));
+        match state.get("job_logs").and_then(|logs| logs.get(id)) {
+            Some(log) => println!("{}", log.str()),
+            None => die("gh: logs unavailable (HTTP 404)", 1),
+        }
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
@@ -1527,6 +1612,12 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             return;
         }
         Endpoint::Pulls => {
+            if jq == Some(".[]") {
+                for pr in listed(state, "origin_prs", sha) {
+                    println!("{pr}");
+                }
+                return;
+            }
             if jq != Some(COMMIT_PR_LINES) {
                 unsupported_jq(jq);
             }
@@ -2036,6 +2127,13 @@ fn record_run(state: &mut Json, mut run: Json) {
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if scoring::packet(state, &query, &variables) {
+        return;
+    }
+    if query.contains("ScoringPullRequests") {
+        scoring_search(state, &variables);
+        return;
+    }
     if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
         && query.contains("rateLimit")
     {
@@ -2080,6 +2178,11 @@ fn graphql(state: &Json, args: &[&str]) {
     } else if is_candidate {
         candidate(state, n, after)
     } else {
+        let blocker_label_limit = query
+            .split("blockedBy(first: ")
+            .nth(1)
+            .and_then(|rest| rest.split("labels(first: ").nth(1))
+            .map(|rest| rest.split(')').next().unwrap().parse::<usize>().unwrap());
         let nodes = listed(state, "sub_issues", n)
             .iter()
             .map(|ticket| {
@@ -2091,7 +2194,7 @@ fn graphql(state: &Json, args: &[&str]) {
                 let mut node = numbered_issue(state, ticket);
                 node.set("labels", object([("nodes", Array(labels))]));
                 node.set("subIssues", sub_issue_count(state, &key));
-                node.set("blockedBy", blockers(state, &key));
+                node.set("blockedBy", blockers(state, &key, blocker_label_limit));
                 node
             })
             .collect();
@@ -2099,6 +2202,75 @@ fn graphql(state: &Json, args: &[&str]) {
     };
     let answer = object([("data", object([("repository", object([("issue", issue)]))]))]);
     println!("{answer}");
+}
+
+/// Owner-scoped merged PR search, paginated like GitHub. Tests supply
+/// GraphQL-shaped nodes in `scoring_prs`, independently of live Run PRs.
+fn scoring_search(state: &Json, variables: &BTreeMap<String, String>) {
+    if let Some(script) = state.get("on_scoring_search").and_then(Json::as_str) {
+        // Like the other hooks, release the fake's state lock while held.
+        // Call readers take this lock too, so a test must still be able to
+        // inspect calls and Stop a Scoring command during its search.
+        unlock();
+        let status = Command::new("bash")
+            .args(["-e", "-c", script])
+            .status()
+            .unwrap();
+        lock();
+        if !status.success() {
+            die("scoring search hook failed", 1);
+        }
+    }
+    let search = &variables["search"];
+    let owner = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("user:"))
+        .unwrap();
+    let range = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("merged:"))
+        .unwrap();
+    let (start, end) = range.split_once("..").unwrap();
+    let nodes: Vec<Json> = state
+        .get("scoring_prs")
+        .map(Json::items)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|pr| {
+            let repo = pr.at("repository").at("nameWithOwner").str();
+            let merged = pr.at("mergedAt").str();
+            repo.split('/').next().unwrap().eq_ignore_ascii_case(owner)
+                && merged >= start
+                && merged <= end
+                && pr.at("body").str().contains("thirdshift:built-with")
+        })
+        .cloned()
+        .collect();
+    let offset: usize = variables
+        .get("after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let end = (offset + 50).min(nodes.len());
+    println!(
+        "{}",
+        object([(
+            "data",
+            object([(
+                "search",
+                object([
+                    ("issueCount", number(nodes.len())),
+                    ("nodes", Array(nodes[offset..end].to_vec())),
+                    (
+                        "pageInfo",
+                        object([
+                            ("hasNextPage", Bool(end < nodes.len())),
+                            ("endCursor", string(end.to_string())),
+                        ])
+                    ),
+                ])
+            )])
+        )])
+    );
 }
 
 /// The Inbox's batched query: one `alias:
@@ -2239,6 +2411,14 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     object([
         ("number", n.clone()),
         (
+            "title",
+            state
+                .get("titles")
+                .and_then(|titles| titles.get(&n.python()))
+                .cloned()
+                .unwrap_or(Null),
+        ),
+        (
             "url",
             state
                 .get("issue_urls")
@@ -2262,10 +2442,28 @@ fn sub_issue_count(state: &Json, key: &str) -> Json {
 }
 
 /// The issues issue `key` is blocked by, as GraphQL's `blockedBy`.
-fn blockers(state: &Json, key: &str) -> Json {
+fn blockers(state: &Json, key: &str, label_limit: Option<usize>) -> Json {
     let blockers = listed(state, "blocked_by", key)
         .iter()
-        .map(|blocker| numbered_issue(state, blocker))
+        .map(|blocker| {
+            let mut node = numbered_issue(state, blocker);
+            let all_labels = listed(state, "labels", &blocker.python());
+            let limit = label_limit.unwrap_or(usize::MAX);
+            let more_labels = all_labels.len() > limit;
+            let labels = all_labels
+                .into_iter()
+                .take(limit)
+                .map(|label| object([("name", label)]))
+                .collect();
+            node.set(
+                "labels",
+                object([
+                    ("nodes", Array(labels)),
+                    ("pageInfo", object([("hasNextPage", Bool(more_labels))])),
+                ]),
+            );
+            node
+        })
         .collect();
     object([("nodes", Array(blockers))])
 }
@@ -2413,7 +2611,7 @@ fn candidate(state: &Json, n: &str, after: Option<&str>) -> Json {
     object([
         ("parent", parent),
         ("subIssues", object([("nodes", Array(sub_issues))])),
-        ("blockedBy", blockers(state, n)),
+        ("blockedBy", blockers(state, n, None)),
         (
             "labelled",
             object([("nodes", Array(labelled)), ("pageInfo", page_info)]),

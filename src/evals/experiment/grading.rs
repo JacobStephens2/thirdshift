@@ -1,16 +1,15 @@
-//! Combined Scores and paired suite Verdicts, kept with private Trial data.
+//! Read-only Experiment assessment: effective paired Scores, suite Verdicts and
+//! whole-Experiment decisive rechecks, kept with private Trial data.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::{Arm, TrialResult};
-use super::{Bar, Task};
-use crate::process::{self, Control, Interruption};
+use super::{Arm, Bar, Task, TrialResult};
+use crate::sandbox::code_grader::{self, Check};
 use crate::trial::{Outcome, Output};
 use crate::verdict::{self, Decision, TaskScores};
 
@@ -46,14 +45,12 @@ impl Score {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Check {
-    pub command: Option<Vec<String>>,
-    pub passed: bool,
-    pub reason: String,
-}
-
-pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) -> Result<Score> {
+pub(super) fn score(
+    task: &Task,
+    repository: &Path,
+    output: &Output,
+    timeout: Duration,
+) -> Result<Score> {
     let mut checks = vec![
         Check {
             command: None,
@@ -72,67 +69,13 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
     ];
     if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
-        // Bind sources remain visible in /proc/self/mountinfo. A neutral
-        // destination alone cannot hide the original Trial's Arm pathname.
-        let snapshot = packet.path().join("repository");
-        copy_repository(repository, &snapshot)?;
-        for (source, name) in [
-            (&output.reports.standards, "standards.md"),
-            (&output.reports.spec, "spec.md"),
-        ] {
-            if let Some(source) = source {
-                fs::write(
-                    packet.path().join(name),
-                    super::model_grader::blind(&fs::read_to_string(source)?),
-                )?;
-            }
-        }
-        for command in &task.manifest.checks {
-            let mut child =
-                crate::sandbox::code_grader(&snapshot, packet.path(), command, Some(&caps))?;
-            let (launched, scope) = child.command_and_scope();
-            let result = process::output_until(
-                launched,
-                None,
-                Control {
-                    name: "code Grader",
-                    interruption: Interruption::Ordinary,
-                    stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-                },
-                Instant::now() + Duration::from_secs(bar.timeout_seconds),
-                &|| {
-                    if let Some(scope) = scope {
-                        scope.sample();
-                    }
-                    Ok(())
-                },
-            );
-            crate::interrupt::check()?;
-            if !result.as_ref().is_ok_and(|result| result.status.success())
-                && scope.is_some_and(crate::scope::Scope::oom_killed)
-            {
-                bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
-            }
-            child.check_started(&result)?;
-            let (passed, reason) = match result {
-                Ok(result) => (
-                    result.status.success(),
-                    format!(
-                        "{}\n{}{}",
-                        result.status,
-                        String::from_utf8_lossy(&result.stdout),
-                        String::from_utf8_lossy(&result.stderr)
-                    ),
-                ),
-                Err(error) => (false, format!("{error:#}")),
-            };
-            checks.push(Check {
-                command: Some(command.clone()),
-                passed,
-                reason,
-            });
-        }
+        checks.extend(code_grader::execute(
+            repository,
+            &output.reports,
+            &task.manifest.checks,
+            timeout,
+            &caps,
+        )?);
     }
     Ok(Score {
         passed: checks.iter().all(|check| check.passed),
@@ -144,58 +87,6 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         checks,
         rechecks: Vec::new(),
     })
-}
-
-fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let target = destination.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_repository(&entry.path(), &target)?;
-        } else if kind.is_symlink() {
-            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
-        } else if kind.is_file() {
-            fs::copy(entry.path(), target)?;
-        }
-        // Skip sockets, FIFOs, devices and other special files: Trial
-        // sessions leave them behind, and no check can use them once the
-        // Trial's servers are gone. Copying them would fail the whole
-        // Experiment over one Trial's ordinary leftovers.
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_verdict_preserves_an_explicit_null_provisional_verdict() {
-        let saved = serde_json::json!({"verdict":"inconclusive","provisional_verdict":null,"suites":{},"borderline_trials":0});
-        let decoded: super::Verdict = serde_json::from_value(saved.clone()).unwrap();
-        assert_eq!(serde_json::to_value(decoded).unwrap(), saved);
-    }
-
-    /// Trial sessions leave sockets and FIFOs behind (dev servers, shell
-    /// fixtures). Copying one into the Grader snapshot must not fail the
-    /// whole Experiment over files no check can use once the Trial is gone.
-    #[test]
-    fn grader_snapshot_skips_special_files() {
-        let root = tempfile::TempDir::new().unwrap();
-        let source = root.path().join("repository");
-        fs::create_dir(&source).unwrap();
-        fs::write(source.join("main.rs"), "ok\n").unwrap();
-        let _socket = std::os::unix::net::UnixListener::bind(source.join("server.sock")).unwrap();
-        let destination = root.path().join("snapshot");
-        copy_repository(&source, &destination).unwrap();
-        assert_eq!(
-            fs::read_to_string(destination.join("main.rs")).unwrap(),
-            "ok\n"
-        );
-        assert!(!destination.join("server.sock").exists());
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -277,22 +168,111 @@ impl Verdict {
     }
 }
 
-pub(super) fn judge(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Result<Verdict> {
-    evaluate(tasks, results, bar, true)
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Pending {
+    pub id: String,
+    pub suite: String,
+    pub task: String,
+    pub arm: Arm,
+    pub trial: usize,
+    pub borderline: bool,
+    pub decisive: bool,
+    #[serde(default)]
+    pub decisive_flips: Vec<Flip>,
+    #[serde(default)]
+    pub decisive_verdicts: BTreeMap<Flip, Decision>,
 }
 
-pub(super) fn decision(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Result<Decision> {
-    Ok(evaluate(tasks, results, bar, false)?
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Flip {
+    Passed,
+    WrongFinding,
+}
+
+impl std::fmt::Display for Pending {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {}/{} {} Trial {} ({})",
+            self.id,
+            self.suite,
+            self.task,
+            self.arm.name(),
+            self.trial,
+            match (self.borderline, self.decisive) {
+                (true, true) => "borderline, decisive",
+                (true, false) => "borderline",
+                _ => "decisive",
+            }
+        )
+    }
+}
+
+pub(super) fn task_is_void(result: &TrialResult, results: &[TrialResult]) -> bool {
+    results.iter().any(|other| {
+        other.suite == result.suite && other.task == result.task && other.outcome == Outcome::Void
+    })
+}
+
+pub(super) fn assess(
+    tasks: &[Task],
+    results: &[TrialResult],
+    bar: &Bar,
+) -> Result<(Verdict, Vec<Pending>)> {
+    let mut verdict = evaluate(tasks, results, bar, None)?;
+    let original = verdict
         .provisional_verdict
         .decision()
-        .expect("a computed Verdict has a provisional decision"))
+        .expect("computed Verdict");
+    let mut pending = Vec::new();
+    for (index, result) in results.iter().enumerate() {
+        // A Void Trial drops the whole paired task, including the other Arm.
+        if task_is_void(result, results) {
+            continue;
+        }
+        let score = result.score.as_ref().context("Trial has no Score")?;
+        if !score.rechecks.is_empty() {
+            continue;
+        }
+        let mut decisive_flips = Vec::new();
+        let mut decisive_verdicts = BTreeMap::new();
+        for flip in [Flip::Passed, Flip::WrongFinding] {
+            let flipped = evaluate(tasks, results, bar, Some((index, flip)))?
+                .provisional_verdict
+                .decision()
+                .expect("computed Verdict");
+            if flipped != original {
+                decisive_flips.push(flip);
+                decisive_verdicts.insert(flip, flipped);
+            }
+        }
+        let decisive = !decisive_flips.is_empty();
+        if score.borderline || decisive {
+            pending.push(Pending {
+                id: result.key(),
+                suite: result.suite.clone(),
+                task: result.task.clone(),
+                arm: result.arm,
+                trial: result.trial,
+                borderline: score.borderline,
+                decisive,
+                decisive_flips,
+                decisive_verdicts,
+            });
+        }
+    }
+    if !pending.is_empty() {
+        verdict.verdict = Conclusion::WaitingOnRechecks;
+    }
+    Ok((verdict, pending))
 }
 
 fn evaluate(
     tasks: &[Task],
     results: &[TrialResult],
     bar: &Bar,
-    predictions: bool,
+    flip: Option<(usize, Flip)>,
 ) -> Result<Verdict> {
     let mut suites = BTreeMap::new();
     let mut total = 0;
@@ -314,20 +294,30 @@ fn evaluate(
                 candidate: Vec::new(),
                 dropped_as_void: false,
             };
-            for result in results
+            for (index, result) in results
                 .iter()
-                .filter(|result| result.suite == task.suite && result.task == task.name)
+                .enumerate()
+                .filter(|(_, result)| result.suite == task.suite && result.task == task.name)
             {
                 paired.dropped_as_void |= result.outcome == Outcome::Void;
-                let score = result
+                let mut score = result
                     .score
                     .as_ref()
-                    .context("Trial has no mechanical Score")?;
+                    .context("Trial has no mechanical Score")?
+                    .effective();
+                if let Some((selected, field)) = flip
+                    && selected == index
+                {
+                    match field {
+                        Flip::Passed => score.passed = !score.passed,
+                        Flip::WrongFinding => score.wrong_finding = !score.wrong_finding,
+                    }
+                }
                 let arm = match result.arm {
                     Arm::Baseline => &mut paired.baseline,
                     Arm::Candidate => &mut paired.candidate,
                 };
-                arm.push(score.effective());
+                arm.push(score);
             }
             ensure!(
                 paired.baseline.len() == trials && paired.candidate.len() == trials,
@@ -338,7 +328,7 @@ fn evaluate(
             scores.push(paired);
         }
         // Counterfactuals need the seeded interval decision, never forecasts.
-        let assessment = if predictions {
+        let assessment = if flip.is_none() {
             verdict::judge(&scores, &statistics)?
         } else {
             verdict::judge_without_predictions(&scores, &statistics)?
@@ -368,3 +358,6 @@ fn evaluate(
         borderline_trials,
     })
 }
+
+#[cfg(test)]
+mod tests;

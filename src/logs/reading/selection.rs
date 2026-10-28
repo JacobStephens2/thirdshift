@@ -40,9 +40,16 @@ impl Name {
                 });
             }
         }
-        if ["architect-", "pickup-", "secure-", "experiment-"]
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
+        if [
+            "architect-",
+            "pickup-",
+            "secure-",
+            "scoring-",
+            "experiment-",
+            "process-",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
         {
             return Ok(Self::Pass(name.into()));
         }
@@ -72,6 +79,20 @@ pub(in crate::logs) enum Observation<'a> {
 }
 
 impl<'a> Observation<'a> {
+    pub(in crate::logs) fn account(self) -> Option<&'a str> {
+        match self {
+            Self::Record(command) => command.account.as_deref(),
+            Self::History(command) => command.account.as_deref(),
+        }
+    }
+
+    pub(in crate::logs) fn require_writable(self, action: &str) -> Result<()> {
+        if let Some(account) = self.account() {
+            bail!("cannot {action}: Command belongs to account {account} and is read-only");
+        }
+        Ok(())
+    }
+
     fn repository(self) -> &'a str {
         match self {
             Self::Record(command) => &command.record.repository,
@@ -221,7 +242,9 @@ pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
         "Architect run" => Some("architect"),
         "Pickup run" => Some("pickup"),
         "Security run" => Some("secure"),
+        "Scoring run" => Some("scoring"),
         "Experiment" => Some("experiment"),
+        "Process" => Some("process"),
         _ => None,
     }
 }
@@ -237,6 +260,7 @@ pub(in crate::logs) struct Selection<'a> {
 
 impl Selection<'_> {
     pub(in crate::logs) fn stop_target(self, input: &str) -> Result<PathBuf> {
+        self.observation.require_writable("stop")?;
         if let Some(owner) = self.child_owner {
             bail!(
                 "cannot stop {input}: child Ticket run; stop {} {} instead",
@@ -338,7 +362,12 @@ pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection
     // A bare record/log path names its outer Command before any dispatched Run.
     // Named selectors still prefer live/latest; suffixed paths are already exact.
     if !matches!(name, Name::Path(_)) {
-        candidates.sort_by_key(|command| command.observation.ordering());
+        candidates.sort_by_key(|command| {
+            (
+                command.observation.account().is_some(),
+                command.observation.ordering(),
+            )
+        });
     }
     candidates
         .into_iter()
@@ -381,6 +410,8 @@ pub(in crate::logs) enum Detailed<'a> {
 /// retaining the status reader's version 1 field names.
 #[derive(Serialize)]
 pub(in crate::logs) struct Details<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<&'a str>,
     #[serde(flatten)]
     record: &'a crate::logs::command_record::CommandRecord,
     state: &'static str,
@@ -399,6 +430,7 @@ pub(in crate::logs) struct Details<'a> {
 impl<'a> Details<'a> {
     fn new(command: &'a Command) -> Result<Self> {
         Ok(Self {
+            account: command.account.as_deref(),
             record: &command.record,
             state: command.state,
             health: &command.health,

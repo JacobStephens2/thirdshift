@@ -14,7 +14,7 @@ pub(crate) fn log_path(
     input: &str,
     session: Option<&str>,
 ) -> Result<std::path::PathBuf> {
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(config, Local::now())?;
     let command = snapshot.resolve(input)?.observation;
     selected_log(command, session)
 }
@@ -40,6 +40,117 @@ pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>)
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
+fn shown_heading(command: &Command) -> String {
+    if let Some(name) = command.record.process_label() {
+        return format!("Process {name}");
+    }
+    format!(
+        "{} {}",
+        crate::logs::display_name(&command.record.kind),
+        command.record.name
+    )
+}
+
+/// One Process Step as `show` and the Console details print it.
+pub(crate) struct ShownStep {
+    pub message: String,
+    pub result: Option<std::path::PathBuf>,
+}
+
+/// Each Process Step's Command log line, and the result file when the Step wrote one.
+pub(crate) fn process_steps(command_log: &std::path::Path) -> Vec<ShownStep> {
+    let Ok(log) = std::fs::read_to_string(command_log) else {
+        return Vec::new();
+    };
+    let results = command_log.with_extension("steps");
+    log.lines()
+        .filter_map(step_message)
+        .map(|message| {
+            let result = step_name(message)
+                .map(|name| results.join(format!("{name}.txt")))
+                .filter(|path| path.is_file());
+            ShownStep {
+                message: message.to_string(),
+                result,
+            }
+        })
+        .collect()
+}
+
+fn print_steps(command: &Command, indent: &str) {
+    if command.record.kind != "Process" {
+        return;
+    }
+    for step in process_steps(&command.command_log) {
+        println!("{indent}{}", step.message);
+        if let Some(path) = &step.result {
+            println!("{indent}result: {}", path.display());
+        }
+    }
+}
+
+fn step_message(line: &str) -> Option<&str> {
+    match crate::progress::ChildLine::of(line) {
+        crate::progress::ChildLine::Own(message) if message.starts_with("step ") => Some(message),
+        _ => None,
+    }
+}
+
+/// New ambiguous names are JSON strings. Keep reading earlier plain names
+/// for Command logs written before quoted Step identities were introduced.
+fn step_name(message: &str) -> Option<String> {
+    let rest = message.strip_prefix("step ")?;
+    if rest.starts_with('"') {
+        let mut names = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+        let name = names.next()?.ok()?;
+        return rest[names.byte_offset()..]
+            .starts_with(": ")
+            .then_some(name);
+    }
+    let colon = duration_separator(rest)?;
+    let name = &rest[..colon];
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn duration_separator(rest: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(at) = rest[from..].find(": ") {
+        let absolute = from + at;
+        if starts_with_duration(&rest[absolute + 2..]) {
+            return Some(absolute);
+        }
+        from = absolute + 2;
+    }
+    None
+}
+
+fn starts_with_duration(text: &str) -> bool {
+    let mut words = text.split(' ');
+    let Some(first) = words.next() else {
+        return false;
+    };
+    if let Some(hours) = first.strip_suffix('h') {
+        return is_uint(hours)
+            && words
+                .next()
+                .is_some_and(|word| word.strip_suffix('m').is_some_and(is_uint))
+            && words
+                .next()
+                .is_some_and(|word| word.strip_suffix('s').is_some_and(is_uint));
+    }
+    if let Some(minutes) = first.strip_suffix('m') {
+        return is_uint(minutes)
+            && words
+                .next()
+                .is_some_and(|word| word.strip_suffix('s').is_some_and(is_uint));
+    }
+    first.strip_suffix('s').is_some_and(is_uint)
+}
+
+fn is_uint(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn print(command: Observation<'_>) -> Result<()> {
     match command {
         Observation::Record(command) => print_details(command, "")?,
@@ -57,10 +168,12 @@ fn print(command: Observation<'_>) -> Result<()> {
 }
 
 fn print_details(command: &Command, indent: &str) -> Result<()> {
+    if let Some(account) = &command.account {
+        println!("{indent}[{account}]");
+    }
     println!(
-        "{indent}{} {} · {}",
-        crate::logs::display_name(&command.record.kind),
-        command.record.name,
+        "{indent}{} · {}",
+        shown_heading(command),
         super::stage_text(command)
     );
     if let Some(issue) = &command.record.issue {
@@ -87,6 +200,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
     if let Some(event) = command.latest_event() {
         println!("{indent}{event}");
     }
+    print_steps(command, indent);
     super::print_tickets(&command.record, &format!("{indent}  "));
     for child in command.dispatched.iter().chain(&command.children) {
         print_details(child, &format!("{indent}  "))?;
@@ -96,22 +210,21 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot =
-        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
         #[derive(Serialize)]
-        struct Show<'a> {
+        struct Show {
             version: u32,
             hostname: String,
-            command: crate::logs::reading::Detailed<'a>,
+            command: serde_json::Value,
         }
         println!(
             "{}",
             serde_json::to_string_pretty(&Show {
                 version: 1,
                 hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: command.details()?,
+                command: crate::logs::metrics::details(&snapshot, command)?,
             })?
         );
     } else {
@@ -122,7 +235,7 @@ pub fn show(input: &str, json: bool) -> Result<()> {
 
 pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;
     let path = selected_log(command, session)?;

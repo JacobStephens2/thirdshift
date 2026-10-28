@@ -14,10 +14,17 @@ use crate::issue::IssueUrl;
 /// A Pass owns its dispatched work in the same process and atomic record.
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "read_command")]
     pub command: CommandRecord,
     #[serde(default)]
     pub dispatched: Vec<CommandRecord>,
+}
+
+fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRecord, D::Error> {
+    // With arbitrary_precision, Serde's flattened buffer represents fractional
+    // numbers as maps. Value restores them before typed metrics read their f64s.
+    let value = serde_json::Value::deserialize(reader)?;
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl CommandTree {
@@ -76,6 +83,8 @@ pub(super) struct CommandRecord {
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
+    #[serde(default)]
+    pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
@@ -90,8 +99,14 @@ pub(super) struct CommandRecord {
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub security_findings: Vec<crate::security::RecordedFinding>,
+    /// Findings this dispatched Security fix addresses, kept before launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_fix_findings: Vec<crate::security::RecordedFinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<crate::evals::experiment::Description>,
+    /// The Custom process name. The selector in `name` stays `process-<name>-<stamp>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -179,6 +194,7 @@ macro_rules! stage_names {
 }
 
 stage_names! {
+    ProcessStep => "Process Step",
     Implement => "implement",
     CodeReview => "Code review",
     Resume => "Resume",
@@ -200,6 +216,8 @@ stage_names! {
     ArmBuilds => "Arm builds",
     EvalTasks => "Eval tasks",
     Trials => "Trials",
+    Sampling => "sampling",
+    Grading => "grading",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -216,7 +234,9 @@ impl StageName {
             | Work::PickupRun(_)
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
-            | Work::Experiment(_) => Self::DispatchedRun,
+            | Work::ScoringRun(_)
+            | Work::Experiment(_)
+            | Work::Process { .. } => Self::DispatchedRun,
         }
     }
 
@@ -229,12 +249,45 @@ impl StageName {
             .any(|stage| stage.name() == name)
     }
 
+    /// Stages entered by Sessions, as distinct from delivery or dispatch work.
+    pub(super) fn is_session(name: &str) -> bool {
+        [
+            Self::Implement,
+            Self::Resume,
+            Self::Repair,
+            Self::SpecReview,
+            Self::SecurityReview,
+            Self::ArchitectureReview,
+            Self::SecurityAudit,
+            Self::SecurityReproduction,
+            Self::SecurityFixPublishing,
+        ]
+        .into_iter()
+        .any(|stage| stage.name() == name)
+    }
+
     pub(super) fn known(name: &str) -> bool {
         Self::order(name) != usize::MAX
     }
 }
 
 impl CommandRecord {
+    /// The Custom process's own name. An older record with no `process_name`
+    /// falls back to the selector in `name`.
+    pub(super) fn process_label(&self) -> Option<&str> {
+        (self.kind == "Process").then(|| self.process_name.as_deref().unwrap_or(self.name.as_str()))
+    }
+
+    /// `Process <name> on <repo>`, or `Process <name> · <repo>#<n>` when the
+    /// record names an issue. Status text adds the kind word itself.
+    pub(super) fn process_heading(&self) -> Option<String> {
+        let name = self.process_label()?;
+        Some(match self.issue.as_ref() {
+            Some(issue) => format!("Process {name} · {}#{}", self.repository, issue.number),
+            None => format!("Process {name} on {}", self.repository),
+        })
+    }
+
     /// The next transition closes a stage; only a recorded outcome closes the
     /// final stage. A live caller can supply its single sampled observation time.
     pub fn stage_times(
@@ -268,8 +321,14 @@ impl CommandRecord {
             .chain(self.session_log.as_ref())
     }
 
-    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
-        self.ended_at = Some(now.to_rfc3339());
+    pub fn finish(
+        &mut self,
+        account: &crate::run_ending::Account<'_>,
+        outside: &mut impl super::effects::Outside,
+        ranges: &super::usual_range::UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
         self.cause = account
             .ended
@@ -279,6 +338,14 @@ impl CommandRecord {
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
+        if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
+            self.run_metrics = Some(super::run_metrics::RunMetrics::of(
+                self,
+                ranges,
+                outside,
+                unaddressed_findings,
+            ));
+        }
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -300,14 +367,16 @@ impl CommandRecord {
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
+            Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
+            Work::Process { name, .. } => format!("process-{name}-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }
         };
         Self {
-            version: 1,
+            version: 2,
             kind: if matches!(work, Work::BaseFix(_)) {
                 "Base fix".into()
             } else {
@@ -328,6 +397,7 @@ impl CommandRecord {
             stages: Vec::new(),
             session_log: None,
             outcome: None,
+            run_metrics: None,
             cause: None,
             issue_branch: None,
             pull_request: None,
@@ -336,7 +406,12 @@ impl CommandRecord {
             tickets: Vec::new(),
             security_findings_waiting: false,
             security_findings: Vec::new(),
+            security_fix_findings: Vec::new(),
             experiment: None,
+            process_name: match work {
+                Work::Process { name, .. } => Some(name.to_string()),
+                _ => None,
+            },
         }
     }
 

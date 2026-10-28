@@ -17,6 +17,42 @@ fn start_console(home: &Path, value: &Value) -> Console {
 }
 
 #[test]
+fn waterfall_choices_name_issues_and_keep_untitled_commands_selectable() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("merged"), 0);
+    let mut untitled = record(home.path(), 8, Some("failed"), 1);
+    untitled["issue"]["title"] = Value::Null;
+    write_record(home.path(), 8, &untitled);
+    let mut experiment = record(home.path(), 9, Some("completed"), 2);
+    experiment["issue"] = Value::Null;
+    experiment["name"] = json!("experiment-fixture");
+    write_record(home.path(), 9, &experiment);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let page = console
+        .get("/waterfall?command=widgets%237")
+        .text()
+        .unwrap();
+    let choices = page
+        .split("<details class=\"command-choices\">")
+        .nth(1)
+        .unwrap()
+        .split("</details>")
+        .next()
+        .unwrap();
+    let title = "Widgets &#60;script&#62;alert(1)&#60;/script&#62;";
+    let (summary, chips) = choices.split_once("</summary>").unwrap();
+    assert!(summary.contains(title), "{summary}");
+    assert!(chips.contains(title), "{chips}");
+    assert!(!choices.contains("<script>"), "{choices}");
+    assert!(choices.contains("acme/widgets#8 · failed</a>"), "{choices}");
+    assert!(
+        choices.contains("experiment-fixture · completed</a>"),
+        "{choices}"
+    );
+}
+
+#[test]
 fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() {
     let home = tempfile::tempdir().unwrap();
     let dir = home

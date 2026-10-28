@@ -56,7 +56,8 @@ async function observe(previous, currentGeneration) {
     let notification;
     try {
       notification = new Notification(`${rows.length} need you · ${host}`, {
-        body: `${text('.subject')} · ${text('.issue-title')} · ${text('.state')}`,
+        // Lead with the state: a narrow toast cuts the body off after a few words.
+        body: `${text('.state')} · ${text('.subject')} · ${text('.issue-title')}`,
         icon: '/assets/favicon-urgent.svg'
       });
     } catch {
@@ -79,7 +80,7 @@ function sync() {
   button.disabled = !!reason;
   button.setAttribute('aria-pressed', String(on));
   button.textContent = on ? 'Turn notifications off' : 'Turn notifications on';
-  status.textContent = reason || (on ? 'Notifications on for this browser while a Console tab is open.' : 'Notifications off for this browser.');
+  status.textContent = reason || '';
   if (!on) {
     generation++;
     stopWatching?.();

@@ -38,19 +38,34 @@ const POLL: Duration = Duration::from_millis(100);
 /// alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    /// A Ticket's Run in a Spec run, into the Spec branch.
-    Ticket { spec_branch: String },
-    /// A Base fix, into the Base branch of the Run that started it. It sees
-    /// no Inherited failures and starts no Base fix of its own.
-    BaseFix { base: String },
+    /// A Ticket's Run in a Spec run, into the Spec branch, with the Spec
+    /// PR the Spec run had captured when it started the Ticket, if any.
+    Ticket {
+        spec_branch: String,
+        spec_pr: Option<SpecPr>,
+    },
+    /// A Base fix, into the Base branch of the Run that started it, with
+    /// that Run's Spec PR when it is a Ticket's Run. It sees no Inherited
+    /// failures and starts no Base fix of its own.
+    BaseFix {
+        base: String,
+        spec_pr: Option<SpecPr>,
+    },
 }
 
 impl Kind {
     /// The Base branch the child Run is given.
     pub fn base(&self) -> &str {
         match self {
-            Kind::Ticket { spec_branch } => spec_branch,
-            Kind::BaseFix { base } => base,
+            Kind::Ticket { spec_branch, .. } => spec_branch,
+            Kind::BaseFix { base, .. } => base,
+        }
+    }
+
+    /// The Spec PR a Self-merge into a Spec branch depends on, if any.
+    pub fn spec_pr(&self) -> Option<&SpecPr> {
+        match self {
+            Kind::Ticket { spec_pr, .. } | Kind::BaseFix { spec_pr, .. } => spec_pr.as_ref(),
         }
     }
 
@@ -61,6 +76,14 @@ impl Kind {
             Kind::BaseFix { .. } => BASE_FIX_INTO,
         }
     }
+}
+
+/// The Spec PR a Ticket's Self-merge into its Spec branch depends on: its
+/// number, and the Base branch the Spec run chose for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecPr {
+    pub number: u64,
+    pub base: String,
 }
 
 /// What a child Run is given by the Run that starts it.
@@ -85,6 +108,10 @@ pub struct Given {
 /// this module writes them and reads them back.
 const SPEC_BRANCH: &str = "--spec-branch";
 
+/// The hidden argument that gives a child Run its [`SpecPr`], followed
+/// by the Spec PR's number and the Spec run's Base branch.
+const SPEC_PR: &str = "--spec-pr";
+
 /// The hidden argument that makes a child Run a [`Kind::BaseFix`], followed
 /// by the Base branch of the Run that started it.
 const BASE_FIX_INTO: &str = "--base-fix-into";
@@ -105,6 +132,7 @@ const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
 const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
 const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
+const DELIVERY_LIMITS: &str = "--delivery-limits";
 
 /// The hidden argument followed by the command that starts the Spec run
 /// again with a Base fix allowed, for the child Run to offer: it asks
@@ -139,7 +167,7 @@ const SECURITY_REVIEW_EFFORT: &str = "--security-review-effort";
 impl Given {
     /// The hidden arguments that give a child Run this, as [`Reader`] reads
     /// them back.
-    fn to_args(&self) -> Vec<&str> {
+    fn to_args(&self) -> Vec<String> {
         let mut args = vec![
             self.kind.hidden_argument(),
             self.kind.base(),
@@ -165,6 +193,21 @@ impl Given {
         append_choice(&mut args, &self.asks.harness, SESSION_FLAGS);
         if let Some(security) = &self.asks.security_review_harness {
             append_choice(&mut args, security, REVIEW_FLAGS);
+        }
+        let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        if let Some(spec_pr) = self.kind.spec_pr() {
+            args.extend([
+                SPEC_PR.to_string(),
+                spec_pr.number.to_string(),
+                spec_pr.base.clone(),
+            ]);
+        }
+        if self.asks.delivery_limits != crate::delivery::Limits::default() {
+            args.extend([
+                DELIVERY_LIMITS.to_string(),
+                serde_json::to_string(&self.asks.delivery_limits)
+                    .expect("Delivery limits serialize"),
+            ]);
         }
         args
     }
@@ -252,7 +295,9 @@ impl PendingChoice {
 /// takes itself.
 #[derive(Default)]
 pub struct Reader {
+    delivery_limits: Option<crate::delivery::Limits>,
     kind: Option<Kind>,
+    spec_pr: Option<SpecPr>,
     stamp: Option<String>,
     command: Option<logs::CommandKind>,
     base_fix: Option<BaseFixAsk>,
@@ -283,6 +328,15 @@ impl Reader {
             None => bail!("missing {missing}"),
         };
         match arg {
+            DELIVERY_LIMITS => {
+                not_yet_given(&self.delivery_limits, arg)?;
+                let limits: crate::delivery::Limits =
+                    serde_json::from_str(&value("Delivery limits")?)?;
+                if limits.repair_cap > crate::delivery::MAX_REPAIRS {
+                    bail!("Delivery limits cannot raise the Repair cap");
+                }
+                self.delivery_limits = Some(limits);
+            }
             SECURITY_REVIEW => {
                 if self.security_review {
                     bail!("repeated argument: {arg}");
@@ -299,9 +353,30 @@ impl Reader {
                 not_yet_given(&self.kind, arg)?;
                 let base = value("Base branch")?;
                 self.kind = Some(if arg == SPEC_BRANCH {
-                    Kind::Ticket { spec_branch: base }
+                    Kind::Ticket {
+                        spec_branch: base,
+                        spec_pr: None,
+                    }
                 } else {
-                    Kind::BaseFix { base }
+                    Kind::BaseFix {
+                        base,
+                        spec_pr: None,
+                    }
+                });
+            }
+            SPEC_PR => {
+                not_yet_given(&self.spec_pr, arg)?;
+                let number = value("Spec PR number")?;
+                let number = number
+                    .parse()
+                    .ok()
+                    .filter(|number| *number > 0)
+                    .with_context(|| {
+                        format!("{arg} must be followed by a PR number, not {number}")
+                    })?;
+                self.spec_pr = Some(SpecPr {
+                    number,
+                    base: value("Base branch")?,
                 });
             }
             STAMP => {
@@ -339,8 +414,21 @@ impl Reader {
     /// it is one. A kind needs a stamp and a Harness, and the other hidden
     /// arguments a kind.
     pub fn finish(self) -> Result<Option<Given>> {
-        let Some(kind) = self.kind else {
+        let kind = match (self.kind, self.spec_pr) {
+            (Some(Kind::Ticket { spec_branch, .. }), Some(spec_pr)) => Some(Kind::Ticket {
+                spec_branch,
+                spec_pr: Some(spec_pr),
+            }),
+            (Some(Kind::BaseFix { base, .. }), Some(spec_pr)) => Some(Kind::BaseFix {
+                base,
+                spec_pr: Some(spec_pr),
+            }),
+            (None, Some(_)) => bail!("only a child Run is given {SPEC_PR}"),
+            (kind, None) => kind,
+        };
+        let Some(kind) = kind else {
             if self.command.is_some()
+                || self.delivery_limits.is_some()
                 || self.stamp.is_some()
                 || self.base_fix.is_some()
                 || self.security_review
@@ -376,6 +464,7 @@ impl Reader {
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             asks: ChildAsks {
+                delivery_limits: self.delivery_limits.unwrap_or_default(),
                 harness,
                 security_review_harness,
                 security_review_default,
@@ -397,6 +486,8 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 /// How a child Run ended.
 #[derive(Debug)]
 pub enum Ended {
+    /// Diagnosis completed, but the Ticket remains open needing information.
+    NotReproduced { comment_url: String },
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
     Reached {
@@ -749,8 +840,12 @@ impl Handle {
             .expect("a reaped Run without a wait error has a status");
         let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
         let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
+        let not_reproduced = reader.not_reproduced().map(String::from);
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
+            Ok(_) if not_reproduced.is_some() => Ended::NotReproduced {
+                comment_url: not_reproduced.unwrap(),
+            },
             Ok(pr_url) => Ended::Reached {
                 pr_url,
                 base_fix: ending.base_fix,
@@ -848,19 +943,41 @@ mod tests {
     fn ticket() -> Kind {
         Kind::Ticket {
             spec_branch: "issue-237".to_string(),
+            spec_pr: None,
+        }
+    }
+
+    fn ticket_with_its_spec_pr() -> Kind {
+        Kind::Ticket {
+            spec_branch: "issue-237".to_string(),
+            spec_pr: Some(SpecPr {
+                number: 240,
+                base: "main".to_string(),
+            }),
         }
     }
 
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
+        }
+    }
+
+    fn base_fix_into_a_spec_branch() -> Kind {
+        Kind::BaseFix {
+            base: "issue-237".to_string(),
+            spec_pr: Some(SpecPr {
+                number: 240,
+                base: "main".to_string(),
+            }),
         }
     }
 
     /// What a child Run started with `args` reads back that it was given, as
     /// the argument parser takes each argument it doesn't recognise itself.
-    fn read(args: &[&str]) -> Result<Option<Given>> {
-        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    fn read(args: &[impl AsRef<str>]) -> Result<Option<Given>> {
+        let args: Vec<String> = args.iter().map(|arg| arg.as_ref().to_string()).collect();
         match crate::args::parse(&args)? {
             crate::args::Command::Run(run) => Ok(run.given),
             _ => panic!("{args:?}: not a Run"),
@@ -894,10 +1011,15 @@ mod tests {
         let harnesses = [on_claude, on_opus];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
         let securities = [(false, false), (true, false), (false, true), (true, true)];
-        for ((kind, harness), security_review_harness) in [ticket(), base_fix()]
-            .into_iter()
-            .zip(harnesses.iter().cycle())
-            .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
+        for ((kind, harness), security_review_harness) in [
+            ticket(),
+            ticket_with_its_spec_pr(),
+            base_fix(),
+            base_fix_into_a_spec_branch(),
+        ]
+        .into_iter()
+        .zip(harnesses.iter().cycle())
+        .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
             for (base_fix, (security_fix, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]
@@ -910,6 +1032,7 @@ mod tests {
                     command: logs::CommandKind::Issue,
                     base_fix,
                     asks: ChildAsks {
+                        delivery_limits: crate::delivery::Limits::default(),
                         harness: harness.clone(),
                         security_review_harness: security_review_harness.clone(),
                         security_review_default: security_review.then(|| Choice {
@@ -927,8 +1050,8 @@ mod tests {
                 // which is a name and, but for `--allow-base-fix`, its value.
                 for at in [0, 2, 4, written.len()] {
                     let mut args = written.clone();
-                    args.insert(at, URL);
-                    args.insert(at, "no-merge");
+                    args.insert(at, URL.to_string());
+                    args.insert(at, "no-merge".to_string());
 
                     assert_eq!(read(&args).unwrap(), Some(given.clone()), "{args:?}");
                 }

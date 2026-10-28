@@ -243,6 +243,11 @@ fn serve(listener: UnixListener, shared: Arc<Shared>, shutdown: &AtomicBool) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
+                // macOS hands out accepted sockets non-blocking like their
+                // listener, which would end a tunnel at its first idle read.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let shared = Arc::clone(&shared);
                 std::thread::Builder::new()
                     .name("thirdshift-trial-proxy-conn".into())
@@ -775,6 +780,8 @@ mod tests {
         provider
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
+        // A tunnel sits idle between requests; the relay must wait for it.
+        std::thread::sleep(Duration::from_millis(200));
         client.get_mut().write_all(b"request").unwrap();
         let mut request = [0; 7];
         provider.read_exact(&mut request).unwrap();

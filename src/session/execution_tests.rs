@@ -64,6 +64,7 @@ echo '{{"type":"step_start","sessionID":"s1","part":{{}}}}'
             .args(["--exact", test, "--nocapture"])
             .env(FIXTURE, self.0.path())
             .env("PATH", path);
+        crate::test_support::isolate_git_config(&mut command);
         command
     }
 
@@ -105,7 +106,7 @@ fn execute_session(root: &Path) -> anyhow::Error {
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(
-        Command::new("git")
+        crate::test_support::git_command()
             .args(["init", "-q"])
             .arg(&worktree)
             .status()
@@ -368,7 +369,7 @@ fn with_review_sessions(
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(
-        Command::new("git")
+        crate::test_support::git_command()
             .args(["init", "-q"])
             .arg(&worktree)
             .status()
@@ -441,6 +442,31 @@ fn keeps_review_reports_beside_each_harness_session_log() {
 }
 
 #[test]
+fn shell_git_fixtures_ignore_global_and_system_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("host.gitconfig");
+    fs::write(&config, "[core]\n ignoreCase = invalid\n").unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session::execution_tests::keeps_review_reports_beside_each_harness_session_log",
+            "--nocapture",
+        ])
+        .env_remove(FIXTURE)
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_SYSTEM", &config)
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn missing_review_reports_get_a_progress_line_and_the_run_carries_on() {
     if let Some(root) = std::env::var_os(FIXTURE) {
         let root = Path::new(&root);
@@ -470,6 +496,64 @@ fn missing_review_reports_get_a_progress_line_and_the_run_carries_on() {
         stderr.contains("implement: no review reports were left; carrying on"),
         "{stderr}"
     );
+}
+
+#[test]
+fn a_symlink_review_report_is_not_kept_and_the_run_carries_on() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let (result, log) = execute_review(root, Harness::OpenCode);
+        result.unwrap();
+        assert!(root.join("carried-on").exists());
+        let original = crate::logs::session::original(&log);
+        assert_eq!(
+            fs::read_to_string(original.with_extension("standards")).unwrap(),
+            "Standards report\nFiles read: src/session.rs\n"
+        );
+        assert!(
+            fs::symlink_metadata(original.with_extension("spec")).is_err(),
+            "a symlink spec report was kept"
+        );
+        assert!(
+            fs::symlink_metadata(original.with_extension("review-summary.json")).is_err(),
+            "a missing summary was kept"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("secret")).unwrap(),
+            "host secret\n"
+        );
+        for entry in fs::read_dir(root.join("logs")).unwrap() {
+            let entry = entry.unwrap();
+            let bytes = fs::read(entry.path()).unwrap();
+            assert!(
+                !bytes
+                    .windows(b"host secret".len())
+                    .any(|window| window == b"host secret"),
+                "kept {} contains the symlink target",
+                entry.path().display()
+            );
+        }
+        return;
+    }
+    let fixture = review_fixture(&format!(
+        r#"{LEAVE_REPORTS}
+printf 'host secret\n' > "$THIRDSHIFT_SESSION_TEST_DIR/secret"
+ln -sfn "$THIRDSHIFT_SESSION_TEST_DIR/secret" "$reports/spec.md"
+"#
+    ));
+    let output = fixture
+        .command(
+            "session::execution_tests::a_symlink_review_report_is_not_kept_and_the_run_carries_on",
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("implement: spec report is a symlink; not keeping it"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("no review reports were left"), "{stderr}");
 }
 
 #[test]

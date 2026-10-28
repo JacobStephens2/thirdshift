@@ -7,6 +7,9 @@ use crate::logs::Stage;
 /// What a session is run as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    /// A Custom process's numbered skill Step.
+    ProcessStep(usize),
+    ScoringGrader(usize),
     /// A Run's implement session, `implement`.
     Implementation,
     /// An Eval's review-only Code review, `code-review`.
@@ -37,6 +40,8 @@ impl Kind {
     /// The kind's token, in its Session trace's name and progress lines.
     pub fn token(self) -> String {
         match self {
+            Self::ProcessStep(n) => format!("process-step-{n}"),
+            Self::ScoringGrader(n) => format!("scoring-grader-{n}"),
             Self::Implementation => "implement".to_string(),
             Self::CodeReview => "code-review".to_string(),
             Self::SpecReview => "spec-review".to_string(),
@@ -73,6 +78,8 @@ impl Kind {
             .into_iter()
             .find(|kind| kind.token() == token)
             .or_else(|| numbered("repair-").map(Kind::Repair))
+            .or_else(|| numbered("process-step-").map(Kind::ProcessStep))
+            .or_else(|| numbered("scoring-grader-").map(Kind::ScoringGrader))
             .or_else(|| numbered("security-reproduction-").map(Kind::SecurityReproduction))
     }
 }
@@ -122,6 +129,9 @@ impl Logged {
     /// `Resume`; any other Resume keeps its kind's stage.
     pub fn stage(self) -> Stage {
         match (self.kind, self.resume) {
+            (Kind::ProcessStep(_), false) => Stage::ProcessStep,
+            (Kind::ProcessStep(_), true) => Stage::Resume,
+            (Kind::ScoringGrader(_), _) => Stage::Grading,
             (
                 Kind::Implementation
                 | Kind::CodeReview

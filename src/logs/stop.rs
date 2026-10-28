@@ -85,7 +85,7 @@ pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
 /// blocks waiting; the Console observes cleanup through its existing stream.
 pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     let path = snapshot.resolve(input)?.stop_target(input)?;
     let tree = read(&path)?;
     require_live(&tree.command)?;
@@ -118,16 +118,12 @@ pub(crate) struct Inspection {
 
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::details_for_user(config, chrono::Local::now(), input)?;
     let selected = snapshot.resolve(input)?;
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = serde_json::to_value(selected.observation.details()?)?;
+    let details = super::metrics::details(&snapshot, selected.observation)?;
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected

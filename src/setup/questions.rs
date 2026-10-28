@@ -160,10 +160,10 @@ pub fn ask(
         yes_or_no(
             outside,
             "Security runs may close a finding their fix merged?",
-            current.security_close.unwrap_or(false),
+            current.security_close.unwrap_or(true),
         )?
     } else {
-        current.security_close.unwrap_or(false)
+        current.security_close.unwrap_or(true)
     };
     let security_review = yes_or_no(
         outside,
@@ -306,6 +306,18 @@ fn ask_console(
     Ok(Some(ConsoleAccess {
         address,
         allowed_emails,
+        other_accounts: loop {
+            let saved = current.other_accounts.to_string();
+            let choice = answer(
+                outside,
+                "Other local accounts (none, readable, or comma-separated names)",
+                Some(&saved),
+            )?;
+            match crate::config::console::OtherAccounts::parse(&choice) {
+                Ok(setting) => break setting,
+                Err(error) => outside.say(error.to_string()),
+            }
+        },
     }))
 }
 

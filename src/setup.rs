@@ -836,6 +836,7 @@ mod tests {
             ("Run the Console?", "y"),
             ("Console's whole address", "https://thirdshift.example.com"),
             ("Allowed emails", "me@example.com, other@example.net"),
+            ("Other local accounts", ""),
         ]);
         let mut outside = Scripted {
             user_config: Some("[console] # my Console\naddress = '' # site\nallowed_emails = [] # people\nport = 9000 # local\n".into()),
@@ -1217,6 +1218,7 @@ address = \"\"
 port = 8711
 allowed_emails = []
 other_consoles = []
+other_accounts = \"none\"
 theme = \"focus-auto\"
 hidden_sections = []
 
@@ -1268,6 +1270,13 @@ effort = \"\"
 model = \"\"
 effort = \"\"
 
+[scoring]
+owners = []
+sample_size = 10
+harness = \"claude\"
+model = \"\"
+fallback_harness = \"codex\"
+fallback_model = \"\"
 [trial]
 memory_high = \"1G\"
 memory_max = \"2G\"

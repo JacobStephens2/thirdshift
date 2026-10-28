@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::{Command, Entry, Observation, Reader, Snapshot};
 use crate::config::UserConfig;
+use crate::logs::accounts::Source;
 use crate::logs::owner;
 
 #[derive(Clone, Copy, Serialize)]
@@ -30,6 +31,8 @@ impl std::fmt::Display for Kind {
 
 #[derive(Serialize)]
 pub(crate) struct Log {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub id: String,
     pub name: String,
     pub repository: String,
@@ -104,27 +107,42 @@ pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
 }
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
-    let root = &config.logs_dir;
-    list(&Snapshot::load(root, Local::now())?, root, selected_owner)
+    let mut logs = Vec::new();
+    for source in crate::logs::accounts::discover(config).logs {
+        let loaded = Snapshot::load(&source.root, Local::now())
+            .and_then(|snapshot| list(&snapshot, &source, None));
+        let listed = match loaded {
+            Ok(logs) => logs,
+            Err(_) if source.account.is_some() => continue,
+            Err(error) => return Err(error),
+        };
+        logs.extend(listed);
+    }
+    if let Some(owner) = selected_owner {
+        logs.retain(|log| log.owners.iter().any(|id| id == owner));
+    }
+    logs.sort_by(|a, b| (&a.account, &a.name).cmp(&(&b.account, &b.name)));
+    Ok(logs)
 }
 
 /// List the physically discovered files of the Snapshot's own capture.
 /// Session membership supplies ownership, never listing eligibility.
 pub(super) fn list(
     snapshot: &Snapshot,
-    root: &Path,
+    source: &Source,
     selected_owner: Option<&str>,
 ) -> Result<Vec<Log>> {
+    let root = &source.root;
     // A child Run keeps its own Sessions, while sharing its Command's log.
     let mut observed = BTreeMap::new();
     fn collect(
         command: &Command,
-        root: &Path,
+        source: &Source,
         ancestors: &[String],
         observed: &mut BTreeMap<PathBuf, Observed>,
     ) -> Result<()> {
         let mut owners = ancestors.to_vec();
-        owners.push(id(command.record_path.strip_prefix(root)?));
+        owners.push(source.id(&command.record_path)?);
         let subject = command
             .record
             .issue
@@ -166,13 +184,13 @@ pub(super) fn list(
             );
         }
         for child in command.dispatched.iter().chain(&command.children) {
-            collect(child, root, &owners, observed)?;
+            collect(child, source, &owners, observed)?;
         }
         Ok(())
     }
     for entry in &snapshot.commands {
         if let Entry::Record(command) = entry {
-            collect(command, root, &[], &mut observed)?;
+            collect(command, source, &[], &mut observed)?;
         }
     }
     let mut logs = Vec::new();
@@ -188,6 +206,9 @@ pub(super) fn list(
                 } else {
                     path.clone()
                 };
+                if source.account.is_some() && std::fs::File::open(&path).is_err() {
+                    continue;
+                }
                 let relative = path.strip_prefix(root)?;
                 let Observed {
                     live,
@@ -197,13 +218,14 @@ pub(super) fn list(
                     reader,
                 } = observed.remove(&path).unwrap_or_default();
                 if let Some(decoded) = owner::decode(&path) {
-                    owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
+                    owners.push(source.id(&decoded.command_log(&path))?);
                 }
                 logs.push(Log {
+                    account: source.account.clone(),
                     reader: reader
                         .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
                         .within(root),
-                    id: id(relative),
+                    id: source.id(&path)?,
                     name: relative.to_string_lossy().into_owned(),
                     repository: repository.clone(),
                     kind: if path.extension().is_some_and(|ext| ext == "jsonl") {
@@ -247,6 +269,9 @@ pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
         );
     } else {
         for log in logs {
+            if let Some(account) = &log.account {
+                print!("[{account}] ");
+            }
             println!(
                 "{} · {}{} · {} · {}",
                 log.id,

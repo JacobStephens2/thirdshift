@@ -41,6 +41,7 @@ pub enum Dispatch<'a> {
         issue: &'a IssueUrl,
         is_spec: bool,
         base: &'a str,
+        finding: &'a crate::security::RecordedFinding,
     },
     /// An Architect run's Architect plan.
     ArchitectPlan { plan: &'a IssueUrl, base: &'a str },
@@ -330,11 +331,16 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
+        let security_fix_findings = match &dispatch {
+            Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
+            _ => &[],
+        };
         let (issue, asks, base, is_spec) = match dispatch {
             Dispatch::SecurityFix {
                 issue,
                 is_spec,
                 base,
+                ..
             }
             | Dispatch::ReadyIssue {
                 issue,
@@ -365,6 +371,7 @@ impl Outside for LaunchAndGitHub<'_> {
                 Work::Run(issue)
             },
             self.harness,
+            security_fix_findings,
         );
         let ended = run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base });
         logs::dispatch_ended(&ended);
@@ -996,6 +1003,7 @@ mod in_memory {
                     issue,
                     is_spec,
                     base,
+                    ..
                 } => Call::DispatchSecurityFix {
                     issue: issue.number,
                     is_spec,
@@ -1128,8 +1136,10 @@ mod in_memory {
     pub fn ready_for_review() -> Ended {
         Ended {
             outcome: Ok(Reached {
-                pr_url: PR_URL.to_string(),
-                goal: Goal::ReadyForReview,
+                resolution: crate::run::Resolution::PullRequest {
+                    url: PR_URL.to_string(),
+                    goal: Goal::ReadyForReview,
+                },
                 log: None,
                 ticket_lines: Vec::new(),
             }),

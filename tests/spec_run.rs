@@ -1712,7 +1712,7 @@ fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
 /// The line thirdshift writes in the Spec PR's body once the Spec review has
 /// written it, when nothing chose the Harness, Model or Effort.
 const BUILT_WITH: &str =
-    "Built with claude · default model · default effort <!-- thirdshift:built-with -->";
+    "Built with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->";
 
 /// The linear Spec's Tickets checklist once every Ticket is done.
 const DONE_CHECKLIST: &str = "<!-- thirdshift:tickets -->
@@ -1875,7 +1875,10 @@ exit 1
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(spec_pr(&scenario)["body"], "untouched");
-    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(
+        &result.stderr,
+        "/pull/2 was retargeted from main to develop under this Spec run",
+    );
     assert_contains(&result.stderr, "#22 failed");
     assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
 }
@@ -1905,13 +1908,15 @@ gh fake pr issue-20 body '"untouched"'"#
         assert_contains(
             &result.stderr,
             if replacement {
-                "is closed, not open"
+                "/pull/2 was closed under this Spec run"
             } else {
-                "PR targets develop, not main"
+                "/pull/2 was retargeted from main to develop under this Spec run"
             },
         );
-        assert_contains(&result.stderr, "#22 landed");
-        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        // #22 started once the Spec PR was open, so its Self-merge checks it.
+        assert_contains(&result.stderr, "#22 failed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+        assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
         if replacement {
             assert_eq!(spec_pr(&scenario)["isDraft"], false);
         }
@@ -2253,6 +2258,51 @@ fn an_unready_label_keeps_a_ticket_from_running() {
         &result.stderr,
         "thirdshift: #21 unready: labelled wontfix\n",
     );
+}
+
+#[test]
+fn an_unready_tickets_outside_blockers_are_reported_in_the_checklist_log_and_record() {
+    let scenario = spec_of(&[(21, &[98, 99]), (22, &[21]), (23, &[])]);
+    scenario.issue_labelled(21, &["ready-for-human"]);
+    // The triage label is beyond the graph query's first label page.
+    let mut labels: Vec<_> = (0..40).map(|n| format!("other-{n}")).collect();
+    labels.push("Ready-For-Agent".to_string());
+    scenario.issue_labelled(99, &labels.iter().map(String::as_str).collect::<Vec<_>>());
+    scenario.issue_is(98, "CLOSED");
+    scenario.issue_titled(21, "Release the migration");
+    scenario.issue_titled(22, "Remove the old reader");
+    scenario.issue_titled(23, "Independent work");
+    scenario.issue_titled(99, "Fix the migration");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    let line =
+        "#21 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)";
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        &format!(
+            "- [ ] {line}\n- [ ] #22 blocked by #21\n- [x] #23 landed with https://github.com/acme/widgets/pull/1\n"
+        ),
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["23"]);
+    assert_contains(&result.stderr, &format!("thirdshift: {line}\n"));
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let logs = scenario.log_files(folder, "log");
+    assert_eq!(logs.len(), 1);
+    let log = std::fs::read_to_string(scenario.path(folder).join(&logs[0])).unwrap();
+    assert_contains(&log, line);
+
+    let shown = scenario.run(&["show", "widgets#20", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    let tickets = &shown["command"]["tickets"];
+    assert_eq!(tickets[0]["issue"]["title"], "Release the migration");
+    assert_eq!(tickets[1]["issue"]["title"], "Remove the old reader");
+    assert_eq!(tickets[2]["issue"]["title"], "Independent work");
+    assert_eq!(tickets[0]["blockers"].as_array().unwrap().len(), 1);
+    assert_eq!(tickets[0]["blockers"][0]["title"], "Fix the migration");
+    assert_eq!(tickets[1]["blockers"][0]["title"], "Release the migration");
 }
 
 #[test]
@@ -2664,7 +2714,7 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
         "{text}"
     );
     for part in [
-        "Cause:        Tickets not done: #21, #22\n",
+        "Cause:        Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)\n",
         "#21 failed: claude exited 1 (session trace: ",
         "#22 blocked by #21\n",
         "#23 landed with https://github.com/acme/widgets/pull/1\n",
@@ -3524,4 +3574,93 @@ fi
         "{args:?}"
     );
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+}
+
+#[test]
+fn issue_1471_a_spec_pr_closed_mid_run_starts_no_further_ticket() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[21])]);
+    scenario.agent_does_for(22, "gh fake pr issue-20 state '\"CLOSED\"'\nexit 1");
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "22"],
+        "{}",
+        result.stderr
+    );
+    assert!(pr_from(&scenario, "issue-23").is_none());
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_ticket_running_when_the_spec_pr_closes_is_not_self_merged() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}\ngh fake pr issue-20 state '\"CLOSED\"'\n",
+            agent_lands(22, "22.txt")
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let ticket_pr = pr_from(&scenario, "issue-22").unwrap();
+    assert_ne!(ticket_pr["state"], "MERGED", "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("#22: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_base_fix_into_the_spec_branch_is_not_self_merged_once_the_spec_pr_closes() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"
+gh fake pr issue-20 state '"CLOSED"'
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "#22: starting Base fix #23 into issue-20");
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_ne!(fix["state"], "MERGED", "{}", result.stderr);
+    assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_none());
 }

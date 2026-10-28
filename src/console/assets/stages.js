@@ -60,9 +60,14 @@ export function initStages(main, refresh) {
           offset: anchor ? anchor.getBoundingClientRect().left - bounds.left : 0
         };
       });
-      return { focus, grids };
+      const open = new Map([...main.querySelectorAll('details.stage-section')].map(section => [section.dataset.grid, section.open]));
+      return { focus, grids, open };
     },
-    restore({ focus, grids }) {
+    restore({ focus, grids, open }) {
+      // Repository folds stay as the reader left them.
+      for (const section of main.querySelectorAll('details.stage-section')) {
+        if (open.has(section.dataset.grid)) section.open = open.get(section.dataset.grid);
+      }
       for (const saved of grids) {
         const section = [...main.querySelectorAll('.stage-section')].find(node => node.dataset.grid === saved.key);
         const scroll = section?.querySelector('.stage-scroll');

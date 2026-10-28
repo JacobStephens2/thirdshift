@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use rand::{SeedableRng, seq::SliceRandom};
@@ -12,9 +12,9 @@ use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{Task, arms, store, workers::TrialResult};
+use super::{Task, arms, store, trial_results};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
-use crate::session::recording::{Input, Recording};
+use crate::session::private;
 use crate::{interrupt, progress, prompt};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -115,6 +115,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
     // Machine caps are read live, not fixed with the Bar.
     let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
+    let mut by_task: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for entry in trial_results::terminal(&experiment.directory)? {
+        by_task
+            .entry((entry.result().suite.clone(), entry.result().task.clone()))
+            .or_default()
+            .push(entry);
+    }
     for task in &experiment.tasks {
         interrupt::check()?;
         let key = Sha256::new()
@@ -127,17 +134,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             .join("graders")
             .join(format!("{key:x}"));
         fs::create_dir_all(&directory)?;
-        let mut results = Vec::new();
-        for path in store::result_paths(&experiment.directory)? {
-            let result: TrialResult = serde_json::from_slice(&fs::read(&path)?)?;
-            if result.suite == task.suite && result.task == task.name {
-                results.push((path, result));
-            }
-        }
+        let mut results = by_task
+            .remove(&(task.suite.clone(), task.name.clone()))
+            .unwrap_or_default();
         let expected = experiment.description.bar.trials_per_task[&task.suite] * 2;
         ensure!(results.len() == expected, "missing Trials for model Grader");
         let saved = directory.join("assessment.json");
-        let scores: BTreeMap<String, Score> = if saved.exists() {
+        let scores: BTreeMap<trial_results::ScoreTarget, Score> = if saved.exists() {
             serde_json::from_slice(&fs::read(&saved)?)?
         } else {
             let seed = experiment.description.bar.seed ^ u64::from_le_bytes(key[..8].try_into()?);
@@ -167,20 +170,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             let scores: BTreeMap<_, _> = results
                 .iter()
                 .zip(&packet.trials)
-                .map(|((path, _), trial)| {
+                .map(|(entry, trial)| {
                     let score = response
                         .scores
                         .iter()
                         .find(|score| score.label == trial.label)
                         .unwrap();
-                    Ok((
-                        path.file_name()
-                            .context("missing Trial filename")?
-                            .to_str()
-                            .context("invalid Trial filename")?
-                            .to_owned(),
-                        score.clone(),
-                    ))
+                    Ok((entry.target()?, score.clone()))
                 })
                 .collect::<Result<_>>()?;
             // Publish only a complete, validated response. On resume it can
@@ -188,119 +184,28 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             store::write(&saved, &scores)?;
             scores
         };
-        ensure!(
-            scores.len() == results.len(),
-            "saved Grader Scores do not cover Trials"
-        );
-        for (path, mut result) in results {
-            let name = path.file_name().unwrap().to_str().unwrap();
-            let score = scores.get(name).context("saved Grader Score missing")?;
-            result
-                .score
-                .as_mut()
-                .context("Trial has no mechanical Score")?
-                .with_model(score.clone());
-            store::write(&path, &result)?;
-        }
+        trial_results::apply_scores(&mut results, &scores)?;
     }
     Ok(())
 }
 
-fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<Packet> {
+fn packet(task: &Task, results: &[trial_results::Terminal]) -> Result<Packet> {
     let mut trials = Vec::new();
-    for (_, result) in results {
+    for entry in results {
+        let result = entry.result();
         let output = result.attempts.last().context("Trial has no attempts")?;
-        let report = |path: &Option<std::path::PathBuf>| -> Result<Option<String>> {
-            path.as_ref()
-                .map(|path| fs::read_to_string(path).map(|text| blind(&text)))
-                .transpose()
-                .map_err(Into::into)
-        };
+        let reports = output.reports.read_and_blind()?;
         trials.push(Trial {
             label: format!("trial-{}", trials.len() + 1),
             outcome: result.outcome,
-            standards: report(&output.reports.standards)?,
-            spec: report(&output.reports.spec)?,
+            standards: reports.standards,
+            spec: reports.spec,
         });
     }
     Ok(Packet {
         criteria: task.manifest.criteria.clone(),
         trials,
     })
-}
-
-pub(super) fn blind(text: &str) -> String {
-    enum Table {
-        Identities,
-        KeyValue,
-        Findings,
-    }
-
-    let fields = ["harness", "model", "effort", "arm"];
-    let mut table = None;
-    let mut blinded = String::new();
-    for line in text.lines() {
-        let normalized = line.to_ascii_lowercase().replace(['*', '_', '`'], "");
-        let normalized = normalized
-            .trim()
-            .trim_start_matches(['#', '>', '-', ' '])
-            .trim();
-        if normalized.contains('|') {
-            let cells: Vec<_> = normalized
-                .trim_matches('|')
-                .split('|')
-                .map(str::trim)
-                .collect();
-            // Findings can name a Model or Harness as evidence. Metadata
-            // tables instead identify Trials through columns or key/value rows.
-            let kind = table.get_or_insert_with(|| {
-                if cells.iter().any(|cell| fields.contains(cell)) {
-                    Table::Identities
-                } else if cells.len() == 2
-                    && (cells[1] == "value"
-                        || ["field", "key", "attribute", "property", "setting"].contains(&cells[0]))
-                {
-                    Table::KeyValue
-                } else {
-                    Table::Findings
-                }
-            });
-            // A Findings block can still smuggle metadata: a two-column row
-            // naming a field with a bare token value (| Harness | claude |)
-            // identifies the Trial, while genuine finding evidence is a
-            // sentence. Drop the former even when the block latched as
-            // Findings.
-            let metadata_row = cells.len() == 2
-                && cells.first().is_some_and(|cell| fields.contains(cell))
-                && cells[1].split_whitespace().count() <= 1;
-            if matches!(kind, Table::Identities)
-                || (matches!(kind, Table::KeyValue)
-                    && cells.first().is_some_and(|cell| fields.contains(cell)))
-                || metadata_row
-            {
-                continue;
-            }
-        } else {
-            table = None;
-        }
-        let identifying = fields.iter().any(|key| {
-            normalized == *key
-                || normalized
-                    .strip_prefix(key)
-                    .is_some_and(|rest| rest.trim_start().starts_with([':', '=']))
-        });
-        if identifying
-            || ["baseline", "candidate", "baseline arm", "candidate arm"].contains(&normalized)
-            || ["built with", "generated with", "co-authored-by:"]
-                .iter()
-                .any(|prefix| normalized.starts_with(prefix))
-        {
-            continue;
-        }
-        blinded.push_str(line);
-        blinded.push('\n');
-    }
-    blinded
 }
 
 fn grade(
@@ -310,7 +215,6 @@ fn grade(
     timeout: u64,
     caps: &crate::scope::Caps,
 ) -> Result<Response> {
-    crate::resources::wait()?;
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
@@ -321,57 +225,28 @@ fn grade(
     let prompt = prompt::grader();
     fs::write(workspace.join("prompt.md"), &prompt)?;
     let choice = grader.choice();
-    let adapter = choice.harness.adapter();
-    let invocation = adapter.trial_session(&choice, None, &prompt);
-    let sandbox =
-        crate::sandbox::for_session(&choice, &grader.harness.path, &workspace, &workspace)?;
-    // The scope surrounds the sandbox, so the Harness and all its tools
-    // share the Grader's cap and inherit its raised OOM score.
-    let mut launched = match &sandbox {
-        Some(prepared) => prepared
-            .launch()
-            .scoped_command(&invocation.args, &workspace, caps)?,
-        None => {
-            crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?
-        }
-    };
-    launched
-        .command
-        .stderr(fs::File::create(workspace.join("stderr"))?)
-        .env("THIRDSHIFT_GRADER_PACKET", &input)
-        .env("THIRDSHIFT_GRADER_SCORES", &scores);
-    let scope = launched.scope;
-    // The unit name stays in the workspace for `journalctl --user -u` after.
-    fs::write(workspace.join("scope"), scope.unit())?;
-    let ended = Recording::for_trial().run(
-        "model Grader",
-        &choice,
-        &mut launched.command,
-        Input {
-            prompt: &prompt,
-            stdin: invocation.stdin.as_deref(),
-            deadline: Some(Instant::now() + Duration::from_secs(timeout)),
-            private: true,
-        },
-        &workspace.join("stdout.jsonl"),
-        adapter.interpretation(&workspace, &prompt),
-    );
-    interrupt::check()?;
-    let ended = ended.map_err(|_| {
-        if scope.oom_killed() {
-            anyhow::anyhow!(
-                "model Grader hit its memory cap ({}); see private Grader artifacts, \
-                 and raise the trial.memory_max User config to retry",
-                crate::scope::OOM_KILL_CAUSE
-            )
-        } else {
-            anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
-        }
+    private::run(private::Request {
+        kind: "model Grader",
+        choice: &choice,
+        binary: &grader.harness.path,
+        workspace: &workspace,
+        artifacts: &workspace,
+        prompt: &prompt,
+        timeout: Duration::from_secs(timeout),
+        caps,
+        environment: &[
+            ("THIRDSHIFT_GRADER_PACKET", &input),
+            ("THIRDSHIFT_GRADER_SCORES", &scores),
+        ],
     })?;
-    ensure!(
-        ended.killed.is_empty(),
-        "model Grader left unfinished background work"
-    );
-    serde_json::from_slice(&fs::read(scores).context("model Grader left no Scores")?)
+    let bytes =
+        private::read_session_file(&scores, private::SESSION_OUTPUT_MAX).map_err(|error| {
+            if private::is_missing_file(&error) {
+                anyhow::anyhow!("model Grader left no Scores")
+            } else {
+                error
+            }
+        })?;
+    serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
 }

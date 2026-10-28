@@ -1,9 +1,9 @@
-//! The Harness a Command's agent sessions run on, with its Model and Effort:
-//! one [`Choice`] per Command, made by the command, else the User config,
-//! else the default, checked before any work, passed on to every session and
-//! child Run, and recorded with what the Command did. A Security review is
-//! the one session that may run on another: the User config's
-//! `security.harness`, when set (ADR-0021).
+//! The Harness a session runs on, with its Model and Effort. A Command
+//! chooses one, by the command, else the User config, else the default,
+//! checked before any work. A Step defaults to that Command's choice and
+//! may name its own. A Security review may still run on another: the User
+//! config's `security.harness`, when set, falling back to the default
+//! Harness when it can't start (ADR-0021).
 
 use std::fmt;
 use std::process::{Command, Output};
@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 
 mod adapter;
 pub(crate) mod agy;
+pub(crate) mod built_with;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
@@ -27,7 +28,7 @@ mod skill_load;
 mod summary;
 pub(crate) mod version;
 
-pub use adapter::Adapter;
+pub use adapter::{Adapter, Probe};
 pub use summary::write as write_summary;
 
 /// The headless agent CLI a Command's sessions run on.
@@ -54,6 +55,11 @@ impl Harness {
     /// Its name, which is also its CLI's.
     pub fn name(self) -> &'static str {
         self.adapter().name()
+    }
+
+    /// Messages protocols report uncached input separately from cache usage.
+    pub(crate) fn input_excludes_cache(self) -> bool {
+        matches!(self, Self::Claude | Self::Grok)
     }
 
     /// Select the adapter once; session callers retain it for their lifetime.
@@ -151,9 +157,11 @@ pub enum ChosenBy {
     SecurityConfig,
     /// Neither: Claude Code, the default.
     Default,
+    /// A Process Step named its Harness.
+    Step,
 }
 
-/// The Harness, Model and Effort every session of a Command runs on.
+/// The Harness, Model and Effort a session runs on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
     pub harness: Harness,
@@ -220,9 +228,9 @@ impl Choice {
     }
 
     /// The line thirdshift writes in a pull request's body and a Run
-    /// notification, as in `Built with claude · claude-opus-5-5 · high`.
-    pub fn built_with(&self) -> String {
-        format!("Built with {self}")
+    /// notification, given the owning Command's detected Harness version.
+    pub fn built_with(&self, version: &str) -> String {
+        built_with::BuiltWith::new(self, version).to_string()
     }
 
     // Compatibility for the existing argument tests; production callers
@@ -240,6 +248,16 @@ impl Choice {
     /// Model and Effort through its adapter's catalog or minimal test call.
     /// Each failure says what to change.
     pub fn check(&mut self) -> Result<()> {
+        self.check_with_probe(Probe::Allow)
+    }
+
+    /// Settle catalog-backed choices without starting a trial session.
+    /// Invalid remote Models fail in the actual session instead.
+    pub fn check_without_probe(&mut self) -> Result<()> {
+        self.check_with_probe(Probe::Skip)
+    }
+
+    fn check_with_probe(&mut self, probe: Probe) -> Result<()> {
         let adapter = self.harness.adapter();
         let cli = adapter.name();
         if !on_path(cli) {
@@ -249,7 +267,7 @@ impl Choice {
                 self.chosen_by
             );
         }
-        adapter.check(self)
+        adapter.check(self, probe)
     }
 
     /// Check the Command and review before work. An unusable non-default
@@ -266,23 +284,33 @@ impl Choice {
         let Some(review) = security_review else {
             return Ok(()); // The review shares the checked Command's choice.
         };
-        if let Err(error) = review.check() {
+        review.check_review(default, Some(self))
+    }
+
+    /// Settle an implicitly chosen Security review with the same fallback
+    /// policy as a Ticket run. Explicit Step Harnesses use `check` instead.
+    pub fn check_security_review(&mut self, default: &mut Choice) -> Result<()> {
+        self.check_review(default, None)
+    }
+
+    fn check_review(&mut self, default: &mut Choice, checked: Option<&Choice>) -> Result<()> {
+        if let Err(error) = self.check() {
             crate::interrupt::check()?;
-            if review.harness == default.harness {
+            if self.harness == default.harness {
                 return Err(error).with_context(|| {
                     format!(
                         "the Security review's default Harness {} can't run",
-                        review.harness.name()
+                        self.harness.name()
                     )
                 });
             }
-            warn_review_fallback(review.harness, default.harness, &format!("{error:#}"));
-            if default.runs_as(self) {
-                *default = self.clone();
+            warn_review_fallback(self.harness, default.harness, &format!("{error:#}"));
+            if let Some(checked) = checked.filter(|checked| default.runs_as(checked)) {
+                *default = checked.clone();
             } else {
                 default.check()?;
             }
-            *review = default.clone();
+            *self = default.clone();
         }
         Ok(())
     }
@@ -324,13 +352,7 @@ impl fmt::Display for Choice {
     /// high`, saying `default model` or `default effort` for one left to the
     /// Harness.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} · {} · {}",
-            self.harness.name(),
-            self.model.as_deref().unwrap_or("default model"),
-            self.effort.as_deref().unwrap_or("default effort")
-        )
+        built_with::describe(self, f)
     }
 }
 
@@ -345,6 +367,7 @@ impl fmt::Display for ChosenBy {
                 "the default, as neither the harness flag nor harness.default in the User \
                  config names one"
             }
+            ChosenBy::Step => "the Step",
         })
     }
 }
@@ -483,7 +506,7 @@ mod tests {
 
     #[test]
     fn the_built_with_line_names_the_harness_model_and_effort_or_the_harnesss_default() {
-        for (chosen, line) in [
+        for (chosen, version, line) in [
             (
                 choice(
                     Harness::Claude,
@@ -491,18 +514,21 @@ mod tests {
                     "high",
                     ChosenBy::Command,
                 ),
-                "Built with claude · claude-opus-5-5 · high",
+                "2.1.11",
+                "Built with claude 2.1.11 · claude-opus-5-5 · high",
             ),
             (
                 Choice::default(),
-                "Built with claude · default model · default effort",
+                "unknown",
+                "Built with claude unknown · default model · default effort",
             ),
             (
                 choice(Harness::Codex, "", "max", ChosenBy::UserConfig),
-                "Built with codex · default model · max",
+                "codex-cli 0.160.0",
+                "Built with codex codex-cli 0.160.0 · default model · max",
             ),
         ] {
-            assert_eq!(chosen.built_with(), line);
+            assert_eq!(chosen.built_with(version), line);
         }
     }
 

@@ -420,6 +420,12 @@ PY
     let experiment = fixture.experiment();
     let pending = experiment["pending_rechecks"].as_array().unwrap();
     assert_eq!(pending.len(), 2);
+    let attempts = retention::attempts(&fixture, &experiment);
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     let baseline = pending
         .iter()
         .find(|trial| trial["arm"] == "baseline")
@@ -445,6 +451,11 @@ PY
     let checked = fixture.experiment();
     assert_eq!(checked["verdict"]["verdict"], "waiting_on_rechecks");
     assert_eq!(checked["pending_rechecks"].as_array().unwrap().len(), 1);
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     let check = fixture.scenario.run(&[
         "recheck",
         id,
@@ -456,6 +467,11 @@ PY
     assert_eq!(check.code, Some(0), "{}", check.stderr);
     assert_eq!(fixture.experiment()["verdict"]["verdict"], "pass");
     assert_eq!(fixture.experiment()["pending_rechecks"], json!([]));
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| !attempt.join("repository").exists())
+    );
 }
 
 #[test]

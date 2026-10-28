@@ -1,4 +1,56 @@
 use super::*;
+#[test]
+fn first_bug_backfill_keeps_closures_in_the_cutoffs_second() {
+    with_recorded_signal(
+        "github::execution_tests::first_bug_backfill_keeps_closures_in_the_cutoffs_second",
+        |_| {
+            let fixture = Fixture::new("");
+            // Emulate GitHub's strict '<' and inclusive '..' date operators.
+            // The bug closed at 15:00:00, before the exact 15:00:00.500 cutoff.
+            fixture.script(
+                r#"exec python3 - "$@" <<'PY'
+import datetime, json, sys
+search = next(arg[7:] for arg in sys.argv[1:] if arg.startswith('search='))
+window = next(word[7:] for word in search.split() if word.startswith('closed:'))
+parse = lambda value: datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+closed = '2026-10-24T15:00:00Z'
+at = parse(closed)
+if window.startswith('<='):
+    visible = at <= parse(window[2:])
+elif window.startswith('<'):
+    visible = at < parse(window[1:])
+else:
+    lower, upper = window.split('..')
+    visible = parse(lower) <= at <= parse(upper)
+bug = {
+    'url': 'https://github.com/acme/widgets/issues/8',
+    'title': 'Wrong answer', 'body': 'The answer should be 42.',
+    'closedAt': closed, 'repository': {'nameWithOwner': 'acme/widgets'},
+    'labels': {'nodes': [{'name': 'bug'}], 'pageInfo': {'hasNextPage': False}},
+    'timelineItems': {'nodes': [{'closer': None}]}
+}
+nodes = [bug] if visible else []
+print(json.dumps({'data': {'search': {
+    'issueCount': len(nodes), 'nodes': nodes,
+    'pageInfo': {'hasNextPage': False, 'endCursor': None}
+}}}))
+PY"#,
+            );
+            let end = chrono::DateTime::parse_from_rfc3339("2026-10-24T15:00:00.500Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let bugs = GitHub::new()
+                .closed_bugs(&["acme".into()], None, end)
+                .unwrap();
+            assert_eq!(
+                bugs.len(),
+                1,
+                "the first proposal window omitted its final second"
+            );
+        },
+    );
+}
+
 use crate::interrupt;
 use crate::test_support::with_recorded_signal;
 use std::fs;
@@ -1132,6 +1184,31 @@ esac
 }
 
 #[test]
+fn the_ticket_graph_fits_githubs_node_budget() {
+    with_recorded_signal(
+        "github::execution_tests::the_ticket_graph_fits_githubs_node_budget",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"exec python3 - "$@" <<'PY'
+import json, re, sys
+query = next(arg[6:] for arg in sys.argv[1:] if arg.startswith('query='))
+sub_issues = int(re.search(r'subIssues\(first: (\d+)', query).group(1))
+blockers = int(re.search(r'blockedBy\(first: (\d+)', query).group(1))
+ticket_labels, blocker_labels = map(int, re.findall(r'labels\(first: (\d+)', query))
+# GitHub counts possible nodes from every nested connection's requested size.
+nodes = sub_issues * (1 + ticket_labels + blockers * (1 + blocker_labels))
+if nodes > 500_000:
+    print('MAX_NODE_LIMIT_EXCEEDED: ' + str(nodes), file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({'data': {'repository': {'issue': {'subIssues': {'nodes': []}}}}}))
+PY"#,
+            );
+            assert!(GitHub::new().tickets(&issue()).unwrap().is_empty());
+        },
+    );
+}
+
+#[test]
 fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
     with_recorded_signal(
         "github::execution_tests::tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers",
@@ -1139,9 +1216,9 @@ fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
             let _fixture = Fixture::new(
                 r#"
 case "$*" in
-  *'nodes { url state }'*)
+  *'nodes { url title state labels(first: 40) { nodes { name } pageInfo { hasNextPage } } }'*)
     cat <<'JSON'
-{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","state":"OPEN"},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
+{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","title":"A foreign Ticket","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","title":"A local blocker","state":"OPEN","labels":{"nodes":[{"name":"Ready-For-Agent"}],"pageInfo":{"hasNextPage":false}}},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
 JSON
     ;;
   *) echo '{}' ;;
@@ -1150,6 +1227,16 @@ esac
             );
             let tickets = GitHub::new().tickets(&issue()).unwrap();
             assert_eq!(tickets.len(), 1);
+            assert_eq!(tickets[0].title.as_deref(), Some("A foreign Ticket"));
+            assert_eq!(
+                tickets[0].open_blockers[0].title.as_deref(),
+                Some("A local blocker")
+            );
+            assert!(
+                tickets[0].open_blockers[0]
+                    .labels
+                    .has(crate::labels::READY_FOR_AGENT)
+            );
             assert_eq!(
                 tickets[0].issue.url,
                 "https://github.com/other/widgets/issues/21"
@@ -1169,7 +1256,7 @@ esac
                 tickets[0]
                     .open_blockers
                     .iter()
-                    .map(|issue| issue.url.as_str())
+                    .map(|blocker| blocker.issue.url.as_str())
                     .collect::<Vec<_>>(),
                 ["https://github.com/acme/widgets/issues/21"]
             );

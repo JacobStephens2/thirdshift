@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::{ExitStatus, Output};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::said;
 use crate::interrupt;
@@ -77,11 +77,29 @@ pub struct Ended {
     pub session_id: Option<String>,
     pub killed: Vec<String>,
     pub final_message: Option<String>,
+    /// The protocol supplied a terminal result, independently of its text.
+    pub completed: bool,
 }
 
 impl Ended {
     pub fn killed_work(&self) -> Vec<&str> {
         self.killed.iter().map(String::as_str).collect()
+    }
+
+    /// One-shot callers require completed work and nonblank final text.
+    pub fn require_final_message(self, label: &str) -> Result<String> {
+        if !self.killed.is_empty() {
+            bail!(
+                "{label} ended with unfinished background work: {}",
+                self.killed.join("; ")
+            );
+        }
+        if !self.completed {
+            bail!("{label} ended before completing its turn");
+        }
+        self.final_message
+            .filter(|text| !text.trim().is_empty())
+            .with_context(|| format!("{label} ended without a final message"))
     }
 }
 
@@ -202,6 +220,16 @@ impl fmt::Display for SessionFailure {
 }
 
 impl std::error::Error for SessionFailure {}
+
+impl SessionFailure {
+    /// The Harness never ran: before any turn, it exited with the shell's
+    /// "cannot execute" (126) or "not found" (127). macOS runs a file it can't
+    /// execute through `/bin/sh`, which reports either, where Linux refuses to
+    /// spawn it at all.
+    pub fn never_launched(&self) -> bool {
+        self.before_first_turn && matches!(self.status.code(), Some(126 | 127))
+    }
+}
 
 impl Failure {
     fn session_error(self, cli: &'static str) -> anyhow::Error {

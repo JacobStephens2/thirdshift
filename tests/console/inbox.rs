@@ -1,4 +1,4 @@
-use super::{Console, configure, record};
+use super::{Console, configure, record, section};
 use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
@@ -22,7 +22,13 @@ fn ended_rows_distinguish_finish_age_from_run_duration() {
         html.contains(&format!("<time datetime=\"{}\">Ended ", end.to_rfc3339())),
         "{html}"
     );
-    assert!(html.contains(" UTC</time>"), "{html}");
+    assert!(
+        html.contains(&format!(
+            "Ended {}",
+            super::support::local_minute(&end.to_rfc3339())
+        )),
+        "{html}"
+    );
     assert!(!html.contains("2 hr 20 min"), "{html}");
 }
 
@@ -70,10 +76,24 @@ fn finish_instants_survive_offsets_and_nested_history() {
     write_record(home.path(), 7, &outer);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
-    assert!(html.contains("<time datetime=\"2026-10-23T19:03:18.964097412-04:00\">Ended Oct 23, 2026 at 23:03:18 UTC</time>"), "{html}");
+    let outer_end = "2026-10-23T19:03:18.964097412-04:00";
+    assert!(
+        html.contains(&format!(
+            "<time datetime=\"{outer_end}\">Ended {}",
+            super::support::local_minute(outer_end)
+        )),
+        "{html}"
+    );
     let nested = html.split("<ul class=\"children\">").nth(1).unwrap();
-    assert!(nested.contains("<time datetime=\"2026-10-23T19:03:17.705023444-04:00\">Ended Oct 23, 2026 at 23:03:17 UTC</time>"), "{nested}");
-    assert!(!nested.contains("23:03:18 UTC"), "{nested}");
+    let child_end = "2026-10-23T19:03:17.705023444-04:00";
+    assert!(
+        nested.contains(&format!(
+            "<time datetime=\"{child_end}\">Ended {}",
+            super::support::local_minute(child_end)
+        )),
+        "{nested}"
+    );
+    assert!(!nested.contains(outer_end), "{nested}");
 }
 
 #[test]
@@ -101,15 +121,9 @@ fn shared_ended_states_show_each_commands_finish() {
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
     for group in ["needs you", "ready for review", "done", "resolved"] {
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
+        let section = section(&html, group);
         assert!(section.contains("<time datetime="), "{group}: {section}");
-        assert!(section.contains(" UTC</time> · "), "{group}: {section}");
+        assert!(section.contains("</time> · </span>"), "{group}: {section}");
         assert!(section.contains(" ago</span>"), "{group}: {section}");
     }
     assert!(html.contains("0 sec ago"), "{html}");
@@ -133,9 +147,10 @@ fn retained_activity_finishes_show_dates_and_missing_finishes_stay_unknown() {
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
     assert!(
-        html.contains(
-            "<time datetime=\"2026-01-01T23:59:00-04:00\">Ended Jan 2, 2026 at 03:59:00 UTC</time>"
-        ),
+        html.contains(&format!(
+            "<time datetime=\"2026-01-01T23:59:00-04:00\">Ended {}",
+            super::support::local_minute("2026-01-01T23:59:00-04:00")
+        )),
         "{html}"
     );
     assert_eq!(html.matches("<time datetime=").count(), 1, "{html}");
@@ -178,9 +193,8 @@ fn idle_inbox_explains_missing_activity_before_the_folded_sections() {
         notice.contains("No Pass is currently recorded as skipped."),
         "{html}"
     );
-    assert!(notice.contains("href=\"/cronjobs\""), "{html}");
-    assert!(notice.contains("Activity logs"), "{html}");
-    assert!(notice.contains("thirdshift status"), "{html}");
+    let notice = notice.split("</section>").next().unwrap();
+    assert!(!notice.contains("scheduler's output"), "{notice}");
     assert!(html.find("No running Commands").unwrap() < html.find("id=\"group-1\"").unwrap());
     for page in ["history", "security"] {
         let html = console.get(&format!("/?page={page}")).text().unwrap();
@@ -233,8 +247,12 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
     );
     assert!(!notice.contains("<script>unsafe</script>"));
     assert!(!notice.contains("No Pass is currently recorded as skipped."));
-    assert!(notice.contains("href=\"#group-1\""), "{notice}");
-    assert!(notice.contains("href=\"#group-2\""), "{notice}");
+    // Needs you is its own folder, with its count; the notice doesn't repeat it.
+    assert!(!notice.contains("Ended problems"), "{notice}");
+    assert!(
+        notice.contains("href=\"/?section=ready-for-review\""),
+        "{notice}"
+    );
     assert!(
         !html.contains("aria-label=\"Idle Passes\""),
         "skip reasons should appear only once"
@@ -372,9 +390,10 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         (4, "ready for review", "Ready", false, false),
         (5, "needs you", "Failed", false, false),
     ] {
+        let issue_link = format!("href=\"https://github.com/acme/widgets/issues/{number}\"");
         let row = html
             .split("<li class=\"command\"")
-            .find(|row| row.contains(&format!(">acme/widgets#{number}<")))
+            .find(|row| row.contains(&issue_link))
             .expect(&html);
         assert!(row.contains(&format!("data-live=\"{live}\"")), "{row}");
         assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
@@ -382,17 +401,8 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
             row.contains(&format!("<span class=\"state\">{state}</span>")),
             "{row}"
         );
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
-        assert!(
-            section.contains(&format!(">acme/widgets#{number}<")),
-            "{section}"
-        );
+        let section = section(&html, group);
+        assert!(section.contains(&issue_link), "{section}");
         let item = json["commands"]
             .as_array()
             .unwrap()
@@ -436,17 +446,12 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let console = Console::start(binary, home.path());
     let html = console.get("/").text().unwrap();
-    let resolved = html
-        .split("data-group=\"resolved\"")
-        .nth(1)
-        .unwrap()
-        .split("</details>")
-        .next()
-        .unwrap();
-    assert!(resolved.contains(">acme/widgets#40<"), "{resolved}");
+    let resolved = section(&html, "resolved");
+    let issue_link = "href=\"https://github.com/acme/widgets/issues/40\"";
+    assert!(resolved.contains(issue_link), "{resolved}");
     let row = resolved
         .split("<li class=\"command\"")
-        .find(|row| row.contains(">acme/widgets#40<"))
+        .find(|row| row.contains(issue_link))
         .expect(resolved);
     assert!(
         row.contains("<p class=\"left\">left needs you: taken up by a later Command started at"),
@@ -584,4 +589,172 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
     assert!(html.contains("No running Commands"), "{html}");
     let json: Value = serde_json::from_str(&status(&["status", "--json"])).unwrap();
     assert_eq!(json["active_runs"], 0);
+}
+
+#[test]
+fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 1, Some("failed"), 0);
+    record(home.path(), 2, Some("merged"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let shown = |html: &str| -> Vec<String> {
+        html.split("<section id=\"group-")
+            .skip(1)
+            .filter(|section| !section.split('>').next().unwrap().contains(" hidden"))
+            .map(|section| {
+                section
+                    .split("data-group=\"")
+                    .nth(1)
+                    .unwrap()
+                    .split('"')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    };
+
+    // With no choice, the first section with rows opens, and every section is a folder.
+    let html = console.get("/").text().unwrap();
+    let folders = html
+        .split("aria-label=\"Inbox sections\"")
+        .nth(1)
+        .expect(&html)
+        .split("</nav>")
+        .next()
+        .unwrap();
+    for (group, slug) in [
+        ("needs you", "needs-you"),
+        ("ready for review", "ready-for-review"),
+        ("landing", "landing"),
+        ("working", "working"),
+        ("done", "done"),
+        ("resolved", "resolved"),
+    ] {
+        assert!(
+            folders.contains(&format!("href=\"/?section={slug}\"")),
+            "{group}: {folders}"
+        );
+    }
+    assert!(
+        folders.contains(
+            "href=\"/?section=needs-you\" data-group=\"needs you\" aria-current=\"page\""
+        ),
+        "{folders}"
+    );
+    assert_eq!(shown(&html), ["needs you"], "{html}");
+    // Both sections are still on the page, so a switch needs no request.
+    assert!(html.contains("data-group=\"done\""), "{html}");
+
+    let html = console.get("/?section=done").text().unwrap();
+    assert_eq!(shown(&html), ["done"], "{html}");
+    assert!(
+        html.contains("href=\"/?section=done\" data-group=\"done\" aria-current=\"page\""),
+        "{html}"
+    );
+
+    // An unknown section falls back to the default.
+    assert_eq!(
+        shown(&console.get("/?section=nonsense").text().unwrap()),
+        ["needs you"]
+    );
+
+    // A section hidden with Sections keeps a hidden folder, for Sections to
+    // show again, and is not shown when asked for.
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\nhidden_sections = [\"needs-you\"]\n",
+    )
+    .unwrap();
+    let html = console.get("/?section=needs-you").text().unwrap();
+    assert!(
+        html.contains("href=\"/?section=needs-you\" data-group=\"needs you\" hidden>"),
+        "{html}"
+    );
+    assert_eq!(shown(&html), ["done"], "{html}");
+}
+
+#[test]
+fn idle_inbox_folds_last_fired_passes_closed_on_load() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let root = home.path().join(".thirdshift/logs/acme/widgets");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("pickup.last-fired"),
+        chrono::Utc::now().to_rfc3339(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let notice = html
+        .split("aria-label=\"No running Commands\"")
+        .nth(1)
+        .expect(&html)
+        .split("</section>")
+        .next()
+        .unwrap();
+    let starts = notice
+        .split("<details id=\"pass-starts\"><summary>Last fired Passes:</summary>")
+        .nth(1)
+        .expect(notice)
+        .split("</details>")
+        .next()
+        .unwrap();
+    assert!(starts.contains("Pickup last fired"), "{starts}");
+    assert!(starts.contains("on acme/widgets"), "{starts}");
+}
+
+#[test]
+fn one_line_rows_carry_a_gist_of_outcome_and_what_a_title_less_pass_did() {
+    use super::write_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut pass = record(home.path(), 1, Some("failed"), 0);
+    pass["kind"] = json!("Pickup run");
+    pass["name"] = json!("pickup-fixture");
+    pass["issue"] = Value::Null;
+    let mut dispatched = record(home.path(), 1, Some("failed"), 0);
+    dispatched["kind"] = json!("Run");
+    dispatched["name"] = json!("acme/widgets#48");
+    dispatched["issue"]["number"] = json!(48);
+    dispatched["issue"]["title"] = json!("Finish a readback");
+    pass["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 1, &pass);
+    let mut quiet = record(home.path(), 2, Some("failed"), 0);
+    quiet["kind"] = json!("Pickup run");
+    quiet["name"] = json!("pickup-quiet");
+    quiet["issue"] = Value::Null;
+    quiet["cause"] = json!("codex exited 1");
+    write_record(home.path(), 2, &quiet);
+    record(home.path(), 3, Some("failed"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let heads: Vec<&str> = section(&html, "needs you")
+        .split("<div class=\"row-head\">")
+        .skip(1)
+        .map(|head| head.split("</div>").next().unwrap())
+        .collect();
+    let head = |subject: &str| {
+        *heads
+            .iter()
+            .find(|head| head.contains(subject))
+            .unwrap_or_else(|| panic!("{subject}: {heads:#?}"))
+    };
+    assert!(
+        head("pickup-fixture on")
+            .contains("<span class=\"gist\" title=\"failed · #48 Finish a readback\">failed · #48 Finish a readback</span>"),
+        "{heads:#?}"
+    );
+    assert!(
+        head("pickup-quiet on").contains(">failed · codex exited 1</span>"),
+        "{heads:#?}"
+    );
+    assert!(
+        head("acme/widgets#3").contains("<span class=\"gist\" title=\"failed\">failed</span>"),
+        "{heads:#?}"
+    );
 }

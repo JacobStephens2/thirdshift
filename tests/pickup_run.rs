@@ -13,6 +13,8 @@
 //! Asked for a Run notification, a pass that took an issue sends one naming
 //! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
+#[path = "pickup_run/base_ci.rs"]
+mod base_ci;
 mod support;
 
 use std::fs;
@@ -46,6 +48,14 @@ git add issue-{issue}.txt
 git commit -q -m "Work on {issue}"
 gh pr create --base {base} --head issue-{issue} --title "Work on {issue}" --body "Closes #{issue}"
 "#
+    )
+}
+
+/// A successful diagnosis followed by PR delivery for a bug-labelled issue.
+fn agent_fixes_bug(issue: u32, base: &str) -> String {
+    format!(
+        "{}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        agent_opens_pr(issue, base),
     )
 }
 
@@ -98,7 +108,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+    scenario.agent_does_for(7, &agent_fixes_bug(7, "main"));
 
     let result = scenario.run(&["pickup"]);
 
@@ -114,7 +124,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with(&format!(
-            "/thirdshift-implement {}\n",
+            "/thirdshift-diagnosing-bugs {}\n",
             scenario.issue_url(7)
         )),
         "{prompt}"
@@ -132,7 +142,7 @@ fn pickup_takes(extra: &[&str], taken: u32, left: u32) {
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+    scenario.agent_does_for(taken, &agent_fixes_bug(taken, "main"));
 
     let mut command = vec!["pickup"];
     command.extend(extra);
@@ -169,7 +179,7 @@ fn pickup_order_in_the_user_config_sets_which_ready_issue_is_run() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    scenario.agent_does_for(9, &agent_fixes_bug(9, "main"));
     scenario.user_config_is("[pickup]\norder = \"highest-first\"\n");
 
     let result = scenario.run(&["pickup"]);
@@ -188,7 +198,7 @@ fn a_pickup_order_flag_beats_pickup_order_in_the_user_config() {
         let scenario = Scenario::new();
         ready_issue(&scenario, 9, &["bug"]);
         ready_issue(&scenario, 7, &["bug"]);
-        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        scenario.agent_does_for(taken, &agent_fixes_bug(taken, "main"));
         scenario.user_config_is(&format!("[pickup]\norder = \"{configured}\"\n"));
 
         let result = scenario.run(&["pickup", flag]);
@@ -461,6 +471,30 @@ exec "$(dirname "$0")/real/gh" "$@"
 }
 
 #[test]
+fn pickup_reservation_records_the_host_holding_it() {
+    let scenario = Scenario::new();
+    let hostname = std::process::Command::new("hostname").output().unwrap();
+    assert!(hostname.status.success());
+    let hostname = String::from_utf8(hostname.stdout).unwrap();
+    let held = pickup_run_held_on_issue_7(&scenario);
+    let message = scenario.origin_git(&[
+        "show",
+        "-s",
+        "--format=%B",
+        "refs/heads/thirdshift/pickup/7",
+    ]);
+    release(&scenario);
+    held.finish();
+
+    assert!(
+        message
+            .lines()
+            .any(|line| line == format!("Host: {}", hostname.trim())),
+        "reservation did not identify its host: {message}"
+    );
+}
+
+#[test]
 fn pickup_reservation_does_not_publish_unrelated_local_head() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
@@ -482,10 +516,21 @@ fn pickup_reservation_does_not_publish_unrelated_local_head() {
 }
 
 #[test]
-fn a_reservation_left_by_a_crashed_host_is_not_stolen() {
+fn a_legacy_reservation_without_a_host_is_not_stolen() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
-    scenario.origin_has_branch("thirdshift/pickup/7", "main", &[]);
+    let tree = scenario.launch_git(&["mktree"]);
+    let token = scenario.launch_git(&[
+        "commit-tree",
+        tree.trim(),
+        "-m",
+        "thirdshift Pickup reservation for https://github.com/acme/widgets/issues/7\n\nToken: old-token\nLaunch: /old/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
+    ]);
+    scenario.launch_git(&[
+        "push",
+        "origin",
+        &format!("{}:refs/heads/thirdshift/pickup/7", token.trim()),
+    ]);
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 
@@ -1601,7 +1646,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
              Pull request: {}\n\
              Session trace:  {}\n\
              Command log:  {}\n\
-             Built with claude · default model · default effort (configured)\n\
+             Built with claude 9.8.7 · default model · default effort (configured)\n\
              Sent by:      thirdshift\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
@@ -1971,16 +2016,18 @@ fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_reque
 
     let result = scenario.run(&["pickup"]);
 
-    assert_eq!(
-        scenario.gh_calls(),
-        ["closed", "open"].map(|state| vec![
+    let mut expected = vec![vec![
+        "api".to_string(),
+        "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
+    ]];
+    expected.extend(["closed", "open"].map(|state| vec![
             "api".to_string(),
             "--paginate".into(),
             "--jq".into(),
             ".[]".into(),
             format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
-        ])
-    );
+        ]));
+    assert_eq!(scenario.gh_calls(), expected);
     assert_skipped(
         &scenario,
         &result,
@@ -2232,6 +2279,23 @@ fn an_issue_written_by_an_untrusted_account_is_passed_over() {
         &no_ready_issue_after(&["#7 issue author is not a Trusted account"]),
     );
     assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn an_issue_with_no_ready_labelling_history_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": []});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 has never been labelled ready-for-agent"]),
+    );
 }
 
 #[test]

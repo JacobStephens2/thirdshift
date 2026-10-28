@@ -6,7 +6,7 @@ const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
-const { chromium } = require('playwright');
+const { chromium } = require('./playwright.cjs');
 
 let home, records, server, exited, browser, origin;
 before(async () => {
@@ -96,7 +96,8 @@ test('notifications ask on click, survive reload and open the Inbox for a rise',
     const notice = await page.evaluate(() => ({ title: notices[0].title, body: notices[0].options.body }));
     const host = await page.locator('header h1').textContent();
     assert.equal(notice.title, `2 need you · ${host}`);
-    assert.match(notice.body, /acme\/widgets#2.*Problem 2/);
+    // A narrow toast truncates the body, so the state comes before what it is about (#1493).
+    assert.equal(notice.body, 'Failed · acme/widgets#2 · Problem 2');
     const focused = await page.evaluate(() => { notices[0].onclick({ preventDefault() {} }); return focusCalls; });
     assert.equal(focused, 1);
     await page.waitForURL(`${origin}/?page=inbox`);
@@ -126,7 +127,7 @@ test('several tabs notify once per rise, including a rise after a fall; off stay
     const record = JSON.parse(await readFile(path, 'utf8'));
     record.issue.title = 'Changed without a count rise';
     await writeFile(path, JSON.stringify(record));
-    for (const page of pages) await page.getByText(record.issue.title, { exact: true }).waitFor();
+    for (const page of pages) await page.locator('#inbox .issue-title').getByText(record.issue.title, { exact: true }).waitFor();
     await settle(2);
     assert.equal(await total(), 1);
     await item(3, 'merged');

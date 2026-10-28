@@ -1,16 +1,24 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod cost;
 mod evidence;
+mod execution;
 mod grading;
 mod integrity;
-mod limits;
 mod model_grader;
+mod names;
 mod options;
+mod reading;
 mod rechecks;
 mod release;
+mod retention;
+mod session_evidence;
 mod store;
 mod trace;
+mod trial;
+mod trial_results;
+mod trial_sessions;
 mod usage;
 mod workers;
 
@@ -30,13 +38,14 @@ use crate::trial::VoidCause;
 use crate::verdict::{Levels, decimal};
 use crate::{interrupt, logs, progress};
 
-pub(crate) use evidence::{RunningTrial, SessionLog};
-pub(crate) use grading::Conclusion;
+pub(crate) use evidence::RunningTrial;
+pub(crate) use grading::{Conclusion, Flip, Pending};
+pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
-pub(crate) use rechecks::{Flip, Pending};
+pub(crate) use session_evidence::{SessionLog, read as read_session};
 pub(crate) use store::{State, View, read};
-pub(crate) use workers::{Arm, TrialResult, trial_key};
+pub(crate) use trial_results::{Arm, TrialResult, trial_key};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Bar {
@@ -116,6 +125,15 @@ pub(crate) struct Description {
     pub suites: Vec<String>,
     pub bar: Bar,
     pub prepared: Option<arms::Prepared>,
+}
+
+impl Description {
+    pub(crate) fn setup(&self, arm: Arm) -> &Setup {
+        match arm {
+            Arm::Baseline => &self.baseline,
+            Arm::Candidate => &self.candidate,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -205,6 +223,11 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    let fresh = !root
+        .join("experiments")
+        .join(&description.id)
+        .join("experiment.json")
+        .exists();
     let Some(mut experiment) =
         store::Stored::open(&root.join("experiments"), description, |description| {
             // The release Baseline probe can build an Arm too. Check new
@@ -225,9 +248,20 @@ pub fn run(options: Options) -> Result<()> {
             options.json,
         );
     };
+    if let Some(name) = options.name {
+        experiment.rename(Some(name))?;
+    }
     if experiment.state == State::Completed {
+        retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
         return Ok(());
+    }
+    if let Err(error) = cost::confirm(&experiment, options.yes) {
+        // A declined new Experiment leaves no record to list as running.
+        if fresh {
+            experiment.discard()?;
+        }
+        return Err(error);
     }
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
@@ -240,11 +274,12 @@ pub fn run(options: Options) -> Result<()> {
             &experiment.description.candidate.commit,
         ])?);
     }
+    experiment.details.release |= options.release;
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
-                std::env::args()
-                    .skip(1)
+                resume_args(std::env::args().skip(1))
+                    .into_iter()
                     .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
             )
             .collect::<Vec<_>>()
@@ -312,6 +347,7 @@ pub fn run(options: Options) -> Result<()> {
     experiment.details.pause_reason = cause.clone();
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
+        retention::repositories(&experiment);
         // Results contain private Grader evidence, unlike the public Command
         // facts. Print them without copying them into the factory's logs.
         println!("{}", experiment.render(options.json)?);
@@ -339,30 +375,46 @@ pub fn run(options: Options) -> Result<()> {
 pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag, name] = positional.as_slice()
+        && flag.as_str() == "--name"
+    {
+        return store::rename(&root, id, names::parse(name)?, json);
+    }
     if let [id, flag, session] = positional.as_slice()
         && flag.as_str() == "--session"
     {
-        let view = read(Some(id))?.pop().context("Experiment not found")?;
-        let session = view
-            .sessions
-            .iter()
-            .find(|log| log.id == session.as_str())
-            .context("Session not found")?;
-        let contents = std::fs::read_to_string(&session.path)?;
+        let session = read_session(id, session)?;
         return Ok(if json {
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": session.id, "trace": session.trace, "contents": contents
+                "id": session.id, "trace": session.trace, "contents": session.contents
             }))?
         } else {
-            contents
+            session.contents
         });
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)
+}
+
+/// The shown resume command leaves out `--name`, so following it keeps a
+/// later rename. Flags pair with values as `options::parse` reads them.
+fn resume_args(mut args: impl Iterator<Item = String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--json" || arg == "--release" || !arg.starts_with("--") {
+            kept.push(arg);
+        } else if arg == "--name" {
+            args.next();
+        } else {
+            kept.push(arg);
+            kept.extend(args.next());
+        }
+    }
+    kept
 }
 
 fn resolve(git: &Git, reference: &str) -> Result<String> {

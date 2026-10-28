@@ -1,4 +1,5 @@
-//! Atomic metadata and one result per Trial. An exclusive lock fences resumes.
+//! Atomic metadata and one result per Trial. An exclusive lock fences resumes;
+//! a short metadata lock fences each `experiment.json` write, renames included.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -8,8 +9,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::{Arm, TrialResult};
-use super::{Description, Task};
+use super::trial_results::files::{Files, Native};
+use super::{Arm, Description, Task, TrialResult, trial_results};
 use crate::trial::{Outcome, VoidCause};
 
 #[derive(Serialize, Deserialize)]
@@ -20,14 +21,17 @@ pub(super) struct Stored {
     pub state: State,
     #[serde(flatten)]
     pub details: Details,
-    created_at: String,
+    pub(super) created_at: String,
+    /// The Day shift's name; unset means the default from the Arms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub verdict: Option<super::grading::Verdict>,
     #[serde(default)]
     pub rechecks: super::rechecks::History,
     #[serde(default)]
-    pub pending_rechecks: Vec<super::rechecks::Pending>,
+    pub pending_rechecks: Vec<super::grading::Pending>,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -36,6 +40,9 @@ pub(super) struct Stored {
 
 #[derive(Serialize)]
 pub(crate) struct View {
+    pub format: u32,
+    pub name: String,
+    pub name_set: bool,
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
@@ -48,7 +55,7 @@ pub(crate) struct View {
     pub results: Vec<TrialResult>,
     pub unfinished_trials: Vec<TrialResult>,
     pub verdict: Option<super::grading::Verdict>,
-    pub pending_rechecks: Vec<super::rechecks::Pending>,
+    pub pending_rechecks: Vec<super::grading::Pending>,
     pub minutes: Minutes,
     pub usage: super::usage::Arms,
     pub voids: Voids,
@@ -72,6 +79,8 @@ pub(crate) struct Details {
     pub resume_command: Option<String>,
     #[serde(default)]
     pub command_log: Option<PathBuf>,
+    #[serde(default)]
+    pub release: bool,
 }
 
 #[derive(Serialize)]
@@ -93,7 +102,7 @@ pub(crate) struct ArmVoids {
 }
 
 impl Voids {
-    fn include(&mut self, result: &TrialResult) {
+    pub(super) fn include(&mut self, result: &TrialResult) {
         let arm = match result.arm {
             Arm::Baseline => &mut self.baseline,
             Arm::Candidate => &mut self.candidate,
@@ -108,7 +117,7 @@ impl Voids {
         }
     }
 
-    fn findings(&self) -> Vec<String> {
+    pub(super) fn findings(&self) -> Vec<String> {
         [("Baseline", &self.baseline), ("Candidate", &self.candidate)]
             .into_iter()
             .filter_map(|(name, arm)| {
@@ -143,7 +152,7 @@ pub(crate) struct Minutes {
 }
 
 impl Minutes {
-    fn include(&mut self, result: &TrialResult) {
+    pub(super) fn include(&mut self, result: &TrialResult) {
         let arm = match result.arm {
             Arm::Baseline => &mut self.baseline,
             Arm::Candidate => &mut self.candidate,
@@ -228,6 +237,7 @@ impl Stored {
                 state: State::Prepared,
                 details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
+                name: None,
                 tasks,
                 verdict: None,
                 rechecks: BTreeMap::new(),
@@ -243,26 +253,51 @@ impl Stored {
         Ok(Some(stored))
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// Remove an Experiment this command created and nothing has run in.
+    pub fn discard(self) -> Result<()> {
+        fs::remove_dir_all(&self.directory)?;
+        Ok(())
+    }
+
+    /// A rename may land while a run holds the Experiment lock, so every
+    /// metadata write keeps the name saved on disk.
+    pub fn save(&mut self) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        let path = self.directory.join("experiment.json");
+        if path.exists() {
+            #[derive(Deserialize)]
+            struct Saved {
+                #[serde(default)]
+                name: Option<String>,
+            }
+            let saved: Saved = serde_json::from_slice(&fs::read(&path)?)?;
+            self.name = saved.name;
+        }
+        write(&path, self)
+    }
+
+    pub fn rename(&mut self, name: Option<String>) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        self.name = name;
         write(&self.directory.join("experiment.json"), self)
     }
 
+    pub fn name(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| super::names::default(&self.description, &self.details))
+    }
+
     pub fn results(&self) -> Result<Vec<TrialResult>> {
-        let mut results = Vec::new();
-        for path in result_paths(&self.directory)? {
-            let mut result: TrialResult = serde_json::from_slice(&fs::read(path)?)?;
-            let key = result.key();
-            if let Some(score) = &mut result.score {
-                score.rechecks = self.rechecks.get(&key).cloned().unwrap_or_default();
-            }
-            results.push(result);
-        }
-        Ok(results)
+        Ok(trial_results::effective(
+            trial_results::terminal(&self.directory)?,
+            &self.rechecks,
+        ))
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
         let (verdict, pending) =
-            super::rechecks::assess(&self.tasks, &mut self.results()?, &self.description.bar)?;
+            super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
         Ok(())
@@ -281,11 +316,8 @@ impl Stored {
             // A saved single-level Verdict is evidence, not an invitation to
             // recalculate it under a newer runner's recheck policy.
             if self.state == State::Completed && missing_flip_verdicts {
-                let (_, pending) = super::rechecks::assess(
-                    &self.tasks,
-                    &mut self.results()?,
-                    &self.description.bar,
-                )?;
+                let (_, pending) =
+                    super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
                 self.pending_rechecks = pending;
             }
             return Ok(());
@@ -302,13 +334,39 @@ impl Stored {
         Ok(())
     }
 
-    pub fn load(root: &Path, id: &str, exclusive: bool) -> Result<Self> {
+    fn directory(root: &Path, id: &str) -> Result<PathBuf> {
         ensure!(
             id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
             "invalid Experiment ID"
         );
         let directory = root.join(id);
         ensure!(directory.is_dir(), "Experiment not found");
+        Ok(directory)
+    }
+
+    /// Validate saved metadata without refreshing a legacy Verdict or reading
+    /// any Trial artifacts. Evidence readers share ordinary load validation.
+    pub(super) fn retained(files: &impl Files, root: &Path, id: &str) -> Result<Self> {
+        Self::metadata(files, Self::directory(root, id)?, id)
+    }
+
+    fn metadata(files: &impl Files, directory: PathBuf, id: &str) -> Result<Self> {
+        let mut stored: Self = serde_json::from_slice(
+            &files
+                .read(&directory.join("experiment.json"))
+                .context("Experiment not found")?,
+        )?;
+        ensure!(stored.format == 1, "unsupported Experiment format");
+        ensure!(
+            stored.description.id == id,
+            "Experiment ID does not match its folder"
+        );
+        stored.directory = directory;
+        Ok(stored)
+    }
+
+    pub fn load(root: &Path, id: &str, exclusive: bool) -> Result<Self> {
+        let directory = Self::directory(root, id)?;
         let lock = if exclusive {
             let lock = File::create(directory.join("lock"))?;
             lock.try_lock()
@@ -317,74 +375,14 @@ impl Stored {
         } else {
             None
         };
-        let mut stored: Self = serde_json::from_slice(
-            &fs::read(directory.join("experiment.json")).context("Experiment not found")?,
-        )?;
-        ensure!(stored.format == 1, "unsupported Experiment format");
-        ensure!(
-            stored.description.id == id,
-            "Experiment ID does not match its folder"
-        );
-        stored.directory = directory;
+        let mut stored = Self::metadata(&Native, directory, id)?;
         stored.lock = lock;
         stored.upgrade_verdict()?;
         Ok(stored)
     }
 
     fn view(&self) -> Result<View> {
-        let results = self.results()?;
-        let (running_trials, sessions) = super::evidence::inventory(self)?;
-        let mut minutes = Minutes::default();
-        let mut voids = Voids::default();
-        let terminal: std::collections::BTreeSet<_> =
-            results.iter().map(TrialResult::key).collect();
-        let mut unfinished_trials = Vec::new();
-        let trials = self.directory.join("trials");
-        if trials.exists() {
-            for trial in fs::read_dir(trials)? {
-                let pending = trial?.path().join("pending.json");
-                if pending.is_file() {
-                    // Every completed attempt is retained here before a pause
-                    // or final publication. Read it once per Trial, so live
-                    // and paused Experiments include time already spent too.
-                    let result: TrialResult = serde_json::from_slice(&fs::read(pending)?)?;
-                    minutes.include(&result);
-                    voids.include(&result);
-                    if !terminal.contains(&result.key()) {
-                        unfinished_trials.push(result);
-                    }
-                }
-            }
-        }
-        let findings = voids.findings();
-        let mut details = self.details.clone();
-        details.resume_command = details.resume_command.as_deref().and_then(|command| {
-            super::options::resume_command(command, self.description.bar.levels)
-        });
-        Ok(View {
-            description: self.description.clone(),
-            state: self.state,
-            details,
-            created_at: self.created_at.clone(),
-            tasks: self
-                .tasks
-                .iter()
-                .map(|task| TaskName {
-                    suite: task.suite.clone(),
-                    name: task.name.clone(),
-                })
-                .collect(),
-            running_trials,
-            sessions,
-            results,
-            unfinished_trials,
-            verdict: self.verdict.clone(),
-            pending_rechecks: self.pending_rechecks.clone(),
-            minutes,
-            usage: super::usage::Arms::read(&self.directory)?,
-            voids,
-            findings,
-        })
+        super::reading::read(self)
     }
 
     pub fn render(&self, json: bool) -> Result<String> {
@@ -393,8 +391,11 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
+                "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
+Baseline: {}
+Candidate: {}{}",
                 self.description.id,
+                view.name,
                 self.state,
                 self.description.baseline.commit,
                 self.description.candidate.commit,
@@ -431,6 +432,13 @@ impl Stored {
     }
 }
 
+/// Held only across one read-and-write of `experiment.json`, never for a run.
+fn metadata_lock(directory: &Path) -> Result<File> {
+    let lock = File::create(directory.join("metadata.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
 pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     let mut temporary =
         tempfile::NamedTempFile::new_in(path.parent().context("missing Experiment folder")?)?;
@@ -438,23 +446,6 @@ pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     temporary.flush()?;
     temporary.persist(path)?;
     Ok(())
-}
-
-pub(super) fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    let root = directory.join("results");
-    if !root.exists() {
-        return Ok(paths);
-    }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() && entry.path().extension().is_some_and(|ext| ext == "json")
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 pub(super) fn list(root: &Path) -> Result<Vec<Stored>> {
@@ -488,6 +479,21 @@ pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
         return Ok(vec![Stored::load(&root, id, false)?.view()?]);
     }
     list(&root)?.iter().map(Stored::view).collect()
+}
+
+/// Renames in any state: only the metadata lock fences this write, as it does
+/// a running Experiment's own.
+pub(super) fn rename(root: &Path, id: &str, name: Option<String>, json: bool) -> Result<String> {
+    let directory = Stored::directory(root, id)?;
+    let mut stored = {
+        let _metadata = metadata_lock(&directory)?;
+        let mut stored = Stored::metadata(&Native, directory, id)?;
+        stored.name = name;
+        write(&stored.directory.join("experiment.json"), &stored)?;
+        stored
+    };
+    stored.upgrade_verdict()?;
+    stored.render(json)
 }
 
 pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {

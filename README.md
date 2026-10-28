@@ -53,6 +53,11 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | Issues marked `ready-for-agent` | `thirdshift pickup` | A [Pickup run](docs/guide.md#pickup-runs) takes the lowest-numbered Ready issue. |
 | Architecture improvements | `thirdshift architect` | An [Architect run](docs/guide.md#architect-runs) reviews the codebase, publishes a plan and builds it, or files an idea for triage. |
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
+| Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores, calibration and proposals by week; `thirdshift scores <pull request> --mine` records yours before revealing the model's. |
+| One skill | `thirdshift skill <skill> [issue <issue>]` | A [standalone skill](docs/guide.md#standalone-skills) runs headlessly and prints its final message. |
+| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and no Issue-branch worktree, it is a Pass and skips while another Pass on the repository is running. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
+
+A Custom process can use `implement` → `delivery` on an Issue-branch worktree for the Ticket run's implementation and bug diagnosis. An unreproduced bug ends successfully with `needs-info`, skipping later Steps and cleaning up the Claim and worktree.
 
 Each Architect, Pickup or Security run makes one pass. Use cron or another operating system scheduler to repeat it. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 
@@ -78,6 +83,8 @@ Open the localhost address it prints. The Console never starts work. Use [`third
 
 ### Console on a server
 
+The Console and `status` show the serving OS account's Commands by default. To add readable Commands from other local accounts, use `thirdshift console other-accounts readable` (or a comma-separated list of account names). Other-account Commands show their owner and are read-only. See [account visibility](docs/guide.md#other-local-accounts) for filesystem access requirements.
+
 <a name="nginx"></a>
 
 The Console can run as a persistent service behind HTTPS and sign-in. See [server installation](docs/guide.md#console-on-a-server) for configuration, passwords, the generated Linux installer and Caddy, Apache or [nginx](docs/guide.md#nginx) setup.
@@ -90,6 +97,7 @@ The Console can run as a persistent service behind HTTPS and sign-in. See [serve
 - [Host resources](docs/guide.md#host-resources): `thirdshift resources --json` and the Console's Resources page show RAM, CPU load and configurable limits that delay new sessions.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
+- [Built-in processes](processes/) are compiled into the binary. `thirdshift process list` lists Processes and marks Built-in processes; `thirdshift process show <name>` prints a Process file exactly so you can copy it under a new Custom process name.
 - [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.
 

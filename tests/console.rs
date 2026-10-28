@@ -21,6 +21,12 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/other_accounts.rs"]
+mod other_accounts;
+
+#[path = "console/assets.rs"]
+mod assets;
+
 #[path = "console/inbox.rs"]
 mod inbox;
 
@@ -36,6 +42,9 @@ mod waterfall;
 #[path = "console/spans.rs"]
 mod spans;
 
+#[path = "console/metrics.rs"]
+mod metrics;
+
 #[cfg(target_os = "linux")]
 #[path = "console/idle.rs"]
 mod idle;
@@ -50,6 +59,12 @@ mod cronjobs;
 
 #[path = "console/experiments.rs"]
 mod experiments;
+
+#[path = "console/scoring.rs"]
+mod scoring;
+
+#[path = "console/security_fixes.rs"]
+mod security_fixes;
 
 struct Console {
     child: Child,
@@ -171,6 +186,18 @@ fn configure(home: &Path) {
     fs::create_dir_all(home.join(".thirdshift")).unwrap();
     fs::write(home.join(".thirdshift/config.toml"),
         "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
+}
+
+/// How the Console shows `rfc3339` up to its zone name: this machine's date
+/// and time to the minute, as in `Ended 2026-10-23 19:03 EDT`.
+/// One Inbox section's markup, found by its group name.
+fn section<'a>(page: &'a str, group: &str) -> &'a str {
+    page.split(&format!("class=\"group\" data-group=\"{group}\""))
+        .nth(1)
+        .expect(page)
+        .split("</section>")
+        .next()
+        .unwrap()
 }
 
 fn record(home: &Path, number: u64, outcome: Option<&str>, days: i64) -> Value {
@@ -346,8 +373,24 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
     failed["ended_at"] = failed["started_at"].clone();
     write_record(home.path(), 3, &failed);
     record(home.path(), 4, None, 0);
+    record(
+        home.path(),
+        5,
+        Some("PR https://github.com/acme/widgets/pull/5 is merged"),
+        90,
+    );
+    record(home.path(), 6, Some("failed: claude exited 1"), 95);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
+    // The Outcome filter offers kinds of outcome, not each PR or error.
+    let select = &html[html.find("<select name=\"outcome\"").unwrap()..];
+    let select = &select[..select.find("</select>").unwrap()];
+    assert!(select.contains(">merged</option>"), "{select}");
+    assert!(select.contains(">failed</option>"), "{select}");
+    assert!(
+        !select.contains("pull/5") && !select.contains("claude exited"),
+        "{select}"
+    );
     assert!(html.contains("<h2>History</h2>"));
     assert!(html.find("acme/widgets#3").unwrap() < html.find("acme/widgets#2").unwrap());
     assert!(html.find("acme/widgets#2").unwrap() < html.find("acme/widgets#1").unwrap());
@@ -358,6 +401,10 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
         .text()
         .unwrap();
     assert!(filtered.contains("acme/widgets#1"));
+    assert!(filtered.contains("acme/widgets#5"));
+    let failures = console.get("/?page=history&outcome=failed").text().unwrap();
+    assert!(failures.contains("acme/widgets#2") && failures.contains("acme/widgets#6"));
+    assert!(!failures.contains("acme/widgets#5"));
     assert!(!filtered.contains("acme/widgets#2"));
     assert!(
         !console
@@ -757,6 +804,7 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
     );
     let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(shown["command"]["cause"], "Old failure");
+    assert_eq!(shown["command"]["issue"]["title"], "Older Command <unsafe>");
     let console = Console::start(binary, home.path());
     let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
     url.query_pairs_mut()
@@ -765,6 +813,12 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
         .get(&format!("/peek?{}", url.query().unwrap()))
         .text()
         .unwrap();
+    let heading = peek.split("</h2>").next().unwrap();
+    assert!(heading.contains("acme/widgets#7</a>"), "{heading}");
+    assert!(
+        heading.contains("Older Command &#60;unsafe&#62;"),
+        "{heading}"
+    );
     for expected in [
         "Older Command &#60;unsafe&#62;",
         "Old failure",
@@ -882,6 +936,121 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
         let row = format!("data-command=\"{}::acme/widgets#{issue}\"", path.display());
         assert_eq!(html.matches(&row).count(), shown, "{html}");
     }
+}
+
+/// The visible text of `html`, tags and attribute values left out, and any
+/// RFC 3339 instant in it, such as `2026-10-25T17:43:26-04:00`.
+fn raw_instants(html: &str) -> Vec<String> {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(19))
+        .filter(|&i| {
+            b"dddd-dd-ddTdd:dd:dd"
+                .iter()
+                .zip(&bytes[i..])
+                .all(|(want, got)| {
+                    if *want == b'd' {
+                        got.is_ascii_digit()
+                    } else {
+                        want == got
+                    }
+                })
+        })
+        .map(|i| text[i..i + 19].to_owned())
+        .collect()
+}
+
+#[test]
+fn inbox_and_command_details_show_instants_in_local_minutes() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("failed"), 0);
+    fixture["cause"] = json!("quota resets at 2026-10-24T03:28:16Z");
+    write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    assert_eq!(raw_instants(&html), Vec::<String>::new(), "{html}");
+    assert!(
+        html.contains(&format!(
+            "quota resets at {}",
+            support::local_minute("2026-10-24T03:28:16Z")
+        )),
+        "{html}"
+    );
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair(
+        "command",
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json")
+            .to_str()
+            .unwrap(),
+    );
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    assert_eq!(raw_instants(&peek), Vec::<String>::new(), "{peek}");
+    let started = fixture["started_at"].as_str().unwrap();
+    assert!(
+        peek.contains(&format!(
+            "<dt>started at</dt><dd>{}",
+            support::local_minute(started)
+        )),
+        "{peek}"
+    );
+}
+
+#[test]
+fn command_details_show_short_facts_and_fold_nested_ones_closed() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("failed"), 0);
+    fixture["cause"] = json!("Short failure");
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = folder.join("7-fixture-implement.logs.jsonl");
+    support::session_trace::write(&session, "Session output\n");
+    fixture["session_log"] = json!(session);
+    write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair(
+        "command",
+        folder.join("7-fixture.command.json").to_str().unwrap(),
+    );
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    // The high-level view: short facts in the open, nested ones behind a preview.
+    assert!(peek.contains("<dt>cause</dt><dd>Short failure"), "{peek}");
+    assert!(
+        peek.contains("<details data-fact=\"issue\"><summary>Widgets &#60;script&#62;alert(1)&#60;/script&#62;</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details data-fact=\"stages\"><summary>1 item</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details data-fact=\"stages/1\"><summary>implement</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details class=\"peek-traces\" data-fact=\"session traces\"><summary>Session traces <span class=\"count\">1</span></summary>"),
+        "{peek}"
+    );
+    assert!(!peek.contains("<details open"), "{peek}");
 }
 
 #[test]
@@ -1064,6 +1233,45 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
         );
     }
     assert_eq!(console.get("/logs/not-an-inventory-id").status(), 404);
+}
+
+#[test]
+fn logs_fold_by_repository_unless_there_is_only_one() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let log = |repository: &str, number: u64| {
+        let folder = home
+            .path()
+            .join(format!(".thirdshift/logs/{repository}/commands/issue"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join(format!("{number}-20261003T120000-0400.log")),
+            "Command output\n",
+        )
+        .unwrap();
+    };
+    log("acme/widgets", 7);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let page = console.get("/logs").text().unwrap();
+    assert!(
+        page.contains("<details class=\"group log-group\" data-repository=\"acme/widgets\" open>"),
+        "{page}"
+    );
+    log("acme/widgets", 8);
+    log("aaa/first", 3);
+    let page = console.get("/logs").text().unwrap();
+    for (repository, count) in [("aaa/first", "1 log"), ("acme/widgets", "2 logs")] {
+        let fold = format!("<details class=\"group log-group\" data-repository=\"{repository}\">");
+        let start = page.find(&fold).unwrap_or_else(|| panic!("{page}"));
+        let fold = &page[start..start + page[start..].find("</details>").unwrap()];
+        assert!(
+            fold.contains(&format!(
+                "<summary>{repository} <span class=\"count\">{count}</span>"
+            )),
+            "{fold}"
+        );
+        assert!(fold.contains("class=\"log-row\""), "{fold}");
+    }
 }
 
 #[test]
@@ -1469,7 +1677,7 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     );
     let status: Value = serde_json::from_slice(&status.stdout).unwrap();
     let groups: Vec<_> = html
-        .split("data-group=\"")
+        .split("class=\"group\" data-group=\"")
         .skip(1)
         .map(|rest| rest.split('"').next().unwrap())
         .collect();
@@ -1485,10 +1693,9 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
         ]
     );
     let subjects: Vec<_> = html
-        .split("<span class=\"subject\">")
+        .split("<span class=\"subject\" title=\"")
         .skip(1)
-        .map(|rest| rest.split("</a></span>").next().unwrap())
-        .map(|subject| subject.rsplit('>').next().unwrap())
+        .map(|rest| rest.split('"').next().unwrap())
         .collect();
     let expected: Vec<_> = status["commands"]
         .as_array()
@@ -1506,13 +1713,7 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     for item in status["commands"].as_array().unwrap() {
         let number = item["issue"]["number"].as_u64().unwrap();
         let group = item["group"].as_str().unwrap();
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
+        let section = section(&html, group);
         assert!(
             section.contains(&format!("acme/widgets#{number}")),
             "{section}"
@@ -1725,7 +1926,7 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     let html = console.get("/").text().unwrap();
     let pr = "<a href=\"https://github.com/acme/widgets/pull/834\">https://github.com/acme/widgets/pull/834</a>";
     for expected in [
-        "<span class=\"subject\"><a href=\"https://github.com/acme/widgets/issues/812\">acme/widgets#812</a></span>",
+        "<a href=\"https://github.com/acme/widgets/issues/812\"><span class=\"subject-repository\">acme/widgets</span><span class=\"subject-issue\">#812</span></a>",
         &format!("<p class=\"pr\">{pr}</p>"),
         &format!("<p>PR {pr} is a draft. &#60;b&#62;javascript:alert(1)&#60;/b&#62;</p>"),
         "waiting on <a href=\"https://github.com/other/repo/issues/98\">https://github.com/other/repo/issues/98</a>",
@@ -1745,7 +1946,8 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     for expected in [
         &format!("<dd>{pr}</dd>"),
         "<dd><a href=\"https://github.com/acme/widgets/issues/812\">https://github.com/acme/widgets/issues/812</a>",
-        "<dd>PR <a href=",
+        // A long value opens from its one-line summary.
+        "<summary>PR <a href=",
     ] {
         assert!(peek.contains(expected), "missing {expected}: {peek}");
     }
@@ -1774,7 +1976,84 @@ fn stages_and_command_details_link_the_github_issue() {
         .text()
         .unwrap();
     assert!(
-        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">acme/widgets#7</a>"),
         "Command details links the Issue URL: {peek}"
     );
+}
+
+#[test]
+fn command_details_and_inbox_share_subject_and_title_fallbacks() {
+    for (issue, name, process, subject, title) in [
+        (
+            Value::Null,
+            "architect-fixture",
+            None,
+            "architect-fixture on acme/widgets",
+            "",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7"}),
+            "acme/widgets#7",
+            None,
+            "acme/widgets#7",
+            "(title unavailable)",
+        ),
+        (
+            Value::Null,
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes on acme/widgets",
+            "",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7"}),
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes · acme/widgets#7",
+            "(title unavailable)",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7", "title": "Review notes"}),
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes · acme/widgets#7",
+            "Review notes",
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        configure(home.path());
+        let mut facts = record(home.path(), 7, Some("failed"), 0);
+        facts["issue"] = issue;
+        facts["name"] = name.into();
+        if let Some(process) = process {
+            facts["kind"] = "Process".into();
+            facts["process_name"] = process.into();
+        }
+        write_record(home.path(), 7, &facts);
+        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+        let inbox = console.get("/").text().unwrap();
+        assert!(inbox.contains(subject), "{inbox}");
+        assert!(
+            inbox.contains(&format!("class=\"issue-title\">{title}</span>")),
+            "{inbox}"
+        );
+        let selector = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
+        let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+        url.query_pairs_mut()
+            .append_pair("command", selector.to_str().unwrap());
+        let peek = console
+            .get(&format!("/peek?{}", url.query().unwrap()))
+            .text()
+            .unwrap();
+        let heading = peek.split("</h2>").next().unwrap();
+        assert!(heading.contains(subject), "{heading}");
+        if title.is_empty() {
+            assert!(!heading.contains("<span>"), "{heading}");
+            assert!(!heading.contains("<a "), "{heading}");
+        } else {
+            assert!(heading.contains(title), "{heading}");
+        }
+    }
 }

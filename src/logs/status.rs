@@ -5,7 +5,7 @@ pub mod inspect;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::{Archive, ArchivePage, archive};
-pub(crate) use inbox::{Inbox, Row, inbox};
+pub(crate) use inbox::{Inbox, Row, inbox, issue_url, subject};
 pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;
@@ -13,6 +13,7 @@ use chrono::Local;
 use serde::Serialize;
 
 use super::command_record::CommandRecord;
+use super::pass_starts::PassStart;
 use super::reading::{Command, Group, IdlePass, InboxItem, Observation, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
@@ -24,6 +25,7 @@ struct Status<'a> {
     active_runs: usize,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
+    pass_starts: &'a [PassStart],
     /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
     /// no answer is kept: with no ready pull requests to read, or before
     /// the first read.
@@ -35,17 +37,32 @@ struct Status<'a> {
 fn print_command(command: &Command, state_word: &str, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
-    let mut subject = match &facts.issue {
-        Some(issue) => format!(
-            "{}#{} {}",
-            facts.repository,
-            issue.number,
-            issue.title.as_deref().unwrap_or("(title unavailable)")
-        ),
-        None => format!("{} on {}", facts.name, facts.repository),
+    let mut subject = if let Some(name) = facts.process_label() {
+        match &facts.issue {
+            Some(issue) => format!(
+                "{name} {}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{name} on {}", facts.repository),
+        }
+    } else {
+        match &facts.issue {
+            Some(issue) => format!(
+                "{}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{} on {}", facts.name, facts.repository),
+        }
     };
     if let Some(pull_request) = &facts.pull_request {
         subject.push_str(&format!(" · {pull_request}"));
+    }
+    if let Some(account) = &command.account {
+        subject.push_str(&format!(" · [{account}]"));
     }
     println!(
         "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
@@ -65,6 +82,9 @@ fn print_command(command: &Command, state_word: &str, indent: &str) {
 }
 
 pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
+    if let Some(account) = &command.account {
+        print!("[{account}] ");
+    }
     let issue = command
         .issue
         .as_ref()
@@ -89,8 +109,10 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             waiting.as_secs()
         );
     }
-    let snapshot =
-        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
+    for account in &snapshot.unavailable_accounts {
+        eprintln!("thirdshift: account {account}: logs unavailable or unreadable");
+    }
     let kept = super::github::refresh(&snapshot, &config, super::github::FRESH_FOR)?;
     let status = Status {
         version: 1,
@@ -100,6 +122,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             .evaluate_inbox(config.inbox_days, &kept)
             .into_rows(all),
         idle_passes: &snapshot.idle_passes,
+        pass_starts: &snapshot.pass_starts,
         github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
         github_last_answered_at: kept.last_answered_at(),
         github_failure: kept.failure.as_deref(),
@@ -152,6 +175,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                         || facts.name.clone(),
                         |issue| format!("{}#{}", facts.repository, issue.number),
                     );
+                    if let Some(account) = &command.account {
+                        print!("[{account}] ");
+                    }
                     println!(
                         "{name} · {} · see Needs you",
                         item.needs_you_kind.expect("Needs you has a kind").title()
@@ -161,6 +187,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         }
         for pass in status.idle_passes {
             println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
+        }
+        for pass in status.pass_starts {
+            println!("{}", pass.line());
         }
     }
     Ok(())
@@ -239,7 +268,7 @@ fn ticket_text(ticket: &super::command_record::TicketRecord, repository: &str) -
     format!("Ticket #{} · {state}", ticket.issue.number)
 }
 
-fn age(seconds: i64) -> String {
+pub(super) fn age(seconds: i64) -> String {
     if seconds < 60 {
         format!("{seconds} sec")
     } else if seconds < 3600 {

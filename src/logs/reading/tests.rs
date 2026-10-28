@@ -6,10 +6,17 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[path = "attribution_tests.rs"]
+mod attribution_tests;
+
 #[path = "inventory_tests.rs"]
 mod inventory_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
+
+#[cfg(target_os = "linux")]
+#[path = "metrics_tests.rs"]
+mod metrics_tests;
 
 fn now() -> DateTime<Local> {
     DateTime::parse_from_rfc3339("2026-10-19T12:00:00-04:00")
@@ -36,6 +43,25 @@ fn write(root: &Path, name: &str, value: &Value) -> PathBuf {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
     path
+}
+
+#[test]
+fn retained_pull_request_lookup_orders_instants_across_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "https://github.com/acme/widgets/pull/23";
+    let mut older = record(7);
+    older["pull_request"] = url.into();
+    older["started_at"] = "2026-10-19T12:00:00+02:00".into();
+    write(dir.path(), "older.command.json", &older);
+    let mut newer = record(7);
+    newer["pull_request"] = url.into();
+    newer["started_at"] = "2026-10-19T11:00:00Z".into();
+    let path = write(dir.path(), "newer.command.json", &newer);
+
+    assert_eq!(
+        run_for_pull_request(dir.path(), url).unwrap(),
+        Some((path, "acme/widgets#7".into()))
+    );
 }
 
 #[test]
@@ -809,6 +835,33 @@ fn a_pass_counts_once(kind: &str) {
         "{kind}"
     );
     assert_eq!(snapshot.active_runs(), 1, "{kind}");
+}
+
+#[test]
+fn a_ready_pass_and_its_ready_dispatch_on_one_pull_request_are_one_row() {
+    let ready_rows = |pass_pull: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pass = ended(record(7), "ready for review");
+        pass["kind"] = "Pickup run".into();
+        pass["name"] = "pass-20261019T110000-0400".into();
+        pass["pull_request"] = pass_pull.into();
+        let mut spec = ended(record(30), "ready for review");
+        spec["kind"] = "Spec run".into();
+        spec["pull_request"] = "https://github.com/acme/widgets/pull/30".into();
+        pass["dispatched"] = json!([spec]);
+        write(dir.path(), "pickup.command.json", &pass);
+        Snapshot::load(dir.path(), now())
+            .unwrap()
+            .evaluate_inbox(7, &crate::logs::github::Kept::default())
+            .into_rows(false)
+            .iter()
+            .filter(|row| row.group == Group::ReadyForReview)
+            .count()
+    };
+    // The Pass's row carries its dispatched run, so the same pull request
+    // is not a second row; a different one still is.
+    assert_eq!(ready_rows("https://github.com/acme/widgets/pull/30"), 1);
+    assert_eq!(ready_rows("https://github.com/acme/widgets/pull/31"), 2);
 }
 
 #[test]

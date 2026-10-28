@@ -1,4 +1,4 @@
-//! The crates.io package: it carries the sources and the Factory skills the
+//! The crates.io package: it carries sources, Factory skills and Built-in processes the
 //! binary embeds, and none of the repository's own agent tooling, docs, site
 //! or tests. And the binary's dependencies, as the lockfile names them: HTTPS
 //! through rustls, never OpenSSL (ADR 0003).
@@ -50,6 +50,17 @@ fn openssl_packages(lockfile: &str) -> Vec<String> {
 }
 
 #[test]
+fn package_carries_the_built_in_process_folder() {
+    let list = package_list();
+    for expected in ["processes/README.md", "processes/ticket-run.toml"] {
+        assert!(
+            list.iter().any(|path| path == expected),
+            "{expected} is missing"
+        );
+    }
+}
+
+#[test]
 fn package_leaves_out_the_repository_tooling() {
     for path in package_list() {
         for excluded in [".agents/", ".grok/", ".claude/", "docs/", "site/", "tests/"] {
@@ -77,6 +88,7 @@ fn package_carries_the_factory_skills_with_their_license_and_credits() {
         "skills/LICENSE",
         "skills/thirdshift-pr/CREDITS.md",
         "skills/thirdshift-implement/SKILL.md",
+        "skills/thirdshift-diagnosing-bugs/SKILL.md",
         "skills/thirdshift-improve-codebase-architecture/SKILL.md",
         "skills/thirdshift-improve-codebase-architecture/REPORT.md",
         "skills/thirdshift-to-spec/SKILL.md",

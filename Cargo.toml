@@ -1,14 +1,14 @@
 [package]
 name = "thirdshift"
-version = "0.15.0"
+version = "0.17.3"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
 repository = "https://github.com/JacobStephens2/thirdshift"
 homepage = "https://thirdshift.app"
-# The crate carries the sources and the Factory skills the binary embeds;
+# The crate carries the sources, Factory skills and Built-in processes the binary embeds;
 # the repository's agent tooling, docs and tests stay out of it.
-include = ["/src", "/skills", "/askama.toml", "/README.md", "/LICENSE"]
+include = ["/src", "/skills", "/processes", "/askama.toml", "/README.md", "/LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"

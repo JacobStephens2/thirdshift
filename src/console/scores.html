@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Scores · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main><div class="page-title"><h1>Scores</h1><code>thirdshift scores --json</code></div>
+<p>Weekly samples. Enter all five of your Scores and reasons before the model's Scores appear. Reload to see changes.</p>
+<section aria-label="Calibration"><h2>Calibration</h2><dl>{% for (criterion, state) in view.calibration %}
+<dt>{{ criterion.name() }}</dt><dd>{% if state.calibrated %}calibrated{% else %}uncalibrated{% endif %}: {{ state.matches }}/{{ state.compared }} agreements</dd>{% endfor %}</dl></section>
+{% for week in view.weeks %}<section><h2>{{ week.week }}</h2><p>{{ week.window_start|readable }} → {{ week.window_end|readable }}</p>
+<ul class="log-list">{% for pr in week.sample %}<li><article aria-label="{{ pr.url }}"><h3><a href="{{ pr.url }}">{{ pr.url }}</a></h3>
+<p>{{ pr.harness }} · {{ pr.model }} · {{ pr.effort }}{% if let Some(version) = pr.harness_version %} · {{ version }}{% endif %}</p>
+{% if pr.for_you %}<p>For you to score</p>{% endif %}
+{% if let Some(mine) = pr.mine %}<h4>Your Scores</h4><dl>{% for score in mine.scores %}<dt>{{ score.criterion.name() }}</dt><dd>{% if score.passed %}pass{% else %}fail{% endif %} — {{ score.reason }}</dd>{% endfor %}</dl>
+{% if let Some(assessment) = pr.assessment %}<h4>Model Scores</h4><p>Grader: {{ assessment.grader.harness }} · {{ assessment.grader.model }}</p><dl>{% for score in assessment.scores %}<dt>{{ score.criterion.name() }}</dt><dd>{% if score.passed %}pass{% else %}fail{% endif %} — {{ score.reason }}</dd>{% endfor %}</dl>{% else %}<p>Model Scores pending.</p>{% endif %}
+<a href="/scores?mine={{ pr.url|urlencode }}">Score again</a>
+{% else %}<p>Model Scores hidden until all five of yours are saved.</p><p><code>thirdshift scores {{ pr.url }} --mine</code></p>
+<form class="judgment-form" action="/scores/mine" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="pull_request" value="{{ pr.url }}">
+{% for criterion in criteria %}<fieldset><legend>{{ criterion.name() }}</legend><label>Score <select name="{{ criterion.name() }}" required><option value="">Choose pass or fail</option><option value="pass">pass</option><option value="fail">fail</option></select></label><label>Reason <textarea name="{{ criterion.name() }}_reason" rows="2" required></textarea></label></fieldset>{% endfor %}<button>Save all five Scores</button></form>{% endif %}
+</article></li>{% endfor %}</ul></section>{% endfor %}
+{% if view.weeks.is_empty() %}<p>No Scoring samples yet.</p>{% endif %}
+</main>{% include "console/chrome.html" %}</body></html>

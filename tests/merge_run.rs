@@ -863,7 +863,7 @@ fn an_empty_foreign_review_does_not_bounce_but_a_later_changed_batch_is_reviewed
     );
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     scenario.assert_cleaned_up("issue-7");
 }
@@ -903,7 +903,7 @@ rm -rf "$other"
     assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     scenario.assert_cleaned_up("issue-7");
 }
@@ -959,7 +959,7 @@ rm -rf "$other"
     assert_review_repair_from(&calls[2]["prompt"], &restored);
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     assert_eq!(
         scenario.origin_file("main", "first.txt").unwrap(),
@@ -1200,7 +1200,9 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
 fn a_merge_run_ends_with_the_issue_closed_and_its_claim_removed() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
-    scenario.agent_does(AGENT_OPENS_PR);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+    ));
 
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 

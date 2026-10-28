@@ -4,11 +4,16 @@
 
 use anyhow::{Context, Result, bail};
 
+use crate::child_run::SpecPr;
 use crate::failed_run::PolicyRefusal;
-use crate::github::{GitHub, Mergeable, PrSnapshot, PrState};
+use crate::github::{GitHub, Mergeable, PrSnapshot, PrState, PullRequest as Record};
 use crate::harness::Choice;
+use crate::harness::built_with::MARKER as BUILT_WITH_MARKER;
 use crate::issue::IssueUrl;
 use crate::{poll, progress};
+
+mod findings;
+pub(crate) use findings::UnaddressedFindings;
 
 /// Immutable information for reporting and confirmed Self-merge finishing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +38,53 @@ impl std::fmt::Display for AlreadyMerged {
 
 impl std::error::Error for AlreadyMerged {}
 
+/// The Spec PR a Spec run captured was closed, merged or retargeted under
+/// it: no further Ticket may start, land or Self-merge on its Spec branch,
+/// and no Recovery command may resume it.
+#[derive(Debug)]
+pub(crate) struct SpecPrChanged {
+    pub url: String,
+    pub change: SpecPrChange,
+}
+
+/// How a Spec PR changed under its Spec run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SpecPrChange {
+    /// It is closed or merged.
+    NotOpen(PrState),
+    /// It targets `to`, not the Base branch `from` the Spec run chose.
+    Retargeted { from: String, to: String },
+}
+
+impl SpecPrChange {
+    /// How `pr`, a Spec PR into `base`, changed, if it did.
+    fn of(pr: &Record, base: &str) -> Option<Self> {
+        if !pr.is_open() {
+            Some(Self::NotOpen(pr.state))
+        } else if pr.base != base {
+            Some(Self::Retargeted {
+                from: base.to_string(),
+                to: pr.base.clone(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Display for SpecPrChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the Spec PR {} was ", self.url)?;
+        match &self.change {
+            SpecPrChange::NotOpen(state) => write!(f, "{state}")?,
+            SpecPrChange::Retargeted { from, to } => write!(f, "retargeted from {from} to {to}")?,
+        }
+        f.write_str(" under this Spec run")
+    }
+}
+
+impl std::error::Error for SpecPrChanged {}
+
 /// A gate error is terminal (`Err`); only a refused request can return to
 /// the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
@@ -49,6 +101,9 @@ pub(crate) struct PullRequest<A = GitHub> {
     base: String,
     identified: Option<Identified>,
     scope: CaptureScope,
+    security_review_count: Option<usize>,
+    /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
+    spec_pr: Option<SpecPr>,
     adapter: A,
 }
 
@@ -66,6 +121,8 @@ impl<A: Adapter> PullRequest<A> {
             base: base.to_string(),
             identified: None,
             scope: CaptureScope::Delivery,
+            security_review_count: None,
+            spec_pr: None,
             adapter,
         }
     }
@@ -98,14 +155,58 @@ impl<A: Adapter> PullRequest<A> {
         }
     }
 
-    /// Progress text is optional. Invalid observations and failed writes warn
-    /// without replacing identity or granting readiness/merge authority.
-    pub fn show_checklist(&mut self, checklist: &str) {
+    /// Progress text is optional. Failed reads and writes warn without
+    /// replacing identity or granting readiness/merge authority; a captured
+    /// Spec PR changed under the Spec run is [`SpecPrChanged`].
+    pub fn show_checklist(&mut self, checklist: &str) -> Result<()> {
         if self.identified.is_none() {
-            return;
+            return Ok(());
         }
         if let Err(error) = self.restore_checklist(checklist, true) {
+            if error.is::<SpecPrChanged>() {
+                return Err(error);
+            }
             Self::warn_checklist(&error);
+        }
+        Ok(())
+    }
+
+    /// A Ticket's PR into its Spec branch: every Self-merge first reobserves
+    /// `spec_pr`, and one changed under the Spec run is [`SpecPrChanged`].
+    pub fn gate_self_merge_on(&mut self, spec_pr: SpecPr) {
+        self.spec_pr = Some(spec_pr);
+    }
+
+    /// The Spec PR Ticket accounting captured, as a Ticket started now is
+    /// given it to check before its Self-merge.
+    pub fn captured_spec_pr(&self) -> Option<SpecPr> {
+        let pr = self.identified.as_ref()?;
+        (self.scope == CaptureScope::TicketAccounting).then(|| SpecPr {
+            number: pr.number,
+            base: self.base.clone(),
+        })
+    }
+
+    /// The Spec PR this PR's Self-merge depends on, for a Base fix it starts
+    /// into the same Spec branch.
+    pub fn spec_pr(&self) -> Option<&SpecPr> {
+        self.spec_pr.as_ref()
+    }
+
+    /// Before a Ticket starts, reobserve the captured Spec PR: one changed
+    /// under the Spec run is [`SpecPrChanged`]. A failed read only warns;
+    /// the landing's identity gate still decides.
+    pub fn ensure_spec_pr_unchanged(&mut self) -> Result<()> {
+        if self.identified.is_none() || self.scope != CaptureScope::TicketAccounting {
+            return Ok(());
+        }
+        match self.accounting_snapshot(true) {
+            Ok(_) => Ok(()),
+            Err(error) if error.is::<SpecPrChanged>() => Err(error),
+            Err(error) => {
+                progress::step(format!("could not check the Spec PR: {error:#}"));
+                Ok(())
+            }
         }
     }
 
@@ -157,8 +258,41 @@ impl<A: Adapter> PullRequest<A> {
         let snapshot = self
             .observe(completion)?
             .context("the Spec PR is not found")?;
+        if self.scope == CaptureScope::TicketAccounting
+            && let Some(change) = SpecPrChange::of(&snapshot.pr, &self.base)
+        {
+            return Err(SpecPrChanged {
+                url: snapshot.pr.url,
+                change,
+            }
+            .into());
+        }
         self.validate(&snapshot, false)?;
         Ok(snapshot)
+    }
+
+    /// A Ticket's Self-merge into its Spec branch, this PR's Base branch,
+    /// needs the Spec PR still open from that branch into the Spec run's
+    /// Base branch. Any failure to show that holds the merge.
+    fn ensure_spec_pr_allows_merge(&mut self) -> Result<()> {
+        let Some(spec_pr) = &self.spec_pr else {
+            return Ok(());
+        };
+        let selector = spec_pr.number.to_string();
+        let snapshot = self
+            .adapter
+            .observe(&self.issue, &selector, false)?
+            .with_context(|| format!("the Spec PR #{selector} is not found"))?;
+        self.check_ownership(&snapshot, &self.base, Some(spec_pr.number))?;
+        let pr = &snapshot.pr;
+        if let Some(change) = SpecPrChange::of(pr, &spec_pr.base) {
+            return Err(SpecPrChanged {
+                url: pr.url.clone(),
+                change,
+            }
+            .into());
+        }
+        Ok(())
     }
 
     fn restore_checklist(&mut self, checklist: &str, completion: bool) -> Result<()> {
@@ -209,12 +343,15 @@ impl<A: Adapter> PullRequest<A> {
         };
         self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
-        let written = with_built_with(&body, choice);
+        let owner = crate::logs::captured_owner().ok();
+        let version = crate::harness::version::detected(
+            choice.harness,
+            owner.as_ref().and_then(|owner| owner.log_path()),
+        );
+        let line = choice.built_with(&version);
+        let written = with_built_with(&body, &line);
         if written != body {
-            progress::step(format!(
-                "writing \"{}\" in the pull request's body",
-                choice.built_with()
-            ));
+            progress::step(format!("writing \"{line}\" in the pull request's body"));
             self.adapter
                 .set_body(&self.issue, snapshot.pr.number, &written, false)?;
         }
@@ -273,10 +410,57 @@ impl<A: Adapter> PullRequest<A> {
         Ok(identified)
     }
 
+    /// Open a draft pull request from this Issue branch when the branch has
+    /// none. An existing pull request, draft or ready, is left to
+    /// [`PullRequest::mark_ready`].
+    pub fn open_if_absent(&mut self, title: &str, body: &str) -> Result<()> {
+        if self.observe(false)?.is_some() {
+            return Ok(());
+        }
+        progress::step(format!("opening a draft pull request into {}", self.base));
+        let url = self
+            .adapter
+            .create_draft(&self.issue, &self.branch, &self.base, title, body)?;
+        let url = url.trim().to_string();
+        let number = self.number_from_url(&url)?;
+        self.identified = Some(Identified { number, url });
+        let snapshot = self
+            .observe(false)?
+            .context("the pull request just opened is not found")?;
+        self.validate(&snapshot, false)?;
+        Ok(())
+    }
+
     /// Immutable information for Delivery's final accounting, including
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {
         self.identified.clone()
+    }
+
+    /// Read only the captured PR, after publication and any Repairs. Completion
+    /// reads also work after interruption or a merge; metrics grant no authority.
+    pub fn unaddressed_findings(&mut self) -> Option<UnaddressedFindings> {
+        let pr = self.identified.as_ref()?;
+        let mut counts = match self.adapter.body(&self.issue, pr.number, true) {
+            Ok(body) => UnaddressedFindings::from_body(&body),
+            Err(error) => {
+                progress::step(format!(
+                    "warning: could not read Unaddressed findings for Run metrics: {error:#}"
+                ));
+                return self
+                    .security_review_count
+                    .map(UnaddressedFindings::from_security_review);
+            }
+        };
+        if let Some(count) = self.security_review_count {
+            counts.include_security_review(count);
+        }
+        Some(counts)
+    }
+
+    /// The review's own count survives a failed body write or later publication.
+    pub fn security_reviewed(&mut self, count: usize) {
+        self.security_review_count = Some(count);
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one
@@ -330,6 +514,7 @@ impl<A: Adapter> PullRequest<A> {
     /// race because the request has no expected-base precondition.
     pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
+        self.ensure_spec_pr_allows_merge()?;
         let number = self
             .identified
             .as_ref()
@@ -397,18 +582,36 @@ impl<A: Adapter> PullRequest<A> {
     }
 
     fn capture(&mut self, snapshot: &PrSnapshot) -> Result<()> {
+        let number = self.identified.as_ref().map(|pr| pr.number);
+        self.check_ownership(snapshot, &self.branch, number)?;
+        if self.identified.is_none() {
+            self.identified = Some(Identified {
+                number: snapshot.pr.number,
+                url: snapshot.pr.url.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `snapshot` is this repository's own PR from `head`, numbered
+    /// `number` when that is known.
+    fn check_ownership(
+        &self,
+        snapshot: &PrSnapshot,
+        head: &str,
+        number: Option<u64>,
+    ) -> Result<()> {
         if snapshot.from_fork {
             bail!("PR {} is from a fork", snapshot.pr.url);
         }
-        if snapshot.pr.head != self.branch {
-            bail!("PR head is {}, not {}", snapshot.pr.head, self.branch);
+        if snapshot.pr.head != head {
+            bail!("PR head is {}, not {head}", snapshot.pr.head);
         }
-        if let Some(pr) = &self.identified
-            && snapshot.pr.number != pr.number
+        if let Some(number) = number
+            && snapshot.pr.number != number
         {
             bail!(
-                "PR identity changed from #{} to #{}",
-                pr.number,
+                "PR identity changed from #{number} to #{}",
                 snapshot.pr.number
             );
         }
@@ -417,12 +620,6 @@ impl<A: Adapter> PullRequest<A> {
                 "PR URL does not match observed number #{}",
                 snapshot.pr.number
             );
-        }
-        if self.identified.is_none() {
-            self.identified = Some(Identified {
-                number: snapshot.pr.number,
-                url: snapshot.pr.url.clone(),
-            });
         }
         Ok(())
     }
@@ -607,11 +804,9 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     format!("{}\n\n{checklist}", body.trim_end())
 }
 
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
-
 /// Preserve unrelated text and replace only thirdshift's annotation line.
-fn with_built_with(body: &str, choice: &Choice) -> String {
-    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
+fn with_built_with(body: &str, line: &str) -> String {
+    let line = format!("{line} {BUILT_WITH_MARKER}");
     if body.contains(BUILT_WITH_MARKER) {
         return body
             .split_inclusive('\n')
@@ -961,7 +1156,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("- [ ] #8 running\n");
+            pr.show_checklist("- [ ] #8 running\n").unwrap();
             assert_eq!(pr.info(), None);
             assert_eq!(
                 pr.land_spec("- [x] #8 landed\n").unwrap(),
@@ -1065,7 +1260,18 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            let shown = pr.show_checklist("new\n");
+            let changed = matches!(
+                change,
+                ObservationChange::WrongBase
+                    | ObservationChange::Closed
+                    | ObservationChange::Merged
+            );
+            assert_eq!(
+                shown.is_err_and(|error| error.is::<SpecPrChanged>()),
+                changed,
+                "{change:?}"
+            );
             assert!(pr.land_spec("new\n").is_err(), "{change:?}");
             assert_eq!(world.borrow().body, "Closes #7\n");
             assert!(world.borrow().edits.is_empty());
@@ -1079,6 +1285,50 @@ mod tests {
     }
 
     #[test]
+    fn a_spec_pr_changed_under_accounting_fails_the_checklist_and_the_ticket_start_check() {
+        for (change, said) in [
+            (ObservationChange::Closed, "closed"),
+            (ObservationChange::Merged, "merged"),
+            (
+                ObservationChange::WrongBase,
+                "retargeted from main to develop",
+            ),
+        ] {
+            let (mut pr, world) = owner(World {
+                completion: VecDeque::from([change.answer(snapshot()), change.answer(snapshot())]),
+                ..World::default()
+            });
+            pr.resume_spec().unwrap();
+            let expected = format!("the Spec PR {URL} was {said} under this Spec run");
+            let started = pr.ensure_spec_pr_unchanged().unwrap_err();
+            assert!(started.is::<SpecPrChanged>(), "{change:?}");
+            assert_eq!(format!("{started:#}"), expected);
+            let shown = pr.show_checklist("new\n").unwrap_err();
+            assert_eq!(format!("{shown:#}"), expected);
+            assert!(world.borrow().edits.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_ticket_start_check_skips_before_capture_and_lets_a_failed_read_through() {
+        let (mut pr, world) = owner(World {
+            observations: VecDeque::from([Ok(None)]),
+            completion: VecDeque::from([Err("read failed")]),
+            ..World::default()
+        });
+        pr.resume_spec().unwrap();
+        pr.ensure_spec_pr_unchanged().unwrap();
+        assert_eq!(world.borrow().selected, [("issue-7".to_string(), false)]);
+
+        let (mut pr, _) = owner(World {
+            completion: VecDeque::from([Err("read failed")]),
+            ..World::default()
+        });
+        pr.resume_spec().unwrap();
+        pr.ensure_spec_pr_unchanged().unwrap();
+    }
+
+    #[test]
     fn checklist_preserves_surrounding_text_is_idempotent_and_never_marks_ready_or_merges() {
         let (mut pr, world) = owner(World {
             body:
@@ -1087,8 +1337,8 @@ mod tests {
             ..World::default()
         });
         pr.resume_spec().unwrap();
-        pr.show_checklist("- [x] #8 done\n");
-        pr.show_checklist("- [x] #8 done\n");
+        pr.show_checklist("- [x] #8 done\n").unwrap();
+        pr.show_checklist("- [x] #8 done\n").unwrap();
         assert_eq!(pr.land_spec("- [x] #8 done\n").unwrap(), URL);
         assert_eq!(
             world.borrow().body,
@@ -1109,7 +1359,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            pr.show_checklist("new\n").unwrap();
             assert_eq!(pr.land_spec("new\n").unwrap(), URL);
             pr.begin_delivery();
             assert!(pr.mark_ready(Some("new\n")).is_err());
@@ -1138,7 +1388,7 @@ mod tests {
                 assert_eq!(pr.mark_ready(Some("done\n")).unwrap().number, 13);
             }
             pr.begin_delivery(); // A later call cannot reset a Delivery capture.
-            pr.show_checklist("final\n");
+            pr.show_checklist("final\n").unwrap();
             assert_eq!(world.borrow().edits.last().unwrap().0, 13);
             assert_eq!(
                 world.borrow().selected.last(),
@@ -1169,7 +1419,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            pr.show_checklist("new\n").unwrap();
             assert_eq!(world.borrow().body, expected);
         }
     }
@@ -1196,7 +1446,7 @@ mod tests {
                     (&mut existing, existing_world),
                 ] {
                     assert_eq!(pr.land_spec("done\n").unwrap(), URL);
-                    pr.show_checklist("final\n");
+                    pr.show_checklist("final\n").unwrap();
                     assert!(
                         world
                             .borrow()
@@ -1244,7 +1494,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         pr.write_built_with(&choice).unwrap();
         let expected =
-            "Closes #7\n\nBuilt with claude · opus · high <!-- thirdshift:built-with -->\n";
+            "Closes #7\n\nBuilt with claude unknown · opus · high <!-- thirdshift:built-with -->\n";
         assert_eq!(world.borrow().body, expected);
         assert_eq!(world.borrow().edits.len(), 2);
         assert!(world.borrow().edits.iter().all(|(number, _)| *number == 12));
@@ -1260,7 +1510,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         assert_eq!(
             world.borrow().body,
-            "Summary\r\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
+            "Summary\r\nBuilt with claude unknown · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
         );
     }
 
@@ -1528,6 +1778,80 @@ mod tests {
             pr.mark_ready(None).unwrap();
             assert!(pr.merge("watched").is_err());
             assert!(world.borrow().merges.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_tickets_self_merge_waits_on_its_spec_pr_still_open_into_the_spec_runs_base() {
+        let spec_pr = || {
+            let mut spec_pr = snapshot();
+            spec_pr.pr.number = 20;
+            spec_pr.pr.url = "https://github.com/acme/widgets/pull/20".to_string();
+            spec_pr.pr.head = "main".to_string();
+            spec_pr.pr.base = "release".to_string();
+            spec_pr
+        };
+        let changed = |change: fn(&mut PrSnapshot)| {
+            let mut spec_pr = spec_pr();
+            change(&mut spec_pr);
+            Ok(Some(spec_pr))
+        };
+        for (answer, said) in [
+            (Ok(Some(spec_pr())), None),
+            (
+                changed(|spec_pr| spec_pr.pr.state = PrState::Closed),
+                Some(
+                    "the Spec PR https://github.com/acme/widgets/pull/20 was closed under this Spec run",
+                ),
+            ),
+            (
+                changed(|spec_pr| spec_pr.pr.state = PrState::Merged),
+                Some(
+                    "the Spec PR https://github.com/acme/widgets/pull/20 was merged under this Spec run",
+                ),
+            ),
+            (
+                changed(|spec_pr| spec_pr.pr.base = "develop".to_string()),
+                Some(
+                    "the Spec PR https://github.com/acme/widgets/pull/20 was retargeted from release to develop under this Spec run",
+                ),
+            ),
+            (
+                changed(|spec_pr| spec_pr.pr.head = "other".to_string()),
+                Some("PR head is other, not main"),
+            ),
+            (Ok(None), Some("the Spec PR #20 is not found")),
+            (Err("unreadable"), Some("unreadable")),
+        ] {
+            let (mut pr, world) = owner(World {
+                observations: VecDeque::from([
+                    Ok(Some(snapshot())),
+                    Ok(Some(snapshot())),
+                    Ok(Some(snapshot())),
+                    answer,
+                ]),
+                ..World::default()
+            });
+            pr.gate_self_merge_on(SpecPr {
+                number: 20,
+                base: "release".to_string(),
+            });
+            pr.mark_ready(None).unwrap();
+            let attempt = pr.merge("watched");
+            assert_eq!(world.borrow().selected.last().unwrap().0, "20");
+            match said {
+                None => {
+                    assert!(matches!(attempt.unwrap(), MergeAttempt::Merged));
+                    assert_eq!(world.borrow().merges, [(12, "watched".to_string())]);
+                }
+                Some(said) => {
+                    let Err(error) = attempt else {
+                        panic!("merged despite: {said}");
+                    };
+                    assert_eq!(format!("{error:#}"), said);
+                    assert!(world.borrow().merges.is_empty(), "{said}");
+                }
+            }
         }
     }
 

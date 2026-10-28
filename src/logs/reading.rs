@@ -1,6 +1,7 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+mod attribution;
 mod cache;
 mod captured_activity;
 pub(crate) mod catalog;
@@ -23,23 +24,102 @@ use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+use super::pass_starts::{self, PassStart};
+pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
-pub(super) use health::{Health, UsualRange};
+pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
+pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
-pub(super) use selection::{Detailed, Observation};
+pub(super) use selection::Observation;
 
 pub(super) struct Snapshot {
+    pub(super) unavailable_accounts: BTreeSet<String>,
     commands: Vec<Entry>,
     pub(super) idle_passes: Vec<IdlePass>,
+    pub(super) pass_starts: Vec<PassStart>,
     now: DateTime<Local>,
     /// The capture its Commands' Session queries and the Logs listing share.
     inventory: Arc<Inventory>,
 }
 
 impl Snapshot {
+    /// Merge opted-in accounts, isolating another account's read failures.
+    pub(super) fn for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, None)
+    }
+
+    pub(super) fn details_for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: &str,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, Some(input))
+    }
+
+    fn user_capture(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: Option<&str>,
+    ) -> Result<Self> {
+        let mut snapshot = Self::capture_records(
+            Arc::new(inventory::Native),
+            &config.logs_dir,
+            now,
+            config.silent_interval,
+            input.is_some(),
+        )?;
+        let sources = super::accounts::discover(config);
+        snapshot.unavailable_accounts = sources.unavailable;
+        for source in sources.logs.into_iter().skip(1) {
+            let Ok(mut other) = Self::capture_records(
+                Arc::new(inventory::Native),
+                &source.root,
+                now,
+                config.silent_interval,
+                input.is_some(),
+            ) else {
+                if matches!(
+                    config.console.other_accounts,
+                    crate::config::console::OtherAccounts::Named(_)
+                ) {
+                    snapshot.unavailable_accounts.extend(source.account);
+                }
+                continue;
+            };
+            fn mark(command: &mut Command, account: &Option<String>) {
+                command.account = account.clone();
+                confine_other_account_sessions(command);
+                for child in command.children.iter_mut().chain(&mut command.dispatched) {
+                    mark(child, account);
+                }
+            }
+            for entry in &mut other.commands {
+                match entry {
+                    Entry::Record(command) => mark(command, &source.account),
+                    Entry::History(command) => command.account = source.account.clone(),
+                }
+            }
+            snapshot.commands.extend(other.commands);
+        }
+        if let Some(input) = input
+            && let Observation::Record(selected) = snapshot.resolve(input)?.observation
+        {
+            let identity = CommandIdentity::of(selected);
+            for entry in &mut snapshot.commands {
+                if let Entry::Record(command) = entry {
+                    command.add_session_signals(Some(&identity));
+                }
+            }
+        }
+        Ok(snapshot)
+    }
+
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
@@ -56,21 +136,48 @@ impl Snapshot {
         Self::capture(Arc::new(inventory::Native), root, now, silent)
     }
 
+    pub(super) fn load_metrics(root: &Path, now: DateTime<Local>) -> Result<Self> {
+        let mut snapshot = Self::capture_records(
+            Arc::new(inventory::Native),
+            root,
+            now,
+            std::time::Duration::from_secs(600),
+            true,
+        )?;
+        for entry in &mut snapshot.commands {
+            if let Entry::Record(command) = entry {
+                command.add_session_signals(None);
+            }
+        }
+        Ok(snapshot)
+    }
+
     fn capture(
         files: Arc<dyn inventory::Files>,
         root: &Path,
         now: DateTime<Local>,
         silent: std::time::Duration,
     ) -> Result<Self> {
+        Self::capture_records(files, root, now, silent, false)
+    }
+
+    fn capture_records(
+        files: Arc<dyn inventory::Files>,
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+        past_metrics: bool,
+    ) -> Result<Self> {
         let inventory = Arc::new(Inventory::capture(files, root)?);
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
+        let pass_starts = starts_in(&inventory, now)?;
         for repo in inventory.repositories() {
             let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo.path)?);
             for folder in &repo.folders {
-                for (path, tree) in read_records(&inventory, folder)? {
+                for (path, tree) in read_records(&inventory, folder, past_metrics)? {
                     let record = &tree.command;
                     if record.parent_record.is_none() {
                         covered.insert(command_log(&path));
@@ -91,7 +198,7 @@ impl Snapshot {
                     .map(|command| Entry::History(Box::new(command))),
             );
         }
-        let ranges = health::UsualRanges::from_records(&records);
+        let ranges = super::usual_range::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
             .iter()
             .filter(|(_, tree)| {
@@ -110,8 +217,10 @@ impl Snapshot {
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
+            unavailable_accounts: BTreeSet::new(),
             commands,
             idle_passes,
+            pass_starts,
             now,
             inventory,
         })
@@ -134,11 +243,34 @@ impl Snapshot {
     }
 }
 
+/// Start times alone, without reading unrelated Command records or GitHub.
+pub(super) fn pass_starts(root: &Path, now: DateTime<Local>) -> Result<Vec<PassStart>> {
+    let inventory = Inventory::capture(Arc::new(inventory::Native), root)?;
+    starts_in(&inventory, now)
+}
+
+fn starts_in(inventory: &Inventory, now: DateTime<Local>) -> Result<Vec<PassStart>> {
+    let mut starts = Vec::new();
+    for repo in inventory.repositories() {
+        starts.extend(pass_starts::read(&repo.path, &repo.name(), now)?);
+    }
+    starts.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
+    Ok(starts)
+}
+
+/// Match a PR to the exact retained Run, including child and dispatched Runs.
+pub(crate) fn run_for_pull_request(root: &Path, url: &str) -> Result<Option<(PathBuf, String)>> {
+    let snapshot = Snapshot::load(root, Local::now())?;
+    Ok(PullRequestAttribution::new(&snapshot)
+        .latest(url)
+        .map(|command| (command.record_path.clone(), command.name.clone())))
+}
+
 /// Reload only the captured Command's folder, after Stop cleanup has finished.
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
     let inventory = Arc::new(Inventory::on_demand());
     let folder = inventory.folder(path.parent().context("Command record has no directory")?)?;
-    let mut records = read_records(&inventory, &folder)?;
+    let mut records = read_records(&inventory, &folder, false)?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
     let command = tree(&inventory, path, None, &mut records, &now);
     let mut work = RetainedWork::default();
@@ -177,6 +309,8 @@ pub(super) enum Entry {
 
 #[derive(Serialize)]
 pub(super) struct Command {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) account: Option<String>,
     #[serde(skip)]
     pub(super) record_path: PathBuf,
     #[serde(flatten)]
@@ -205,6 +339,29 @@ pub(super) struct CurrentStage {
 }
 
 impl Command {
+    /// Enrich this Command when `selected` is every Command (`None`), or this
+    /// Command's exact identity. A match also enriches nested Ticket
+    /// runs and dispatches. Path alone is not enough: a dispatch shares its
+    /// parent's record path. Usual ranges and health already include every record.
+    fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
+        let enrich = selected.is_none_or(|identity| identity.matches(self));
+        if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
+            metrics.add_session_signals(
+                &self.record,
+                if self.account.is_some() {
+                    cache::readonly_session_signals
+                } else {
+                    cache::session_signals
+                },
+            );
+            self.record.run_metrics = Some(metrics);
+        }
+        let nested = if enrich { None } else { selected };
+        for child in self.dispatched.iter_mut().chain(&mut self.children) {
+            child.add_session_signals(nested);
+        }
+    }
+
     fn new(
         inventory: &Arc<Inventory>,
         record: CommandRecord,
@@ -227,6 +384,7 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            account: None,
             activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
             command_log: command_log(&record_path),
             record_path,
@@ -244,7 +402,21 @@ impl Command {
     }
 }
 
-fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathBuf, CommandTree>> {
+pub(super) fn repository_records(root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+    let inventory = Inventory::on_demand();
+    let mut records = BTreeMap::new();
+    for folder in inventory.directories(&root.join("commands"))? {
+        let folder = inventory.folder(&folder)?;
+        records.extend(read_records(&inventory, &folder, false)?);
+    }
+    Ok(records)
+}
+
+fn read_records(
+    inventory: &Inventory,
+    folder: &Folder,
+    past_metrics: bool,
+) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
     for path in &folder.files {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -254,12 +426,20 @@ fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathB
         let Some(mut tree) = cache::record(path)? else {
             continue;
         };
-        let record = &mut tree.command;
-        if record.version != 1 {
+        if !matches!(tree.command.version, 1 | 2) {
             continue;
         }
+        if past_metrics {
+            for record in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
+                if record.run_metrics.is_none() && record.outcome.is_some() {
+                    record.run_metrics = Some(super::run_metrics::RunMetrics::historical(record));
+                }
+            }
+        }
+        let record = &mut tree.command;
         // Records written before completion times existed were last
-        // replaced when their outcome was recorded.
+        // replaced when their outcome was recorded. Keep that health fallback
+        // after metric reconstruction so it cannot invent recorded durations.
         if record.outcome.is_some() && record.ended_at.is_none() {
             record.end_time_estimated = true;
             record.ended_at = inventory
@@ -269,6 +449,47 @@ fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathB
         records.insert(path.clone(), tree);
     }
     Ok(records)
+}
+
+/// Another account's record names its Session path. Keep a trace only when it
+/// is a regular file inside that record's own directory. A lexical prefix is
+/// not enough: `..` and a symlink can leave the directory.
+fn confine_other_account_sessions(command: &mut Command) {
+    let root = command.record_path.parent();
+    let keep = |path: &Path| {
+        let Some(root) = root else {
+            return false;
+        };
+        contained_trace(root, path)
+    };
+    if command
+        .record
+        .session_log
+        .as_deref()
+        .is_some_and(|path| !keep(path))
+    {
+        command.record.session_log = None;
+    }
+    for stage in &mut command.record.stages {
+        if stage.session_log.as_deref().is_some_and(|path| !keep(path)) {
+            stage.session_log = None;
+        }
+    }
+    command.activity.drop_session_unless(keep);
+}
+
+fn contained_trace(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
 fn command_log(path: &Path) -> PathBuf {

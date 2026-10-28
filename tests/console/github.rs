@@ -36,13 +36,7 @@ fn pr_is(scenario: &Scenario, state: &str) {
 }
 
 fn group(page: &str, name: &str) -> String {
-    page.split(&format!("data-group=\"{name}\""))
-        .nth(1)
-        .unwrap()
-        .split("</details>")
-        .next()
-        .unwrap()
-        .to_owned()
+    section(page, name).to_owned()
 }
 
 fn events(console: &Console) -> BufReader<reqwest::blocking::Response> {
@@ -66,6 +60,21 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
             "background read did not start"
         );
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Kill the Console and return its `gh` calls once they settle. A fake `gh`
+/// it spawned before the kill can still record its call afterwards.
+fn stop(console: Console, scenario: &Scenario) -> Vec<Vec<String>> {
+    drop(console);
+    let mut calls = scenario.gh_calls();
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let now = scenario.gh_calls();
+        if now == calls {
+            return calls;
+        }
+        calls = now;
     }
 }
 
@@ -126,8 +135,7 @@ fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
     );
     // Stop the Console to distinguish status's reads from the background reads.
     drop(stream);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -166,8 +174,7 @@ fn github_issue_closure_wakes_needs_you_and_status_reuses_the_answer() {
     // unchanged facts must leave open pages idle too.
     assert_idle_events(&console, Duration::from_secs(2));
     drop(stream);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -197,8 +204,7 @@ fn unchanged_github_reads_leave_open_inbox_idle_and_keep_status_fresh() {
     wait_until(|| scenario.gh_calls_of("api", "graphql").len() >= 3);
     assert_idle_events(&console, Duration::from_secs(2));
     assert!(scenario.gh_calls_of("api", "graphql").len() >= 6);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -372,13 +378,14 @@ fn failure_warning_wakes_open_inbox_and_recovers() {
     }
     let output = scenario.run(&["status", "--json"]);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
-    assert!(
-        console
-            .get("/")
-            .text()
+    let answered =
+        chrono::DateTime::parse_from_rfc3339(status["github_last_answered_at"].as_str().unwrap())
             .unwrap()
-            .contains(status["github_last_answered_at"].as_str().unwrap())
-    );
+            .with_timezone(&chrono::Local)
+            .format("GitHub last answered at %Y-%m-%d %H:%M ")
+            .to_string();
+    let page = console.get("/").text().unwrap();
+    assert!(page.contains(&answered), "{answered} not in {page}");
     gh["failing"] = json!([]);
     scenario.write_gh_state(&gh);
     pr_is(&scenario, "MERGED");

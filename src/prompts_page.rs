@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, SecurityRun, Trial, Units};
+use Sender::{ArchitectRun, Experiment, Process, ScoringRun, SecurityRun, Trial, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -60,7 +60,13 @@ const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
 const MODEL: &str = "<model>";
 const EFFORT: &str = "<effort>";
-const PLACEHOLDERS: [&str; 20] = [
+const PROCESS: &str = "<process>";
+const STEP: &str = "<step>";
+const SKILL_NAME: &str = "<skill>";
+const SKILL_PATH: &str = "<skill path>";
+const EARLIER_STEP: &str = "<earlier step>";
+const EARLIER_RESULT: &str = "<earlier step result>";
+const PLACEHOLDERS: [&str; 26] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -81,6 +87,12 @@ const PLACEHOLDERS: [&str; 20] = [
     prompt::REVIEW_REPORTS_DIRECTORY,
     prompt::SECURITY_REVIEW_REPORT_FILE,
     prompt::SECURITY_REVIEW_MERGE_BASE,
+    PROCESS,
+    STEP,
+    SKILL_NAME,
+    SKILL_PATH,
+    EARLIER_STEP,
+    EARLIER_RESULT,
 ];
 
 /// Who sends a prompt.
@@ -93,8 +105,11 @@ enum Sender {
     SecurityRun,
     /// An Experiment's private model Grader.
     Experiment,
+    ScoringRun,
     /// An Eval Trial, outside the Run's press units.
     Trial,
+    /// A Step of a Custom process.
+    Process,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -137,6 +152,20 @@ fn prompts() -> Vec<Prompt> {
     };
     let with_sentinel = vec![
         Prompt {
+            id: "prompt-scoring-grader",
+            title: "Scoring Grader",
+            when: "A Scoring run asks an independent Model to score one blind packet on Correct, Scoped, Tested, Honest and Standards.",
+            sender: ScoringRun,
+            text: prompt::scoring_grader(),
+        },
+        Prompt {
+            id: "prompt-bug-origin",
+            title: "Bug-origin proposal",
+            when: "In a Scoring run, inspects a closed bug's fix and history in the Eval sandbox, proposing a commit only when history establishes one.",
+            sender: ScoringRun,
+            text: prompt::bug_origin(),
+        },
+        Prompt {
             id: "prompt-grader",
             title: "Grader",
             when: "In an Experiment, starts a fresh model Grader for one Eval task's blind packet after code checks finish.",
@@ -177,6 +206,35 @@ fn prompts() -> Vec<Prompt> {
             when: "In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.",
             sender: Units(&[REVIEW]),
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
+        },
+        Prompt {
+            id: "prompt-bug-fresh",
+            title: "Bug Ticket run, fresh",
+            when: "Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(&issue, &prompt::fresh(&issue, BASE, BRANCH), None),
+        },
+        Prompt {
+            id: "prompt-bug-continuation",
+            title: "Bug Ticket run, Continuation without a pull request",
+            when: "Diagnoses a bug in a Continuation with no pull request before changing code. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending hands the issue back for information without a PR.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(
+                &issue,
+                &prompt::continuation(&issue, BASE, BRANCH, None),
+                Some(prompt::SECURITY_REVIEW_MERGE_BASE),
+            ),
+        },
+        Prompt {
+            id: "prompt-bug-continuation-pr",
+            title: "Bug Ticket run, Continuation with an open pull request",
+            when: "Diagnoses a bug before continuing its open pull request. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending leaves the existing PR unmerged and hands the issue back for information.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(
+                &issue,
+                &prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+                Some(prompt::SECURITY_REVIEW_MERGE_BASE),
+            ),
         },
         Prompt {
             id: "prompt-architecture-review",
@@ -264,6 +322,63 @@ fn prompts() -> Vec<Prompt> {
             when: "Continues any session, once, that ended its turn with background work still running, which was killed with it.",
             sender: Units(&[IMPLEMENT, REVIEW, FINISH]),
             text: prompt::resume(&[BACKGROUND_WORK]),
+        },
+        Prompt {
+            id: "prompt-process-step",
+            title: "Custom process Step",
+            when: "Starts the first Step of a Custom process. No earlier Step has a result.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                None,
+                prompt::ProcessWorktree::Throwaway,
+            ),
+        },
+        Prompt {
+            id: "prompt-process-step-later",
+            title: "Custom process Step, with an earlier result",
+            when: "Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                prompt::EarlierSteps {
+                    results: &[(
+                        EARLIER_STEP.to_string(),
+                        std::path::PathBuf::from(EARLIER_RESULT),
+                    )],
+                    first: false,
+                },
+                None,
+                prompt::ProcessWorktree::Throwaway,
+            ),
+        },
+        Prompt {
+            id: "prompt-process-step-issue",
+            title: "Custom process Step, on an issue",
+            when: "Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                Some(&issue),
+                prompt::ProcessWorktree::IssueBranch(None),
+            ),
         },
     ];
     with_sentinel
@@ -390,7 +505,7 @@ fn fence(text: &str) -> String {
 /// when, if not always; or the Architecture review, which is no unit of a Ticket run.
 fn skill_used_by(skill: &str) -> String {
     match skill {
-        "thirdshift-implement" | "thirdshift-tdd" => unit_links(&[IMPLEMENT]),
+        "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
         "thirdshift-code-review" => format!("{}, or a Code review Trial", unit_links(&[REVIEW])),
         "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
@@ -617,7 +732,9 @@ fn sent_by(sender: &Sender) -> String {
         ArchitectRun => "an Architect run, before any unit".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
+        ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
+        Process => "a Custom process".to_string(),
     }
 }
 
@@ -701,6 +818,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_continuation_bug_prompt_names_the_merge_base_and_a_fresh_one_does_not() {
+        let prompts = prompts();
+        let text = |id: &str| {
+            prompts
+                .iter()
+                .find(|prompt| prompt.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"))
+                .text
+                .clone()
+        };
+        let line = format!(
+            "Merge base commit: `{}`.",
+            prompt::SECURITY_REVIEW_MERGE_BASE
+        );
+        for id in ["prompt-bug-continuation", "prompt-bug-continuation-pr"] {
+            let text = text(id);
+            assert!(text.contains(&line), "{id}: {text}");
+            assert!(text.contains("Reproduce at the merge base"), "{id}");
+        }
+        let fresh = text("prompt-bug-fresh");
+        assert!(!fresh.contains("Merge base commit:"), "{fresh}");
+    }
+
     /// The golden-file test: the page carries the fragment as rendered now.
     /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
@@ -745,6 +886,9 @@ mod tests {
                 "prompt-fresh"
                     | "prompt-continuation"
                     | "prompt-continuation-pr"
+                    | "prompt-bug-fresh"
+                    | "prompt-bug-continuation"
+                    | "prompt-bug-continuation-pr"
                     | "prompt-spec-review"
                     | "prompt-architecture-review"
                     | "prompt-security-review"
@@ -753,6 +897,9 @@ mod tests {
                     | "prompt-review-repair"
                     | "prompt-ci-fix-repair"
                     | "prompt-ci-fix-repair-inherited"
+                    | "prompt-process-step"
+                    | "prompt-process-step-later"
+                    | "prompt-process-step-issue"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

@@ -17,12 +17,40 @@ use crate::notification::NotificationAsk;
 use crate::ready::PickupOrder;
 use crate::run::Goal;
 
+/// What `thirdshift process` was asked to do.
+pub enum ProcessAction {
+    List,
+    Show(String),
+    Check(ProcessRun),
+    Run(ProcessRun),
+}
+
+/// A Custom process to check or run, with the Command's explicit choices.
+pub struct ProcessRun {
+    pub name: String,
+    pub issue: Option<IssueInput>,
+    pub asked: harness::Asked,
+    /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
+    pub email: Option<NotificationAsk>,
+    /// `merge` or `no-merge`. Absent leaves the choice to the User config.
+    pub goal: Option<Goal>,
+    /// Whether this Process's Security review Step is requested.
+    pub security_review: Option<crate::security::review::Ask>,
+}
+
 /// What thirdshift was asked to do.
 pub enum Command {
     Help,
     Version,
     Update,
     Setup,
+    Score,
+    Scores {
+        pull_request: Option<String>,
+        mine: bool,
+        json: bool,
+    },
+    BugOrigins(crate::scoring::origins::Options),
     Evals(crate::evals::Action),
     Experiment(crate::evals::experiment::Options),
     Experiments(Vec<String>),
@@ -52,6 +80,10 @@ pub enum Command {
         json: bool,
     },
     ConsoleThemeImport(String),
+    ConsoleOtherAccounts {
+        value: Option<String>,
+        json: bool,
+    },
     ConsoleThemeExport(String),
     ConsoleSections {
         hide: Vec<String>,
@@ -66,6 +98,7 @@ pub enum Command {
         command: String,
         json: bool,
     },
+    Metrics(MetricsArgs),
     Spans {
         command: String,
         span: Option<String>,
@@ -100,6 +133,11 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    Skill {
+        name: String,
+        issue: Option<IssueInput>,
+    },
+    Process(ProcessAction),
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
     /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
@@ -115,6 +153,15 @@ pub enum Command {
     Pickup(PassArgs),
     Secure(PassArgs),
     Run(Box<RunArgs>),
+}
+
+#[derive(Default)]
+pub struct MetricsArgs {
+    pub command: Option<String>,
+    pub json: bool,
+    pub from: Option<chrono::NaiveDate>,
+    pub through: Option<chrono::NaiveDate>,
+    pub repositories: Vec<String>,
 }
 
 /// The flag that stops an Architect run once its plan is published and
@@ -336,12 +383,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
+        Some("bug-origins") => {
+            return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
+        }
         Some("experiment") => {
             return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
         }
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "other-accounts") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                let value = match &args[2..end] {
+                    [] => None,
+                    [value] if !value.starts_with('-') => Some(value.clone()),
+                    _ => bail!(
+                        "usage: thirdshift console other-accounts [none|readable|name,name] [--json]"
+                    ),
+                };
+                return Ok(Command::ConsoleOtherAccounts { value, json });
+            }
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");
                 let end = args.len() - usize::from(json);
@@ -457,6 +519,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 requeue,
                 json,
             });
+        }
+        Some("metrics") => {
+            return metrics(&args[1..]).map(Command::Metrics);
         }
         Some("dismiss") => {
             let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
@@ -614,6 +679,35 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
             };
         }
+        Some("score") => {
+            return match &args[1..] {
+                [] => Ok(Command::Score),
+                _ => bail!("usage: thirdshift score"),
+            };
+        }
+        Some("scores") => {
+            let mut pull_request = None;
+            let mut mine = false;
+            let mut json = false;
+            for argument in &args[1..] {
+                match argument.as_str() {
+                    "--mine" if !mine => mine = true,
+                    "--json" if !json => json = true,
+                    value if !value.starts_with('-') && pull_request.is_none() => {
+                        pull_request = Some(value.to_owned());
+                    }
+                    _ => bail!("usage: thirdshift scores [<pull request>] [--mine] [--json]"),
+                }
+            }
+            if mine && pull_request.is_none() {
+                bail!("usage: thirdshift scores <pull request> --mine [--json]");
+            }
+            return Ok(Command::Scores {
+                pull_request,
+                mine,
+                json,
+            });
+        }
         Some("resources") => {
             return match &args[1..] {
                 [] => Ok(Command::Resources { json: false }),
@@ -650,6 +744,20 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
             };
         }
+        Some("skill") => {
+            return match &args[1..] {
+                [name] => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: None,
+                }),
+                [name, keyword, issue] if keyword == "issue" => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: Some(IssueInput::parse(issue)?),
+                }),
+                _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
+            };
+        }
+        Some("process") => return parse_process(&args[1..]).map(Command::Process),
         Some("setup") => {
             return match &args[1..] {
                 [] => Ok(Command::Setup),
@@ -690,6 +798,208 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     })))
+}
+
+fn metrics(args: &[String]) -> Result<MetricsArgs> {
+    use chrono::Datelike;
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--from <Monday>] [--through <Monday>] [--repo <owner/repository>]";
+    let mut asked = MetricsArgs::default();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--json" if !asked.json => asked.json = true,
+            "--from" | "--through" => {
+                let value = words.next().context(usage)?;
+                let date =
+                    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").with_context(|| {
+                        format!("{word} needs a Monday week-start date (YYYY-MM-DD)")
+                    })?;
+                anyhow::ensure!(
+                    date.format("%Y-%m-%d").to_string() == *value
+                        && date.weekday() == chrono::Weekday::Mon,
+                    "{word} needs a Monday week-start date (YYYY-MM-DD)"
+                );
+                let slot = if word == "--from" {
+                    &mut asked.from
+                } else {
+                    &mut asked.through
+                };
+                anyhow::ensure!(slot.is_none(), "repeated argument: {word}");
+                *slot = Some(date);
+            }
+            "--repo" => {
+                let value = words.next().context(usage)?;
+                anyhow::ensure!(
+                    value.split('/').count() == 2
+                        && value.split('/').all(|part| {
+                            !part.is_empty()
+                                && part.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)
+                                })
+                        }),
+                    "--repo needs owner/repository"
+                );
+                asked.repositories.push(value.clone());
+            }
+            word if !word.starts_with('-') && asked.command.is_none() => {
+                asked.command = Some(word.into())
+            }
+            _ => bail!(usage),
+        }
+    }
+    anyhow::ensure!(
+        asked
+            .from
+            .zip(asked.through)
+            .is_none_or(|(from, through)| from <= through),
+        "--from must not be after --through"
+    );
+    anyhow::ensure!(
+        asked.command.is_none()
+            || (asked.from.is_none() && asked.through.is_none() && asked.repositories.is_empty()),
+        "week and repository filters apply only to metrics trends"
+    );
+    Ok(asked)
+}
+
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review]";
+
+fn parse_process(args: &[String]) -> Result<ProcessAction> {
+    if args.is_empty() || matches!(args, [word] if word == "list") {
+        return Ok(ProcessAction::List);
+    }
+    if args[0] == "list" {
+        bail!(PROCESS_USAGE);
+    }
+    if args[0] == "show" {
+        let [_, name] = args else {
+            bail!(PROCESS_USAGE);
+        };
+        return Ok(ProcessAction::Show(process_name(name)?));
+    }
+    let mut name = None;
+    let mut issue = None;
+    let mut email = None;
+    let mut goal = None;
+    let mut review_flags = Flags::default();
+    let mut asked = harness::Asked::default();
+    let mut check = false;
+    let mut expect_issue = false;
+    let mut words = args.iter().peekable();
+    while let Some(arg) = words.next() {
+        if take_harness_flag(&mut asked, arg, &mut words)? {
+            continue;
+        }
+        if take_email_flag(&mut email, arg, &mut words)? {
+            continue;
+        }
+        if take_merge_flag(&mut goal, arg)? {
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "security-review" | "--security-review" | "no-security-review" | "--no-security-review"
+        ) && (name.is_some() || arg.starts_with("--"))
+        {
+            take_flag(&mut review_flags, arg, &mut words)?;
+            continue;
+        }
+        // `check` is the subcommand only before the name. A later `check` is
+        // the name, so a reserved file called check is still refused as one.
+        if arg == "check"
+            && !check
+            && name.is_none()
+            && issue.is_none()
+            && email.is_none()
+            && goal.is_none()
+        {
+            check = true;
+            continue;
+        }
+        if arg == "issue" {
+            if name.is_none() || expect_issue || issue.is_some() {
+                bail!(PROCESS_USAGE);
+            }
+            expect_issue = true;
+            continue;
+        }
+        if expect_issue {
+            issue = Some(IssueInput::parse(arg)?);
+            expect_issue = false;
+            continue;
+        }
+        if name.is_some() || arg.starts_with('-') {
+            bail!(PROCESS_USAGE);
+        }
+        name = Some(process_name(arg)?);
+    }
+    if expect_issue
+        || ((email.is_some() || goal.is_some() || review_flags.security_review.is_some())
+            && (check || name.is_none()))
+    {
+        bail!(PROCESS_USAGE);
+    }
+    let Some(name) = name else {
+        bail!(PROCESS_USAGE);
+    };
+    let command = ProcessRun {
+        name,
+        issue,
+        asked,
+        email,
+        goal,
+        security_review: review_flags.security_review,
+    };
+    Ok(if check {
+        ProcessAction::Check(command)
+    } else {
+        ProcessAction::Run(command)
+    })
+}
+
+/// Record a merge flag in `goal`. False, taking nothing, when `arg` is not one.
+fn take_merge_flag(goal: &mut Option<Goal>, arg: &str) -> Result<bool> {
+    let asked = match arg {
+        "merge" | "--merge" => Goal::Merged,
+        "no-merge" | "--no-merge" => Goal::ReadyForReview,
+        _ => return Ok(false),
+    };
+    ask_once(goal, asked, arg, MERGE_FLAGS)?;
+    Ok(true)
+}
+
+/// Record an email flag in `email`. False, taking nothing, when `arg` is not one.
+fn take_email_flag<'a>(
+    email: &mut Option<NotificationAsk>,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    let asked = match arg {
+        "email" | "--email" => {
+            NotificationAsk::Send(rest.next_if(|next| is_address(next)).cloned())
+        }
+        "email-unless-merged" | "--email-unless-merged" => {
+            NotificationAsk::SendUnlessMerged(rest.next_if(|next| is_address(next)).cloned())
+        }
+        "no-email" | "--no-email" => NotificationAsk::Skip,
+        _ => return Ok(false),
+    };
+    ask_once(email, asked, arg, EMAIL_FLAGS)?;
+    Ok(true)
+}
+
+/// A process name is one path component. A slash is an argument error, not a
+/// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
+fn process_name(name: &str) -> Result<String> {
+    if !one_path_component(name) {
+        bail!(PROCESS_USAGE);
+    }
+    Ok(name.to_string())
+}
+
+/// One path component: not empty, not `.` or `..`, and no separator or line break.
+pub(crate) fn one_path_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
@@ -802,32 +1112,13 @@ fn take_flag<'a>(
     arg: &str,
     rest: &mut Peekable<impl Iterator<Item = &'a String>>,
 ) -> Result<bool> {
+    if take_email_flag(&mut flags.email, arg, rest)? {
+        return Ok(true);
+    }
+    if take_merge_flag(&mut flags.goal, arg)? {
+        return Ok(true);
+    }
     match arg {
-        "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-        "no-merge" | "--no-merge" => {
-            ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-        }
-        "email" | "--email" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::Send(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "email-unless-merged" | "--email-unless-merged" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::SendUnlessMerged(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "no-email" | "--no-email" => {
-            ask_once(&mut flags.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
-        }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?
@@ -871,13 +1162,26 @@ fn take_flag<'a>(
             arg,
             SECURITY_REVIEW_FLAGS,
         )?,
-        "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
+        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+    }
+    Ok(true)
+}
+
+/// Take the Harness, Model and Effort words shared by Commands, consuming
+/// nothing when `arg` is not one of them.
+fn take_harness_flag<'a>(
+    asked: &mut harness::Asked,
+    arg: &str,
+    rest: &mut impl Iterator<Item = &'a String>,
+) -> Result<bool> {
+    match arg {
+        "harness" | "--harness" => ask_harness(&mut asked.harness, arg, rest.next())?,
         "model" | "--model" => {
-            let model = &mut flags.harness.model_and_effort.model;
+            let model = &mut asked.model_and_effort.model;
             ask_word(model, arg, rest.next(), "a model")?
         }
         "effort" | "--effort" => {
-            let effort = &mut flags.harness.model_and_effort.effort;
+            let effort = &mut asked.model_and_effort.effort;
             ask_word(effort, arg, rest.next(), "an effort level")?
         }
         _ => return Ok(false),
@@ -987,6 +1291,7 @@ mod tests {
                     },
                 ] {
                     let asks = Asks {
+                        delivery_limits: crate::delivery::Limits::default(),
                         security_review_harness: None,
                         security_review_default: None,
                         goal,

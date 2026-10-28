@@ -159,6 +159,39 @@ fn console_dismiss_and_undo_refuse_missing_sessions_bad_csrf_and_gets() {
 }
 
 #[test]
+fn console_dismiss_is_unavailable_for_mixed_collapsed_rows() {
+    let home = configured();
+    let mut fixture = record(home.path(), 8, Some("failed"), 0);
+    fixture["kind"] = json!("Run");
+    fixture["cause"] = json!("boom");
+    write_record(home.path(), 8, &fixture);
+    let older = chrono::Local::now() - chrono::Duration::seconds(10);
+    let stamp = older.format("%Y%m%dT%H%M%S%z");
+    let at = older.format("%Y-%m-%d %H:%M:%S");
+    fs::write(
+        home.path().join(".thirdshift/logs/acme/widgets/activity.log"),
+        format!("{at} Run #7 started: commands/issue/7-{stamp}.log, on claude\n{at} Run #7 ended: failed: boom\n"),
+    ).unwrap();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let inbox = get(&console, "/?page=inbox", &session).text().unwrap();
+    assert!(
+        inbox.contains("2 Commands with this cause: boom"),
+        "{inbox}"
+    );
+    assert!(!inbox.contains(">Dismiss</button>"), "{inbox}");
+    let details = get(&console, "/peek?command=widgets%238", &session)
+        .text()
+        .unwrap();
+    assert!(!details.contains(">Dismiss</button>"), "{details}");
+}
+
+#[test]
 fn console_dismiss_is_unavailable_for_commands_that_are_not_waiting() {
     let home = configured();
     record(home.path(), 7, Some("merged"), 0);
@@ -298,13 +331,7 @@ fn console_dismiss_and_undo_update_open_pages_and_name_the_account() {
             for stream in &mut pages {
                 assert!(sse_event(stream).contains("event: commands"));
                 let page = get(&console, "/", &session).text().unwrap();
-                let section = page
-                    .split(&format!("data-group=\"{expected_group}\""))
-                    .nth(1)
-                    .expect(&page)
-                    .split("</details>")
-                    .next()
-                    .unwrap();
+                let section = section(&page, expected_group);
                 assert!(section.contains("widgets#7"), "{page}");
             }
             let details = get(&console, peek, &session).text().unwrap();

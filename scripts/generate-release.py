@@ -22,11 +22,13 @@ RELEASE_PATHS = [
 ]
 
 
-LEAST_PRIVILEGE_JOBS = (
-    "plan",
-    "build-local-artifacts",
-    "build-global-artifacts",
-)
+# PR-reachable concrete jobs: minutes, sized from successful hosted runs.
+# See docs/ci-performance.md. Reusable smoke jobs set their own bounds.
+PR_JOB_TIMEOUTS = {
+    "plan": 5,
+    "build-local-artifacts": 20,
+    "build-global-artifacts": 5,
+}
 
 LEAST_PRIVILEGE_PERMISSIONS = (
     '    permissions:\n'
@@ -36,27 +38,28 @@ LEAST_PRIVILEGE_PERMISSIONS = (
 
 
 def harden_release_workflow(generated):
-    """Narrow PR-reachable jobs and keep secrets off the PR smoke path.
+    """Bound PR-reachable jobs and keep secrets off the PR smoke path.
 
     The plan and build jobs run on pull requests, so they get job-level
     least-privilege permissions (read the checkout, read/download and
-    write/upload workflow artifacts). The publishing jobs keep the
-    workflow top-level write permission. The smoke reusable call needs no
+    write/upload workflow artifacts), with execution timeouts. The publishing
+    jobs keep the workflow top-level write permission. The smoke reusable call needs no
     secrets, so drop its `secrets: inherit` instead of forwarding every
     secret to a PR-reachable run; the publish-only reusable calls keep
     theirs.
     """
-    for job in LEAST_PRIVILEGE_JOBS:
+    for job, timeout in PR_JOB_TIMEOUTS.items():
         anchor = f"  {job}:\n"
         if generated.count(anchor) != 1:
             raise RuntimeError(
                 f"cargo-dist workflow shape changed: expected one {anchor!r}"
             )
-        if f"{anchor}{LEAST_PRIVILEGE_PERMISSIONS}" in generated:
-            continue
-        generated = generated.replace(
-            anchor, f"{anchor}{LEAST_PRIVILEGE_PERMISSIONS}", 1
-        )
+        permissions_anchor = f"{anchor}{LEAST_PRIVILEGE_PERMISSIONS}"
+        if permissions_anchor not in generated:
+            generated = generated.replace(anchor, permissions_anchor, 1)
+        bounded_anchor = f"{permissions_anchor}    timeout-minutes: {timeout}\n"
+        if bounded_anchor not in generated:
+            generated = generated.replace(permissions_anchor, bounded_anchor, 1)
     smoke_anchor = "  custom-release-smoke:\n"
     if generated.count(smoke_anchor) == 1:
         start = generated.index(smoke_anchor)

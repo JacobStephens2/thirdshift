@@ -1,7 +1,9 @@
 //! The machine's Console. Async execution is confined to this module.
 mod account_commands;
 mod accounts;
+mod assets;
 mod auth;
+mod bug_origins;
 pub(crate) mod conversation;
 mod cronjobs;
 mod experiments;
@@ -19,6 +21,7 @@ mod dismiss;
 mod peek;
 mod resources;
 mod restart;
+mod scoring;
 mod stop;
 mod subscription;
 mod time;
@@ -70,6 +73,10 @@ struct PageRoute {
 }
 
 enum View {
+    BugOrigins,
+    SettleBugOrigin,
+    Scores,
+    HumanScores,
     Experiments,
     Experiment,
     ExperimentSession,
@@ -105,6 +112,34 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/bug-origins",
+        cli: &["thirdshift bug-origins --json"],
+        method: Method::GET,
+        view: View::BugOrigins,
+    },
+    PageRoute {
+        path: "/bug-origins/settle",
+        cli: &[
+            "thirdshift bug-origins 8 --confirm --json",
+            "thirdshift bug-origins 8 --correct 24 --json",
+            "thirdshift bug-origins 8 --none --json",
+        ],
+        method: Method::POST,
+        view: View::SettleBugOrigin,
+    },
+    PageRoute {
+        path: "/scores",
+        cli: &["thirdshift scores --json", "thirdshift scores 23 --json"],
+        method: Method::GET,
+        view: View::Scores,
+    },
+    PageRoute {
+        path: "/scores/mine",
+        cli: &["thirdshift scores 23 --mine --json"],
+        method: Method::POST,
+        view: View::HumanScores,
+    },
     PageRoute {
         path: "/experiments/proposals/{suite}/{task}/approve",
         cli: &["thirdshift evals approve suite task --json"],
@@ -367,6 +402,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         accounts::Accounts::load()?;
     }
     let executable = restart::Executable::current()?;
+    let assets = assets::Development::from_environment()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -375,14 +411,16 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .await
             .context("can't listen for the Console on localhost")?;
         let watched = executable.clone();
-        let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         axum::serve(
             listener,
-            router(no_sign_in, changes).layer(axum::Extension(notifier)),
+            router(no_sign_in, changes)
+                .layer(axum::Extension(notifier))
+                .layer(axum::Extension(assets)),
         )
         .with_graceful_shutdown(async move {
             let mut accounts_revision = 0;
@@ -435,8 +473,12 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ExperimentSession, Method::GET) => get(experiments::session),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::Scores, Method::GET) => get(scoring::show),
+            (View::HumanScores, Method::POST) => post(scoring::submit),
+            (View::BugOrigins, Method::GET) => get(bug_origins::show),
+            (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
-            (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
+            (View::Inbox, Method::GET) => get(move |viewer, query| inbox(cli, path, viewer, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
@@ -481,6 +523,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[template(path = "console/inbox.html")]
 struct InboxPage {
     page: PageContext,
+    csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
     inbox: Inbox,
@@ -488,13 +531,35 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
+    /// The `section` the URL asked for, as its slug.
+    section: String,
 }
 
 impl InboxPage {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
-            .any(|section| section == &group.replace(' ', "-"))
+            .any(|section| section == &slug(group))
+    }
+
+    /// The one section the Inbox shows, like a mail folder: the one the URL
+    /// names if it is visible, otherwise the first visible one with rows.
+    fn folder(&self) -> &'static str {
+        let visible = || {
+            self.inbox
+                .sections
+                .iter()
+                .filter(|section| !self.hidden(section.group))
+        };
+        visible()
+            .find(|section| slug(section.group) == self.section)
+            .or_else(|| visible().find(|section| !section.rows.is_empty()))
+            .or_else(|| visible().next())
+            .map_or("", |section| section.group)
+    }
+
+    fn slug(&self, group: &str) -> String {
+        slug(group)
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
@@ -519,8 +584,12 @@ impl InboxPage {
             .any(|row| row.state != "Slow")
     }
 
-    fn row<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
-        RowTemplate { row }
+    fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
+        RowTemplate {
+            row,
+            csrf: &self.csrf,
+            can_copy,
+        }
     }
 }
 
@@ -528,12 +597,23 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    csrf: &'a str,
+    can_copy: bool,
 }
 
 impl RowTemplate<'_> {
-    fn child<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
-        RowTemplate { row }
+    fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            row,
+            csrf: self.csrf,
+            can_copy: false,
+        }
     }
+}
+
+/// A section's name as config and URLs spell it: `needs you` is `needs-you`.
+fn slug(group: &str) -> String {
+    group.replace(' ', "-")
 }
 
 fn query_value(query: &Option<String>, key: &str) -> String {
@@ -548,7 +628,12 @@ fn query_value(query: &Option<String>, key: &str) -> String {
         .unwrap_or_default()
 }
 
-async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery) -> Response {
+async fn inbox(
+    cli: &'static str,
+    path: &'static str,
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    RawQuery(query): RawQuery,
+) -> Response {
     let mut requested_page = query_value(&query, "page");
     if requested_page.is_empty() {
         requested_page = path.trim_start_matches('/').into();
@@ -568,13 +653,14 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
         "" | "inbox" | "1" => None,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    page(Ok(render_page(cli, archive_page, query).await))
+    page(Ok(render_page(cli, archive_page, query, viewer.csrf).await))
 }
 
 async fn render_page(
     cli: &'static str,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
+    csrf: String,
 ) -> Result<String> {
     // The shared observations and templates stay blocking, off the async executor.
     tokio::task::spawn_blocking(move || -> Result<String> {
@@ -591,6 +677,7 @@ async fn render_page(
         };
         Ok(InboxPage {
             page: PageContext::new(&config),
+            csrf,
             hidden_sections: config.console.hidden_sections.clone(),
             cli,
             inbox: status::inbox(&config)?,
@@ -600,6 +687,7 @@ async fn render_page(
                 .transpose()?,
             outcome,
             repository,
+            section: query_value(&query, "section"),
         }
         .render()?)
     })
@@ -660,15 +748,28 @@ fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> 
     }
 }
 
-async fn asset(Path(path): Path<String>) -> Response {
+async fn asset(
+    axum::Extension(assets): axum::Extension<assets::Development>,
+    Path(path): Path<String>,
+) -> Response {
     if path == "user-themes.css" || path.starts_with("user-fonts/") {
         return match tokio::task::spawn_blocking(move || user_asset(&path)).await {
             Ok(response) => response,
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
-    let Some(file) = ASSETS.get_file(&path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let body = if assets.directory().is_some() {
+        let requested = path.clone();
+        match tokio::task::spawn_blocking(move || assets.read(&requested)).await {
+            Ok(Ok(bytes)) => axum::body::Body::from(bytes),
+            Ok(Err(_)) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    } else {
+        let Some(file) = ASSETS.get_file(&path) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        axum::body::Body::from(file.contents())
     };
     let content_type = match std::path::Path::new(&path)
         .extension()
@@ -685,7 +786,7 @@ async fn asset(Path(path): Path<String>) -> Response {
             (header::CONTENT_TYPE, content_type),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        file.contents(),
+        body,
     )
         .into_response()
 }

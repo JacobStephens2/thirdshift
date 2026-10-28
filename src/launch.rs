@@ -364,15 +364,12 @@ impl fmt::Display for AlreadyRunning {
 pub fn start(base: Option<&str>) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
+    crate::logs::pass_fired(&repo);
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
-    let Some(lock) = try_pass_lock(&repo)? else {
-        return Ok(Start::AlreadyRunning(AlreadyRunning(repo)));
-    };
-    // Never closed, so the lock is held for as long as this process lives,
-    // through the Spec run or Run it dispatches, and the operating system
-    // releases it however the process ends.
-    std::mem::forget(lock);
+    if let Some(running) = hold_pass(&repo)? {
+        return Ok(Start::AlreadyRunning(running));
+    }
     Ok(Start::Clear(Launch {
         directory,
         repo,
@@ -384,6 +381,15 @@ pub fn start(base: Option<&str>) -> Result<Start> {
 /// is on.
 pub fn repo() -> Result<Repo> {
     LaunchDirectory::open(current_dir()?, Opening::Pass)?.repo()
+}
+
+/// The Base branch a Custom process detaches at: the branch checked out in
+/// the Launch directory, at the commit sampled on origin. This does not take
+/// the Pass lock, and it does not offer `base <branch>`, which this command
+/// cannot name.
+pub fn checked_out_base() -> Result<BaseBranch> {
+    let directory = LaunchDirectory::open(current_dir()?, Opening::Run)?;
+    directory.prepare_base_branch(None)
 }
 
 /// Resolve a Run's shorthand before command startup. A full URL passes
@@ -409,6 +415,23 @@ pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {
         repo: repo.name,
         number: number.get(),
     })
+}
+
+/// Take the lock that makes this process the one Pass on `repo`, and hold it
+/// until this process exits. `Some` when another Pass already holds it: this
+/// call took nothing. A Custom process started with no issue uses this; one
+/// started with an issue does not. `start` calls this after the preflight a
+/// Pickup run, Architect run or Security run does.
+pub fn hold_pass(repo: &Repo) -> Result<Option<AlreadyRunning>> {
+    match try_pass_lock(repo)? {
+        Some(lock) => {
+            // Never closed, so the lock is held for as long as this process
+            // lives. The operating system releases it however the process ends.
+            std::mem::forget(lock);
+            Ok(None)
+        }
+        None => Ok(Some(AlreadyRunning(repo.clone()))),
+    }
 }
 
 /// Try, without waiting, for the lock that makes its holder the one Pass on
@@ -455,6 +478,8 @@ mod tests {
         for (key, value) in [
             ("user.name", "Test Runner"),
             ("user.email", "runner@example.com"),
+            ("commit.gpgsign", "false"),
+            ("tag.gpgsign", "false"),
             ("remote.origin.url", "https://github.com/acme/widgets.git"),
             ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
             (
@@ -470,11 +495,9 @@ mod tests {
     }
 
     fn isolated(dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = crate::test_support::git_command()
             .args(args)
             .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .unwrap();
         assert!(output.status.success(), "git {args:?}");

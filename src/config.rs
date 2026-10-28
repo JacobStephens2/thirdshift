@@ -18,12 +18,14 @@ use crate::harness::{self, Harness, ModelAndEffort};
 use crate::ready::PickupOrder;
 
 pub mod console;
+pub mod scoring;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
     pub resources: crate::resources::Limits,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
@@ -73,7 +75,7 @@ pub struct UserConfig {
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
-    /// `security.close`: off by default; None leaves the decision unmade.
+    /// `security.close`: on by default; None leaves the decision unmade.
     /// It takes effect only when fixing is also allowed.
     pub security_close: Option<bool>,
     pub security_review: bool,
@@ -124,6 +126,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
@@ -160,6 +163,17 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "scoring" {
+                config.scoring = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                config
+                    .scoring
+                    .validate()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                continue;
+            }
             if section == "resources" {
                 config.resources = value
                     .clone()
@@ -434,6 +448,14 @@ impl UserConfigDocument {
                 if console.allowed_emails != self.settings.console.allowed_emails {
                     let emails: toml_edit::Array = console.allowed_emails.iter().collect();
                     set(&mut document, "console", "allowed_emails", emails);
+                }
+                if console.other_accounts != self.settings.console.other_accounts {
+                    set(
+                        &mut document,
+                        "console",
+                        "other_accounts",
+                        console.other_accounts.value(),
+                    );
                 }
             }
             set(&mut document, "merge", "always", changes.merge_always);
@@ -941,6 +963,7 @@ address = ""        # HTTPS address for console install, e.g. https://console.ex
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
 
@@ -988,9 +1011,17 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+
+[scoring]
+owners = []   # GitHub owners whose repositories Scoring runs search; default [] (configure before score)
+sample_size = 10   # maximum pull requests per sample, spread across Harness and Model pairs; default 10
+harness = "claude"   # the Grader's Harness; default claude
+model = ""   # the Grader's Model; default blank, for the Harness's own
+fallback_harness = "codex"   # the second Grader's Harness when the first matches the Run's Model; default codex
+fallback_model = ""   # the second Grader's Model; default blank, for the second Harness's own
 
 [trial]
 memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
@@ -1068,7 +1099,7 @@ pub fn home() -> Result<PathBuf> {
 /// `path` as an absolute path, with a leading `~` expanded to `home`, or
 /// `None` if it is relative: the directory a Run is launched from is no base
 /// for a setting that holds for every Run.
-fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
+pub(crate) fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
     let path = match path.strip_prefix('~') {
         Some("") => home.to_path_buf(),
         Some(rest) => home.join(rest.strip_prefix('/')?),
@@ -1121,7 +1152,7 @@ mod tests {
         config.harness.default = None;
         assert_eq!(config.security_fix, Some(false));
         config.security_fix = None;
-        assert_eq!(config.security_close, Some(false));
+        assert_eq!(config.security_close, Some(true));
         config.security_close = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
@@ -1161,6 +1192,7 @@ mod tests {
                 "console.port",
                 "console.allowed_emails",
                 "console.other_consoles",
+                "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",
                 "activity.quiet_skips",
@@ -1187,6 +1219,12 @@ mod tests {
                 "security.close",
                 "security.review",
                 "security.harness",
+                "scoring.owners",
+                "scoring.sample_size",
+                "scoring.harness",
+                "scoring.model",
+                "scoring.fallback_harness",
+                "scoring.fallback_model",
                 "trial.memory_high",
                 "trial.memory_max",
                 "trial.memory_swap_max",
@@ -1701,7 +1739,7 @@ mod tests {
             after.security_fix = None;
         }
         if before.security_close.is_none() {
-            assert_eq!(after.security_close, Some(false));
+            assert_eq!(after.security_close, Some(true));
             after.security_close = None;
         }
         assert_eq!(after, before, "{completed}");
@@ -1812,7 +1850,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
-            security_close: false,
+            security_close: true,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),

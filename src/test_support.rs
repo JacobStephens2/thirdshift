@@ -11,11 +11,56 @@ use std::process::Command;
 
 use crate::interrupt;
 
+/// Git for unit-test fixtures, including commands made after repository setup.
+/// Keep this on each child Command so parallel tests never change the process
+/// environment and new Git views of a fixture inherit the same isolation.
+pub(crate) fn git_command() -> Command {
+    let mut command = Command::new("git");
+    isolate_git_config(&mut command);
+    command
+}
+
+/// Also cover Git invoked by shell scripts in a fixture subprocess.
+pub(crate) fn isolate_git_config(command: &mut Command) {
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+}
+
+/// A child that announces Session s1 after writing a native Codex quota record.
+/// The record may deliberately name another Session/directory or a stale time;
+/// `current` writes a fresh timestamp. HOME is set only on the child Command.
+pub(crate) fn native_codex_command(
+    root: &std::path::Path,
+    id: &str,
+    directory: &std::path::Path,
+    timestamp: &str,
+) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command
+        .env("HOME", root.join("home"))
+        .env("NATIVE_ID", id)
+        .env("NATIVE_CWD", directory)
+        .env("QUOTA_TIME", timestamp)
+        .args(["-c", r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-$NATIVE_ID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$NATIVE_ID" "$NATIVE_CWD" > "$native"
+sleep 1.1
+if [ "$QUOTA_TIME" = current ]; then QUOTA_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$QUOTA_TIME" >> "$native"
+echo '{"type":"thread.started","thread_id":"s1"}'
+sleep 1
+touch "$HOME/../continued"
+"#]);
+    command
+}
+
 /// A scratch worktree in a fresh local Git repository.
 pub(crate) fn scratch_worktree() -> tempfile::TempDir {
     let worktree = tempfile::tempdir().unwrap();
     assert!(
-        Command::new("git")
+        git_command()
             .args(["init", "-q"])
             .arg(worktree.path())
             .status()

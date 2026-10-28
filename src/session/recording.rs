@@ -1,4 +1,4 @@
-//! Session trace recording: consume the transcript, checkpoint stream Models,
+//! Session trace recording: interpret the launch context, checkpoint stream Models,
 //! and replace them only when completed Interpretation supplies a report.
 //! The captured owning Command also governs child inheritance and collection.
 
@@ -29,14 +29,27 @@ pub struct Recording {
     trial_context: Option<logs::trace::Context>,
 }
 
-/// The Session prompt, its transport, and execution limits for private Graders.
+/// Session interpretation policy, prompt transport and execution limits.
 #[derive(Default)]
 pub struct Input<'a> {
     pub prompt: &'a str,
+    pub policy: Policy,
     pub stdin: Option<&'a str>,
     pub deadline: Option<Instant>,
+    /// Scoring Graders share the Eval plan-limit policy while retaining Command ownership.
+    pub stop_at_limit: bool,
     /// Keep decoded progress and completion text out of factory Command logs.
     pub private: bool,
+}
+
+/// Interpretation rules are independent of log labels and output privacy.
+#[derive(Default, Clone, Copy)]
+pub enum Policy {
+    #[default]
+    Ordinary,
+    Security,
+    /// Blind Scoring packets must not consult retained production history.
+    StreamOnly,
 }
 
 impl Recording {
@@ -110,7 +123,7 @@ impl Recording {
         }
     }
 
-    /// Run one Session with the selected launch command and Interpretation.
+    /// Interpret and record one Session using its selected Harness and launch context.
     /// Preserve stream evidence before supervision can discard recovered state;
     /// a present completion report replaces it, even with no observed Models.
     /// Evidence writes are warnings and never change the Session outcome.
@@ -118,12 +131,33 @@ impl Recording {
         &self,
         kind: &str,
         choice: &Choice,
-        command: &mut Command,
+        invocation: &mut dyn crate::process::Invocation,
         input: Input<'_>,
         log: &Path,
-        stream: Interpretation,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        let command = invocation.command();
+        let directory = match command.get_current_dir() {
+            Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+            Some(dir) => std::env::current_dir()
+                .context("could not resolve Session launch directory")?
+                .join(dir),
+            None => {
+                std::env::current_dir().context("could not resolve Session launch directory")?
+            }
+        };
+        let mut stream = adapter.interpretation(&directory, input.prompt);
+        if let Some(home) = command
+            .get_envs()
+            .find_map(|(name, value)| (name == "HOME").then_some(value).flatten())
+        {
+            stream.set_home(Path::new(home));
+        }
+        stream = match input.policy {
+            Policy::Ordinary => stream,
+            Policy::Security => stream.for_security(choice.model.as_deref()),
+            Policy::StreamOnly => stream.without_retained(),
+        };
         command.env_remove(logs::trace::TRIAL_CONTEXT);
         if matches!(self.owner, Ok(None)) {
             // A Trial must not lend a caller's stale Command identity to
@@ -155,10 +189,10 @@ impl Recording {
         let choice_owned = choice.clone();
         let recording = self.clone();
         let private = input.private;
-        let stop_at_limit = matches!(self.owner, Ok(None));
+        let stop_at_limit = input.stop_at_limit || matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
-            command,
+            invocation,
             input.stdin,
             input.deadline,
             stream,
@@ -320,13 +354,22 @@ impl Recording {
 }
 
 #[derive(Serialize, Deserialize)]
-struct SessionModels {
+pub(crate) struct SessionModels {
     command_log: Option<PathBuf>,
     kind: String,
-    harness: String,
-    requested: Option<String>,
-    effort: Option<String>,
+    pub(crate) harness: String,
+    pub(crate) requested: Option<String>,
+    pub(crate) effort: Option<String>,
     observed: Vec<String>,
+}
+
+impl SessionModels {
+    /// Read only the exact Session's evidence belonging to this Command.
+    pub(crate) fn for_session(log: &Path, command_log: &Path) -> Option<Self> {
+        let path = logs::session::original(log).with_extension("models.json");
+        let evidence: Self = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+        (evidence.command_log.as_deref() == Some(command_log)).then_some(evidence)
+    }
 }
 
 struct StreamPolicy {

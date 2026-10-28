@@ -11,23 +11,30 @@
 //! One owned recording implementation holds the complete lifecycle. The
 //! process-wide interface serializes its operations, including emitted output.
 
+pub(crate) mod accounts;
 mod activity;
 mod command_record;
 pub mod dismiss;
 mod effects;
 pub mod export;
 pub(crate) mod github;
+pub mod metrics;
 pub(crate) mod owner;
+pub(crate) mod pass_starts;
 mod process_identity;
 mod reading;
 pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
+pub(crate) use reading::run_for_pull_request;
 mod recording;
+mod run_metrics;
 pub(crate) mod session;
+pub(crate) mod session_signals;
 pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
+mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -41,7 +48,7 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked};
+pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
 
@@ -76,7 +83,9 @@ pub enum CommandKind {
     Architect,
     Pickup,
     Secure,
+    Scoring,
     Experiment,
+    Process,
 }
 
 impl CommandKind {
@@ -86,7 +95,9 @@ impl CommandKind {
             Self::Architect => "architect",
             Self::Pickup => "pickup",
             Self::Secure => "secure",
+            Self::Scoring => "scoring",
             Self::Experiment => "experiment",
+            Self::Process => "process",
         }
     }
 
@@ -96,7 +107,9 @@ impl CommandKind {
             "architect" => Some(Self::Architect),
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
+            "scoring" => Some(Self::Scoring),
             "experiment" => Some(Self::Experiment),
+            "process" => Some(Self::Process),
             _ => None,
         }
     }
@@ -115,7 +128,15 @@ pub enum Begin<'a> {
     /// `thirdshift pickup`, a pass.
     PickupRun,
     SecurityRun,
+    ScoringRun,
     Experiment,
+    /// `thirdshift process <name> [issue <issue>]`, a Custom process.
+    /// `pass` holds the first lines, as the other Passes do, when it was
+    /// started with no issue.
+    Process {
+        name: &'a str,
+        pass: bool,
+    },
 }
 
 /// The work a command starts.
@@ -133,24 +154,42 @@ pub enum Work<'a> {
     ArchitectRun(&'a Repo),
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
+    ScoringRun(&'a Repo),
     Experiment(&'a Repo),
+    /// A Custom process, named by its file.
+    Process {
+        repo: &'a Repo,
+        name: &'a str,
+    },
 }
 
 /// A Pass, a command that may be skipped before it starts work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pass {
     Architect,
     Pickup,
     Security,
 }
 
+impl Pass {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Architect => "Architect",
+            Self::Pickup => "Pickup",
+            Self::Security => "Security",
+        }
+    }
+}
+
 impl Display for Pass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Pass::Architect => "Architect run",
-            Pass::Pickup => "Pickup run",
-            Pass::Security => "Security run",
-        })
+        write!(f, "{} run", self.name())
+    }
+}
+
+impl serde::Serialize for Pass {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -205,6 +244,11 @@ pub fn configured(config: &UserConfig) {
     record().configured(config);
 }
 
+/// Keep the Pass's latest start once its repository is known, before gates.
+pub(crate) fn pass_fired(repo: &Repo) {
+    record().pass_fired(repo);
+}
+
 /// Record that the command starts `work`, its sessions on `harness`: keep its
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
@@ -222,6 +266,26 @@ pub fn started(work: Work, harness: &Choice) {
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
+}
+
+/// Record that the Custom process `name`, started with no issue, was skipped
+/// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
+/// <reason>` unless that is already its last Process line. Unlike the other
+/// Passes, it also keeps a Command record whose outcome is `skipped`: the
+/// Process's record shows that ending. `harness` is the choice it would have
+/// run on; the skip does not check that it can run.
+pub fn skipped_process(
+    repo: &Repo,
+    name: &str,
+    harness: &crate::harness::Choice,
+    reason: impl Display,
+) {
+    record().skipped_process(repo, name, harness, &reason.to_string());
+}
+
+/// Add an observation to the running command's repository Activity log.
+pub(crate) fn activity(message: impl Display) {
+    record().activity(message);
 }
 
 /// Record how the command ended, `outcome` in short: show any lines held
@@ -253,6 +317,11 @@ pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 
+/// Retain Delivery's final counts for the active Run's completion metrics.
+pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
+    record().unaddressed_findings(counts);
+}
+
 /// Complete the durable facts from the same account used by other renderers.
 pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);
@@ -263,7 +332,12 @@ pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
 }
 
 pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
-    record().experiment_finished(outcome, cause);
+    complete(outcome, cause);
+}
+
+/// Record how a Command with no Run account ended, such as a Process.
+pub fn complete(outcome: &str, cause: Option<&str>) {
+    record().outcome(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.
@@ -280,8 +354,12 @@ pub fn dispatch_ended(ended: &crate::run::Ended) {
 }
 
 /// Keep a Pass's dispatch before the Run's fallible launch checks.
-pub fn dispatching(work: Work, harness: &Choice) {
-    record().dispatching(work, harness);
+pub fn dispatching(
+    work: Work,
+    harness: &Choice,
+    security_fix_findings: &[crate::security::RecordedFinding],
+) {
+    record().dispatching(work, harness, security_fix_findings);
 }
 
 /// Print the lines held from the terminal, as before a failure, and print
@@ -305,6 +383,11 @@ pub fn root(repo: &Repo) -> PathBuf {
 /// The command whose folder holds this process's Session traces.
 pub fn command_kind() -> CommandKind {
     record().command_kind()
+}
+
+/// Resolve a locally retained Run by its pull request, including child Runs.
+pub(crate) fn record_for_pull_request(root: &Path, url: &str) -> anyhow::Result<Option<PathBuf>> {
+    Ok(run_for_pull_request(root, url)?.map(|(path, _)| path))
 }
 
 /// Where this command and all its child Runs keep Session traces on `repo`.
@@ -360,7 +443,8 @@ impl<'a> Work<'a> {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
-            Work::PickupRun(_) | Work::SecurityRun(_) => None,
+            Work::ScoringRun(_) => Some(Stage::Sampling),
+            Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
     }
@@ -370,9 +454,11 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
-            Work::ArchitectRun(repo) | Work::SecurityRun(repo) | Work::Experiment(repo) => {
-                repo.clone()
-            }
+            Work::ArchitectRun(repo)
+            | Work::SecurityRun(repo)
+            | Work::ScoringRun(repo)
+            | Work::Experiment(repo)
+            | Work::Process { repo, .. } => repo.clone(),
         }
     }
 
@@ -384,7 +470,9 @@ impl<'a> Work<'a> {
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
+            Work::ScoringRun(_) => Kind::ScoringRun,
             Work::Experiment(_) => Kind::Experiment,
+            Work::Process { .. } => Kind::Process,
         }
     }
 
@@ -393,7 +481,11 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) | Work::Experiment(_) => None,
+            Work::ArchitectRun(_)
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
+            | Work::Experiment(_)
+            | Work::Process { .. } => None,
         }
     }
 

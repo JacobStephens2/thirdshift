@@ -120,6 +120,41 @@ impl owner::Files for Scripted {
 }
 
 impl Outside for Scripted {
+    fn session_signals(
+        &mut self,
+        _log: &Path,
+    ) -> Option<crate::logs::session_signals::SessionSignals> {
+        None
+    }
+
+    fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>> {
+        self.0
+            .lock()
+            .unwrap()
+            .files
+            .get(&crate::logs::session::original(log).with_extension("review-summary.json"))
+            .map(|text| text.as_bytes().to_vec())
+    }
+
+    fn command_records(&mut self, root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .files
+            .iter()
+            .filter_map(|(path, contents)| {
+                path.starts_with(root)
+                    .then(|| {
+                        serde_json::from_str(contents)
+                            .ok()
+                            .map(|tree| (path.clone(), tree))
+                    })
+                    .flatten()
+            })
+            .collect())
+    }
+
     fn stop_request(&mut self, record: &Path) -> Option<crate::logs::stop::Request> {
         let memory = self.0.lock().unwrap();
         serde_json::from_str(memory.files.get(&record.with_extension("stop.json"))?).ok()
@@ -271,8 +306,10 @@ fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
     memory.0.lock().unwrap().record_write_fails = false;
     let ended = crate::run::Ended {
         outcome: Ok(crate::run::Reached {
-            pr_url: "https://github.com/acme/widgets/pull/1".into(),
-            goal: crate::run::Goal::ReadyForReview,
+            resolution: crate::run::Resolution::PullRequest {
+                url: "https://github.com/acme/widgets/pull/1".into(),
+                goal: crate::run::Goal::ReadyForReview,
+            },
             log: None,
             ticket_lines: Vec::new(),
         }),
@@ -297,6 +334,98 @@ fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
     );
     let facts = memory.command_record();
     assert_eq!(facts.outcome.as_deref(), Some("ready for review"));
+}
+
+#[test]
+fn completion_metrics_place_each_stage_against_repository_history() {
+    let memory = Scripted::default();
+    let time = |value: &str| DateTime::parse_from_rfc3339(value).unwrap();
+    let mut historical = CommandRecord::new(
+        Work::Run(&issue()),
+        STAMP,
+        &harness(),
+        time("2026-10-01T12:00:00-04:00"),
+    );
+    historical.version = 1;
+    historical.outcome = Some("ready for review".into());
+    historical.ended_at = Some("2026-10-01T12:12:00-04:00".into());
+    historical.stages = vec![
+        Stage {
+            name: "implement".into(),
+            began_at: "2026-10-01T12:00:00-04:00".into(),
+            session_log: None,
+        },
+        Stage {
+            name: "pull request".into(),
+            began_at: "2026-10-01T12:01:00-04:00".into(),
+            session_log: None,
+        },
+        Stage {
+            name: "CI watch".into(),
+            began_at: "2026-10-01T12:11:00-04:00".into(),
+            session_log: None,
+        },
+    ];
+    for number in 1..=3 {
+        memory.0.lock().unwrap().files.insert(
+            format!("/logs/acme/widgets/commands/issue/{number}-history.command.json").into(),
+            serde_json::to_string(&historical).unwrap(),
+        );
+    }
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    for (at, stage) in [
+        ("2026-10-03T12:01:00-04:00", StageName::PullRequest),
+        ("2026-10-03T12:06:00-04:00", StageName::CiWatch),
+        ("2026-10-03T12:09:00-04:00", StageName::Cleanup),
+    ] {
+        memory.0.lock().unwrap().now = Some(time(at));
+        record.stage(stage, None);
+    }
+    memory.0.lock().unwrap().now = Some(time("2026-10-03T12:10:00-04:00"));
+    let ended = crate::run::Ended {
+        outcome: Ok(crate::run::Reached {
+            resolution: crate::run::Resolution::PullRequest {
+                url: "https://github.com/acme/widgets/pull/1".into(),
+                goal: crate::run::Goal::ReadyForReview,
+            },
+            log: None,
+            ticket_lines: Vec::new(),
+        }),
+        base_fix: None,
+        advice: Vec::new(),
+    };
+    record.finished(&crate::run_ending::Account::of_run(&ended));
+    let path = record.record_path().unwrap();
+    let saved: serde_json::Value = serde_json::from_str(&memory.file(path)).unwrap();
+    let metrics = &saved["run_metrics"];
+    assert_eq!(metrics["total_minutes"], 10.0);
+    assert_eq!(metrics["repairs"], 0);
+    assert_eq!(metrics["ci_rounds"], 1);
+    for (index, (minutes, position, range)) in [
+        (1.0, "within", Some(60.0)),
+        (5.0, "below", Some(600.0)),
+        (3.0, "above", Some(60.0)),
+        (1.0, "too_few_runs", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let stage = &metrics["stages"][index];
+        assert_eq!(stage["minutes"], minutes);
+        assert_eq!(stage["seconds"], minutes * 60.0);
+        assert_eq!(stage["position"], position);
+        assert_eq!(
+            stage["usual_range"],
+            range
+                .map(|seconds| serde_json::json!({
+                    "lower_seconds": seconds, "upper_seconds": seconds
+                }))
+                .unwrap_or(serde_json::Value::Null)
+        );
+    }
 }
 
 #[test]
@@ -1301,7 +1430,7 @@ fn a_pickup_or_security_run_enters_a_stage_naming_what_it_dispatched_and_when() 
         } else {
             Work::Run(&dispatched)
         };
-        record.dispatching(child, &harness());
+        record.dispatching(child, &harness(), &[]);
         // The dispatched Command's own stages are its own, not the pass's.
         memory.0.lock().unwrap().now =
             Some(DateTime::parse_from_rfc3339("2026-10-03T13:31:00-04:00").unwrap());
@@ -1337,7 +1466,7 @@ fn a_dispatch_found_to_be_a_spec_by_its_launch_checks_renames_the_pass_stage() {
     record.begin(Begin::PickupRun);
     record.configured(&config(true));
     record.started(Work::PickupRun(&ready), &harness());
-    record.dispatching(Work::Run(&dispatched), &harness());
+    record.dispatching(Work::Run(&dispatched), &harness(), &[]);
     record.started(Work::SpecRun(&dispatched), &harness());
     let tree = command_tree(&memory);
     assert_eq!(tree["stages"][0]["name"], "dispatched Spec run");
@@ -1353,7 +1482,7 @@ fn an_architect_run_keeps_its_own_stage_while_its_plan_is_dispatched() {
     record.begin(Begin::ArchitectRun);
     record.configured(&config(true));
     record.started(Work::ArchitectRun(&repo), &harness());
-    record.dispatching(Work::Run(&plan), &harness());
+    record.dispatching(Work::Run(&plan), &harness(), &[]);
     record.started(Work::Run(&plan), &harness());
     let tree = command_tree(&memory);
     let stages: Vec<_> = tree["stages"]

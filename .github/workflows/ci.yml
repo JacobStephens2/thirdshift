@@ -22,8 +22,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The runner images are pinned to the platforms thirdshift supports.
+# Job limits bound hangs in CI watch; measured runtimes and headroom are in
+# docs/ci-performance.md.
 jobs:
   console-test:
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +47,7 @@ jobs:
         working-directory: console
 
   site-test:
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -60,6 +64,7 @@ jobs:
       - run: npm test
 
   test:
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -77,13 +82,21 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       # The tests run the binary against real git and fake gh and claude,
       # which the tests build from tests/fakes.rs with rustc.
+      # nextest fills idle slots across test binaries (#1317). Keep the
+      # contributor's cargo test path exercised by the nightly run too.
+      - uses: taiki-e/install-action@nextest
+        if: ${{ github.event_name != 'schedule' }}
+      - run: cargo nextest run
+        if: ${{ github.event_name != 'schedule' }}
       - run: cargo test
+        if: ${{ github.event_name == 'schedule' }}
 
   # Which macOS work this event gets (#893, docs/ci-performance.md): the full
   # suite on pushes to main, nightly, by hand or for a PR into main labelled
   # `test:macos`; the gate for any other PR into main; none for a PR into
   # another base, such as a Spec branch.
   macos-plan:
+    timeout-minutes: 5
     runs-on: ubuntu-24.04
     outputs:
       suite: ${{ steps.plan.outputs.suite }}
@@ -106,6 +119,7 @@ jobs:
   # macOS-specific code, which the macos-gate profile in .config/nextest.toml
   # selects.
   test-macos-gate:
+    timeout-minutes: 20
     needs: macos-plan
     if: ${{ needs.macos-plan.outputs.suite == 'gate' }}
     runs-on: macos-26
@@ -135,6 +149,7 @@ jobs:
       - run: cargo nextest run --profile macos-gate
 
   test-macos-shard:
+    timeout-minutes: 60
     needs: macos-plan
     if: ${{ needs.macos-plan.outputs.suite == 'full' }}
     runs-on: macos-26
@@ -169,16 +184,17 @@ jobs:
       # nextest runs tests from every test binary in parallel, where cargo test
       # runs the binaries one after another; that matters on the slower macOS
       # runners. Without a lib target there are no doctests for it to miss.
-      # The Linux job keeps plain cargo test, so the suite also runs the way
-      # a contributor runs it locally.
+      # Linux also uses nextest, except for its nightly cargo test run.
       - uses: taiki-e/install-action@nextest
       # Hash partitions cover the same suite once across all four runners.
-      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }}
+      # Pushes to main report every failure in a shard in the same run (#1325).
+      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }} ${{ github.event_name == 'push' && '--no-fail-fast' || '' }}
 
   # Keep one stable check name on every run. It requires what the plan
   # asked for: every shard passed, or the gate passed, or, with no macOS work,
   # both were skipped. A failed, cancelled or wrongly skipped job fails it.
   test-macos:
+    timeout-minutes: 5
     needs: [macos-plan, test-macos-gate, test-macos-shard]
     if: ${{ always() }}
     runs-on: ubuntu-24.04

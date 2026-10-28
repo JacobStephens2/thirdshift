@@ -20,12 +20,17 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 
 | Prompt | When it is sent | File |
 | --- | --- | --- |
+| Scoring Grader | A Scoring run asks an independent Model to score one blind packet on Correct, Scoped, Tested, Honest and Standards. | [scoring-grader.md](scoring-grader.md) |
+| Bug-origin proposal | In a Scoring run, inspects a closed bug's fix and history in the Eval sandbox, proposing a commit only when history establishes one. | [bug-origin.md](bug-origin.md) |
 | Grader | In an Experiment, starts a fresh model Grader for one Eval task's blind packet after code checks finish. | [grader.md](grader.md) |
 | Fresh | Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch. | [fresh.md](fresh.md) |
 | Continuation, with no pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
 | Continuation, with an open pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |
 | Code review | In an Eval Trial, reviews the prepared historical diff with the production code-review Factory skill, under the implement session's sub-agent rules. Writes reports without fixing or publishing anything. | [code-review.md](code-review.md) |
 | Spec review | In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready. | [spec-review.md](spec-review.md) |
+| Bug Ticket run, fresh | Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow. | [bug-fresh.md](bug-fresh.md) |
+| Bug Ticket run, Continuation without a pull request | Diagnoses a bug in a Continuation with no pull request before changing code. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending hands the issue back for information without a PR. | [bug-continuation.md](bug-continuation.md) |
+| Bug Ticket run, Continuation with an open pull request | Diagnoses a bug before continuing its open pull request. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending leaves the existing PR unmerged and hands the issue back for information. | [bug-continuation-pr.md](bug-continuation-pr.md) |
 | Architecture review | Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none. | [architecture-review.md](architecture-review.md) |
 | Security review | When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge. | [security-review.md](security-review.md) |
 | Security audit | Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root. | [security-audit.md](security-audit.md) |
@@ -37,5 +42,8 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 | CI-fix Repair | Starts a Repair session when CI fails on the pull request's head commit, listing each failed check. | [ci-fix-repair.md](ci-fix-repair.md) |
 | CI-fix Repair, with Inherited failures | Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix. | [ci-fix-repair-inherited.md](ci-fix-repair-inherited.md) |
 | Resume | Continues any session, once, that ended its turn with background work still running, which was killed with it. | [resume.md](resume.md) |
+| Custom process Step | Starts the first Step of a Custom process. No earlier Step has a result. | [process-step.md](process-step.md) |
+| Custom process Step, with an earlier result | Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message. | [process-step-later.md](process-step-later.md) |
+| Custom process Step, on an issue | Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue. | [process-step-issue.md](process-step-issue.md) |
 
 The Factory skills the prompts name are in [`skills/`](../skills/), as thirdshift writes them out.

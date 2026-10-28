@@ -4,13 +4,13 @@ use askama::Template;
 use axum::response::Response;
 
 use crate::config::UserConfig;
-use crate::cronjobs::{self, CronJob};
+use crate::cronjobs::{self, CronJobs};
 
 #[derive(Template)]
 #[template(path = "console/cronjobs.html")]
 struct CronJobsPage {
     page: super::PageContext,
-    jobs: Vec<CronJob>,
+    inventory: CronJobs,
 }
 
 pub(super) async fn show() -> Response {
@@ -19,7 +19,7 @@ pub(super) async fn show() -> Response {
             let config = UserConfig::load()?;
             Ok(CronJobsPage {
                 page: super::PageContext::new(&config),
-                jobs: cronjobs::load()?,
+                inventory: cronjobs::load()?,
             }
             .render()?)
         })

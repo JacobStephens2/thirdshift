@@ -419,7 +419,10 @@ printf '%s\n' '{"type":"item.started","item":{"id":"test","type":"command_execut
     assert_eq!(scenario.codex_calls().len(), 3);
     let request = the_one_request(&resend);
     let text = text(&request);
-    assert_contains(text, "Built with codex · gpt-6.1-sol · high (configured)");
+    assert_contains(
+        text,
+        "Built with codex 9.8.7 · gpt-6.1-sol · high (configured)",
+    );
     assert_contains(
         text,
         "Listed sessions launched the harness. Requested models are not confirmed by harness evidence.",
@@ -502,7 +505,7 @@ exit 3
     assert_contains(text, "Security review incomplete");
     assert_contains(
         text,
-        "Built with claude · claude-opus-5-5 · default effort (configured)",
+        "Built with claude 9.8.7 · claude-opus-5-5 · default effort (configured)",
     );
     assert_contains(
         text,

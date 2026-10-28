@@ -46,6 +46,7 @@ pub use executable::write_executable;
 
 pub mod fakes;
 pub mod resend;
+pub mod scoring;
 pub mod session_trace;
 
 use std::fs;
@@ -349,6 +350,16 @@ echo '{{"type": "system", "subtype": "task_started", "task_id": "b1", "descripti
 echo '{{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {{"status": "killed"}}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
 "#
     )
+}
+
+/// How thirdshift shows an RFC 3339 instant to people: this machine's date
+/// and time to the minute, followed by the zone name this leaves out.
+pub fn local_minute(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M ")
+        .to_string()
 }
 
 /// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
@@ -896,6 +907,9 @@ test -f {root}/{COPY_REPLACED}
             // enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
             .env("THIRDSHIFT_POLL_MS", "100");
+        if args.first() == Some(&"score") {
+            command.env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1");
+        }
         command
     }
 

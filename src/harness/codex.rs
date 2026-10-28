@@ -92,7 +92,7 @@ impl Adapter for Codex {
         );
         invocation
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         super::check_sign_in(self, &["login", "status"])?;
         check_model_and_effort(choice)
     }

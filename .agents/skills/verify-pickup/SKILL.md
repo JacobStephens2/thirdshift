@@ -48,7 +48,19 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `4d4756b102af44e1fedd1fc625a61ff1d4364fe7`.
+Last confirmed source commit: `f949bbb3523f865b88283ecb44a7759d7dea5b57`.
+The merge-time sync combines main's `3cd68bb` mapping with the bug diagnosis
+ending: `Claim::needs_info` reads labels, then removes Ready and Claim while
+adding needs-info. The model retains those as separate requests and does not
+restore Ready until a later Day shift hand-back.
+The policy now runs through `Claimed::needs_info` and `Outside`; this refactor
+preserves the request order and the model needs no change.
+Pickup ordering and paginated issue listing are outside the one-issue model;
+same-second Claim history is normalized within its complete, ordered-read
+assumption. The known pre-Claim counterexample and both sensitivity mutations
+remain reachable. Claimed-dispatch safety passes; the explicit literal-property
+assertion and both mutation commands still fail with their expected traces.
+The merge requires no further model or property change.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
@@ -56,7 +68,7 @@ The model describes these functions, including their ordering:
 | `src/pickup.rs` | `run`, `run_through`: reserve → refresh → dispatch; reservation lifetime |
 | `src/pickup/reservation.rs` | `Reservation::take`, `Drop::drop`: empty create lease, owner-token release |
 | `src/ready.rs` | `first`, `Search::first_priority`, `standing_of`, `refresh`: Ready reads and Claim-count comparison; Pickup keeps the settling wait |
-| `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels` |
+| `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels`, `Claim::needs_info`, `Claimed::needs_info` |
 | `src/github.rs` | `open_issues_labelled`, `issue`, `candidate`, `ClaimHistory::after`, `issue_labels`, `set_labels` |
 | `src/labels.rs` | `Edit::apply`, `request`: whole-label PUT; existing Claim is accepted |
 | `src/pass.rs`, `src/run.rs` | `LaunchAndGitHub::dispatch`, `start`, `make_claim`, `end_claim`: dispatch before Claim; both Run kinds share it |

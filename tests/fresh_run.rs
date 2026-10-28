@@ -105,6 +105,28 @@ fn a_direct_run_warns_about_an_untrusted_author_and_still_delivers_its_pr() {
 }
 
 #[test]
+fn a_direct_run_warns_when_never_labelled_ready_and_still_delivers_its_pr() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": []});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["no-merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result
+            .stderr
+            .contains("warning: #7 has never been labelled ready-for-agent"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn a_direct_run_warns_when_trust_cannot_be_checked_and_still_delivers_its_pr() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
@@ -238,7 +260,9 @@ fn gives_the_agent_the_fresh_prompt() {
          A passing run counts only when it exercises that finding; a green suite does not. \
          Address the Standards and Spec findings you agree with.\n\
          Write the reviewers' reports, with each axis's final files-read list, \
-         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).\n\
+         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
+         Write `<review reports directory>/summary.json` beside them with the finding counts, \
+         following the `thirdshift-code-review` skill's summary format.\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
          with the line of code, plan decision, ADR or run that refutes each finding. \

@@ -18,10 +18,12 @@ mod git;
 mod github;
 mod harness;
 mod host;
+mod implement;
 mod interrupt;
 mod issue;
 mod labels;
 mod launch;
+mod local_time;
 mod logs;
 mod notification;
 mod otlp_jsonl;
@@ -29,6 +31,7 @@ mod pass;
 mod pickup;
 mod poll;
 mod process;
+mod processes;
 mod progress;
 mod prompt;
 #[cfg(test)]
@@ -43,9 +46,11 @@ mod run;
 mod run_ending;
 mod sandbox;
 mod scope;
+mod scoring;
 mod security;
 mod session;
 mod setup;
+mod skill;
 mod skills;
 mod spec_run;
 mod terminal;
@@ -87,11 +92,19 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
+       thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
+       thirdshift process show <name>              Print a Process file exactly (experimental)
+       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security-review flags match a Ticket run (experimental)
+       thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
+       thirdshift score                               Sample merged factory work and propose Bug origins
+       thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
+       thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
-       thirdshift experiments [<id>] [--json]        List Experiments or show one
+       thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
@@ -105,7 +118,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme import <file>        Import a Theme JSON document
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
+       thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
@@ -114,26 +129,19 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
-
-Start from the issue's repository clone. The Base branch is the branch checked out.
-Use a positive decimal number anywhere an Issue URL is accepted, e.g. thirdshift merge 106.
-Numbers use origin's GitHub repository, including from nested directories in the clone.
-An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
-merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
-
+Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
+An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>                       Choose the Harness's Model
-  effort <level>                     Choose the Harness's Effort
+  model <name>, effort <level>       Choose the Harness's Model and Effort
   security-review / no-security-review  Enable / disable a Ticket run's Security review
-  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings, or closing a finding its fix merged (security-close / no-security-close)
+  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
-Pass commands: architect, pickup, secure (no Issue URL).
-  base <branch>                      Use an origin branch, whatever is checked out
+Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.
   --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
   https://thirdshift.app/docs/
@@ -160,6 +168,15 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Score) => return score(),
+        Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
+        Ok(Command::Scores {
+            pull_request,
+            mine,
+            json,
+        }) => {
+            return printed(scoring::show(pull_request.as_deref(), mine, json));
+        }
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::Experiment(options)) => {
             return match evals::experiment::run(options) {
@@ -188,6 +205,9 @@ fn main() -> ExitCode {
             return printed(console::theme(name.as_deref(), json));
         }
         Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleOtherAccounts { value, json }) => {
+            return printed(config::console::other_accounts(value.as_deref(), json));
+        }
         Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
         Ok(Command::ConsoleSections { hide, show, json }) => {
             return printed(console::sections(&hide, &show, json));
@@ -240,6 +260,12 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::Metrics(asked)) => {
+            return match logs::metrics::show(&asked) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -281,6 +307,18 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
+        Ok(Command::Process(action)) => {
+            let verbatim = matches!(action, args::ProcessAction::Show(_));
+            return match processes::execute(action) {
+                Ok(text) if verbatim => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Ok(text) if text.is_empty() => ExitCode::SUCCESS,
+                other => printed(other),
+            };
+        }
         Ok(Command::Trial(request)) => return printed(trial::run(&request)),
         Ok(Command::OomExec { program, args }) => match scope::oom_exec(&program, &args) {
             // Unreachable on success: `exec` replaces this process.
@@ -447,6 +485,29 @@ fn secure(args: PassArgs) -> ExitCode {
             close,
         },
     })
+}
+
+fn score() -> ExitCode {
+    let _lock = match scoring::lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            progress::step("Scoring run skipped: another Scoring run is running on this machine");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => return failure(&error),
+    };
+    let started_at = chrono::Utc::now();
+    let (config, started) = match command::start(
+        Begin::ScoringRun,
+        |_| notification::NotificationAsk::Skip,
+        About::ScoringRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    started.finish(Ending::Scoring(
+        scoring::sample(&config, started_at).map_err(Into::into),
+    ))
 }
 
 /// The release script's internal interface: the prompt on stdin, only the

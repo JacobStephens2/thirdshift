@@ -273,6 +273,7 @@ fn fix(
             issue: &issue,
             is_spec: record.fix_size()? == reproduction::FixSize::Spec,
             base,
+            finding: &metadata,
         });
         if let Err(error) =
             outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
@@ -286,7 +287,10 @@ fn fix(
                 }
                 Ok(reached) => FailedRun {
                     log: reached.log,
-                    pr_url: Some(reached.pr_url),
+                    pr_url: reached
+                        .resolution
+                        .goal()
+                        .map(|_| reached.resolution.url().to_string()),
                     ticket_lines: reached.ticket_lines,
                     ..error
                         .context("could not record the successful Security fix's ending")
@@ -311,8 +315,10 @@ fn fix(
         ),
     };
     let close = match (&ended.outcome, &issue) {
-        (Ok(reached), Some(issue)) if closing && reached.goal == crate::run::Goal::Merged => {
-            close_after_merge(outside, base, &record, issue, &reached.pr_url)
+        (Ok(reached), Some(issue))
+            if closing && reached.resolution.goal() == Some(crate::run::Goal::Merged) =>
+        {
+            close_after_merge(outside, base, &record, issue, reached.resolution.url())
         }
         _ => CloseOutcome::NotAttempted,
     };
@@ -585,8 +591,10 @@ mod tests {
     fn merged(pr_url: &str) -> crate::run::Ended {
         crate::run::Ended {
             outcome: Ok(crate::run::Reached {
-                pr_url: pr_url.to_string(),
-                goal: crate::run::Goal::Merged,
+                resolution: crate::run::Resolution::PullRequest {
+                    url: pr_url.to_string(),
+                    goal: crate::run::Goal::Merged,
+                },
                 log: None,
                 ticket_lines: Vec::new(),
             }),

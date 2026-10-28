@@ -59,10 +59,7 @@ impl Trace {
             b"session",
             log.as_os_str().as_encoded_bytes(),
         ]);
-        let input_excludes_cache = matches!(
-            choice.harness,
-            crate::harness::Harness::Claude | crate::harness::Harness::Grok
-        );
+        let input_excludes_cache = choice.harness.input_excludes_cache();
         let mut attrs = vec![
             attribute("service.name", "thirdshift"),
             attribute("service.version", env!("CARGO_PKG_VERSION")),
@@ -77,6 +74,9 @@ impl Trace {
         }
         if let Some(effort) = &choice.effort {
             attrs.push(attribute("thirdshift.request.effort", effort));
+        }
+        if let Some(dir) = command.get_current_dir() {
+            attrs.push(attribute("thirdshift.harness.directory", dir.display()));
         }
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
@@ -103,17 +103,8 @@ impl Trace {
                     attrs.push(attribute("thirdshift.session.prompt", prompt));
                     attrs.push(attribute(
                         "thirdshift.harness.arguments",
-                        serde_json::to_string(
-                            &command
-                                .get_args()
-                                .map(|arg| arg.to_string_lossy())
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap(),
+                        serde_json::to_string(&recorded_arguments(command)).unwrap(),
                     ));
-                    if let Some(dir) = command.get_current_dir() {
-                        attrs.push(attribute("thirdshift.harness.directory", dir.display()));
-                    }
                     attrs
                 },
                 ..Default::default()
@@ -386,6 +377,34 @@ impl Trace {
     }
 }
 
+/// Launcher environment values can be credentials. Keep the command's shape
+/// in evidence without copying those values into local spans or OTLP exports.
+fn recorded_arguments(command: &std::process::Command) -> Vec<String> {
+    let mut arguments: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    if Path::new(command.get_program())
+        .file_name()
+        .is_some_and(|name| name == "bwrap")
+    {
+        let mut index = 0;
+        while index < arguments.len() {
+            match arguments[index].as_str() {
+                "--" => break,
+                "--setenv" => {
+                    if let Some(value) = arguments.get_mut(index + 2) {
+                        *value = "[redacted]".into();
+                    }
+                    index += 3;
+                }
+                _ => index += 1,
+            }
+        }
+    }
+    arguments
+}
+
 fn status(outcome: Outcome) -> Status {
     Status {
         code: if outcome == Outcome::Succeeded { 1 } else { 2 },
@@ -393,7 +412,7 @@ fn status(outcome: Outcome) -> Status {
     }
 }
 
-fn set(attrs: &mut Vec<KeyValue>, attr: KeyValue) {
+pub(super) fn set(attrs: &mut Vec<KeyValue>, attr: KeyValue) {
     if let Some(old) = attrs.iter_mut().find(|old| old.key == attr.key) {
         *old = attr;
     } else {

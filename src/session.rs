@@ -26,9 +26,11 @@ use crate::skills;
 
 pub mod kind;
 pub(crate) mod limits;
+pub(crate) mod private;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
+pub(crate) mod usage;
 use review_reports::ReviewReports;
 
 pub use kind::{Kind, Logged};
@@ -64,6 +66,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// A Custom process Step, under its owning Command's log directory.
+    pub fn of_process(repo: &Repo) -> Self {
+        Logs {
+            name: "process".to_string(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
     /// An isolated Trial's artifacts, with no Command owner or factory logs.
     pub fn of_trial(dir: &Path) -> Self {
         Logs {
@@ -80,6 +91,14 @@ impl Logs {
             dir: logs::session_dir(&issue.repo()),
             recording: OnceCell::new(),
         }
+    }
+
+    /// A Custom process's review keeps the Security review session kind for
+    /// fallback and Resume, with a distinct trace for each one-based Step.
+    pub fn of_process_review(repo: &Repo, step_index: usize) -> Self {
+        let mut logs = Self::of_process(repo);
+        logs.name = format!("process-step-{step_index}");
+        logs
     }
 
     /// The logs of the Architect run on `repo`.
@@ -256,13 +275,14 @@ impl<'a> Sessions<'a> {
         let taken = steps(&sessions);
         let log = sessions.last_log.into_inner().map(|(_, log)| log);
         let endings = sessions.endings_with_killed_work.into_inner();
-        if endings.is_empty() {
-            return (taken, log);
-        }
-        let taken = taken.map_err(|error| {
-            error.context(format!("{}, and a later step failed", endings.join("; ")))
-        });
-        (taken, log)
+        (with_killed_work(taken, &endings), log)
+    }
+
+    /// Transfer killed-work context to a caller whose Steps outlive this
+    /// session scope. That caller must apply [`with_killed_work`] to its
+    /// final outcome; taking it prevents annotating the same failure twice.
+    pub fn take_killed_work(&self) -> Vec<String> {
+        std::mem::take(&mut *self.endings_with_killed_work.borrow_mut())
     }
 
     /// Run a session of `kind` given `prompt`, logged and labelled by its
@@ -271,7 +291,8 @@ impl<'a> Sessions<'a> {
     /// same way, or the session has no id to resume, the work may have been
     /// abandoned rather than awaited: a progress line names it and this
     /// succeeds, leaving the steps that follow to decide the outcome.
-    pub fn run(&self, kind: Kind, prompt: &str) -> Result<()> {
+    /// Returns the final message while retaining the prompt's launch policy.
+    pub fn run(&self, kind: Kind, prompt: &str) -> Result<Option<String>> {
         // The shared review-report contract identifies code review sessions
         // before expansion. Retain that policy even if report setup fails.
         let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -279,7 +300,7 @@ impl<'a> Sessions<'a> {
         } else {
             Purpose::Ordinary
         };
-        self.run_to_final_message(purpose, kind, prompt).map(drop)
+        self.run_to_final_message(purpose, kind, prompt)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:
@@ -519,13 +540,7 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let mut interpretation = adapter.interpretation(&self.worktree, prompt);
-        if let Some(launch) = &self.sandbox
-            && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
-        {
-            interpretation.set_home(Path::new(home));
-        }
-        let (mut invocation, interpretation) = match purpose {
+        let (mut invocation, policy) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -533,12 +548,15 @@ impl Outside for OnMachine {
                     prompt,
                     matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
-                interpretation.for_security(harness.model.as_deref()),
+                recording::Policy::Security,
             ),
-            Purpose::Ordinary => (adapter.session(harness, resume, prompt), interpretation),
+            Purpose::Ordinary => (
+                adapter.session(harness, resume, prompt),
+                recording::Policy::Ordinary,
+            ),
             Purpose::CodeReview => (
                 adapter.code_review_session(harness, resume, prompt),
-                interpretation,
+                recording::Policy::Ordinary,
             ),
         };
         // A sandboxed session is always a Trial's: it runs with the Harness's
@@ -586,11 +604,11 @@ impl Outside for OnMachine {
             &mut command,
             recording::Input {
                 prompt,
+                policy,
                 stdin: invocation.stdin.as_deref(),
                 ..Default::default()
             },
             log,
-            interpretation,
         );
         drop(github_config);
         ended
@@ -601,9 +619,17 @@ impl Outside for OnMachine {
     }
 }
 
+/// Name earlier killed work ahead of a later failure, leaving success alone.
+pub fn with_killed_work<T>(taken: Result<T>, endings: &[String]) -> Result<T> {
+    if endings.is_empty() {
+        return taken;
+    }
+    taken.map_err(|error| error.context(format!("{}, and a later step failed", endings.join("; "))))
+}
+
 /// How a session ended whose `killed` background work, by description, was
 /// still running: what follows "implement session" or "the Resume".
-fn ending_with(killed: &[&str]) -> String {
+pub(crate) fn ending_with(killed: &[&str]) -> String {
     match killed {
         [task] => format!("ended with a background task still running ({task}), which was killed"),
         _ => format!(
@@ -704,6 +730,7 @@ mod tests {
             session_id: session_id.map(String::from),
             killed: killed.iter().map(|work| work.to_string()).collect(),
             final_message: Some(said.to_string()),
+            completed: true,
         })
     }
 
@@ -742,8 +769,7 @@ mod tests {
                 "implement", &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!(
                     "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
-                )]), recording::Input::default(), &log,
-                crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
+                )]).current_dir(root.path()), recording::Input::default(), &log,
             ).unwrap();
             let reports = ReviewReports::new(root.path()).unwrap();
             for axis in ["standards", "spec"] {

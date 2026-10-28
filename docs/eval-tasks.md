@@ -85,7 +85,9 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
   executed by preparation. After a Trial, the Experiment runs each check with
-  an isolated view of the Trial repository as its working directory. Exit zero
+  an isolated copy of the prepared repository, captured before the session,
+  as its working directory. Session edits and commits cannot change the code
+  these checks grade. Exit zero
   passes; nonzero or the Bar's timeout fails the check. A sandbox that cannot
   start makes the Trial void. Each check gets
   `THIRDSHIFT_TRIAL_STANDARDS_REPORT`, `THIRDSHIFT_TRIAL_SPEC_REPORT` and
@@ -126,9 +128,9 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   Experiment. Missing tables are reported by task name before either Arm is
   built, including for release Experiments. `base` and `branch` name distinct
   local branches; `issue_url` and `pr_url` are the original issue and PR URLs.
-  Spec-review Experiments
-  create those local branches, commit the prepared change and push them to
-  the disposable bare origin. A Spec-review Trial keeps the production Spec
+  Complete Trial repository preparation creates those local branches, commits
+  the staged reviewed patch and, for Spec review, pushes them to the disposable
+  bare origin. A Spec-review Trial keeps the production Spec
   review prompt. There is no PR service: its `gh` calls fail inside the sandbox,
   and only its reports are graded.
   Code-review Experiments also commit the prepared patch on the Issue branch,
@@ -156,7 +158,8 @@ dependencies, Trials per Arm and each Eval task's name, state and session.
 `touched` returns a sorted array of suite names, once each, for the supplied
 changed paths. With no changed paths it returns `[]`.
 
-`prepare` requires an approved Eval task and a destination that does not exist.
+`prepare` is the inspection operation: it requires an approved Eval task and a
+destination that does not exist. Trial inputs are optional for inspection.
 It creates an independent Git repository in a temporary sibling folder, fetches
 only the base's ancestry from the local source, and checks out a detached base.
 It stages the binary-capable `base..change` patch in the index without importing
@@ -174,10 +177,39 @@ removes the temporary repository and leaves the destination absent.
 A code-review repository has no origin. A Spec-review repository gets a fresh
 local bare origin at `<destination>/.git/eval-origin.git`, seeded only with the base. It
 is pushable: the session can create a branch, commit and push as in production.
-The bare origin receives the same history verification. Preparation returns
+The bare origin receives the same history verification. Inspection preparation returns
 `repository` and `origin` paths (`origin` is `null` for code review); `verify`
 returns `{"safe":true}` on success. Keep or delete the entire destination for
 the lifetime of its Trial; the repository and any bare origin are throwaway.
+
+Trial execution requests a complete repository through a separate preparation
+operation. It requires Trial inputs with valid, distinct Base branch and Issue
+branch names, including custom names containing slashes. It performs the same
+base-only import and verification as inspection, then creates the requested
+branches and one synthetic reviewed commit directly above the recorded base.
+The commit uses the existing index: copied inputs and tracked worktree overlays
+are not added to the reviewed patch. The issue input is excluded locally.
+Code review has no origin; Spec review seeds the staged private origin with the
+requested Base branch, then publishes both requested refs without removing the
+seed. Inspection keeps its conventional `base` seed; that name reserves no
+prefix in complete Trial preparation. The configured origin URL and
+returned paths name the final destination and remain usable after publication.
+Branch validation, checkout, commit and push share preparation's isolated Git
+policy, ignoring caller hooks and global/system settings. All preparation
+finishes in the temporary sibling before publication; failures leave the
+destination absent and launch no Arm. Existing destinations are refused.
+Trial execution then establishes the selected Harness's instruction fallback
+and captures integrity before launching the Arm. Repository-change detection
+protects `.thirdshift-issue.md`, every destination in `[inputs]`, and the Base
+branch and synthetic change commits under review. Editing or deleting an input,
+moving the Base branch, or altering or removing a protected Git object makes
+an otherwise successful Trial void with `repository_changed`. Ordinary Issue
+branch commits, pushes to the local origin, report files, and other tracked,
+untracked or ignored working-tree changes do not void a Trial. For tasks with
+`checks`, a private copy captured before the session supplies their repository;
+checks share their own build artifacts, never the session's edits.
+`evals verify` retains its
+inspection contract: it expects the detached base, before the synthetic commit.
 
 These commands prepare data for the Experiment runner; they start no Harness,
 Trial or Grader. Isolation of the session's home, processes and network belongs

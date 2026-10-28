@@ -11,11 +11,26 @@ use support::{Scenario, scope_available};
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
+#[path = "experiments/code_graders.rs"]
+mod code_graders;
+
+#[path = "experiments/cost.rs"]
+mod cost;
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
+#[path = "experiments/names.rs"]
+mod names;
+
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
+
+#[path = "experiments/result_format.rs"]
+mod result_format;
+
+#[path = "experiments/retention.rs"]
+mod retention;
 
 #[path = "experiments/release.rs"]
 mod release;
@@ -494,6 +509,107 @@ echo '{"type":"result","subtype":"success","total_cost_usd":0.25,"modelUsage":{"
     );
 }
 
+#[test]
+fn trial_export_ignores_result_metadata_but_requires_trace_context_and_complete_pairs() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    for entry in fs::read_dir(directory.join("results")).unwrap() {
+        fs::write(entry.unwrap().path(), "malformed result").unwrap();
+    }
+    let mut session_spans = Vec::new();
+    for trial in fs::read_dir(directory.join("trials")).unwrap() {
+        let trial = trial.unwrap().path();
+        for name in ["pending.json", "active.json"] {
+            fs::write(trial.join(name), "malformed unrelated metadata").unwrap();
+        }
+        for attempt in fs::read_dir(&trial).unwrap() {
+            let attempt = attempt.unwrap().path();
+            if !attempt.is_dir() {
+                continue;
+            }
+            for name in ["started.json", "result.json"] {
+                fs::write(attempt.join(name), "malformed unrelated metadata").unwrap();
+            }
+            for entry in fs::read_dir(attempt.join("session")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.to_string_lossy().ends_with(".spans.jsonl") {
+                    session_spans.push(path);
+                }
+            }
+        }
+    }
+    session_spans.sort();
+    assert_eq!(session_spans.len(), 2);
+    let spans = &session_spans[0];
+    let bytes = fs::read_to_string(spans).unwrap();
+    let preserved = bytes.replacen('{', "{\"futureTrialField\":{\"opaque\":true},", 1);
+    fs::write(spans, &preserved).unwrap();
+    let unassociated = directory.join("trials/unassociated/attempt-old");
+    fs::create_dir_all(unassociated.join("session")).unwrap();
+    fs::write(
+        unassociated.join("session/orphan.spans.jsonl"),
+        "not decoded",
+    )
+    .unwrap();
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = |name: &str| {
+        let output = fixture.scenario.path(name);
+        fixture.scenario.run(&[
+            "logs",
+            record["name"].as_str().unwrap(),
+            "--export",
+            output.to_str().unwrap(),
+        ])
+    };
+    let run = export("export-valid");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        fs::read_to_string(fixture.scenario.path("export-valid/spans.jsonl"))
+            .unwrap()
+            .contains(&preserved)
+    );
+    let spans = trace_spans(&fixture.scenario.path("export-valid/spans.jsonl"));
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent spec-review")
+            .count(),
+        2
+    );
+
+    let context = unassociated.join("trace-context.json");
+    fs::write(&context, "malformed context").unwrap();
+    let run = export("export-bad-context");
+    assert_eq!(run.code, Some(1));
+    assert!(run.stderr.contains("trace-context.json"), "{}", run.stderr);
+    fs::remove_file(context).unwrap();
+
+    let logs = session_spans[0].with_file_name("trial-spec-review.logs.jsonl");
+    assert!(logs.is_file(), "{}", logs.display());
+    fs::remove_file(&logs).unwrap();
+    let run = export("export-partial-pair");
+    assert_eq!(run.code, Some(1));
+    assert!(
+        run.stderr.contains(logs.to_str().unwrap()),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        !fixture
+            .scenario
+            .path("export-partial-pair/spans.jsonl")
+            .exists()
+    );
+}
+
 fn trace_spans(path: &std::path::Path) -> Vec<Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -674,7 +790,7 @@ fn arm_usage_sums_void_retries_and_both_sessions_of_each_resume() {
     fixture.scenario.agent_does(&format!(r#"
 echo '{{"type":"assistant","message":{{"id":"m1","model":"observed","usage":{{"input_tokens":7,"output_tokens":2}},"content":[]}}}}'
 echo '{{"type":"result","subtype":"success","total_cost_usd":0.05}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-printf changed > changed.txt
+printf changed >> .thirdshift-issue.md
 {}
 "#, support::leaves_running("cargo test")));
     let run = fixture.run(&[]);
@@ -745,7 +861,7 @@ fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
 }
 
 #[test]
-fn spec_review_ignored_repository_changes_are_void() {
+fn spec_review_ignored_repository_artifacts_are_allowed() {
     let fixture = Fixture::new();
     let directory = fixture
         .scenario
@@ -768,8 +884,8 @@ fn spec_review_ignored_repository_changes_are_void() {
     let experiment = fixture.experiment();
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(
-            result["outcome"], "void",
-            "creating an ignored repository file must invalidate the Trial"
+            result["outcome"], "succeeded",
+            "creating an ignored repository file is ordinary session work"
         );
     }
 }
@@ -911,7 +1027,18 @@ PY
         for commit in [&baseline, &candidate] {
             let build = scenario.path(&format!("home/.thirdshift/evals/builds/{commit}"));
             fs::create_dir_all(&build).unwrap();
-            fs::copy(env!("CARGO_BIN_EXE_thirdshift"), build.join("thirdshift")).unwrap();
+            let binary = build.join("thirdshift");
+            support::copy_executable(
+                std::path::Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                &binary,
+            );
+            // macOS scans a fresh copy on its first exec, for about a second.
+            // Pay that here, outside the Trial deadline the tests time.
+            let warmed = std::process::Command::new(&binary)
+                .arg("--version")
+                .output()
+                .unwrap();
+            assert!(warmed.status.success(), "{warmed:?}");
         }
         let suite = scenario.path(&format!("home/.thirdshift/evals/suites/{session}"));
         let task = suite.join("tasks/fixture");
@@ -980,14 +1107,32 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         self.scenario.run_with_env(&args, &NO_SANDBOX)
     }
 
+    /// [`Fixture::run`] with stdin and stderr on a terminal, typing
+    /// `keystrokes` at its questions.
+    fn run_on_terminal(
+        &self,
+        extra: &[&str],
+        keystrokes: &[support::Keystrokes],
+    ) -> support::TerminalResult {
+        let mut args = vec!["experiment", "candidate", "--json"];
+        args.extend_from_slice(extra);
+        self.scenario
+            .run_on_terminal(&args, &NO_SANDBOX, keystrokes)
+    }
+
     fn experiment(&self) -> Value {
         let listed = self.scenario.run(&["experiments", "--json"]);
         assert_eq!(listed.code, Some(0), "{}", listed.stderr);
         let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+        for experiment in listed.as_array().unwrap() {
+            result_format::assert_documented("Experiment", experiment);
+        }
         let id = listed[0]["id"].as_str().unwrap();
         let shown = self.scenario.run(&["experiments", id, "--json"]);
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-        serde_json::from_str(&shown.stdout).unwrap()
+        let experiment = serde_json::from_str(&shown.stdout).unwrap();
+        result_format::assert_documented("Experiment", &experiment);
+        experiment
     }
 
     fn trial_calls(&self) -> Vec<Value> {
@@ -1237,11 +1382,47 @@ esac
 }
 
 #[test]
+fn review_fixes_and_repository_reports_reach_model_grading_in_both_suites() {
+    for session in ["spec-review", "code-review"] {
+        let fixture = Fixture::with_session(session, 1);
+        fixture.scenario.agent_does(&format!(
+            r#"
+printf fixed > review-fix.txt
+git add review-fix.txt
+git -c user.name=Review -c user.email=review@example.invalid commit -m 'Review fix'
+if git remote get-url origin >/dev/null 2>&1; then
+    git push origin HEAD
+fi
+{reports}
+printf 'Spec report\n' > "$reports/spec.md"
+printf '{{"standards":0,"spec":0}}\n' > "$reports/summary.json"
+"#,
+            reports = review_reports_prelude()
+        ));
+        let run = fixture.run(&[]);
+        assert_eq!(run.code, Some(0), "{session}: {}", run.stderr);
+        let experiment = fixture.experiment();
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "succeeded", "{session}: {result}");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            assert_eq!(result["score"]["passed"], true);
+            assert_eq!(result["score"]["model"]["reason"], "Written criteria met.");
+        }
+        let packet = fixture.grader_packet();
+        assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
+        for trial in packet["trials"].as_array().unwrap() {
+            assert_eq!(trial["standards"], "Standards report\n");
+            assert_eq!(trial["spec"], "Spec report\n");
+        }
+    }
+}
+
+#[test]
 fn changed_repositories_are_void_retried_and_excluded_from_the_verdict() {
     for mutation in [
         "printf changed >> .thirdshift-issue.md",
-        "printf changed > invented-untracked.txt",
-        "git -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m changed",
+        "rm .thirdshift-issue.md",
+        "git update-ref refs/heads/main HEAD",
     ] {
         let fixture = Fixture::new();
         fixture.scenario.agent_does(mutation);
@@ -1433,6 +1614,9 @@ while true; do sleep 0.05; done
         &NO_SANDBOX,
         "started",
     );
+    let running = fixture.experiment();
+    assert_eq!(running["state"], "running");
+    assert!(!running["running_trials"].as_array().unwrap().is_empty());
     let status = fixture.scenario.run(&["status", "--json"]);
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
@@ -1448,6 +1632,12 @@ while true; do sleep 0.05; done
     assert_eq!(stopped["outcome"], "interrupted");
     let before = fixture.experiment();
     assert_eq!(before["state"], "interrupted");
+    let attempts = retention::attempts(&fixture, &before);
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     let finished = before["results"].as_array().unwrap();
     assert!(!finished.is_empty());
     assert!(finished.len() < 6);
@@ -1469,6 +1659,11 @@ while true; do sleep 0.05; done
     assert_eq!(after["state"], "completed");
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["results"].as_array().unwrap().len(), 6);
+    assert!(
+        retention::attempts(&fixture, &after)
+            .iter()
+            .all(|attempt| !attempt.join("repository").exists())
+    );
     for result in finished {
         let saved = after["results"]
             .as_array()
@@ -1715,7 +1910,7 @@ printf '{"version":1,"outcome":"succeeded","timings":{"total_ms":1,"session_ms":
 case "$PWD" in
   *--baseline--*)
     echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning","rateLimitType":"seven_day"}}}}'
-    sleep 0.3
+    sleep 5
     touch '{}'
     ;;
   *) sleep 0.1 ;;
@@ -2011,6 +2206,54 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
     let after = fixture.experiment();
     assert_eq!(after["state"], "completed");
     assert_eq!(after["bar"]["void_rules"]["causes"], old_causes);
+}
+
+#[test]
+fn retained_pending_history_obeys_the_saved_void_cause_list() {
+    let fixture = Fixture::new();
+    let started = fixture.scenario.path("limited-trials-started");
+    fs::create_dir(&started).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{started}'/"$arm"
+while [ ! -f '{started}/baseline' ] || [ ! -f '{started}/candidate' ]; do sleep 0.01; done
+echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning"}}}}'
+sleep 0.2
+"#,
+        started = started.display()
+    ));
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    assert_eq!(fixture.trial_calls().len(), 2);
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    let metadata = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    // Retained history from an older Bar, before host_killed became retryable.
+    saved["bar"]["void_rules"]["causes"] = json!(["session_unavailable", "usage_limit"]);
+    fs::write(&metadata, serde_json::to_vec(&saved).unwrap()).unwrap();
+    for trial in fs::read_dir(directory.join("trials")).unwrap() {
+        let pending = trial.unwrap().path().join("pending.json");
+        let mut history: Value = serde_json::from_slice(&fs::read(&pending).unwrap()).unwrap();
+        history["attempts"][0]["void_cause"] = json!("host_killed");
+        fs::write(pending, serde_json::to_vec(&history).unwrap()).unwrap();
+    }
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(
+        fixture.trial_calls().len(),
+        2,
+        "a retained Void cause excluded by the saved Bar must not get another attempt"
+    );
+    for result in fixture.experiment()["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "void");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+    }
 }
 
 #[test]

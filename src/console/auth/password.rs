@@ -2,8 +2,6 @@
 use super::*;
 use crate::{email::Resend, resend_key::ResendKey};
 
-const OWNER: &str = "Email password setup is off. Ask the machine's owner to run thirdshift console password --email <address>.";
-
 #[derive(Template)]
 #[template(path = "console/set_password.html")]
 struct PasswordPage {
@@ -135,9 +133,9 @@ pub(in crate::console) async fn set_password(
             let mut response = Redirect::to("/").into_response();
             set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
             response
-        },
-        Ok(Ok(Some(_))) => (StatusCode::UNAUTHORIZED, axum::response::Html("Password not set. Check your code or <a href=\"/set-password\">request another</a>.")).into_response(),
-        Ok(Ok(None)) => (StatusCode::SERVICE_UNAVAILABLE, OWNER).into_response(),
+        }
+        Ok(Ok(Some(_))) => Reply::PasswordNotSet.response().await,
+        Ok(Ok(None)) => Reply::PasswordOff.response().await,
         Ok(Err(error)) => failed(error),
         Err(error) => failed(error),
     }

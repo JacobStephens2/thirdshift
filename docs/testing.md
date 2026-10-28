@@ -4,19 +4,40 @@ Run `scripts/affected-tests main` from anywhere in this checkout. It requires
 Python 3 and Git, compares the working tree with the merge-base of the supplied
 ref and `HEAD`, and includes staged, unstaged and untracked non-ignored files.
 Renames include both paths. An invalid ref fails before running checks; an empty
-diff prints that no tests are affected. Each selected command is printed, and
-any failed command fails the entry point.
+diff prints that no tests are affected. Before each selected command starts,
+the script prints its full-output log path. After it finishes, one summary line
+shows the command, `PASS` or `FAIL`, wall time in seconds and the log path. Raw
+check output stays in the log. Failures also print failing Rust test names and
+panic messages, or failing `node --test` cases for the browser suites, so the
+summary is enough to start investigating. Any failed command fails the entry
+point and stops the remaining checks.
+
+Logs live in `.affected-tests/` at the checkout root, which Git ignores. Each
+command gets a separate log named after the command with a unique suffix;
+subsequent runs keep earlier logs. Both stdout and stderr are saved in full.
+Run the script in the foreground and read its summary; open the printed log
+when more context is needed. Logs may be deleted when no longer needed.
+
+```text
++ cargo nextest run (log: /checkout/.affected-tests/cargo-nextest-run-abc123.log)
+PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run-abc123.log)
+```
 
 | Changed paths | Checks |
 | --- | --- |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
+| `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
+| `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
-| Several areas together | Full Rust suite plus any selected browser and release-generator checks; the full suite subsumes the targeted Rust checks |
+| Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
 
-Unknown paths print the reason for selecting the full Rust suite. The mappings
-are deliberately narrow: adding a new area cannot silently opt it out. For
-changes to the selector or other Python tooling, also run
+Unknown paths print the reason for selecting the full Rust suite, and Console
+paths print the reason for selecting the Console browser tests. The mappings
+are deliberately narrow: adding a new area cannot silently opt it out. When a
+Console browser test starts reading another file outside `console/`, add that
+file to the Console source paths in `scripts/affected-tests`. For changes to
+the selector or other Python tooling, also run
 `python3 -m unittest discover -s scripts -p 'test_*.py'`, as CI does.
 
 The full Rust suite uses `cargo nextest run` when `cargo nextest --version`
@@ -27,10 +48,21 @@ target or doctests. For a focused iteration, use
 `cargo test --bin thirdshift <module>::tests` or `cargo test --test <file>`
 (the file name without `.rs`).
 
+Some tests give a Trial, grader or Harness a deadline of a second or less, and
+that deadline covers setup as well as the fake agent. On a busy many-core host,
+running every test at once can use up the deadline before the fake agent starts.
+On an 18-core Mac, `cargo test --test experiments` failed three such tests, and
+`cargo test --bin thirdshift` failed four. CI runners have about three cores and
+pass (#1472). If timeout tests fail locally but pass alone, rerun with fewer
+threads, for example `cargo test -- --test-threads=3` or
+`cargo nextest run --test-threads 3`.
+
 Set up browser dependencies following [the site instructions](../site/tests/README.md)
-before selecting site checks. A missing dependency fails visibly rather than
-dropping that check. Site generation checks remain part of `npm test`; regenerate
-prompt changes as described in [AGENTS.md](../AGENTS.md#generated-prompts).
+before selecting site checks, and [the Console instructions](../console/README.md)
+before selecting Console checks. A missing Node, npm or Playwright dependency
+fails visibly rather than dropping that check. Site generation checks remain
+part of `npm test`; regenerate prompt changes as described in
+[AGENTS.md](../AGENTS.md#generated-prompts).
 
 ## Local work and CI
 
@@ -44,8 +76,8 @@ this does not change Delivery or CI policy.
 Local selection shortens feedback; CI retains its broader checks on every PR,
 including Python tooling, formatting, clippy, site and Console browser tests,
 and the Linux Rust suite. The macOS gate/full-suite policy remains in
-[CI performance](ci-performance.md). This script selects Rust, site and release
-checks; it does not replace CI's cross-platform and Console browser coverage.
+[CI performance](ci-performance.md). This script selects Rust, site, Console
+browser and release checks; it does not replace CI's cross-platform coverage.
 
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 `/usr/bin/time -p cargo test` for the fallback), recording the command, result,

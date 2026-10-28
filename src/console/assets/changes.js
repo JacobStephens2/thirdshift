@@ -1,6 +1,20 @@
 // One stream per tab, shared by the page, peek and notification consumers.
+import { refreshAssetStyles } from './look.js';
+
 const subscribers = new Set();
 let polling, stream;
+let assets;
+// Pages without live Command content still need the shared stream in development.
+document.addEventListener('console-development-assets', () => watchCommands(() => {}), { once: true });
+function refreshAssets(event) {
+  const current = JSON.parse(event.data);
+  if (assets && current.scripts !== assets.scripts) {
+    location.reload();
+  } else if (current.styles !== (assets?.styles ?? 0)) {
+    refreshAssetStyles();
+  }
+  assets = current;
+}
 function refreshAll() {
   for (const refresh of subscribers) refresh();
 }
@@ -11,6 +25,7 @@ function startUpdates() {
   if (typeof EventSource === 'function') {
     stream = new EventSource('/events');
     stream.addEventListener('commands', refreshAll);
+    stream.addEventListener('assets', refreshAssets);
     stream.addEventListener('error', startPolling);
     stream.addEventListener('open', () => {
       clearInterval(polling);

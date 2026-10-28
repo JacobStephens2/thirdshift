@@ -97,6 +97,19 @@ pub struct Usage {
 }
 
 impl Usage {
+    /// GenAI input includes cached tokens, even for Messages counters.
+    pub(crate) fn input_including_cache(&self, input_excludes_cache: bool) -> Option<u64> {
+        self.input.map(|input| {
+            if input_excludes_cache {
+                input
+                    .saturating_add(self.cache_read.unwrap_or(0))
+                    .saturating_add(self.cache_write.unwrap_or(0))
+            } else {
+                input
+            }
+        })
+    }
+
     pub(super) fn messages(value: &Value) -> Self {
         Self {
             input: value["input_tokens"].as_u64(),
@@ -157,7 +170,18 @@ impl ErrorKind {
         .any(|term| text.contains(term))
         {
             Self::UsageLimit
-        } else if text.contains("rate_limit") || text.contains("rate limit") || text.contains("429")
+        } else if [
+            "rate_limit",
+            "rate limit",
+            "429",
+            "at capacity",
+            "overloaded",
+        ]
+        .iter()
+        .any(|term| text.contains(term))
+            || text
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|word| matches!(word, "503" | "529"))
         {
             Self::RateLimit
         } else {
