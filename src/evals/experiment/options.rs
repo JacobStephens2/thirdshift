@@ -18,6 +18,7 @@ pub struct Options {
     pub(super) trials_per_task: Option<usize>,
     pub(super) json: bool,
     pub(super) release: bool,
+    pub(super) yes: bool,
 }
 
 #[derive(Default)]
@@ -54,6 +55,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut candidate = None;
     let mut json = false;
     let mut release = false;
+    let mut yes = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         if arg == "--json" {
@@ -62,6 +64,9 @@ pub fn parse(args: &[String]) -> Result<Options> {
         } else if arg == "--release" {
             ensure!(!release, "repeated --release");
             release = true;
+        } else if arg == "--yes" {
+            ensure!(!yes, "repeated --yes");
+            yes = true;
         } else if arg.starts_with("--") {
             let value = args
                 .next()
@@ -151,7 +156,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     }
     Ok(Options {
         candidate: candidate.context(
-            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]",
+            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes]",
         )?,
         baseline,
         baseline_setup,
@@ -161,5 +166,6 @@ pub fn parse(args: &[String]) -> Result<Options> {
         trials_per_task,
         json,
         release,
+        yes,
     })
 }

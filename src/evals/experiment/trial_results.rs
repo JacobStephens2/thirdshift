@@ -13,7 +13,7 @@ use self::files::{Files, Native, directory, metadata};
 use super::{grading, rechecks, store};
 use crate::trial::{Outcome, Output};
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Arm {
     Baseline,

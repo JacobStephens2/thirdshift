@@ -1,6 +1,7 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod cost;
 mod evidence;
 mod execution;
 mod grading;
@@ -246,6 +247,7 @@ pub fn run(options: Options) -> Result<()> {
         println!("{}", experiment.render(options.json)?);
         return Ok(());
     }
+    cost::confirm(&experiment, &root.join("experiments"), options.yes)?;
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
             Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));

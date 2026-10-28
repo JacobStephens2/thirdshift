@@ -14,6 +14,9 @@ const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 #[path = "experiments/code_graders.rs"]
 mod code_graders;
 
+#[path = "experiments/cost.rs"]
+mod cost;
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
