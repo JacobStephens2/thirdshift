@@ -68,6 +68,8 @@ async function refresh() {
     const next = new DOMParser().parseFromString(await response.text(), 'text/html');
     const replacement = next.getElementById('experiments');
     if (!replacement) throw new Error('Experiment view unavailable');
+    // A rename from the CLI changes the heading and the tab title together.
+    document.title = next.title;
     const position = [scrollX, scrollY];
     Idiomorph.morph(main, replacement, { callbacks: { beforeAttributeUpdated(name, node) {
       if (name === 'open' && node.matches('details')) return false;

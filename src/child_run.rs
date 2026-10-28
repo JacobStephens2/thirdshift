@@ -38,19 +38,34 @@ const POLL: Duration = Duration::from_millis(100);
 /// alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    /// A Ticket's Run in a Spec run, into the Spec branch.
-    Ticket { spec_branch: String },
-    /// A Base fix, into the Base branch of the Run that started it. It sees
-    /// no Inherited failures and starts no Base fix of its own.
-    BaseFix { base: String },
+    /// A Ticket's Run in a Spec run, into the Spec branch, with the Spec
+    /// PR the Spec run had captured when it started the Ticket, if any.
+    Ticket {
+        spec_branch: String,
+        spec_pr: Option<SpecPr>,
+    },
+    /// A Base fix, into the Base branch of the Run that started it, with
+    /// that Run's Spec PR when it is a Ticket's Run. It sees no Inherited
+    /// failures and starts no Base fix of its own.
+    BaseFix {
+        base: String,
+        spec_pr: Option<SpecPr>,
+    },
 }
 
 impl Kind {
     /// The Base branch the child Run is given.
     pub fn base(&self) -> &str {
         match self {
-            Kind::Ticket { spec_branch } => spec_branch,
-            Kind::BaseFix { base } => base,
+            Kind::Ticket { spec_branch, .. } => spec_branch,
+            Kind::BaseFix { base, .. } => base,
+        }
+    }
+
+    /// The Spec PR a Self-merge into a Spec branch depends on, if any.
+    pub fn spec_pr(&self) -> Option<&SpecPr> {
+        match self {
+            Kind::Ticket { spec_pr, .. } | Kind::BaseFix { spec_pr, .. } => spec_pr.as_ref(),
         }
     }
 
@@ -61,6 +76,14 @@ impl Kind {
             Kind::BaseFix { .. } => BASE_FIX_INTO,
         }
     }
+}
+
+/// The Spec PR a Ticket's Self-merge into its Spec branch depends on: its
+/// number, and the Base branch the Spec run chose for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecPr {
+    pub number: u64,
+    pub base: String,
 }
 
 /// What a child Run is given by the Run that starts it.
@@ -84,6 +107,10 @@ pub struct Given {
 /// always the same binary as its parent (see [`own_executable`]), so only
 /// this module writes them and reads them back.
 const SPEC_BRANCH: &str = "--spec-branch";
+
+/// The hidden argument that gives a child Run its [`SpecPr`], followed
+/// by the Spec PR's number and the Spec run's Base branch.
+const SPEC_PR: &str = "--spec-pr";
 
 /// The hidden argument that makes a child Run a [`Kind::BaseFix`], followed
 /// by the Base branch of the Run that started it.
@@ -168,6 +195,13 @@ impl Given {
             append_choice(&mut args, security, REVIEW_FLAGS);
         }
         let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        if let Some(spec_pr) = self.kind.spec_pr() {
+            args.extend([
+                SPEC_PR.to_string(),
+                spec_pr.number.to_string(),
+                spec_pr.base.clone(),
+            ]);
+        }
         if self.asks.delivery_limits != crate::delivery::Limits::default() {
             args.extend([
                 DELIVERY_LIMITS.to_string(),
@@ -263,6 +297,7 @@ impl PendingChoice {
 pub struct Reader {
     delivery_limits: Option<crate::delivery::Limits>,
     kind: Option<Kind>,
+    spec_pr: Option<SpecPr>,
     stamp: Option<String>,
     command: Option<logs::CommandKind>,
     base_fix: Option<BaseFixAsk>,
@@ -318,9 +353,30 @@ impl Reader {
                 not_yet_given(&self.kind, arg)?;
                 let base = value("Base branch")?;
                 self.kind = Some(if arg == SPEC_BRANCH {
-                    Kind::Ticket { spec_branch: base }
+                    Kind::Ticket {
+                        spec_branch: base,
+                        spec_pr: None,
+                    }
                 } else {
-                    Kind::BaseFix { base }
+                    Kind::BaseFix {
+                        base,
+                        spec_pr: None,
+                    }
+                });
+            }
+            SPEC_PR => {
+                not_yet_given(&self.spec_pr, arg)?;
+                let number = value("Spec PR number")?;
+                let number = number
+                    .parse()
+                    .ok()
+                    .filter(|number| *number > 0)
+                    .with_context(|| {
+                        format!("{arg} must be followed by a PR number, not {number}")
+                    })?;
+                self.spec_pr = Some(SpecPr {
+                    number,
+                    base: value("Base branch")?,
                 });
             }
             STAMP => {
@@ -358,7 +414,19 @@ impl Reader {
     /// it is one. A kind needs a stamp and a Harness, and the other hidden
     /// arguments a kind.
     pub fn finish(self) -> Result<Option<Given>> {
-        let Some(kind) = self.kind else {
+        let kind = match (self.kind, self.spec_pr) {
+            (Some(Kind::Ticket { spec_branch, .. }), Some(spec_pr)) => Some(Kind::Ticket {
+                spec_branch,
+                spec_pr: Some(spec_pr),
+            }),
+            (Some(Kind::BaseFix { base, .. }), Some(spec_pr)) => Some(Kind::BaseFix {
+                base,
+                spec_pr: Some(spec_pr),
+            }),
+            (None, Some(_)) => bail!("only a child Run is given {SPEC_PR}"),
+            (kind, None) => kind,
+        };
+        let Some(kind) = kind else {
             if self.command.is_some()
                 || self.delivery_limits.is_some()
                 || self.stamp.is_some()
@@ -875,12 +943,34 @@ mod tests {
     fn ticket() -> Kind {
         Kind::Ticket {
             spec_branch: "issue-237".to_string(),
+            spec_pr: None,
+        }
+    }
+
+    fn ticket_with_its_spec_pr() -> Kind {
+        Kind::Ticket {
+            spec_branch: "issue-237".to_string(),
+            spec_pr: Some(SpecPr {
+                number: 240,
+                base: "main".to_string(),
+            }),
         }
     }
 
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
+        }
+    }
+
+    fn base_fix_into_a_spec_branch() -> Kind {
+        Kind::BaseFix {
+            base: "issue-237".to_string(),
+            spec_pr: Some(SpecPr {
+                number: 240,
+                base: "main".to_string(),
+            }),
         }
     }
 
@@ -921,10 +1011,15 @@ mod tests {
         let harnesses = [on_claude, on_opus];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
         let securities = [(false, false), (true, false), (false, true), (true, true)];
-        for ((kind, harness), security_review_harness) in [ticket(), base_fix()]
-            .into_iter()
-            .zip(harnesses.iter().cycle())
-            .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
+        for ((kind, harness), security_review_harness) in [
+            ticket(),
+            ticket_with_its_spec_pr(),
+            base_fix(),
+            base_fix_into_a_spec_branch(),
+        ]
+        .into_iter()
+        .zip(harnesses.iter().cycle())
+        .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
             for (base_fix, (security_fix, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]

@@ -477,7 +477,15 @@ fn one_capture_serves_every_session_projection_without_discovering_again() {
                 }
             }
         }
-        let logs = catalog::list(&snapshot, root, None).unwrap();
+        let logs = catalog::list(
+            &snapshot,
+            &crate::logs::accounts::Source {
+                account: None,
+                root: root.to_owned(),
+            },
+            None,
+        )
+        .unwrap();
         let names: Vec<_> = logs.iter().map(|log| log.name.as_str()).collect();
         assert!(
             names.contains(&"acme/widgets/commands/issue/notes.log"),
@@ -537,11 +545,18 @@ fn a_fresh_capture_observes_added_removed_and_retargeted_sessions_and_revised_ev
     let first = capture(root, &files);
     let selected = first.resolve("widgets#7").unwrap().observation;
     let listed = |snapshot: &Snapshot| -> Vec<PathBuf> {
-        catalog::list(snapshot, root, None)
-            .unwrap()
-            .into_iter()
-            .map(|log| log.path)
-            .collect()
+        catalog::list(
+            snapshot,
+            &crate::logs::accounts::Source {
+                account: None,
+                root: root.to_owned(),
+            },
+            None,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|log| log.path)
+        .collect()
     };
     assert_eq!(
         selected.sessions().unwrap(),

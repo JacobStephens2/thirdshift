@@ -1875,7 +1875,10 @@ exit 1
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(spec_pr(&scenario)["body"], "untouched");
-    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(
+        &result.stderr,
+        "/pull/2 was retargeted from main to develop under this Spec run",
+    );
     assert_contains(&result.stderr, "#22 failed");
     assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
 }
@@ -1905,13 +1908,15 @@ gh fake pr issue-20 body '"untouched"'"#
         assert_contains(
             &result.stderr,
             if replacement {
-                "is closed, not open"
+                "/pull/2 was closed under this Spec run"
             } else {
-                "PR targets develop, not main"
+                "/pull/2 was retargeted from main to develop under this Spec run"
             },
         );
-        assert_contains(&result.stderr, "#22 landed");
-        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        // #22 started once the Spec PR was open, so its Self-merge checks it.
+        assert_contains(&result.stderr, "#22 failed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+        assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
         if replacement {
             assert_eq!(spec_pr(&scenario)["isDraft"], false);
         }
@@ -3569,4 +3574,93 @@ fi
         "{args:?}"
     );
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+}
+
+#[test]
+fn issue_1471_a_spec_pr_closed_mid_run_starts_no_further_ticket() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[21])]);
+    scenario.agent_does_for(22, "gh fake pr issue-20 state '\"CLOSED\"'\nexit 1");
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "22"],
+        "{}",
+        result.stderr
+    );
+    assert!(pr_from(&scenario, "issue-23").is_none());
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_ticket_running_when_the_spec_pr_closes_is_not_self_merged() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}\ngh fake pr issue-20 state '\"CLOSED\"'\n",
+            agent_lands(22, "22.txt")
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let ticket_pr = pr_from(&scenario, "issue-22").unwrap();
+    assert_ne!(ticket_pr["state"], "MERGED", "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("#22: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_base_fix_into_the_spec_branch_is_not_self_merged_once_the_spec_pr_closes() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"
+gh fake pr issue-20 state '"CLOSED"'
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "#22: starting Base fix #23 into issue-20");
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_ne!(fix["state"], "MERGED", "{}", result.stderr);
+    assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_none());
 }

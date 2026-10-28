@@ -35,6 +35,7 @@ fn console_allowlist_defaults_to_email_to_even_with_notifications_off() {
         ("Run the Console?", "y"),
         ("Console's whole address", "thirdshift.example.com"),
         ("Allowed emails", ""),
+        ("Other local accounts", ""),
     ]);
     let mut outside = Scripted {
         user_config: Some("[email]\nto = 'owner@example.com'\n".into()),
@@ -65,6 +66,7 @@ fn console_allowlist_defaults_to_the_notification_address_just_chosen() {
         ("Run the Console?", "y"),
         ("Console's whole address", "thirdshift.example.com"),
         ("Allowed emails", ""),
+        ("Other local accounts", ""),
     ]);
     let mut outside = Scripted {
         user_config: Some("[email]\nto = 'old@example.com'\n".into()),
@@ -107,6 +109,7 @@ fn entering_existing_console_defaults_preserves_allowlist_layout_and_comments() 
         ("Run the Console? [Y/n]", ""),
         ("[https://saved.example.com]", ""),
         ("[saved@example.com, other@example.com]", ""),
+        ("Other local accounts", ""),
     ]);
     let saved = "[console] # Console\naddress = 'https://saved.example.com' # site\nallowed_emails = [\n  'saved@example.com', # owner\n  'other@example.com', # colleague\n] # people\n";
     let mut outside = Scripted {
@@ -131,6 +134,7 @@ fn console_reasks_invalid_addresses_and_allowlists_without_using_the_example_as_
         ("Allowed emails", "bad @example.com"),
         ("Allowed emails", "owner@example.com,"),
         ("Allowed emails", "owner@example.com"),
+        ("Other local accounts", ""),
     ]);
     let mut outside = Scripted::answering(&answers);
     setup(&mut outside);
@@ -176,6 +180,7 @@ fn rejected_console_sign_in_entries_are_named_and_reasked_before_writing() {
         );
 
         answers.push(("Allowed emails", "a@b.com, c@d.com"));
+        answers.push(("Other local accounts", ""));
         let mut outside = Scripted::answering(&answers);
         setup(&mut outside);
         assert_eq!(
@@ -233,6 +238,7 @@ fn first_run_setup_also_saves_console_access_and_offers_install() {
         ("Run the Console?", "y"),
         ("whole address", "thirdshift.example.com"),
         ("Allowed emails", "owner@example.com"),
+        ("Other local accounts", ""),
     ]);
     let mut outside = Scripted::answering(&answers);
     run_offer(&mut outside, Path::new(HOME), Path::new(PATH)).unwrap();
@@ -253,6 +259,7 @@ fn review_changed_console_allowlist_keeps_entry_comments() {
         ("Run the Console?", "y"),
         ("Console's whole address", ""),
         ("Allowed emails", "saved@example.com, added@example.net"),
+        ("Other local accounts", ""),
     ]);
     let saved = "[console] # Console\naddress = 'https://saved.example.com' # site\nallowed_emails = [\n  'saved@example.com', # owner retained\n] # people\n";
     let mut outside = Scripted {
@@ -284,6 +291,7 @@ fn replacing_or_removing_allowlist_entries_keeps_the_comments() {
             ("Run the Console?", "y"),
             ("whole address", ""),
             ("Allowed emails", answer),
+            ("Other local accounts", ""),
         ]);
         let mut outside = Scripted {
             user_config: Some("[console]\naddress = 'saved.example.com'\nallowed_emails = [\n  'saved@example.com', # owner\n  'other@example.com', # colleague\n] # people\n".into()),

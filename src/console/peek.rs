@@ -7,6 +7,7 @@ use super::filters;
 #[derive(Template)]
 #[template(path = "console/peek.html")]
 pub(super) struct Peek {
+    pub account: Option<String>,
     pub command: String,
     pub cli: String,
     pub facts: Vec<Fact>,
@@ -109,6 +110,7 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            account: value["account"].as_str().map(str::to_owned),
             dismissal: inspection.dismissal.map(|action| {
                 let (path, label, suffix) = match action {
                     crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),

@@ -87,7 +87,7 @@ How hard the **Model** reasons in a session, such as `high` or `max`. One per **
 _Avoid_: reasoning level, thinking budget
 
 **Resume**:
-A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Every session **Step** gets this rule, in a **Custom process** as in a **Ticket run**. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Process** or Ticket run: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Process or Ticket run then fails, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
+A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. Any session **Step** of a **Process** can get one, a **Ticket run**'s implement session included. A Resume that ends the same way gets no second Resume and does not fail the Process: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the Steps that follow decide the outcome. If the Process then fails, as a **Failed ticket run** for instance, its cause names the killed work ahead of the Step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 ### Factory work
 
@@ -124,14 +124,14 @@ A named sequence of **Steps** that a **Command** carries out: a **Built-in proce
 _Avoid_: workflow, pipeline, recipe, run type
 
 **Built-in process**:
-A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out.
+A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, and whether it holds a **Claim**, is decided before its first Step.
 
 **Custom process**:
 A **Process** a person defines on their own machine and starts by name. It can't take a **Built-in process**'s name. Started with no issue and no Issue-branch worktree, it is a **Pass**. A file that declares an Issue-branch worktree is refused when no issue is given. Started with an issue, it is not a Pass. Its `self-merge` catalogue Step, directly after `delivery`, is the **Self-merge**, and only when the command or the **User config** asks. A file can only tighten limits, never loosen them.
 _Avoid_: workflow, pipeline
 
 **Step**:
-One entry in a **Process**: a skill session, a command, or a catalogue Step whose rules stay in thirdshift.
+One entry in a **Process**: a skill session, a command, or a catalogue Step whose rules stay in thirdshift, such as the implement session, the **Security review** or **Delivery**. Every catalogue Step is open to a **Custom process** as well as a **Built-in process**.
 _Avoid_: task, stage
 
 ### Architecture
@@ -155,7 +155,7 @@ The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base 
 _Avoid_: integration branch, feature branch
 
 **Spec PR**:
-The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body. Ticket accounting captures the resumed or created PR by number in the Spec's repository. Every draft or checklist operation reobserves that number and checks its open state, Spec branch, Base branch and repository ownership; an invalid or missing PR is never replaced during accounting. A landing must pass those checks before the Spec review can start. Delivery explicitly ends this accounting capture before the Spec review and captures its own PR afterward.
+The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body. Ticket accounting captures the resumed or created PR by number in the Spec's repository. Every draft or checklist operation reobserves that number and checks its open state, Spec branch, Base branch and repository ownership; an invalid or missing PR is never replaced during accounting. When the Spec PR is closed, merged or retargeted while the **Spec run** is running, the Spec run starts no further **Ticket**, a running Ticket started after the Spec PR opened, or its **Base fix**, makes no **Self-merge**, and the Spec run ends as a **Failed spec run** whose **Recovery** offers no command. A landing must pass those checks before the Spec review can start. Delivery explicitly ends this accounting capture before the Spec review and captures its own PR afterward.
 
 **Tickets checklist**:
 The part of the **Spec PR**'s body, between fixed markers, that thirdshift writes: one line per **Ticket**, ticked once it is done, with its pull request, or saying whether it is not started, running, failed, interrupted, blocked, in a cycle or unready. It is rewritten as each Ticket starts and ends, and put back after the **Spec review** rewrites the body.
@@ -236,7 +236,7 @@ A **Ticket run** that ends, including by interruption, without an open pull requ
 _Avoid_: Failed run (former name)
 
 **Recovery**:
-The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it; built only from factory-owned facts, never agent output.
+The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it, except after a **Spec PR** changed under its **Spec run**, when no command would be safe; built only from factory-owned facts, never agent output.
 
 **Continuation**:
 A **Ticket run** that picks up an existing **Issue branch**, one with no pull request or an open one, instead of starting fresh. When a pull request is open, its base is the **Base branch**.
@@ -288,8 +288,12 @@ _Avoid_: completion email, alert
 ### Console
 
 **Console**:
-The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+The web page a machine serves that shows the serving OS account's **Commands**, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. The **User config** can include readable **Other-account Commands** on that machine; each machine serves its own Console, behind a sign-in, and every view and action it offers is also a CLI command.
 _Avoid_: dashboard, floor, UI, web UI
+
+**Other-account Command**:
+A **Command** owned by another OS account on the same machine, included by choice in the **Console** and `status` when the serving account can read its logs. Its account is shown with it, and it can be read but never given a **Stop** or **Dismissal** from that account.
+_Avoid_: remote Command, shared Command
 
 **Stop**:
 Ending a live **Command** on request, from the CLI or the **Console**. It is an interruption, and the Command cleans up as after any other, but its issue is left for the **Day shift**: labelled `needs-triage`, with `ready-for-agent` not put back, unless the Stop asks for the issue to go back in line. Stop waits for the Command to end, then reports its outcome and any branch or pull request it left. The **Activity log** records who asked for it. A Stop of a **Spec run** stops its **Ticket runs** with it.
@@ -344,6 +348,14 @@ _Avoid_: dataset, golden dataset, test set
 **Eval task**:
 One past situation in an **Eval suite**: a repository as it once was, the kind of session to run on it, and what success means there, such as a bug the review must catch.
 _Avoid_: task, case, test case, example, sample
+
+**Difficulty**:
+How often an **Eval task** passes on the **Baseline arm**'s setup, measured over a stated number of **Trials**. An Eval task is **discriminating** when its Difficulty lies inside the band an **Eval suite** admits, so that one **Arm** doing better or worse on it can show.
+_Avoid_: pass rate, calibration, hardness
+
+**Advisory suite**:
+An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict** to pass or block a release. Its Verdict is still shown.
+_Avoid_: non-gating suite, informational suite
 
 **Arm**:
 One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.

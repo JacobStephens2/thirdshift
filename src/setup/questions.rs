@@ -306,6 +306,18 @@ fn ask_console(
     Ok(Some(ConsoleAccess {
         address,
         allowed_emails,
+        other_accounts: loop {
+            let saved = current.other_accounts.to_string();
+            let choice = answer(
+                outside,
+                "Other local accounts (none, readable, or comma-separated names)",
+                Some(&saved),
+            )?;
+            match crate::config::console::OtherAccounts::parse(&choice) {
+                Ok(setting) => break setting,
+                Err(error) => outside.say(error.to_string()),
+            }
+        },
     }))
 }
 

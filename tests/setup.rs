@@ -701,10 +701,18 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
                 "https://thirdshift.example.com",
             ),
             ("Allowed emails (comma-separated) [owner@example.com]", ""),
+            ("Other local accounts", "conductor,operator"),
         ],
     );
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["other_accounts"].as_array().unwrap(),
+        &[
+            toml::Value::from("conductor"),
+            toml::Value::from("operator")
+        ]
+    );
     assert_eq!(
         config["console"]["address"].as_str(),
         Some("https://thirdshift.example.com")

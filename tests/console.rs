@@ -21,6 +21,9 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/other_accounts.rs"]
+mod other_accounts;
+
 #[path = "console/assets.rs"]
 mod assets;
 

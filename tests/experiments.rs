@@ -17,8 +17,14 @@ mod code_graders;
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
+#[path = "experiments/names.rs"]
+mod names;
+
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
+
+#[path = "experiments/result_format.rs"]
+mod result_format;
 
 #[path = "experiments/retention.rs"]
 mod retention;
@@ -782,7 +788,10 @@ PY
             let build = scenario.path(&format!("home/.thirdshift/evals/builds/{commit}"));
             fs::create_dir_all(&build).unwrap();
             let binary = build.join("thirdshift");
-            fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+            support::copy_executable(
+                std::path::Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+                &binary,
+            );
             // macOS scans a fresh copy on its first exec, for about a second.
             // Pay that here, outside the Trial deadline the tests time.
             let warmed = std::process::Command::new(&binary)
@@ -862,10 +871,15 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         let listed = self.scenario.run(&["experiments", "--json"]);
         assert_eq!(listed.code, Some(0), "{}", listed.stderr);
         let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+        for experiment in listed.as_array().unwrap() {
+            result_format::assert_documented("Experiment", experiment);
+        }
         let id = listed[0]["id"].as_str().unwrap();
         let shown = self.scenario.run(&["experiments", id, "--json"]);
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
-        serde_json::from_str(&shown.stdout).unwrap()
+        let experiment = serde_json::from_str(&shown.stdout).unwrap();
+        result_format::assert_documented("Experiment", &experiment);
+        experiment
     }
 
     fn trial_calls(&self) -> Vec<Value> {
@@ -1346,6 +1360,9 @@ while true; do sleep 0.05; done
         &NO_SANDBOX,
         "started",
     );
+    let running = fixture.experiment();
+    assert_eq!(running["state"], "running");
+    assert!(!running["running_trials"].as_array().unwrap().is_empty());
     let status = fixture.scenario.run(&["status", "--json"]);
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
