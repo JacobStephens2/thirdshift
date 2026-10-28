@@ -154,6 +154,29 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
+        self.deliver_steps(worktree, opening, pull_request, checklist, None)
+    }
+
+    /// Execute the compiled Ticket process inside the same checked session
+    /// and Failed ticket run lifecycle as the original Ticket run.
+    pub fn ticket_run(
+        self,
+        worktree: Worktree,
+        opening: Opening,
+        pull_request: &mut PullRequest,
+    ) -> Result<Reached, FailedRun> {
+        let steps = crate::processes::ticket::steps()?;
+        self.deliver_steps(worktree, opening, pull_request, None, Some(steps))
+    }
+
+    fn deliver_steps(
+        self,
+        worktree: Worktree,
+        opening: Opening,
+        pull_request: &mut PullRequest,
+        checklist: Option<&str>,
+        steps: Option<Vec<crate::processes::ticket::Step>>,
+    ) -> Result<Reached, FailedRun> {
         let tracker = Tracker::new(opening.session.stage(), CommandLog);
         let logs = self.logs;
         let issue = self.issue;
@@ -212,7 +235,10 @@ impl Delivery<'_> {
                     repair_cap,
                     protected_paths,
                 };
-                route.steps(&mut outside, &opening, checklist)
+                match steps {
+                    Some(steps) => route.process_steps(&mut outside, &opening, steps),
+                    None => route.steps(&mut outside, &opening, checklist),
+                }
             },
         )
     }
@@ -419,6 +445,56 @@ impl Route<'_> {
         opening: &Opening,
         checklist: Option<&str>,
     ) -> Result<Resolution> {
+        if let Some(resolution) = self.implement(outside, opening)? {
+            return Ok(resolution);
+        }
+        let review = self.review(outside)?;
+        let pr = self.publish(outside, checklist)?;
+        self.finish(outside, pr, self.goal, review.as_slice())
+    }
+
+    /// The file supplies the sequence. Delivery and its adjacent Self-merge
+    /// share one Repair loop, just as in a Custom process.
+    fn process_steps(
+        &self,
+        outside: &mut impl Outside,
+        opening: &Opening,
+        steps: Vec<crate::processes::ticket::Step>,
+    ) -> Result<Resolution> {
+        use crate::processes::ticket::Step;
+
+        let mut steps = steps.into_iter().peekable();
+        let mut review = None;
+        let mut resolution = None;
+        while let Some(step) = steps.next() {
+            match step {
+                Step::Implement => {
+                    if let Some(early) = self.implement(outside, opening)? {
+                        return Ok(early);
+                    }
+                }
+                Step::SecurityReview => review = self.review(outside)?,
+                Step::Delivery => {
+                    let goal = if matches!(steps.peek(), Some(Step::SelfMerge)) {
+                        steps.next();
+                        self.goal
+                    } else {
+                        Goal::ReadyForReview
+                    };
+                    let pr = self.publish(outside, None)?;
+                    resolution = Some(self.finish(outside, pr, goal, review.as_slice())?);
+                }
+                Step::SelfMerge => anyhow::bail!("self-merge must directly follow delivery"),
+            }
+        }
+        resolution.context("ticket-run ended without delivery")
+    }
+
+    fn implement(
+        &self,
+        outside: &mut impl Outside,
+        opening: &Opening,
+    ) -> Result<Option<Resolution>> {
         let session = opening.session;
         if session.catches_up_from_origin() {
             outside.catch_up()?;
@@ -432,10 +508,13 @@ impl Route<'_> {
             })?
         {
             outside.confirm_needs_info()?;
-            return Ok(Resolution::NotReproduced { comment_url });
+            return Ok(Some(Resolution::NotReproduced { comment_url }));
         }
-        let review = self
-            .security_review
+        Ok(None)
+    }
+
+    fn review(&self, outside: &mut impl Outside) -> Result<Option<SecurityOutcome>> {
+        self.security_review
             .then(|| {
                 outside.stage(Stage::SecurityReview);
                 outside.security_review(&prompt::security_review(
@@ -444,20 +523,29 @@ impl Route<'_> {
                     self.branch,
                 ))
             })
-            .transpose()?;
+            .transpose()
+    }
+
+    fn publish(&self, outside: &mut impl Outside, checklist: Option<&str>) -> Result<Identified> {
         outside.stage(Stage::Push);
         outside.push()?;
         self.write_built_with(outside);
         outside.stage(Stage::PullRequestReadiness);
-        let pr = outside.mark_pr_ready(checklist)?;
-        take_reviewed_to_goal(outside, &pr.url, self.goal, review.as_slice())?;
-        if self.goal == Goal::Merged {
+        outside.mark_pr_ready(checklist)
+    }
+
+    fn finish(
+        &self,
+        outside: &mut impl Outside,
+        pr: Identified,
+        goal: Goal,
+        reviews: &[SecurityOutcome],
+    ) -> Result<Resolution> {
+        take_reviewed_to_goal(outside, &pr.url, goal, reviews)?;
+        if goal == Goal::Merged {
             self.after_merge(outside, &pr);
         }
-        Ok(Resolution::PullRequest {
-            url: pr.url,
-            goal: self.goal,
-        })
+        Ok(Resolution::PullRequest { url: pr.url, goal })
     }
 
     /// Write the line that says the pull request was built with the Harness

@@ -778,8 +778,16 @@ their descriptions, marking compiled-in Built-in processes as <code>(built-in)</
 under a new name in <code>~/.thirdshift/processes/</code> as a starting point.
 Built-in process files live in the repository&#39;s <a href="https://github.com/JacobStephens2/thirdshift/blob/main/processes/"><code>processes/</code></a>
 folder and are compiled into the binary, like Factory skills (ADR-0001).
-They use the same format and validation as Custom processes. This release
-provides the folder and catalog; no Built-in process file ships yet.
+They use the same format and validation as Custom processes. The built-in
+<code>ticket-run</code> runs <code>implement</code> → <code>security-review</code> → <code>delivery</code> → <code>self-merge</code>,
+inheriting the Command&#39;s Harness, Model and Effort. Ticket runs started from
+an Issue URL or by a Pickup run execute it; Spec, Architect and Security
+runs&#39; Ticket runs keep their existing path for now. The command and User
+config still decide whether the Security review and Self-merge run. The
+Command keeps its Ticket run identity, sessions and progress lines.
+Inspect it with <code>thirdshift process show ticket-run</code>, or validate it with
+<code>thirdshift process check ticket-run issue &lt;issue&gt;</code>. Save the printed file
+under a new name to run it as a Custom process.
 A Custom process cannot take a reserved Built-in process name.</p>
 <p>Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and

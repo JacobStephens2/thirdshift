@@ -51,11 +51,13 @@ fn openssl_packages(lockfile: &str) -> Vec<String> {
 
 #[test]
 fn package_carries_the_built_in_process_folder() {
-    assert!(
-        package_list()
-            .iter()
-            .any(|path| path == "processes/README.md")
-    );
+    let list = package_list();
+    for expected in ["processes/README.md", "processes/ticket-run.toml"] {
+        assert!(
+            list.iter().any(|path| path == expected),
+            "{expected} is missing"
+        );
+    }
 }
 
 #[test]
