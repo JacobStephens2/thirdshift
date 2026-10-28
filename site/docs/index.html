@@ -503,6 +503,8 @@ thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
 thirdshift experiments &lt;id&gt; --name &lt;text&gt; [--json]  # rename an Experiment; --name &#39;&#39; brings back its default name
 thirdshift experiments &lt;id&gt; --session &lt;session-id&gt; [--json]  # read a Trial&#39;s retained session from its inventory
 thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
+thirdshift recheck &lt;id&gt; --pending [--json]  # review pending Scores and their fingerprint
+thirdshift recheck &lt;id&gt; --batch &lt;fingerprint&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
 thirdshift help                     # print a compact command and option reference
@@ -544,6 +546,22 @@ declarations; repeat <code>--suite &lt;name&gt;</code> to select them explicitly
 Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a <code>[trial]</code> table. This check also precedes the release Baseline probe.</p>
+<p>For an <strong>A/A Experiment</strong>, use one commit and the same flags in both Arms.
+This measures how often the Arms disagree when nothing differs, so you can
+assess ordinary Trial variation before weighing a change. For example:</p>
+<pre><code class="language-sh">thirdshift experiment HEAD --baseline HEAD \
+  --suite code-review --suite spec-review \
+  --baseline-harness claude --candidate-harness claude \
+  --baseline-model opus --candidate-model opus \
+  --baseline-effort high --candidate-effort high
+</code></pre>
+<p>Choose matching Harness, Model and Effort values available on your machine.
+Select the suites explicitly with <code>--suite</code>: identical commits touch no paths
+from which to select them automatically. Both Arms follow the ordinary build
+and Trial path (the commit&#39;s cached build may be reused), with separate Trials,
+Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
+identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
+The ordinary resume rules below still apply.</p>
 <p>Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
@@ -583,12 +601,102 @@ production code-review Factory skill on the historical diff and retain both
 axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: <code>gh</code> calls fail
 inside the sandbox and only their reports are graded.</p>
-<p>The Bar is saved before the first Trial: margin <code>-0.10</code>, credible level <code>0.95</code>,
+<p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,
 prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
 <code>1800</code>-second per-Trial timeout, and up to two fresh retries for Void Trials.
-Override these with <code>--margin</code>, <code>--credible-level</code>, <code>--prior</code>, <code>--seed</code>,
+Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fail-level</code>, <code>--prior</code>, <code>--seed</code>,
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
-<code>--void-retries</code> accepts zero, one or two. A sandbox that cannot start, a
+Both levels are credible levels strictly between zero and one. Changing
+either level after the first Trial is refused, as with the rest of the Bar.</p>
+<p>The default pass level is the highest at which an A/A Experiment at the
+measured disagreement rate passes at least 80% of the time on each suite at
+its size, but never below 70% (#1268). #1370&#39;s A/A Experiment measured these
+rates, as paired task differences:</p>
+<table>
+<thead>
+<tr>
+<th>Suite</th>
+<th>Size</th>
+<th>Accuracy disagreements</th>
+<th>Wrong-finding disagreements</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>code-review</code></td>
+<td>10 tasks × 3 Trials</td>
+<td>2 of 10 tasks (one by two Trials, one by one)</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>spec-review</code></td>
+<td>30 tasks × 1 Trial</td>
+<td>5 of 30 tasks</td>
+<td>2 of 30 tasks</td>
+</tr>
+</tbody></table>
+<p>No pass level from 70% to 95% reaches 80% on either suite at today&#39;s size, so
+the default is the 70% floor; without ADR-0024&#39;s upper-bound clause a higher
+pass level only lowers the pass rate. Simulated A/A Experiments at those rates,
+each judged by the Verdict at a 70% pass level, pass this often under the
+current rule (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>) and
+ADR-0024&#39;s rule, whose pass also needed the pass-level upper bound to reach zero:</p>
+<table>
+<thead>
+<tr>
+<th>Suite size</th>
+<th><code>code-review</code>, ADR-0025</th>
+<th><code>code-review</code>, ADR-0024</th>
+<th><code>spec-review</code>, ADR-0025</th>
+<th><code>spec-review</code>, ADR-0024</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Today (10 / 30)</td>
+<td>67%</td>
+<td>67%</td>
+<td>56%</td>
+<td>46%</td>
+</tr>
+<tr>
+<td>40</td>
+<td>94%</td>
+<td>86%</td>
+<td>67%</td>
+<td>53%</td>
+</tr>
+<tr>
+<td>60</td>
+<td>97%</td>
+<td>85%</td>
+<td>76%</td>
+<td>61%</td>
+</tr>
+<tr>
+<td>80</td>
+<td>98%</td>
+<td>86%</td>
+<td>84%</td>
+<td>68%</td>
+</tr>
+<tr>
+<td>100</td>
+<td>98%</td>
+<td>86%</td>
+<td>89%</td>
+<td>71%</td>
+</tr>
+</tbody></table>
+<p>#1370&#39;s own counts give these 70% intervals: <code>code-review</code> accuracy
+[−0.171, −0.018] and wrong findings [−0.039, +0.039]; <code>spec-review</code> accuracy
+[−0.042, +0.108] and wrong findings [−0.047, +0.048]. At 95% (before #1268),
+the A/A pass rates were 0% and 13%.</p>
+<p>Both suites fall short at today&#39;s size. <code>code-review</code> needs about 20 Eval tasks
+(between today&#39;s 10 and the table&#39;s 40) to reach 80% at 70%, and #1434 grows
+it. <code>spec-review</code> needs about 80. Under
+ADR-0024&#39;s rule <code>spec-review</code> could not reach 80% at 70% at any size: for
+identical Arms a 70% interval&#39;s upper bound falls below zero about 15% of the
+time per noisy metric, capping the pass rate near 72%.</p>
+<p><code>--void-retries</code> accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work,
 provider capacity or overload errors, a plan-limit stop, or a host kill or
 Trial-only memory cap makes a Trial void.
@@ -650,6 +758,11 @@ or wrong-finding flag changes the Experiment&#39;s pass/fail/inconclusive decisi
 under the fixed Bar. Scores from a task dropped as void are excluded.
 <code>thirdshift experiments &lt;id&gt; --json</code> lists these under <code>pending_rechecks</code>, with
 each Trial&#39;s <code>id</code>, suite, task, Arm, Trial number and borderline/decisive flags.
+<code>decisive_flips</code> names <code>passed</code>, <code>wrong_finding</code>, or both;
+<code>decisive_verdicts</code> maps each named flip to the provisional Verdict it would
+give (<code>pass</code>, <code>fail</code> or <code>inconclusive</code>). These are separate one-flag flips,
+not both flags flipped together. A Score pending only because it is borderline
+has an empty list and map.
 The text view lists the same IDs. <code>verdict.provisional_verdict</code> and suite
 intervals show the calculation while <code>verdict.verdict</code> waits.</p>
 <p>Read the Trial&#39;s reports and record your decision:</p>
@@ -665,8 +778,31 @@ history and recalculated Verdict, then prints the updated Experiment, with
 <code>--json</code> available. A changed Score can make another Score decisive, so consult
 the updated pending list. Trials and Graders never rerun for a recheck, and the
 Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.</p>
+<p>To record the same decision and reason for every Score on a reviewed list:</p>
+<pre><code class="language-sh">thirdshift recheck &lt;experiment-id&gt; --pending --json
+thirdshift recheck &lt;experiment-id&gt; --batch &lt;fingerprint&gt; pass --reason &#39;I checked every listed Trial against the written criteria.&#39;
+</code></pre>
+<p>The first command lists every pending Score with its suite, Eval task, Arm,
+Trial number, ID and borderline/decisive reason, plus a <code>fingerprint</code> of that
+Experiment&#39;s list. Omit <code>--json</code> for text. The second command takes that
+fingerprint and appends one timestamped recheck to each listed Score&#39;s history,
+using one exclusive lock and one atomic save. It accepts <code>--wrong-finding</code> and
+<code>--json</code> just like a single recheck. A stale fingerprint refuses the entire
+batch without changing anything; list the pending Scores again and review
+them before retrying. An empty pending list refuses a batch too. The batch
+only covers the reviewed list: its decisions may make other Scores decisive,
+so check the updated pending list afterwards. Rechecks stay in the CLI.</p>
 <p>Each suite gets a paired Verdict using its recorded Trials per Eval task (one
-or three). Any failed suite fails the Experiment; otherwise any inconclusive
+or three). For each metric, fail when the upper bound at the fail level is below
+zero. Otherwise pass when the lower bound at the pass level is above the margin;
+otherwise the metric is inconclusive. A pass whose whole pass-level interval is
+below zero is reported as worse, within the margin: in JSON as
+<code>worse_within_margin: true</code> on that metric, in the text view after the Verdict
+and in the Console. It doesn&#39;t change the decision.
+One set of draws supplies both intervals. Both accuracy and wrong findings must
+pass; either can fail the suite. The prediction of how many more Eval tasks
+would settle an inconclusive metric uses the same two-level decision.
+Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.
@@ -674,6 +810,18 @@ The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, <code>experiments --json</code> reports
 <code>pass_cubed</code>: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
+The Bar&#39;s JSON carries <code>pass_level</code> and <code>fail_level</code>; each metric carries
+<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v3</code>, and
+their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code>. Saved Experiments under
+<code>paired-dirichlet-v2</code>, whose pass also needed the pass-level upper bound to
+reach zero, keep that rule and their stored Bar and Verdict when read, and
+when resumed with the same levels. Saved Experiments under <code>paired-dirichlet-v1</code>
+remain readable with their stored single-level Bar and Verdict unchanged. See
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0024-pass-and-fail-use-separate-levels.md">ADR-0024</a> and
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>.
+For a paused single-level Experiment, its saved view and Console show a resume
+command using both recorded levels in place of the removed <code>--credible-level</code>
+flag. Reading that command does not rewrite its stored Bar or Verdict.
 Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or
@@ -687,7 +835,7 @@ resuming exhausted history finishes without replaying its old pause.</p>
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 1</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 2</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost

@@ -92,11 +92,34 @@ pub(super) fn score(
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Verdict {
     pub verdict: Conclusion,
-    #[serde(default)]
-    pub provisional_verdict: Option<Decision>,
+    #[serde(default, skip_serializing_if = "Provisional::is_missing")]
+    pub provisional_verdict: Provisional,
     pub suites: BTreeMap<String, verdict::Verdict>,
     #[serde(default)]
     borderline_trials: usize,
+}
+
+/// Missing and explicit null are distinct facts in a saved legacy Verdict.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Provisional {
+    Recorded(Option<Decision>),
+    #[default]
+    #[serde(skip)]
+    Missing,
+}
+
+impl Provisional {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+
+    pub(crate) fn decision(self) -> Option<Decision> {
+        match self {
+            Self::Recorded(decision) => decision,
+            Self::Missing => None,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -119,6 +142,22 @@ impl From<Decision> for Conclusion {
 }
 
 impl Verdict {
+    /// Passing metrics whose pass-level interval lies wholly below zero.
+    pub fn worse_within_margin_metrics(&self) -> Vec<String> {
+        self.suites
+            .iter()
+            .flat_map(|(suite, verdict)| {
+                [
+                    ("accuracy", &verdict.accuracy),
+                    ("wrong findings", &verdict.wrong_findings),
+                ]
+                .into_iter()
+                .filter(|(_, assessment)| assessment.worse_within_margin)
+                .map(move |(metric, _)| format!("{suite} {metric}"))
+            })
+            .collect()
+    }
+
     pub fn outcome(&self) -> &'static str {
         match self.verdict {
             Conclusion::Pass => "pass",
@@ -140,9 +179,11 @@ pub(crate) struct Pending {
     pub decisive: bool,
     #[serde(default)]
     pub decisive_flips: Vec<Flip>,
+    #[serde(default)]
+    pub decisive_verdicts: BTreeMap<Flip, Decision>,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Flip {
     Passed,
@@ -180,7 +221,10 @@ pub(super) fn assess(
     bar: &Bar,
 ) -> Result<(Verdict, Vec<Pending>)> {
     let mut verdict = evaluate(tasks, results, bar, None)?;
-    let original = verdict.provisional_verdict.expect("computed Verdict");
+    let original = verdict
+        .provisional_verdict
+        .decision()
+        .expect("computed Verdict");
     let mut pending = Vec::new();
     for (index, result) in results.iter().enumerate() {
         // A Void Trial drops the whole paired task, including the other Arm.
@@ -192,10 +236,15 @@ pub(super) fn assess(
             continue;
         }
         let mut decisive_flips = Vec::new();
+        let mut decisive_verdicts = BTreeMap::new();
         for flip in [Flip::Passed, Flip::WrongFinding] {
-            let flipped = evaluate(tasks, results, bar, Some((index, flip)))?;
-            if flipped.provisional_verdict != Some(original) {
+            let flipped = evaluate(tasks, results, bar, Some((index, flip)))?
+                .provisional_verdict
+                .decision()
+                .expect("computed Verdict");
+            if flipped != original {
                 decisive_flips.push(flip);
+                decisive_verdicts.insert(flip, flipped);
             }
         }
         let decisive = !decisive_flips.is_empty();
@@ -209,6 +258,7 @@ pub(super) fn assess(
                 borderline: score.borderline,
                 decisive,
                 decisive_flips,
+                decisive_verdicts,
             });
         }
     }
@@ -230,7 +280,7 @@ fn evaluate(
     for (suite, &trials) in &bar.trials_per_task {
         let statistics = verdict::Bar {
             margin: bar.margin,
-            credible_level: bar.credible_level,
+            levels: bar.levels,
             prior: bar.prior,
             seed: bar.seed,
             draws: bar.draws,
@@ -303,7 +353,7 @@ fn evaluate(
         .count();
     Ok(Verdict {
         verdict: verdict.into(),
-        provisional_verdict: Some(verdict),
+        provisional_verdict: Provisional::Recorded(Some(verdict)),
         suites,
         borderline_trials,
     })

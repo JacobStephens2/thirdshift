@@ -1,4 +1,4 @@
-# Experiment results (format 1)
+# Experiment results (format 2)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 1` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 1.
+`format: 2` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 2.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -23,6 +23,12 @@ to the machine retaining the Experiment.
 The private `experiment.json` already has `format: 1`. The CLI view projects its
 metadata and retained evidence; it is not a copy of that internal storage file.
 Older CLI builds without a `format` field predate this documented contract.
+Format 2 replaced format 1's single credible level and interval with the
+two-level Bar: `pass_level`, `fail_level` and `pass_rule` in each Bar,
+`pass_interval` and `fail_interval` in each assessment, and
+`worse_within_margin`. It also added `decisive_verdicts` to pending rechecks
+and lets a saved single-level Verdict omit `provisional_verdict`. Experiments
+saved before the two-level Bar still show `credible_level` and `interval`.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
 
@@ -108,7 +114,10 @@ overlaid in the view. Do not rewrite the result files to apply a recheck.
 decision before required rechecks; `borderline_trials` counts borderline Scores.
 `pending_rechecks` names Trials requiring review, with `borderline` and
 `decisive` flags. `decisive_flips` says whether flipping `passed`,
-`wrong_finding`, or both would change the whole Experiment's decision.
+`wrong_finding`, or both would change the whole Experiment's decision, and
+`decisive_verdicts` maps each such flip to the provisional decision it gives.
+A saved single-level Verdict may omit `provisional_verdict` or record it as
+null; both are preserved as saved.
 
 `verdict.suites` maps suite names to paired Verdicts. Each retains its statistical
 `bar`, producer `thirdshift_version` and seeded sampling `method` description,
@@ -118,16 +127,24 @@ only for three-Trial suites: each Arm's share of retained Eval tasks for which
 all three Trials passed.
 
 Each assessment has `difference_counts`, ordered from -1 to +1 in steps of
-1 / Trials per Eval task, its credible `interval` (`lower`, `upper`), decision
-and nullable `more_tasks` forecast. Differences are Candidate minus Baseline;
+1 / Trials per Eval task, its intervals (`lower`, `upper`), decision and
+nullable `more_tasks` forecast. A two-level Bar gives `pass_interval` and
+`fail_interval` at its pass and fail levels; a saved single-level Bar gives one
+credible `interval`. `worse_within_margin`, present only when true, marks a
+pass whose pass-level interval lies wholly below zero: worse, but within the
+margin. It never changes the decision. Differences are Candidate minus Baseline;
 for wrong findings, positive means fewer wrong findings in the Candidate.
 `more_tasks.target_probability` is the forecast target; `additional_tasks`
 is null if the search budget ran out. `clear_probabilities[k-1]` estimates the
 chance of a clear Verdict after k additional completed, non-void Eval tasks.
 
-The Experiment's top-level `bar` fixes the margin, credible level, prior, seed,
+The Experiment's top-level `bar` fixes the margin, levels, prior, seed,
 draw count, per-suite Trials per Eval task, per-Trial timeout in seconds and
-Void cause/retry policy. `void_rules.retries` counts fresh retries after the
+Void cause/retry policy. A two-level Bar records `pass_level`, `fail_level` and
+`pass_rule`: `margin` means a pass needs only the pass-level lower bound above
+the margin; `reaches_zero`, shown only by two-level Bars saved before that rule,
+also needed the pass-level upper bound to reach zero. A saved single-level Bar
+records `credible_level` instead. `void_rules.retries` counts fresh retries after the
 first attempt (at most two). Suite Bars hold the corresponding scalar
 `trials_per_task` and the posterior prediction budget (`simulations`,
 `interval_draws`, `max_additional_tasks`), rather than the execution policy.
@@ -152,7 +169,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
 ```json
 {
   "Experiment": {
-    "format": 1,
+    "format": 2,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -190,7 +207,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "harness": {"name": "string", "path": "string", "version": "string"}
   },
   "Bar": {
-    "margin": "number", "credible_level": "number", "prior": "number",
+    "margin": "number", "pass_level?": "number", "fail_level?": "number",
+    "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
     "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
@@ -220,11 +238,12 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "Pending": {
     "id": "string", "suite": "string", "task": "string", "arm": "baseline|candidate",
     "trial": "integer", "borderline": "boolean", "decisive": "boolean",
-    "decisive_flips": ["passed|wrong_finding"]
+    "decisive_flips": ["passed|wrong_finding"],
+    "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
   },
   "Verdict": {
     "verdict": "pass|fail|inconclusive|waiting_on_rechecks",
-    "provisional_verdict": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
+    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
   },
   "Decision": "pass|fail|inconclusive",
   "SuiteVerdict": {
@@ -233,14 +252,17 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?"
   },
   "SuiteBar": {
-    "margin": "number", "credible_level": "number", "prior": "number",
+    "margin": "number", "pass_level?": "number", "fail_level?": "number",
+    "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
     "seed": "integer", "draws": "integer", "trials_per_task": "integer",
     "prediction": {"simulations": "integer", "interval_draws": "integer", "max_additional_tasks": "integer"}
   },
   "Assessment": {
-    "difference_counts": ["integer"], "interval": {"lower": "number", "upper": "number"},
-    "verdict": "Decision", "more_tasks": "MoreTasks?"
+    "difference_counts": ["integer"], "pass_interval?": "Interval", "fail_interval?": "Interval",
+    "interval?": "Interval", "verdict": "Decision", "worse_within_margin?": "boolean",
+    "more_tasks": "MoreTasks?"
   },
+  "Interval": {"lower": "number", "upper": "number"},
   "MoreTasks": {"target_probability": "number", "additional_tasks": "integer?", "clear_probabilities": ["number"]},
   "PassCubed": {"baseline": "number", "candidate": "number"},
   "Usage": {"models": {"*": "Measurement"}, "cost_usd": "number?"},
