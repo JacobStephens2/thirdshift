@@ -9,9 +9,25 @@
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "WebSite",
-  "name": "thirdshift",
-  "url": "https://thirdshift.app/"
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "name": "thirdshift",
+      "url": "https://thirdshift.app/"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "thirdshift",
+      "url": "https://thirdshift.app/",
+      "description": "Turn GitHub issues into ready-for-review pull requests with unattended coding agents. thirdshift runs implementation, code review and CI in isolated Git worktrees.",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS",
+      "license": "https://opensource.org/licenses/MIT",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "downloadUrl": "https://github.com/JacobStephens2/thirdshift/releases/latest",
+      "sameAs": ["https://github.com/JacobStephens2/thirdshift"]
+    }
+  ]
 }
 </script>
 <!-- The share card. docs/share-card/render.mjs renders the image from this page. -->
