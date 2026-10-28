@@ -13,7 +13,7 @@ use self::files::{Files, Native, directory, metadata};
 use super::{grading, rechecks, store};
 use crate::trial::{Outcome, Output};
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Arm {
     Baseline,
@@ -119,7 +119,7 @@ pub(super) fn apply_scores(
     Ok(())
 }
 
-fn read_terminal(files: &impl Files, root: &Path) -> Result<Vec<Terminal>> {
+pub(super) fn read_terminal(files: &impl Files, root: &Path) -> Result<Vec<Terminal>> {
     let mut results = Vec::new();
     for entry in directory(files, &root.join("results"))? {
         if entry.kind.is_file() && entry.path.extension().is_some_and(|ext| ext == "json") {

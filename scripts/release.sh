@@ -267,7 +267,7 @@ wait_for_experiment() {
 		return
 	fi
 	progress "checking release Experiment for ${1:0:7}"
-	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" --json)
+	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" --json --yes)
 	while :; do
 		status=$(printf '%s\n' "$snapshot" | experiment_status)
 		read -r outcome id <<<"$status"

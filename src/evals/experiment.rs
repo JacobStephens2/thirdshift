@@ -1,6 +1,7 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod cost;
 mod evidence;
 mod execution;
 mod grading;
@@ -136,6 +137,15 @@ pub(crate) struct Description {
     pub prepared: Option<arms::Prepared>,
 }
 
+impl Description {
+    pub(crate) fn setup(&self, arm: Arm) -> &Setup {
+        match arm {
+            Arm::Baseline => &self.baseline,
+            Arm::Candidate => &self.candidate,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Task {
     suite: String,
@@ -223,6 +233,11 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    let fresh = !root
+        .join("experiments")
+        .join(&description.id)
+        .join("experiment.json")
+        .exists();
     let Some(mut experiment) =
         store::Stored::open(&root.join("experiments"), description, |description| {
             // The release Baseline probe can build an Arm too. Check new
@@ -250,6 +265,13 @@ pub fn run(options: Options) -> Result<()> {
         retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
         return Ok(());
+    }
+    if let Err(error) = cost::confirm(&experiment, options.yes) {
+        // A declined new Experiment leaves no record to list as running.
+        if fresh {
+            experiment.discard()?;
+        }
+        return Err(error);
     }
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =

@@ -497,8 +497,8 @@ thirdshift evals touched &lt;path&gt;...  # select suites from their declared so
 thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepare a throwaway repository at its base
 thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond the base commit
 thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
-thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--name &lt;text&gt;] [--json]  # run or resume an Experiment
-thirdshift experiment --release &lt;commit&gt; [--json]  # use the last release tag and touched suites
+thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--name &lt;text&gt;] [--json] [--yes]  # run or resume an Experiment
+thirdshift experiment --release &lt;commit&gt; [--json] [--yes]  # use the last release tag and touched suites
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
 thirdshift experiments &lt;id&gt; --name &lt;text&gt; [--json]  # rename an Experiment; --name &#39;&#39; brings back its default name
 thirdshift experiments &lt;id&gt; --session &lt;session-id&gt; [--json]  # read a Trial&#39;s retained session from its inventory
@@ -544,6 +544,19 @@ declarations; repeat <code>--suite &lt;name&gt;</code> to select them explicitly
 Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a <code>[trial]</code> table. This check also precedes the release Baseline probe.</p>
+<p>Before building either Arm, an Experiment prints what its Trials will cost: how
+many it will run, per suite and Arm; the worst case, those Trials times the
+Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
+history, an estimate from the mean minutes of completed, non-void Trials in this
+machine&#39;s earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
+and Arm has one. A resumed Experiment counts only its remaining Trials. When
+stdin is a terminal it then asks <code>Run these Trials? [y/N]</code>; any answer but <code>y</code> or <code>yes</code>
+exits without building an Arm or starting a Trial, and a new Experiment
+leaves no record. In release mode the Baseline probe comes first and may build
+the last release&#39;s Arm. <code>--yes</code> skips the question,
+and so does a stdin that is not a terminal. <code>scripts/release.sh --with-experiment</code> passes <code>--yes</code>, so a release asks only its own question.
+There is no cost ceiling in the Bar: the cost is already bounded by Trials
+times the timeout.</p>
 <p><code>--name &lt;text&gt;</code> saves a name with the Experiment: one line of at most 100
 characters, trimmed. An empty or over-long name is refused before any build.
 <code>thirdshift experiments &lt;id&gt; --name &lt;text&gt;</code> renames a saved Experiment in any
@@ -2151,7 +2164,8 @@ cargo test
 <code>scripts/release.sh --with-experiment 0.4.0</code>, adding <code>--with-experiment</code> again
 on each resume that should run an Experiment.</p>
 <p>With <code>--with-experiment</code>, before pushing anything, the script runs
-<code>thirdshift experiment --release &lt;commit&gt;</code> using this checkout&#39;s runner and private Eval suites.
+<code>thirdshift experiment --release &lt;commit&gt; --yes</code> using this checkout&#39;s runner and private Eval suites,
+so the Experiment prints its cost without asking about it.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to <code>main</code> during interruption does
