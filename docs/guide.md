@@ -1127,7 +1127,23 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
-built-in Step: `implement`, `security-review`, `delivery` or `self-merge`, described above, or `run-published-issue`.
+built-in Step: `implement`, `security-review`, `delivery` or `self-merge`, described above, or `architecture-review` or `run-published-issue`.
+
+`architecture-review` runs the Architecture review in its own throwaway worktree
+at the Base branch on origin, checks the final line and any plan, and applies
+`architect-plan` or `architect-idea` labels using the Architect run's rules.
+It takes its own Harness, Model and Effort like any Step, and runs outside
+parallel groups. It cannot use an Issue-branch worktree. Follow it with
+`run-published-issue` to start a Ticket run or Spec run on a Strong plan.
+It must precede Issue-branch editing Steps or follow their Delivery, so an
+early end cannot discard unpublished work.
+An idea, including an open issue that already covers the recommendation, ends
+the Process successfully with that issue's URL and no child run. So does a plan
+when the command asks for `thirdshift process <name> --plan-only`. Later Steps
+are skipped, and the progress lines and Ending say why. This early end belongs
+to the Step; there is no file setting for it. Custom processes still take only
+the shared Pass lock, without the Architect run's skip gates.
+
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. Its optional
 `process = "<name>"` setting selects the Process for a child Ticket run,
@@ -1145,7 +1161,8 @@ process = "contractor-ticket"
 ```
 
 The publishing session's final
-message ends with the issue's URL on its last non-blank line. Before it starts a
+message ends with the issue's URL on its last non-blank line; an
+`architecture-review` Step supplies its checked plan instead. Before it starts a
 run, thirdshift checks that the issue is in this repository, which it checks
 before viewing the issue, that the issue is open, that a Trusted account
 published it, and that it was created since that session Step began. A final
