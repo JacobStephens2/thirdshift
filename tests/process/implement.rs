@@ -11,12 +11,7 @@ fn implementation_with_security_review() -> String {
 #[test]
 fn implement_and_security_review_share_the_delivery_path() {
     let scenario = prepare_ship(&implementation_with_security_review());
-    scenario.agent_does_for_in_session(7, 2, r#"
-report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
-test -n "$report"
-printf '[]' > "$report"
-printf '%s' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-"#);
+    scenario.agent_does_for_in_session(7, 2, CLEAN_REVIEW);
 
     let result = scenario.run(&["process", "ship", "issue", "7", "--security-review"]);
 

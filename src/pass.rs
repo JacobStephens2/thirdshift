@@ -331,7 +331,6 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
-        let pickup = matches!(dispatch, Dispatch::ReadyIssue { .. });
         let security_fix_findings = match &dispatch {
             Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
             _ => &[],
@@ -374,12 +373,7 @@ impl Outside for LaunchAndGitHub<'_> {
             self.harness,
             security_fix_findings,
         );
-        let started_by = if pickup {
-            StartedBy::Pickup { base }
-        } else {
-            StartedBy::Dispatch { base }
-        };
-        let ended = run::run_to_end(issue, &mut asks, started_by);
+        let ended = run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base });
         logs::dispatch_ended(&ended);
         ended
     }

@@ -5115,6 +5115,13 @@ git commit -q -m "Add feature"
 printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
 
+const CLEAN_REVIEW: &str = r#"
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '[]' > "$report"
+printf '%s' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#;
+
 const DELIVER: &str = "\
 version = 1
 description = \"Ship a fix\"

@@ -1347,14 +1347,7 @@ fn run_security_review(
                 base: issue_run.base,
             }
             .run(&mut issue_run.pull_request, &text);
-            let endings = sessions.take_killed_work();
-            if !endings.is_empty() {
-                prepared
-                    .killed_work
-                    .lock()
-                    .expect("killed work")
-                    .insert(index + 1, endings);
-            }
+            retain_killed_work(&prepared.killed_work, index + 1, sessions);
             review
         },
     );
@@ -1663,17 +1656,25 @@ fn run_session_step(
         &before_each,
         |sessions| {
             let result = action(sessions, index);
-            let endings = sessions.take_killed_work();
-            if !endings.is_empty() {
-                run.killed_work
-                    .lock()
-                    .expect("killed work")
-                    .insert(index, endings);
-            }
+            retain_killed_work(run.killed_work, index, sessions);
             result
         },
     )
     .0
+}
+
+fn retain_killed_work(
+    killed_work: &Mutex<BTreeMap<usize, Vec<String>>>,
+    step_index: usize,
+    sessions: &session::Sessions<'_>,
+) {
+    let endings = sessions.take_killed_work();
+    if !endings.is_empty() {
+        killed_work
+            .lock()
+            .expect("killed work")
+            .insert(step_index, endings);
+    }
 }
 
 /// Start a Ticket run, or a Spec run, on the issue the session Step before

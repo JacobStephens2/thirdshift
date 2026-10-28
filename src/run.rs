@@ -114,8 +114,6 @@ pub enum StartedBy<'a> {
     /// A Pass, dispatching an issue: the Base branch is that Pass's, whatever the
     /// Launch directory has checked out.
     Dispatch { base: &'a str },
-    /// A Pickup run, using the compiled Ticket process on its Base branch.
-    Pickup { base: &'a str },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
     /// a Base fix: the Base branch is the one the child Run was given.
     Child(&'a Kind),
@@ -126,7 +124,7 @@ impl<'a> StartedBy<'a> {
     fn child(self) -> Option<&'a Kind> {
         match self {
             StartedBy::Child(kind) => Some(kind),
-            StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Pickup { .. } => None,
+            StartedBy::Command | StartedBy::Dispatch { .. } => None,
         }
     }
 
@@ -141,7 +139,7 @@ impl<'a> StartedBy<'a> {
     fn given_base(self) -> Option<&'a str> {
         match self {
             StartedBy::Command => None,
-            StartedBy::Dispatch { base } | StartedBy::Pickup { base } => Some(base),
+            StartedBy::Dispatch { base } => Some(base),
             StartedBy::Child(kind) => Some(kind.base()),
         }
     }

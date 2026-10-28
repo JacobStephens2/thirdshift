@@ -7,13 +7,6 @@ fn reviewed_process() -> String {
     )
 }
 
-const CLEAN_REVIEW: &str = r#"
-report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
-test -n "$report"
-printf '[]' > "$report"
-printf '%s' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-"#;
-
 #[test]
 fn security_review_config_runs_before_delivery_and_records_the_outcome() {
     let scenario = prepare_ship(&reviewed_process());
