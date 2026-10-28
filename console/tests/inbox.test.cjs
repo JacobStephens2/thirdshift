@@ -210,6 +210,36 @@ test('Command details opens with the Inbox subject and full title above its acti
   }
 });
 
+test('Command details shows the full failure reason below its heading on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const cause = 'codex exited 1: Selected model is at capacity. Please try a different model. See https://example.test/status <script>unsafe</script>';
+  fixture.cause = cause;
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    for (const width of [1280, 390]) {
+      const page = await pageFor(t, { viewport: { width, height: 844 } });
+      await page.goto(`${origin}/?section=needs-you`);
+      const row = page.locator('#inbox .command').filter({
+        has: page.locator('.subject a[href="https://github.com/acme/widgets/issues/1"]'),
+      });
+      await showDetails(page, row);
+      const pane = page.getByRole('region', { name: 'Command details', exact: true });
+      const reason = pane.locator('h2 + .peek-failure');
+      await reason.waitFor();
+      assert.equal(await reason.textContent(), `Failed: ${cause}`);
+      assert.equal(await reason.getByRole('link').getAttribute('href'), 'https://example.test/status');
+      assert.equal(await reason.locator('script, details').count(), 0);
+      assert.equal(await reason.evaluate(el => Boolean(el.compareDocumentPosition(
+        el.parentElement.querySelector('form[data-dismiss]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+      const fits = await reason.evaluate(el => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight);
+      assert.equal(fits, true, `full failure reason fits at width ${width}`);
+      await page.close();
+    }
+  } finally { await replaceRecord(path, original); }
+});
+
 test('inline Dismiss leaves Needs you without opening details and offers Undo on a phone', async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   await page.goto(origin);
