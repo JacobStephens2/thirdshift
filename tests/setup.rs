@@ -30,6 +30,40 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn security_sandbox_unavailable_report_preserves_saved_settings() {
+    for (review, fix) in [(false, false), (true, false), (false, true), (true, true)] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!("[security]\nreview = {review}\nfix = {fix}\n"));
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(result.stdout.is_empty(), "{}", result.stdout);
+        assert_eq!(
+            result.stderr.contains("Security sandbox probe:"),
+            review || fix,
+            "{}",
+            result.stderr
+        );
+        if review || fix {
+            assert!(result.stderr.contains(&format!(
+                "Security sandbox probe: unavailable on {}; Setup did not check isolation on this OS.",
+                std::env::consts::OS
+            )));
+            assert!(result.stderr.contains("needs-validation"));
+            if cfg!(target_os = "macos") {
+                assert!(result.stderr.contains("sandbox-exec (Seatbelt)"));
+                assert!(result.stderr.contains("has not verified"));
+            }
+        }
+        let saved: toml::Table = user_config(&scenario).unwrap().parse().unwrap();
+        assert_eq!(saved["security"]["review"].as_bool(), Some(review));
+        assert_eq!(saved["security"]["fix"].as_bool(), Some(fix));
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {

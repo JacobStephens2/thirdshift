@@ -38,11 +38,28 @@ pub(super) fn report(config_path: &Path) -> String {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = config_path;
-        format!(
-            "Security sandbox probe: unavailable on {}; validate equivalent platform isolation before executing target code",
-            std::env::consts::OS
-        )
+        unavailable_report(std::env::consts::OS)
     }
+}
+
+#[cfg(any(test, not(target_os = "linux")))]
+fn unavailable_report(os: &str) -> String {
+    let mut report = format!(
+        "Security sandbox probe: unavailable on {os}; Setup did not check isolation on this OS.\n\
+         Before running target code, each Security session must enforce:\n\
+         - no external network;\n\
+         - an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
+         - a read-only target and toolchain, with writes only inside scratch;\n\
+         - explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
+         If a session cannot enforce every control, Security runs and reviews here report findings as needs-validation instead of reproducing them.\n\
+         Setup only prints this guidance; it still saves the User config and exits successfully."
+    );
+    if os == "macos" {
+        report.push_str(
+            "\nOn macOS, sandbox-exec (Seatbelt) is the usual route, but Setup has not verified that it meets every control.",
+        );
+    }
+    report
 }
 
 #[cfg(target_os = "linux")]
@@ -162,4 +179,36 @@ pub(crate) fn child(args: &[String]) -> Option<ExitCode> {
         return Some(ExitCode::from(SCRATCH));
     }
     Some(ExitCode::from(PASSED))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unavailable_report;
+
+    #[test]
+    fn macos_report_explains_unchecked_controls_and_needs_validation() {
+        assert_eq!(
+            unavailable_report("macos"),
+            "Security sandbox probe: unavailable on macos; Setup did not check isolation on this OS.\n\
+Before running target code, each Security session must enforce:\n\
+  - no external network;\n\
+  - an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
+  - a read-only target and toolchain, with writes only inside scratch;\n\
+  - explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
+If a session cannot enforce every control, Security runs and reviews here report findings as needs-validation instead of reproducing them.\n\
+Setup only prints this guidance; it still saves the User config and exits successfully.\n\
+On macOS, sandbox-exec (Seatbelt) is the usual route, but Setup has not verified that it meets every control."
+        );
+    }
+
+    #[test]
+    fn other_platforms_get_unchecked_isolation_guidance_without_seatbelt() {
+        let report = unavailable_report("freebsd");
+        assert!(report.starts_with(
+            "Security sandbox probe: unavailable on freebsd; Setup did not check isolation on this OS."
+        ));
+        assert!(report.contains("report findings as needs-validation instead of reproducing them"));
+        assert!(!report.contains("sandbox-exec"));
+        assert!(!report.contains("Seatbelt"));
+    }
 }
