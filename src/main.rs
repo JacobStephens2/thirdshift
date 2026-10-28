@@ -116,6 +116,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme import <file>        Import a Theme JSON document
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
+       thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
@@ -127,8 +128,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
-An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
-merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
+An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
@@ -204,6 +204,9 @@ fn main() -> ExitCode {
             return printed(console::theme(name.as_deref(), json));
         }
         Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleOtherAccounts { value, json }) => {
+            return printed(config::console::other_accounts(value.as_deref(), json));
+        }
         Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
         Ok(Command::ConsoleSections { hide, show, json }) => {
             return printed(console::sections(&hide, &show, json));

@@ -20,7 +20,7 @@ pub(crate) struct Watching {
 
 pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut watching = Watching::default();
     let kept = crate::logs::github::load(&config.logs_dir);
     watching.deadline = kept.next_warning_change();

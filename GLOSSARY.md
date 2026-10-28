@@ -288,8 +288,12 @@ _Avoid_: completion email, alert
 ### Console
 
 **Console**:
-The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+The web page a machine serves that shows the serving OS account's **Commands**, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. The **User config** can include readable **Other-account Commands** on that machine; each machine serves its own Console, behind a sign-in, and every view and action it offers is also a CLI command.
 _Avoid_: dashboard, floor, UI, web UI
+
+**Other-account Command**:
+A **Command** owned by another OS account on the same machine, included by choice in the **Console** and `status` when the serving account can read its logs. Its account is shown with it, and it can be read but never given a **Stop** or **Dismissal** from that account.
+_Avoid_: remote Command, shared Command
 
 **Stop**:
 Ending a live **Command** on request, from the CLI or the **Console**. It is an interruption, and the Command cleans up as after any other, but its issue is left for the **Day shift**: labelled `needs-triage`, with `ready-for-agent` not put back, unless the Stop asks for the issue to go back in line. Stop waits for the Command to end, then reports its outcome and any branch or pull request it left. The **Activity log** records who asked for it. A Stop of a **Spec run** stops its **Ticket runs** with it.

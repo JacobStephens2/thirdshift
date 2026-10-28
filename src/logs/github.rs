@@ -281,11 +281,7 @@ pub fn load(logs_dir: &Path) -> Kept {
 /// including the blocking GitHub adapter, belongs off the Console's async thread.
 pub fn poll() -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     refresh(&snapshot, &config, Duration::ZERO)?;
     Ok(())
 }
@@ -308,6 +304,7 @@ pub(super) fn refresh(
     }
     // Serialize readers across status and Console processes. A busy reader
     // already owns the refresh; status can show the kept answer immediately.
+    std::fs::create_dir_all(&config.logs_dir)?;
     let lock = std::fs::File::create(config.logs_dir.join(".github-inbox-lock"))?;
     match lock.try_lock() {
         Ok(()) => {}
@@ -396,6 +393,10 @@ pub(super) fn refresh(
     for (repository, subjects) in repositories {
         if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
             break;
+        }
+        // One record must not choose the request path or fail every other read.
+        if !crate::github::valid_repo_slug(&repository) {
+            continue;
         }
         match github.inbox_findings(&repository) {
             Ok(waits) => {

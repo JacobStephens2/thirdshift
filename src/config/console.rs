@@ -43,6 +43,88 @@ pub fn validate_sections(sections: &[String]) -> Result<()> {
 pub struct ConsoleAccess {
     pub address: String,
     pub allowed_emails: Vec<String>,
+    pub other_accounts: OtherAccounts,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum OtherAccounts {
+    Mode(AccountMode),
+    Named(Vec<String>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountMode {
+    None,
+    Readable,
+}
+
+impl Default for OtherAccounts {
+    fn default() -> Self {
+        Self::Mode(AccountMode::None)
+    }
+}
+
+impl OtherAccounts {
+    pub fn parse(value: &str) -> Result<Self> {
+        let setting = match value {
+            "none" => Self::default(),
+            "readable" => Self::Mode(AccountMode::Readable),
+            _ => Self::Named(
+                value
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .collect(),
+            ),
+        };
+        setting.validate()?;
+        Ok(setting)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Self::Named(names) = self {
+            ensure!(
+                names.iter().all(|name| !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-.$".contains(&b))),
+                "console.other_accounts must be none, readable, or local account names (comma-separated on the CLI)"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn value(&self) -> toml_edit::Value {
+        match self {
+            Self::Mode(AccountMode::None) => "none".into(),
+            Self::Mode(AccountMode::Readable) => "readable".into(),
+            Self::Named(names) => names.iter().collect::<toml_edit::Array>().into(),
+        }
+    }
+}
+
+impl std::fmt::Display for OtherAccounts {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mode(AccountMode::None) => out.write_str("none"),
+            Self::Mode(AccountMode::Readable) => out.write_str("readable"),
+            Self::Named(names) if names.is_empty() => out.write_str("none"),
+            Self::Named(names) => out.write_str(&names.join(",")),
+        }
+    }
+}
+
+pub fn other_accounts(value: Option<&str>, json: bool) -> Result<String> {
+    let settings = match value {
+        Some(value) => edit(None, &[], &[], Some(OtherAccounts::parse(value)?))?,
+        None => super::UserConfig::load()?.console,
+    };
+    Ok(if json {
+        serde_json::to_string(&settings.other_accounts)?
+    } else {
+        settings.other_accounts.to_string()
+    })
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -52,6 +134,7 @@ pub struct ConsoleSettings {
     pub port: u16,
     pub allowed_emails: Vec<String>,
     pub other_consoles: Vec<String>,
+    pub other_accounts: OtherAccounts,
     pub theme: String,
     pub hidden_sections: Vec<String>,
 }
@@ -63,6 +146,7 @@ impl Default for ConsoleSettings {
             port: 8711,
             allowed_emails: Vec::new(),
             other_consoles: Vec::new(),
+            other_accounts: OtherAccounts::default(),
             theme: "focus-auto".into(),
             hidden_sections: Vec::new(),
         }
@@ -95,6 +179,7 @@ impl ConsoleSettings {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        self.other_accounts.validate()?;
         if !self.address.is_empty() {
             self.hostname()?;
         }
@@ -129,6 +214,15 @@ pub fn write_look(
     theme: Option<&str>,
     hide: &[String],
     show: &[String],
+) -> Result<ConsoleSettings> {
+    edit(theme, hide, show, None)
+}
+
+fn edit(
+    theme: Option<&str>,
+    hide: &[String],
+    show: &[String],
+    other_accounts: Option<OtherAccounts>,
 ) -> Result<ConsoleSettings> {
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -191,6 +285,10 @@ pub fn write_look(
                 .collect::<toml_edit::Array>()
                 .into(),
         );
+    }
+    if let Some(other_accounts) = other_accounts {
+        set("other_accounts", other_accounts.value());
+        settings.other_accounts = other_accounts;
     }
     let rendered = document.to_string();
     if path.exists() {

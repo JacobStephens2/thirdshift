@@ -156,6 +156,7 @@ fn row_for(
     undo: bool,
 ) -> Result<DismissalTarget> {
     let selected = snapshot.resolve(input)?;
+    selected.observation.require_writable("dismiss")?;
     let record = match selected.observation {
         Observation::Record(command) => &command.record,
         Observation::History(_) => {
@@ -189,6 +190,7 @@ fn row_for(
         let Observation::Record(command) = item.command else {
             bail!("cannot dismiss {input}: row has no Command record");
         };
+        item.command.require_writable("dismiss")?;
         let selector = item
             .command
             .selector()
@@ -232,7 +234,9 @@ impl Action {
     /// Availability for an evaluated row, including every collapsed member.
     pub(super) fn for_row(row: &InboxItem<'_>) -> Option<Self> {
         if !std::iter::once(row).chain(&row.collapsed).all(|item| {
-            matches!(item.command, Observation::Record(_)) && item.command.selector().is_some()
+            matches!(item.command, Observation::Record(_))
+                && item.command.account().is_none()
+                && item.command.selector().is_some()
         }) {
             return None;
         }
@@ -331,11 +335,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     let source = if from_console { "Console" } else { "CLI" };
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     let github = super::github::load(&config.logs_dir);
     let target = row_for(&snapshot, &github, input, config.inbox_days, undo)?;
     if target.members.is_empty() {
