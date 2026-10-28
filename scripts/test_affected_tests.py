@@ -304,6 +304,39 @@ class AffectedTests(unittest.TestCase):
         log = next((self.root / ".affected-tests").glob("*.log"))
         self.assertEqual(log.read_text(), output)
 
+    def test_signal_terminated_rust_test_is_named(self):
+        self.change("src/main.rs")
+        self.env.update(
+            RUNNER_EXIT="100",
+            RUNNER_STDERR=(
+                "     SIGABRT [   0.376s] (1/1) thirdshift abort_test_must_be_named\n"
+                "error: test run failed\n"
+            ),
+        )
+        result, _ = self.run_selector()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("abort_test_must_be_named", result.stdout)
+
+    def test_failed_release_generator_tests_are_named(self):
+        self.change("scripts/release.sh")
+        for status in ("FAIL", "ERROR"):
+            with self.subTest(status=status):
+                output = (
+                    f"{status}: test_release_notes "
+                    "(test_generate_release.ReleaseTests.test_release_notes)\n"
+                    "----------------------------------------------------------------------\n"
+                    "AssertionError: missing notes\n"
+                )
+                (self.tools / "python3").write_text(
+                    f"#!{sys.executable}\n"
+                    "import sys\n"
+                    f"sys.stderr.write({output!r})\n"
+                    "sys.exit(1)\n"
+                )
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("test_release_notes", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

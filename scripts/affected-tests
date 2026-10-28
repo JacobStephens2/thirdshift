@@ -27,7 +27,8 @@ def print_failures(log_path):
                 else:
                     print(line, flush=True)
             elif re.match(
-                r"test .+ \.\.\. FAILED$|FAIL\s|TIMEOUT\s|error(?:\[|:)"
+                r"test .+ \.\.\. FAILED$|(?:FAIL|TIMEOUT|SIG[A-Z0-9]+)\s"
+                r"|(?:FAIL|ERROR):|error(?:\[|:)"
                 r"|not ok \d+ - |✖ (?!failing tests:)", line.strip(),
             ):
                 print(line.strip(), flush=True)
