@@ -222,6 +222,62 @@ fn land_tickets_honors_the_configured_parallel_limit() {
 }
 
 #[test]
+fn a_custom_ticket_does_not_self_merge_after_the_spec_pr_closes() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "gather",
+        &format!("{LAND_TICKETS}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Custom Ticket delivery"
+[worktrees.ticket]
+kind = "issue-branch"
+[[steps]]
+name = "change"
+command = '''
+set -e
+number=${THIRDSHIFT_ISSUE_URL##*/}
+echo "$number" > "custom-$number.txt"
+git add .
+git commit -qm custom
+if test "$number" = 9; then gh fake pr issue-7 state '"CLOSED"'; fi
+'''
+worktree = "ticket"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+[[steps]]
+name = "merge"
+catalogue = "self-merge"
+worktree = "ticket"
+"#,
+    );
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[8])]);
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(pr_from(&scenario, "issue-7")["state"], "CLOSED");
+    assert_eq!(pr_from(&scenario, "issue-8")["state"], "MERGED");
+    assert_ne!(
+        pr_from(&scenario, "issue-9")["state"],
+        "MERGED",
+        "ticket self-merged after the Spec PR closed: {}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("was closed under this Spec run"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_following_step_reads_the_landed_tickets_in_the_spec_worktree() {
     let scenario = Scenario::new();
     write_process(
