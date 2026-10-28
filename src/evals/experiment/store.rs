@@ -36,6 +36,7 @@ pub(super) struct Stored {
 
 #[derive(Serialize)]
 pub(crate) struct View {
+    pub format: u32,
     #[serde(flatten)]
     pub description: Description,
     pub state: State,

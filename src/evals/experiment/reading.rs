@@ -88,6 +88,7 @@ impl Observation {
     // and the Experiment metadata already loaded by Stored.
     fn project(self, stored: &Stored) -> View {
         View {
+            format: 1,
             description: stored.description.clone(),
             state: stored.state,
             details: stored.details.clone(),
