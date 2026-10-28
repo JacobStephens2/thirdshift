@@ -55,6 +55,8 @@ use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 mod catalog;
+mod identity;
+pub(crate) use identity::Identity;
 pub(crate) mod ticket;
 use catalog::Catalog;
 
@@ -353,7 +355,7 @@ struct Prepared {
     steps: Vec<ResolvedStep>,
     issue: Option<IssueUrl>,
     /// A dispatched Ticket shares its Command but keeps its own artifacts.
-    dispatched: bool,
+    dispatched: Option<Identity>,
     /// When untrusted edits start counting, set when a run begins.
     started: DateTime<Utc>,
     /// The Base branch checked out in the Launch directory.
@@ -439,7 +441,7 @@ struct StepRun<'a> {
     issue_branch: bool,
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
-    dispatched: bool,
+    dispatched: Option<&'a Identity>,
     started: DateTime<Utc>,
     /// Branch and Base branch when this Step continues an Issue branch.
     continuation: Option<(String, String)>,
@@ -524,10 +526,11 @@ fn run(command: &ProcessRun) -> Result<String> {
         &config.email,
         About::Process { name },
     )?;
-    let (path, mut file) = match load(name) {
+    let (path, mut file, identity) = match load(name) {
         Ok(loaded) => loaded,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    logs::process_loaded(identity);
     file.goal = goal;
     file.security_review = Flags {
         security_review: command.security_review,
@@ -963,7 +966,7 @@ fn execute_groups(
     let mut results = logs::command_log_path()
         .context("a Process has no Command log")?
         .with_extension("steps");
-    if prepared.dispatched {
+    if prepared.dispatched.is_some() {
         let issue = prepared
             .issue
             .as_ref()
@@ -1172,7 +1175,7 @@ fn run_parallel(
             let results = results.to_path_buf();
             let first = group_start + offset == 0;
             let issue = prepared.issue.clone();
-            let dispatched = prepared.dispatched;
+            let dispatched = prepared.dispatched.as_ref();
             let started_at = prepared.started;
             let continuation = step_continuation(prepared, step, continuing.as_ref());
             let issue_branch =
@@ -1289,7 +1292,7 @@ fn run_step(
         ),
         choice: &step.choice,
         issue: prepared.issue.as_ref(),
-        dispatched: prepared.dispatched,
+        dispatched: prepared.dispatched.as_ref(),
         started: prepared.started,
         continuation: step_continuation(prepared, step, continuing.as_ref()),
         checkout,
@@ -1367,8 +1370,8 @@ fn run_security_review(
     let before_each = || prepare_for_session(issue_run.issue, prepared.started, checkout.path());
     let text = prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch);
     let mut logs = session::Logs::of_process_review(&issue_run.issue.repo(), index + 1);
-    if prepared.dispatched {
-        logs = logs.for_child(issue_run.issue);
+    if let Some(identity) = &prepared.dispatched {
+        logs = logs.for_child(issue_run.issue, identity.clone());
     }
     let (review, log) = session::Sessions::checked_within(
         &logs,
@@ -1695,8 +1698,11 @@ fn run_session_step(
         .expect("the Step belongs to this Process")
         + 1;
     let mut logs = session::Logs::of_process(&launch::repo()?);
-    if run.dispatched {
-        logs = logs.for_child(run.issue.expect("a dispatched Ticket has an issue"));
+    if let Some(identity) = run.dispatched {
+        logs = logs.for_child(
+            run.issue.expect("a dispatched Ticket has an issue"),
+            identity.clone(),
+        );
     }
     let before_each = || match run.issue {
         Some(issue) => prepare_for_session(issue, run.started, worktree),
@@ -2057,10 +2063,10 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
     line
 }
 
-fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
+fn load(name: &str) -> Result<(PathBuf, ProcessFile, Identity)> {
     let (path, text) = Catalog::installed()?.custom(name)?;
     let file = validated(&path, &text)?;
-    Ok((path, file))
+    Ok((path, file, Identity::custom(name, Some(&text))))
 }
 
 fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
@@ -2135,7 +2141,7 @@ fn prepare_from(
         description: file.description,
         steps,
         issue,
-        dispatched: false,
+        dispatched: None,
         started,
         base: source.base.to_string(),
         limits: file.limits,

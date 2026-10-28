@@ -22,6 +22,13 @@ and declare an Issue-branch worktree. An issue with Tickets still starts a Spec
 run. The optional Security review and Self-merge keep
 their command and User config gates. Commands still appear as Ticket runs.
 
+Command records and Session traces retain the Process name, whether it is
+Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
+Ticket run records its selected Process independently of its parent, defaulting
+to `ticket-run`. Custom processes
+hash the file loaded for that run; Built-in processes hash the compiled-in
+file. Runs awaiting a Built-in file retain their run-type name without a hash.
+
 Inspect and check it with `thirdshift process show ticket-run` and
 `thirdshift process check ticket-run issue <issue>`. To run a copy, save the
 shown file as `~/.thirdshift/processes/<new-name>.toml`, then use

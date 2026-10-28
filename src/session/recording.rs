@@ -27,6 +27,7 @@ pub struct Recording {
     /// Command remain errors; they must never select the Trial's storage.
     owner: std::result::Result<Option<Owner>, String>,
     trial_context: Option<logs::trace::Context>,
+    process: Option<crate::processes::Identity>,
 }
 
 /// Session interpretation policy, prompt transport and execution limits.
@@ -59,7 +60,22 @@ impl Recording {
         Self {
             owner: logs::captured_owner().map(Some),
             trial_context: None,
+            process: None,
         }
+    }
+
+    /// Custom Steps keep their own Process even while a parallel dispatch is active.
+    pub fn for_process() -> Self {
+        Self {
+            process: logs::custom_process(),
+            ..Self::capture()
+        }
+    }
+
+    /// A selected child captures its Process independently of the parent.
+    pub fn with_process(mut self, process: crate::processes::Identity) -> Self {
+        self.process = Some(process);
+        self
     }
 
     /// Trial artifacts have their own empty output directory and no Command.
@@ -69,6 +85,7 @@ impl Recording {
             trial_context: std::env::var(logs::trace::TRIAL_CONTEXT)
                 .ok()
                 .and_then(|json| serde_json::from_str(&json).ok()),
+            process: None,
         }
     }
 
@@ -82,6 +99,7 @@ impl Recording {
                 .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
             trial_context: None,
+            process: None,
         }
     }
 
@@ -169,12 +187,15 @@ impl Recording {
                 .with_context(|| format!("could not create {}", dir.display()))?;
         }
         let started = Instant::now();
-        let context = self
+        let mut context = self
             .trial_context
             .clone()
             .or_else(logs::trace_context)
             .or_else(|| self.owner().map(logs::trace::Context::of_owner))
             .unwrap_or_else(|| logs::trace::Context::of_session(log));
+        if let Some(process) = &self.process {
+            context.process = process.clone();
+        }
         let trace = Arc::new(Mutex::new(super::trace::Trace::create(
             log,
             kind,

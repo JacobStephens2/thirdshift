@@ -79,6 +79,21 @@ printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(record["process_name"], "publish", "{record}");
     assert_eq!(record["dispatched"][0]["kind"], "Run", "{record}");
     assert_eq!(
+        record["dispatched"][0]["process_name"], "contractor",
+        "{record}"
+    );
+    assert_eq!(
+        record["dispatched"][0]["process_kind"], "custom",
+        "{record}"
+    );
+    use sha2::{Digest, Sha256};
+    let source = fs::read(scenario.path("home/.thirdshift/processes/contractor.toml")).unwrap();
+    assert_eq!(
+        record["dispatched"][0]["process_hash"],
+        format!("{:x}", Sha256::digest(source)),
+        "{record}"
+    );
+    assert_eq!(
         record["dispatched"][0]["outcome"], "ready for review",
         "{record}"
     );
@@ -228,6 +243,43 @@ printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         (result.stdout.trim(), traces),
         (scenario.issue_url(8).as_str(), 2)
     );
+    use sha2::{Digest, Sha256};
+    for entry in fs::read_dir(process_dir(&scenario)).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(".logs.jsonl") {
+            continue;
+        }
+        let name = if path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("8-")
+        {
+            "contractor"
+        } else {
+            "publish"
+        };
+        let source =
+            fs::read(scenario.path(&format!("home/.thirdshift/processes/{name}.toml"))).unwrap();
+        let expected_hash = format!("{:x}", Sha256::digest(source));
+        for line in fs::read_to_string(&path).unwrap().lines() {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            for batch in request["resourceLogs"].as_array().unwrap() {
+                let attributes = batch["resource"]["attributes"].as_array().unwrap();
+                for (key, expected) in [
+                    ("thirdshift.process.name", name),
+                    ("thirdshift.process.kind", "custom"),
+                    ("thirdshift.process.hash", expected_hash.as_str()),
+                ] {
+                    let actual = attributes
+                        .iter()
+                        .find(|attr| attr["key"] == key)
+                        .and_then(|attr| attr["value"]["stringValue"].as_str());
+                    assert_eq!(actual, Some(expected), "{}: {batch}", path.display());
+                }
+            }
+        }
+    }
 }
 
 #[test]

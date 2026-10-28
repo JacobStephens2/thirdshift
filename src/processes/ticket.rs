@@ -16,7 +16,8 @@ pub(crate) fn run_custom(
 ) -> Result<crate::run::Reached, crate::failed_run::FailedRun> {
     use super::*;
 
-    let (path, mut file) = load(name)?;
+    let (path, mut file, identity) = load(name)?;
+    logs::process_running(identity.clone());
     let config = UserConfig::load()?;
     file.goal = delivery.goal;
     file.security_review = delivery.security_review;
@@ -49,7 +50,7 @@ pub(crate) fn run_custom(
             base: delivery.base,
         },
     )?;
-    prepared.dispatched = true;
+    prepared.dispatched = Some(identity);
     refuse_unstartable(&prepared)?;
     let branch = worktree.branch().to_string();
     let mut held = Some(worktree);
