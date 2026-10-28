@@ -198,13 +198,11 @@ fn command_details_keep_dispatch_and_child_signals_and_other_commands_health() {
 
         let before = Snapshot::load(dir.path(), now()).unwrap();
         let mut opens = Opens::new(&traces);
-        let details = Snapshot::load_details(
-            dir.path(),
-            now(),
-            std::time::Duration::from_secs(600),
-            selected,
-        )
-        .unwrap();
+        let mut config =
+            crate::config::UserConfig::parse("", &dir.path().join("config.toml"), dir.path())
+                .unwrap();
+        config.logs_dir = dir.path().into();
+        let details = Snapshot::details_for_user(&config, now(), selected).unwrap();
         assert_eq!(
             opens.take(),
             expected.iter().map(|n| traces[n - 1].clone()).collect()

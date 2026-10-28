@@ -743,6 +743,11 @@ impl GitHub {
             let Some((owner, repo, number, subject)) = subject else {
                 continue;
             };
+            // A record from another account reaches this query unchanged.
+            // Reject anything that is not a GitHub name before interpolating it.
+            if !github_name(&owner) || !github_name(&repo) {
+                continue;
+            }
             let alias = format!("pr{index}");
             let (field, fields) = subject.selection();
             query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
@@ -1664,6 +1669,27 @@ impl PullRequestState {
             closed_at: at("closedAt"),
         })
     }
+}
+
+/// A GitHub owner or repository name safe to interpolate into GraphQL or a
+/// `gh api` path: one letter or digit, then only letters, digits, `.`, `_`
+/// and `-`, at most 100 bytes.
+pub(crate) fn github_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && name.len() <= 100
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// `owner/repo`, with both sides a [`github_name`] and no extra slash.
+pub(crate) fn valid_repo_slug(slug: &str) -> bool {
+    let Some((owner, repo)) = slug.split_once('/') else {
+        return false;
+    };
+    !repo.contains('/') && github_name(owner) && github_name(repo)
 }
 
 /// The owner, repository and pull request number of a

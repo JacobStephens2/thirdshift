@@ -14,7 +14,7 @@ pub(crate) fn log_path(
     input: &str,
     session: Option<&str>,
 ) -> Result<std::path::PathBuf> {
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(config, Local::now())?;
     let command = snapshot.resolve(input)?.observation;
     selected_log(command, session)
 }
@@ -168,6 +168,9 @@ fn print(command: Observation<'_>) -> Result<()> {
 }
 
 fn print_details(command: &Command, indent: &str) -> Result<()> {
+    if let Some(account) = &command.account {
+        println!("{indent}[{account}]");
+    }
     println!(
         "{indent}{} · {}",
         shown_heading(command),
@@ -207,12 +210,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_details(
-        &config.logs_dir,
-        Local::now(),
-        config.silent_interval,
-        input,
-    )?;
+    let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
         #[derive(Serialize)]
@@ -237,7 +235,7 @@ pub fn show(input: &str, json: bool) -> Result<()> {
 
 pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;
     let path = selected_log(command, session)?;

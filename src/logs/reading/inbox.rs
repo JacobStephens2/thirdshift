@@ -350,7 +350,7 @@ impl RefreshWork {
 struct Row<'a> {
     item: InboxItem<'a>,
     order: (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>),
-    failure: Option<(&'a str, bool)>,
+    failure: Option<(&'a str, bool, Option<&'a str>)>,
 }
 
 /// One operation's retained Inbox decisions. Projections read only this value;
@@ -695,7 +695,7 @@ pub(super) fn evaluate<'a>(
             failure: facts
                 .cause
                 .filter(|cause| failed && !cause.is_empty())
-                .map(|cause| (cause, dismissal.is_some())),
+                .map(|cause| (cause, dismissal.is_some(), command.account())),
             item: InboxItem {
                 command,
                 group,

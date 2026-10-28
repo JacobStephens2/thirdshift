@@ -99,6 +99,23 @@ test('Inbox keeps issue numbers visible for long repository and Process subjects
         assert.equal(await subject.textContent(), full);
         assert.equal(await subject.getAttribute('title'), full);
         assert.equal(await subject.locator('a').getAttribute('href'), fixture.issue.url);
+        // Insert and measure in one browser task so a live refresh cannot
+        // remove the fixture tag before its layout is checked.
+        const tagged = await subject.evaluate(node => {
+          const tag = document.createElement('span');
+          tag.className = 'account-tag';
+          tag.textContent = 'conductor';
+          node.prepend(tag, ' ');
+          const subject = node.getBoundingClientRect();
+          const account = node.querySelector('.account-tag').getBoundingClientRect();
+          const issue = node.querySelector('.subject-issue').getBoundingClientRect();
+          return { left: account.left, right: issue.right, subjectLeft: subject.left, subjectRight: subject.right,
+            accountTop: account.top, accountBottom: account.bottom, issueTop: issue.top, issueBottom: issue.bottom };
+        });
+        assert.ok(tagged.left >= tagged.subjectLeft && tagged.right <= tagged.subjectRight + 1,
+          `account and #123 must fit inside the subject: ${JSON.stringify(tagged)}`);
+        assert.ok(tagged.accountTop < tagged.issueBottom && tagged.issueTop < tagged.accountBottom,
+          `account and #123 must share one line: ${JSON.stringify(tagged)}`);
       });
     }
     fixture.issue = null;

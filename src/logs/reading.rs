@@ -36,6 +36,7 @@ pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::Observation;
 
 pub(super) struct Snapshot {
+    pub(super) unavailable_accounts: BTreeSet<String>,
     commands: Vec<Entry>,
     pub(super) idle_passes: Vec<IdlePass>,
     pub(super) pass_starts: Vec<PassStart>,
@@ -45,6 +46,80 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    /// Merge opted-in accounts, isolating another account's read failures.
+    pub(super) fn for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, None)
+    }
+
+    pub(super) fn details_for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: &str,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, Some(input))
+    }
+
+    fn user_capture(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: Option<&str>,
+    ) -> Result<Self> {
+        let mut snapshot = Self::capture_records(
+            Arc::new(inventory::Native),
+            &config.logs_dir,
+            now,
+            config.silent_interval,
+            input.is_some(),
+        )?;
+        let sources = super::accounts::discover(config);
+        snapshot.unavailable_accounts = sources.unavailable;
+        for source in sources.logs.into_iter().skip(1) {
+            let Ok(mut other) = Self::capture_records(
+                Arc::new(inventory::Native),
+                &source.root,
+                now,
+                config.silent_interval,
+                input.is_some(),
+            ) else {
+                if matches!(
+                    config.console.other_accounts,
+                    crate::config::console::OtherAccounts::Named(_)
+                ) {
+                    snapshot.unavailable_accounts.extend(source.account);
+                }
+                continue;
+            };
+            fn mark(command: &mut Command, account: &Option<String>) {
+                command.account = account.clone();
+                confine_other_account_sessions(command);
+                for child in command.children.iter_mut().chain(&mut command.dispatched) {
+                    mark(child, account);
+                }
+            }
+            for entry in &mut other.commands {
+                match entry {
+                    Entry::Record(command) => mark(command, &source.account),
+                    Entry::History(command) => command.account = source.account.clone(),
+                }
+            }
+            snapshot.commands.extend(other.commands);
+        }
+        if let Some(input) = input
+            && let Observation::Record(selected) = snapshot.resolve(input)?.observation
+        {
+            let identity = CommandIdentity::of(selected);
+            for entry in &mut snapshot.commands {
+                if let Entry::Record(command) = entry {
+                    command.add_session_signals(Some(&identity));
+                }
+            }
+        }
+        Ok(snapshot)
+    }
+
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
@@ -72,25 +147,6 @@ impl Snapshot {
         for entry in &mut snapshot.commands {
             if let Entry::Record(command) = entry {
                 command.add_session_signals(None);
-            }
-        }
-        Ok(snapshot)
-    }
-
-    pub(super) fn load_details(
-        root: &Path,
-        now: DateTime<Local>,
-        silent: std::time::Duration,
-        input: &str,
-    ) -> Result<Self> {
-        let mut snapshot =
-            Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)?;
-        if let Observation::Record(selected) = snapshot.resolve(input)?.observation {
-            let identity = CommandIdentity::of(selected);
-            for entry in &mut snapshot.commands {
-                if let Entry::Record(command) = entry {
-                    command.add_session_signals(Some(&identity));
-                }
             }
         }
         Ok(snapshot)
@@ -161,6 +217,7 @@ impl Snapshot {
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
+            unavailable_accounts: BTreeSet::new(),
             commands,
             idle_passes,
             pass_starts,
@@ -252,6 +309,8 @@ pub(super) enum Entry {
 
 #[derive(Serialize)]
 pub(super) struct Command {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) account: Option<String>,
     #[serde(skip)]
     pub(super) record_path: PathBuf,
     #[serde(flatten)]
@@ -287,7 +346,14 @@ impl Command {
     fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
         let enrich = selected.is_none_or(|identity| identity.matches(self));
         if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
-            metrics.add_session_signals(&self.record, cache::session_signals);
+            metrics.add_session_signals(
+                &self.record,
+                if self.account.is_some() {
+                    cache::readonly_session_signals
+                } else {
+                    cache::session_signals
+                },
+            );
             self.record.run_metrics = Some(metrics);
         }
         let nested = if enrich { None } else { selected };
@@ -318,6 +384,7 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            account: None,
             activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
             command_log: command_log(&record_path),
             record_path,
@@ -382,6 +449,47 @@ fn read_records(
         records.insert(path.clone(), tree);
     }
     Ok(records)
+}
+
+/// Another account's record names its Session path. Keep a trace only when it
+/// is a regular file inside that record's own directory. A lexical prefix is
+/// not enough: `..` and a symlink can leave the directory.
+fn confine_other_account_sessions(command: &mut Command) {
+    let root = command.record_path.parent();
+    let keep = |path: &Path| {
+        let Some(root) = root else {
+            return false;
+        };
+        contained_trace(root, path)
+    };
+    if command
+        .record
+        .session_log
+        .as_deref()
+        .is_some_and(|path| !keep(path))
+    {
+        command.record.session_log = None;
+    }
+    for stage in &mut command.record.stages {
+        if stage.session_log.as_deref().is_some_and(|path| !keep(path)) {
+            stage.session_log = None;
+        }
+    }
+    command.activity.drop_session_unless(keep);
+}
+
+fn contained_trace(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
 fn command_log(path: &Path) -> PathBuf {

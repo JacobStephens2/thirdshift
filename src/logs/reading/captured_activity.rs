@@ -20,6 +20,13 @@ impl Activity {
             now,
         }
     }
+
+    /// Drop a Session path another account named outside its own log directory.
+    pub(super) fn drop_session_unless(&mut self, keep: impl Fn(&Path) -> bool) {
+        if self.session.as_deref().is_some_and(|path| !keep(path)) {
+            self.session = None;
+        }
+    }
 }
 
 impl Command {
