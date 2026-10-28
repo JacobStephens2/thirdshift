@@ -4,8 +4,24 @@ Run `scripts/affected-tests main` from anywhere in this checkout. It requires
 Python 3 and Git, compares the working tree with the merge-base of the supplied
 ref and `HEAD`, and includes staged, unstaged and untracked non-ignored files.
 Renames include both paths. An invalid ref fails before running checks; an empty
-diff prints that no tests are affected. Each selected command is printed, and
-any failed command fails the entry point.
+diff prints that no tests are affected. Before each selected command starts,
+the script prints its full-output log path. After it finishes, one summary line
+shows the command, `PASS` or `FAIL`, wall time in seconds and the log path. Raw
+check output stays in the log. Failures also print failing Rust test names and
+panic messages, or failing `node --test` cases for the browser suites, so the
+summary is enough to start investigating. Any failed command fails the entry
+point and stops the remaining checks.
+
+Logs live in `.affected-tests/` at the checkout root, which Git ignores. Each
+command gets a separate log named after the command with a unique suffix;
+subsequent runs keep earlier logs. Both stdout and stderr are saved in full.
+Run the script in the foreground and read its summary; open the printed log
+when more context is needed. Logs may be deleted when no longer needed.
+
+```text
++ cargo nextest run (log: /checkout/.affected-tests/cargo-nextest-run-abc123.log)
+PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run-abc123.log)
+```
 
 | Changed paths | Checks |
 | --- | --- |
