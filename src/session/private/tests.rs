@@ -240,13 +240,17 @@ echo '{"type":"result","subtype":"success","result":"private completion"}'
 "#,
             );
             run_scoring(&choice, &packet, "grade packet", &repo, 7).unwrap();
-            let scope = fs::read_to_string(packet.join("scope-arguments")).unwrap();
-            assert!(scope.contains("--scope"), "{scope}");
-            for limit in ["MemoryHigh", "MemoryMax", "MemorySwapMax"] {
-                assert!(
-                    !scope.contains(limit),
-                    "ordinary session acquired a resource cap: {scope}"
-                );
+            if cfg!(target_os = "linux") {
+                let scope = fs::read_to_string(packet.join("scope-arguments")).unwrap();
+                assert!(scope.contains("--scope"), "{scope}");
+                for limit in ["MemoryHigh", "MemoryMax", "MemorySwapMax"] {
+                    assert!(
+                        !scope.contains(limit),
+                        "ordinary session acquired a resource cap: {scope}"
+                    );
+                }
+            } else {
+                assert!(!packet.join("scope-arguments").exists());
             }
             let args = fs::read_to_string(packet.join("arguments")).unwrap();
             assert!(args.contains("requested-model"), "{args}");

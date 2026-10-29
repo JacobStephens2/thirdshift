@@ -591,7 +591,8 @@ pub(crate) fn unwrapped_program(command: &Command) -> &std::ffi::OsStr {
 
 /// Keep Trial Harnesses in the existing cap and retain the outer launcher's
 /// OOM evidence. Only a declared, kernel-confirmed dedicated scope is borrowed.
-/// A standalone Trial without that descriptor stays put with marker cleanup.
+/// A standalone Trial can create its own scope unless that would bypass caps
+/// imposed by its caller; those callers retain the marker fallback.
 pub(crate) fn trial_session_command(
     program: impl AsRef<std::ffi::OsStr>,
 ) -> Box<dyn crate::process::Invocation> {
@@ -631,12 +632,49 @@ pub(crate) fn trial_session_command(
     })();
     match inherited {
         Ok(Some(scope)) => Box::new(Launch { command, scope }),
-        Ok(None) => Box::new(command),
+        Ok(None) => {
+            if available() {
+                match uncapped_current_cgroup() {
+                    Ok(true) => return session_command(command.get_program()),
+                    Ok(false) => {}
+                    Err(error) => crate::progress::step(format_args!(
+                        "warning: could not inspect the Trial's inherited caps: {error:#}; using the session marker"
+                    )),
+                }
+            }
+            Box::new(command)
+        }
         Err(error) => {
             crate::progress::step(format_args!(
                 "warning: could not adopt the Trial's session scope: {error:#}; using the session marker"
             ));
             Box::new(command)
+        }
+    }
+}
+
+fn uncapped_current_cgroup() -> Result<bool> {
+    let groups = std::fs::read_to_string("/proc/self/cgroup")?;
+    let group = groups
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .context("no unified cgroup for the Trial")?;
+    let root = Path::new("/sys/fs/cgroup");
+    let mut directory = events_path(group).parent().unwrap().to_path_buf();
+    loop {
+        for property in ["memory.high", "memory.max", "memory.swap.max"] {
+            match std::fs::read_to_string(directory.join(property)) {
+                Ok(value) if value.trim() != "max" => return Ok(false),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("could not read an inherited Trial cap"),
+            }
+        }
+        if directory == root {
+            return Ok(true);
+        }
+        if !directory.pop() || !directory.starts_with(root) {
+            anyhow::bail!("Trial cgroup is outside the cgroup mount");
         }
     }
 }

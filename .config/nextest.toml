@@ -32,6 +32,7 @@ default-filter = """
 | (binary_id(thirdshift::bin/thirdshift) & test(/^console::changes::tests::/))
 | (binary_id(thirdshift::bin/thirdshift) & test(/^setup::sandbox::tests::/))
 | (binary_id(thirdshift::bin/thirdshift) & test(/^session::recording::lifetime_tests::/))
+| (binary_id(thirdshift::bin/thirdshift) & test(=session::private::tests::scoring_uses_an_ordinary_session_without_memory_caps_and_registers_its_command_models))
 | (binary_id(thirdshift::setup) & test(=security_sandbox_unavailable_report_preserves_saved_settings))
 | (binary_id(thirdshift::console) & (
     test(/^watching::/)

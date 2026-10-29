@@ -61,7 +61,7 @@ def running(pid):
         return False
 
 
-def exercise(binary, environment, mode):
+def exercise(binary, environment, mode, standalone=False):
     unit = 'thirdshift-trial-fixture-' + uuid.uuid4().hex + '.scope'
     with tempfile.TemporaryDirectory(prefix='thirdshift-trial-scope-') as directory:
         root = Path(directory)
@@ -84,8 +84,12 @@ def exercise(binary, environment, mode):
         env = dict(environment, HOME=str(root / 'home'), PATH=str(root / 'bin') + os.pathsep + environment['PATH'],
                    THIRDSHIFT_TRIAL_NO_SANDBOX='1', THIRDSHIFT_TRIAL_SCOPE=unit,
                    GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1')
+        if standalone:
+            env.pop('THIRDSHIFT_TRIAL_SCOPE', None)
         command = ['systemd-run', '--user', '--scope', '--quiet', '--collect', '--unit=' + unit,
                    '--property=MemoryMax=128M', '--', binary, '--trial', str(request)]
+        if standalone:
+            command = [binary, '--trial', str(request)]
         child = subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             if mode == 'interrupt':
@@ -104,16 +108,25 @@ def exercise(binary, environment, mode):
             observations = [json.loads(path.read_text()) for path in repo.glob('observed-*.json')]
             assert len(observations) == (2 if mode == 'resume' else 1), (observations, stderr)
             for observed in observations:
-                assert observed['group'].endswith('/' + unit), f'Trial Harness moved out of its dedicated scope: {observed}'
-                assert observed['limit'] != 'max' and int(observed['limit']) <= 128 * 1024 * 1024, f'Trial Harness escaped its 128M cap: {observed}'
+                if standalone:
+                    assert Path(observed['group']).name.startswith('thirdshift-session-'), f'uncapped standalone Trial has no session scope: {observed}'
+                else:
+                    assert observed['group'].endswith('/' + unit), f'Trial Harness moved out of its dedicated scope: {observed}'
+                    assert observed['limit'] != 'max' and int(observed['limit']) <= 128 * 1024 * 1024, f'Trial Harness escaped its 128M cap: {observed}'
             for path in repo.glob('pid-*'):
                 assert not running(int(path.read_text())), f'detached process survived {mode}: {path.read_text()}'
             if mode != 'interrupt':
                 trace = Path(result['log']).read_text()
                 assert 'fixture-harness-1.0' in trace, 'borrowed cleanup lost Harness version evidence'
-            print(f'{mode}: capped, detached work stopped, supervisor and version evidence preserved')
+            print(f'{mode} (standalone={standalone}): detached work stopped, scope/caps and version evidence preserved')
         finally:
-            subprocess.run(['systemctl', '--user', 'stop', unit], env=env, capture_output=True, timeout=15)
+            if not standalone:
+                subprocess.run(['systemctl', '--user', 'stop', unit], env=env, capture_output=True, timeout=15)
+            for path in repo.glob('pid-*'):
+                try:
+                    os.kill(int(path.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             if child.poll() is None:
                 child.kill()
             child.communicate(timeout=10)
@@ -130,3 +143,17 @@ if __name__ == '__main__':
         list(workers.map(lambda mode: exercise(binary, environment, mode), ['normal', 'normal']))
     for mode in ['resume', 'interrupt']:
         exercise(binary, environment, mode)
+    # The standalone contract applies where a new scope bypasses no caller cap.
+    group = next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
+    directory = Path('/sys/fs/cgroup') / group.lstrip('/')
+    capped = False
+    while True:
+        for prop in ['memory.high', 'memory.max', 'memory.swap.max']:
+            file = directory / prop
+            if file.exists() and file.read_text().strip() != 'max':
+                capped = True
+        if directory == Path('/sys/fs/cgroup'):
+            break
+        directory = directory.parent
+    if not capped:
+        exercise(binary, environment, 'normal', standalone=True)
