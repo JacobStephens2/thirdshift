@@ -1414,8 +1414,10 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
+        // Namespace-local PIDs can name inaccessible host processes; only a
+        // successful host probe counts as an observed survivor here.
         assert!(
-            !crate::process::is_alive(pid),
+            crate::process::signal(pid, 0).is_err(),
             "orphaned sleep {pid} outlived its sandbox"
         );
         fs::remove_file(layout.repo.join("orphan.pid")).unwrap();
@@ -1976,8 +1978,10 @@ mod tests {
         crate::process::signal(child.id() as libc::pid_t, libc::SIGINT).unwrap();
         let status = child.wait().expect("sandboxed session did not end");
         assert!(!status.success());
+        // Namespace-local PIDs can name inaccessible host processes; only a
+        // successful host probe counts as an observed survivor here.
         assert!(
-            !crate::process::is_alive(pid),
+            crate::process::signal(pid, 0).is_err(),
             "orphaned sleep {pid} outlived its sandbox"
         );
         fs::remove_file(layout.repo.join("signal.pid")).unwrap();
