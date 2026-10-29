@@ -490,6 +490,7 @@ impl Drop for HeldClaim<'_> {
 struct StepRun<'a> {
     process: &'a str,
     plan_only: bool,
+    security_fix: bool,
     goal: Goal,
     limits: &'a Limits,
     completed: &'a Mutex<CompletedRuns>,
@@ -1372,6 +1373,7 @@ fn run_parallel(
                 let run = StepRun {
                     process: &process,
                     plan_only: prepared.plan_only,
+                    security_fix: prepared.security_fix,
                     goal,
                     limits,
                     completed,
@@ -1466,6 +1468,7 @@ fn run_step(
     let run = StepRun {
         process,
         plan_only: prepared.plan_only,
+        security_fix: prepared.security_fix,
         goal: prepared.goal,
         limits: &prepared.limits,
         completed: &prepared.completed,
@@ -1608,6 +1611,11 @@ fn run_land_tickets(
         } else {
             crate::security::review::Ask::Forbid
         }),
+        security_fix: Some(if prepared.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
+        }),
         ..Flags::default()
     };
     let mut asks = Asks::of_run(run.issue, &flags, &config);
@@ -1679,6 +1687,7 @@ fn run_delivery(
     }
     let child_asks = ChildAsks {
         harness: step.choice.clone(),
+        security_fix: prepared.security_fix,
         delivery_limits: delivery::Limits {
             repair_cap: prepared.limits.repair_cap,
             protected_paths: prepared.limits.protected_paths.clone(),
@@ -2052,6 +2061,11 @@ fn run_published(
             Goal::ReadyForReview
         } else {
             run.goal
+        }),
+        security_fix: Some(if run.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
         }),
         ..Flags::default()
     };

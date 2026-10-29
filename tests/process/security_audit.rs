@@ -323,3 +323,148 @@ fn repeated_findings_keep_a_completed_unsuccessful_reproduction() {
         second.stderr
     );
 }
+
+fn dispatched_security_ticket_process() -> String {
+    let audit = AUDIT
+        .replacen(
+            "[[steps]]",
+            "[worktrees.ticket]\nkind = 'issue-branch'\n\
+             [worktrees.audit]\nkind = 'throwaway'\n\n[[steps]]",
+            1,
+        )
+        .replace(
+            "catalogue = \"security-audit\"",
+            "catalogue = \"security-audit\"\nworktree = \"audit\"",
+        )
+        .replace(
+            "catalogue = \"reproduce-findings\"",
+            "catalogue = \"reproduce-findings\"\nworktree = \"audit\"",
+        );
+    format!(
+        r#"{audit}
+[[steps]]
+name = "change"
+command = "echo child > child.txt; git add child.txt; git commit -qm child; gh pr create --base main --head issue-8 --title Child --body 'Closes #8'"
+worktree = "ticket"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#
+    )
+}
+
+#[test]
+fn dispatched_security_steps_honor_user_config_fix_permission() {
+    assert_dispatched_fix_permission("[security]\nfix = true\n", None, true);
+}
+
+#[test]
+fn dispatched_security_steps_honor_command_fix_permission() {
+    assert_dispatched_fix_permission("[security]\nfix = false\n", Some("--security-fix"), true);
+    assert_dispatched_fix_permission("[security]\nfix = true\n", Some("no-security-fix"), false);
+}
+
+fn assert_dispatched_fix_permission(config: &str, flag: Option<&str>, allowed: bool) {
+    let scenario = Scenario::new();
+    write_process(&scenario, "audit", AUDIT);
+    scenario.agent_does_in_session(1, &audit_script());
+    scenario.agent_does_in_session(2, REPRODUCE);
+    let initial = scenario.run(&["process", "audit"]);
+    assert_eq!(initial.code, Some(0), "{}", initial.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+
+    scenario.user_config_is(config);
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        &dispatched_security_ticket_process(),
+    );
+    scenario.agent_does_in_session(
+        3,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    // Keep the incorrect extra audit valid so the failure identifies skipping.
+    scenario.agent_does_in_session(4, &audit_script());
+
+    let mut args = vec!["process", "publish"];
+    args.extend(flag);
+    let result = scenario.run(&args);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        if allowed { 3 } else { 4 },
+        "child audit should follow the fix permission: {}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stderr.matches("awaits an allowed fix").count(),
+        if allowed { 2 } else { 0 },
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn dispatched_security_steps_retain_child_trace_identity() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_process(
+        &scenario,
+        "contractor",
+        &dispatched_security_ticket_process(),
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(2, &audit_script());
+    scenario.agent_does_in_session(3, REPRODUCE);
+
+    let result = scenario.run(&["process", "publish"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let traces: Vec<_> = fs::read_dir(process_dir(&scenario))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            name.ends_with("-security-audit.logs.jsonl")
+                || name.ends_with("-security-reproduction-1.logs.jsonl")
+        })
+        .collect();
+    assert_eq!(traces.len(), 2, "{traces:?}");
+    for path in traces {
+        for line in fs::read_to_string(&path).unwrap().lines() {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            for batch in request["resourceLogs"].as_array().unwrap() {
+                let attributes = batch["resource"]["attributes"].as_array().unwrap();
+                let process = attributes
+                    .iter()
+                    .find(|attribute| attribute["key"] == "thirdshift.process.name")
+                    .and_then(|attribute| attribute["value"]["stringValue"].as_str());
+                assert_eq!(process, Some("contractor"), "{}: {batch}", path.display());
+            }
+        }
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("8-process-step-"),
+            "child identity missing from trace filename: {}",
+            path.display()
+        );
+    }
+}

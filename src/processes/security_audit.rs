@@ -16,7 +16,16 @@ pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Res
         progress::step(&message);
         return Ok(message);
     }
-    let logs = session::Logs::of_process_review(&repo, index + 1);
+    let mut logs = session::Logs::of_process_review(&repo, index + 1);
+    if let Some(identity) = &prepared.dispatched {
+        logs = logs.for_child(
+            prepared
+                .issue
+                .as_ref()
+                .expect("a dispatched Ticket has an issue"),
+            identity.clone(),
+        );
+    }
     let before_each = |worktree: &Path| {
         link_harnesses(worktree, std::slice::from_ref(step))?;
         if let Some(issue) = &prepared.issue {
