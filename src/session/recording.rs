@@ -92,6 +92,10 @@ impl Recording {
         }
     }
 
+    pub(super) fn is_trial(&self) -> bool {
+        matches!(self.owner, Ok(None))
+    }
+
     /// Construct from captured facts; fixtures need no process-global changes.
     #[cfg(test)]
     pub fn new(local: Option<PathBuf>, inherited: Option<PathBuf>, stamp: String) -> Self {
@@ -157,6 +161,10 @@ impl Recording {
         log: &Path,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        let borrowed_trial = invocation
+            .parts()
+            .1
+            .is_some_and(crate::scope::Scope::borrows_trial);
         let command = invocation.command();
         let directory = match command.get_current_dir() {
             Some(dir) if dir.is_absolute() => dir.to_path_buf(),
@@ -208,6 +216,11 @@ impl Recording {
             command,
             self.command_log(),
         )?));
+        if borrowed_trial {
+            // Supervisor-side metadata must finish before the Harness adds
+            // members to the borrowed Trial cgroup's cleanup population.
+            trace.lock().unwrap().prepare_version();
+        }
         let streaming_trace = Arc::clone(&trace);
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();

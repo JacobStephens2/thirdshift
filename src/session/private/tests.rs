@@ -196,9 +196,9 @@ fn auxiliary_uses_only_kernel_evidence_and_keeps_journal_lazy() {
 }
 
 #[test]
-fn scoring_uses_an_ordinary_unscoped_session_and_registers_its_command_models() {
+fn scoring_uses_an_ordinary_session_without_memory_caps_and_registers_its_command_models() {
     isolated(
-        "scoring_uses_an_ordinary_unscoped_session_and_registers_its_command_models",
+        "scoring_uses_an_ordinary_session_without_memory_caps_and_registers_its_command_models",
         false,
         |root| {
             let repo = crate::issue::Repo {
@@ -215,7 +215,19 @@ fn scoring_uses_an_ordinary_unscoped_session_and_registers_its_command_models() 
                 ..Choice::default()
             };
             crate::logs::started(crate::logs::Work::ScoringRun(&repo), &choice);
-            write_executable(&root.join("bin/systemd-run"), "#!/bin/sh\nexit 99\n");
+            write_executable(
+                &root.join("bin/systemctl"),
+                "#!/bin/sh\ncase \"$*\" in *SystemState*) echo running;; *) echo LoadState=not-found;; esac\n",
+            );
+            write_executable(
+                &root.join("bin/systemd-run"),
+                r#"#!/bin/sh
+printf '%s\n' "$@" > scope-arguments
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+"#,
+            );
             write_executable(
                 &root.join("bin/claude"),
                 r#"#!/bin/sh
@@ -228,6 +240,14 @@ echo '{"type":"result","subtype":"success","result":"private completion"}'
 "#,
             );
             run_scoring(&choice, &packet, "grade packet", &repo, 7).unwrap();
+            let scope = fs::read_to_string(packet.join("scope-arguments")).unwrap();
+            assert!(scope.contains("--scope"), "{scope}");
+            for limit in ["MemoryHigh", "MemoryMax", "MemorySwapMax"] {
+                assert!(
+                    !scope.contains(limit),
+                    "ordinary session acquired a resource cap: {scope}"
+                );
+            }
             let args = fs::read_to_string(packet.join("arguments")).unwrap();
             assert!(args.contains("requested-model"), "{args}");
             assert!(!args.contains("disallowedTools"), "{args}");
@@ -363,6 +383,7 @@ exec "$@"
             write_executable(
                 &binary,
                 r#"#!/bin/sh
+if [ "${1-}" = --version ]; then echo fixture; exit 0; fi
 printf '%s\n' "$@" > harness-arguments
 echo 'private timeout evidence' >&2
 echo '{"type":"assistant","message":{"model":"fixture-model","content":[]}}'

@@ -159,7 +159,7 @@ fn execute(session: Session<'_>) -> Result<()> {
         Profile::Scoring { repo, ordinal } => {
             let invocation = adapter.session(choice, None, prompt);
             let command = match &launch {
-                Some(launch) => launch.session_command(&invocation.args)?,
+                Some(launch) => launch.session_command(&invocation.args, false)?,
                 None => {
                     let mut command = crate::scope::session_command(adapter.name());
                     command.command().args(&invocation.args);

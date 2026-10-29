@@ -21,6 +21,7 @@
 //! the linger step, before any uncapped Trial or Grader starts.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +54,10 @@ pub const ENV_MEMORY_HIGH: &str = "THIRDSHIFT_TRIAL_MEMORY_HIGH";
 pub const ENV_MEMORY_MAX: &str = "THIRDSHIFT_TRIAL_MEMORY_MAX";
 /// See [`ENV_MEMORY_HIGH`].
 pub const ENV_MEMORY_SWAP_MAX: &str = "THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX";
+
+/// Verified against current membership before a Trial's sequential sessions
+/// borrow their dedicated capped scope. Never adopt a login scope.
+const TRIAL_SCOPE: &str = "THIRDSHIFT_TRIAL_SCOPE";
 
 /// The memory caps for Trial and Grader scopes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +247,10 @@ impl Scope {
         self.observation.signal(&self.unit, signal)
     }
 
+    pub(crate) fn borrows_trial(&self) -> bool {
+        self.observation.borrows_trial()
+    }
+
     /// Resolve and sample the live scope lazily: it only exists after launch.
     pub fn sample(&self) {
         let mut watch = self.watch.borrow_mut();
@@ -276,6 +285,9 @@ trait Observation {
     fn events(&self, unit: &str) -> Option<PathBuf>;
     fn acknowledge(&self) {}
     fn journal_oom_killed(&self, unit: &str) -> bool;
+    fn borrows_trial(&self) -> bool {
+        false
+    }
     // Memory-only fixtures own no real cgroup. Native observation supplies
     // the same scope's process ownership alongside its memory evidence.
     fn processes(&self, _unit: &str) -> Result<Vec<libc::pid_t>> {
@@ -287,6 +299,45 @@ trait Observation {
 }
 
 struct Native;
+
+/// The supervisor stays inside its Trial cap; each sequential Harness session
+/// owns only members added after its launch, including detached descendants.
+struct TrialMembers {
+    directory: PathBuf,
+    protected: BTreeSet<libc::pid_t>,
+}
+
+impl Observation for TrialMembers {
+    fn borrows_trial(&self) -> bool {
+        true
+    }
+
+    fn events(&self, _unit: &str) -> Option<PathBuf> {
+        Some(self.directory.join("memory.events"))
+    }
+
+    fn journal_oom_killed(&self, unit: &str) -> bool {
+        Native.journal_oom_killed(unit)
+    }
+
+    fn processes(&self, _unit: &str) -> Result<Vec<libc::pid_t>> {
+        let mut pids = Vec::new();
+        read_group_processes(&self.directory, &mut pids)?;
+        pids.retain(|pid| !self.protected.contains(pid));
+        Ok(pids)
+    }
+
+    fn signal(&self, unit: &str, signal: libc::c_int) -> Result<()> {
+        for pid in self.processes(unit)? {
+            if let Err(error) = crate::process::signal(pid, signal)
+                && error.raw_os_error() != Some(libc::ESRCH)
+            {
+                return Err(error).context("could not signal a Trial session survivor");
+            }
+        }
+        Ok(())
+    }
+}
 
 impl Observation for Native {
     fn processes(&self, unit: &str) -> Result<Vec<libc::pid_t>> {
@@ -538,6 +589,58 @@ pub(crate) fn unwrapped_program(command: &Command) -> &std::ffi::OsStr {
     }
 }
 
+/// Keep Trial Harnesses in the existing cap and retain the outer launcher's
+/// OOM evidence. Only a declared, kernel-confirmed dedicated scope is borrowed.
+/// A standalone Trial without that descriptor stays put with marker cleanup.
+pub(crate) fn trial_session_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> Box<dyn crate::process::Invocation> {
+    let mut command = Command::new(program);
+    crate::process::session::mark(&mut command);
+    let inherited = (|| -> Result<Option<Scope>> {
+        if !cfg!(target_os = "linux") {
+            return Ok(None);
+        }
+        let Some(unit) = std::env::var(TRIAL_SCOPE)
+            .ok()
+            .filter(|unit| unit.starts_with("thirdshift-trial-") && unit.ends_with(".scope"))
+        else {
+            return Ok(None);
+        };
+        let groups = std::fs::read_to_string("/proc/self/cgroup")?;
+        let Some(group) = groups.lines().find_map(|line| line.strip_prefix("0::")) else {
+            return Ok(None);
+        };
+        if !Path::new(group)
+            .components()
+            .any(|component| component.as_os_str() == unit.as_str())
+        {
+            return Ok(None);
+        }
+        let directory = events_path(group).parent().unwrap().to_path_buf();
+        let mut pids = Vec::new();
+        read_group_processes(&directory, &mut pids)?;
+        Ok(Some(Scope {
+            unit,
+            watch: RefCell::new(None),
+            observation: Box::new(TrialMembers {
+                directory,
+                protected: pids.into_iter().collect(),
+            }),
+        }))
+    })();
+    match inherited {
+        Ok(Some(scope)) => Box::new(Launch { command, scope }),
+        Ok(None) => Box::new(command),
+        Err(error) => {
+            crate::progress::step(format_args!(
+                "warning: could not adopt the Trial's session scope: {error:#}; using the session marker"
+            ));
+            Box::new(command)
+        }
+    }
+}
+
 /// Build a Trial's command under the caps. The wrapper raises the scope's own
 /// `oom_score_adj`, which old Arm builds inherit; new ones raise it
 /// themselves too.
@@ -549,7 +652,9 @@ pub fn trial_command(
     caps: &Caps,
 ) -> Result<Launch> {
     let unit = unit_name("trial", &format!("{trial}-{attempt}"));
-    launch(program, args, unit, caps)
+    let mut launched = launch(program, args, unit.clone(), caps)?;
+    launched.command.env(TRIAL_SCOPE, unit);
+    Ok(launched)
 }
 
 /// Build a code or model Grader's command under the Trial caps and the wrapper
@@ -588,6 +693,7 @@ fn launch<S: AsRef<std::ffi::OsStr>>(
         .arg("--oom-exec")
         .arg(program)
         .args(args);
+    crate::process::session::mark(&mut command);
     Ok(Launch {
         command,
         scope: Scope {

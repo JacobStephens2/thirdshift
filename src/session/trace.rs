@@ -367,6 +367,10 @@ impl Trace {
         }
     }
 
+    pub(super) fn prepare_version(&mut self) {
+        self.record_version(&Value::Null);
+    }
+
     fn record_version(&mut self, envelope: &Value) {
         let Some(version) = &mut self.version else {
             return;

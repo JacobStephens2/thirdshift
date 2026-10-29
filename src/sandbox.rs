@@ -255,6 +255,7 @@ impl Launch {
     /// The Harness runs behind the relay: `prefix` starts the relay, then
     /// runs the program as `$0` with `args` as `$@`, so the relay dies with
     /// the session.
+    #[cfg(test)]
     pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
         self.configure_command(&mut command, args)?;
@@ -264,9 +265,14 @@ impl Launch {
     pub(crate) fn session_command(
         &self,
         args: &[String],
+        trial: bool,
     ) -> Result<Box<dyn crate::process::Invocation>> {
-        let mut launched =
-            crate::scope::session_command(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
+        let program = find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap"));
+        let mut launched = if trial {
+            crate::scope::trial_session_command(program)
+        } else {
+            crate::scope::session_command(program)
+        };
         self.configure_command(launched.command(), args)?;
         Ok(launched)
     }
@@ -285,19 +291,9 @@ impl Launch {
     }
 
     fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
-        crate::process::session::mark(command);
+        let marker = crate::process::session::mark(command);
         command.args(&self.argv);
-        if let Some((_, Some(marker))) = command
-            .get_envs()
-            .find(|(name, _)| *name == crate::process::session::MARKER)
-        {
-            let marker = marker.to_owned();
-            command.args([
-                std::ffi::OsStr::new("--setenv"),
-                std::ffi::OsStr::new(crate::process::session::MARKER),
-                &marker,
-            ]);
-        }
+        command.args(["--setenv", crate::process::session::MARKER, &marker]);
         command.arg("--");
         command.args(&self.prefix);
         command.arg(&self.program);

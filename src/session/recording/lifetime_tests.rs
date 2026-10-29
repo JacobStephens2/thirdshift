@@ -147,7 +147,7 @@ fn sweep_failures_warn_without_changing_the_session_outcome() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             stderr.matches("injected session-sweep failure").count(),
-            4,
+            2,
             "{stderr}"
         );
         assert!(

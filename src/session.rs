@@ -573,9 +573,13 @@ impl Outside for OnMachine {
             invocation = adapter.trial_session(harness, resume, prompt);
         }
         let mut launched = match &self.sandbox {
-            Some(launch) => launch.session_command(&invocation.args)?,
+            Some(launch) => launch.session_command(&invocation.args, true)?,
             None => {
-                let mut launched = crate::scope::session_command(adapter.name());
+                let mut launched = if self.recording.is_trial() {
+                    crate::scope::trial_session_command(adapter.name())
+                } else {
+                    crate::scope::session_command(adapter.name())
+                };
                 launched.command().args(&invocation.args);
                 launched
             }

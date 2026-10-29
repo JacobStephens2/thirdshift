@@ -13,10 +13,10 @@ use crate::progress;
 pub(crate) const MARKER: &str = "THIRDSHIFT_SESSION";
 
 /// Explicit overrides fence nested and parallel sessions from inherited IDs.
-pub(crate) fn mark(command: &mut Command) {
-    if marker(command).is_none() {
-        command.env(MARKER, format!("{:032x}", rand::random::<u128>()));
-    }
+pub(crate) fn mark(command: &mut Command) -> String {
+    let marker = marker(command).unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
+    command.env(MARKER, &marker);
+    marker
 }
 
 fn marker(command: &Command) -> Option<String> {
