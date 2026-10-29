@@ -1744,28 +1744,42 @@ fn the_summary_is_from_the_pr_whose_head_or_merge_is_tagged() {
     const OTHER: &str = "2222222222222222222222222222222222222222";
     let with_summary = "Intro.\n<!-- release-summary:start -->\nThe headline.\n\
                         <!-- release-summary:end -->\nRest.";
+    let release = format!("release-0.2.0 {REPO} {REPO}");
+    let fork = format!("release-0.2.0 attacker/thirdshift {REPO}");
     for (case, pulls, body, summary) in [
         (
             "the merge of a PR with a summary section",
-            format!("{OTHER} {OTHER} 4\n{TAGGED} {OTHER} 5"),
+            format!("{OTHER} {OTHER} other {REPO} {REPO} 4\n{TAGGED} {OTHER} {release} 5"),
             with_summary,
             "The headline.\n",
         ),
         (
             "the merge of a PR without a summary section",
-            format!("{TAGGED} {OTHER} 5"),
+            format!("{TAGGED} {OTHER} {release} 5"),
             "Old news.",
             "",
         ),
         (
             "the head of a PR, not its merge",
-            format!("{OTHER} {TAGGED} 5"),
+            format!("none {TAGGED} {release} 5"),
             with_summary,
             "The headline.\n",
         ),
         (
+            "a fork PR listed ahead of the release PR",
+            format!("none {TAGGED} {fork} 9\nnone {TAGGED} {release} 5"),
+            with_summary,
+            "The headline.\n",
+        ),
+        (
+            "only a fork PR whose head is the tagged commit",
+            format!("none {TAGGED} {fork} 5"),
+            with_summary,
+            "",
+        ),
+        (
             "a PR for another commit",
-            format!("{OTHER} {OTHER} 5"),
+            format!("{OTHER} {OTHER} {release} 5"),
             with_summary,
             "",
         ),
@@ -1780,13 +1794,66 @@ fn the_summary_is_from_the_pr_whose_head_or_merge_is_tagged() {
                  \tpr) [ \"$3\" = 5 ] && printf '%s\\n' '{body}' ;;\n\
                  \tesac\n\
                  }}\n\
-                 bump_summary {TAGGED}\n"
+                 bump_summary {TAGGED} release-0.2.0\n"
             ),
         );
 
         assert!(output.status.success(), "{case}: {}", stderr(&output));
         assert_eq!(stdout(&output), summary, "{case}");
     }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_foreign_pr_with_the_tagged_head_does_not_supply_the_release_summary() {
+    // The commits API lists every pull request that points at the tagged bump
+    // commit, oldest first. A fork can push that same commit and open first.
+    const TAGGED: &str = "1111111111111111111111111111111111111111";
+    let output = with_functions_of(
+        "release-notes.sh",
+        &format!(
+            r#"gh() {{
+	case $1 in
+	api)
+		jq=
+		while [ $# -gt 0 ]; do
+			if [ "$1" = --jq ]; then jq=$2; fi
+			shift
+		done
+		case $jq in
+		*head.repo.full_name*)
+			printf '%s\n' 'null {tagged} release-0.2.0 attacker/thirdshift JacobStephens2/thirdshift 9' \
+				'null {tagged} release-0.2.0 JacobStephens2/thirdshift JacobStephens2/thirdshift 5'
+			;;
+		*head.sha*)
+			printf '%s\n' 'null {tagged} 9' 'null {tagged} 5'
+			;;
+		*)
+			printf '%s\n' 'null 9' 'null 5'
+			;;
+		esac
+		;;
+	pr)
+		case $3 in
+		9) printf '%s\n' $'<!-- release-summary:start -->\nFOREIGN-SENTINEL\n<!-- release-summary:end -->' ;;
+		5) printf '%s\n' $'<!-- release-summary:start -->\nThe release.\n<!-- release-summary:end -->' ;;
+		esac
+		;;
+	esac
+}}
+bump_summary {tagged} release-0.2.0
+"#,
+            tagged = TAGGED,
+        ),
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary = stdout(&output);
+    assert!(
+        !summary.contains("FOREIGN-SENTINEL"),
+        "foreign summary was published: {summary}"
+    );
+    assert_eq!(summary, "The release.\n");
 }
 
 #[test]

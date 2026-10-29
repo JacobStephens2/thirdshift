@@ -547,7 +547,7 @@ const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRep
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
 const COMMIT_PR_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.number)""#;
-const COMMIT_PR_HEAD_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.head.sha) \(.number)""#;
+const COMMIT_PR_HEAD_LINES: &str = r#".[] | [(.merge_commit_sha // "none"), .head.sha, .head.ref, (.head.repo.full_name // "none"), (.base.repo.full_name // "none"), (.number | tostring)] | join(" ")"#;
 
 const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#;
 
@@ -1629,9 +1629,23 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 };
                 if jq == Some(COMMIT_PR_HEAD_LINES) {
                     let head = pr_fields(pr, &["headRefOid".to_owned()]);
+                    let repo = state.at("repo").str();
+                    let head_repo = if pr.get("isCrossRepository").is_some_and(Json::truthy) {
+                        pr.get("headRepo")
+                            .and_then(Json::as_str)
+                            .unwrap_or("fork/thirdshift")
+                    } else {
+                        repo
+                    };
+                    let merge = if merge == "null" {
+                        "none".to_owned()
+                    } else {
+                        merge
+                    };
                     println!(
-                        "{merge} {} {}",
+                        "{merge} {} {} {head_repo} {repo} {}",
                         head.at("headRefOid").python(),
+                        pr.at("head").python(),
                         pr.at("number").python()
                     );
                 } else {
