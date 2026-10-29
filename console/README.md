@@ -15,6 +15,26 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+## Documentation screenshots
+
+The README and public site's Console section share the PNGs in
+[`site/screenshots/`](../site/screenshots/). After the build and browser setup
+above, refresh both from the repository root:
+
+```sh
+node console/screenshots.cjs
+```
+
+The capture needs Python 3 for its fake `gh`. It opens the real Console in
+Chromium at 1440 × 1200, using the Focus light Theme, and captures the full page
+below the machine header. It creates sample Commands and Session spans in a temporary home,
+answers GitHub reads with a local fake `gh`, and closes its browser and server
+before removing that home. It reads no personal logs or GitHub data. Inspect
+both images before committing them; the Console layout can change. The images
+show Inbox with Command details and Waterfall with every call expanded.
+
+## Development and behavior
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
