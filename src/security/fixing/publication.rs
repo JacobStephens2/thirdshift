@@ -5,10 +5,12 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use super::SECURITY_FIX;
+use crate::git::Git;
 use crate::github::{GitHub, Issue, SecurityRecord, Ticket};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::prompt;
+use crate::reservation::Reservation;
 use crate::security::reproduction::FixSize;
 
 /// Facts captured by the shell, without Session or clock ownership here.
@@ -20,8 +22,11 @@ pub(super) enum Source<'a> {
     },
 }
 
-/// GitHub effects and interruption observations, shared with the scripted adapter.
+/// GitHub effects, the fix's reservation on origin, and interruption
+/// observations, shared with the scripted adapter.
 pub(super) trait Outside {
+    /// What holds the fix reserved on origin, released when it is dropped.
+    type Reservation;
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
     fn tickets(&mut self, issue: &IssueUrl) -> Result<Vec<Ticket>>;
     fn issue_labels(&mut self, issue: &IssueUrl) -> Result<Labels>;
@@ -38,24 +43,35 @@ pub(super) trait Outside {
     fn add_sub_issue(&mut self, parent: &IssueUrl, child: &IssueUrl) -> Result<()>;
     fn add_blocked_by(&mut self, ticket: &IssueUrl, blocker: &IssueUrl) -> Result<()>;
     fn apply(&mut self, edit: &Edit) -> Result<()>;
+    /// Reserve the fix `issue` on origin, failing if another run holds it.
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Self::Reservation>;
     fn interrupted(&mut self) -> bool;
 }
 
-impl Outside for GitHub {
+/// GitHub, and the Launch directory `launch`, whose origin the fix is
+/// reserved on.
+pub(super) struct Shell<'a> {
+    pub github: GitHub,
+    pub launch: &'a Git,
+}
+
+impl Outside for Shell<'_> {
+    type Reservation = Reservation;
+
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue> {
-        GitHub::issue(self, issue)
+        self.github.issue(issue)
     }
     fn tickets(&mut self, issue: &IssueUrl) -> Result<Vec<Ticket>> {
-        GitHub::tickets(self, issue)
+        self.github.tickets(issue)
     }
     fn issue_labels(&mut self, issue: &IssueUrl) -> Result<Labels> {
-        GitHub::issue_labels(self, issue)
+        self.github.issue_labels(issue)
     }
     fn issue_text(&mut self, issue: &IssueUrl) -> Result<String> {
-        self.security_fix_text(issue)
+        self.github.security_fix_text(issue)
     }
     fn issues_created_since(&mut self, repo: &str, since: DateTime<Utc>) -> Result<Vec<IssueUrl>> {
-        GitHub::issues_created_since(self, repo, since)
+        self.github.issues_created_since(repo, since)
     }
     fn create_issue(
         &mut self,
@@ -64,34 +80,39 @@ impl Outside for GitHub {
         body: &str,
         labels: &[Label],
     ) -> Result<IssueUrl> {
-        self.create_issue_in(repo, title, body, labels)
+        self.github.create_issue_in(repo, title, body, labels)
     }
     fn close_issue(&mut self, issue: &IssueUrl, comment: &str) -> Result<()> {
-        GitHub::close_issue(self, issue, comment)
+        self.github.close_issue(issue, comment)
     }
     fn add_sub_issue(&mut self, parent: &IssueUrl, child: &IssueUrl) -> Result<()> {
-        GitHub::add_sub_issue(self, parent, child)
+        self.github.add_sub_issue(parent, child)
     }
     fn add_blocked_by(&mut self, ticket: &IssueUrl, blocker: &IssueUrl) -> Result<()> {
-        GitHub::add_blocked_by(self, ticket, blocker)
+        self.github.add_blocked_by(ticket, blocker)
     }
     fn apply(&mut self, edit: &Edit) -> Result<()> {
-        edit.apply(self)
+        edit.apply(&self.github)
+    }
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Reservation> {
+        Reservation::of_published(self.launch, issue)
     }
     fn interrupted(&mut self) -> bool {
         crate::interrupt::requested()
     }
 }
 
-/// Publish or reuse the finding's fix through the complete validation protocol.
-pub(super) fn publish(
-    github: &mut impl Outside,
+/// Publish or reuse the finding's fix through the complete validation
+/// protocol, reserving it on origin before it is marked ready. Returns it,
+/// with its reservation.
+pub(super) fn publish<O: Outside>(
+    github: &mut O,
     repo: &Repo,
     record: &SecurityRecord,
     url: &str,
     size: FixSize,
     source: Source<'_>,
-) -> Result<IssueUrl> {
+) -> Result<(IssueUrl, O::Reservation)> {
     let (message, started) = match source {
         Source::ExistingFinding => {
             let number = record
@@ -112,8 +133,8 @@ pub(super) fn publish(
             {
                 bail!("the private Security finding must be an open, ready single Ticket");
             }
-            mark_ready(github, &issue, viewed.labels)?;
-            return Ok(issue);
+            let reservation = mark_ready(github, &issue, viewed.labels)?;
+            return Ok((issue, reservation));
         }
         Source::Session { message, started } => (message, started),
     };
@@ -211,21 +232,29 @@ pub(super) fn publish(
         let labels = github.issue_labels(issue)?;
         github.apply(&Edit::of(issue, labels, &[], &[SECURITY_FIX]))?;
     }
-    mark_ready(github, &issue, viewed.labels)?;
-    Ok(issue)
+    let reservation = mark_ready(github, &issue, viewed.labels)?;
+    Ok((issue, reservation))
 }
 
-/// Make the final readiness edit, after the flow's checks and child tagging.
-fn mark_ready(github: &mut impl Outside, issue: &IssueUrl, labels: Labels) -> Result<()> {
+/// Make the final readiness edit, after the flow's checks and child tagging,
+/// once the fix is reserved on origin, so that an overlapping Pickup run
+/// never takes it. Returns its reservation.
+fn mark_ready<O: Outside>(
+    github: &mut O,
+    issue: &IssueUrl,
+    labels: Labels,
+) -> Result<O::Reservation> {
     if github.interrupted() {
         bail!("interrupted");
     }
+    let reservation = github.reserve(issue)?;
     github.apply(&Edit::of(
         issue,
         labels,
         &[NEEDS_TRIAGE],
         &[READY_FOR_AGENT, SECURITY_FIX],
-    ))
+    ))?;
+    Ok(reservation)
 }
 
 /// One staged Spec Ticket the publishing session proposed: its title, its

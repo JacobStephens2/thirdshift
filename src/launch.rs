@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::command_limit;
-pub use crate::command_limit::{AlreadyRunning, Sharing};
+pub use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::{IssueInput, IssueUrl, Repo};
@@ -348,9 +348,9 @@ pub enum Start {
 ///
 /// Once the preflight checks pass, the run is [`AlreadyRunning`], with
 /// nothing done, if its repository is at its Command `limit` on this
-/// machine, or busy for a run that keeps it to itself, as `sharing` says.
-/// Otherwise this process holds a slot there until it exits, through
-/// whatever it dispatches.
+/// machine, or, as `sharing` says, another Pass of its kind runs there.
+/// Otherwise this process holds a slot there, and the lock of its kind if it
+/// has one, until it exits, through whatever it dispatches.
 pub fn start(base: Option<&str>, limit: NonZeroUsize, sharing: Sharing) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;

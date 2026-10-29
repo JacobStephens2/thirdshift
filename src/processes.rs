@@ -14,11 +14,12 @@
 //! run, on the issue the session Step before it published.
 //!
 //! A Process started with no issue is a Pass, unless it declares an
-//! Issue-branch worktree, which needs an issue. A Pass keeps the repository
-//! to itself: it is skipped, before any worktree, while any other Command
-//! runs there. It does not take an Architect run's Ready-issue or
-//! Architect-idea gates. A Process started with an issue is not a Pass: it
-//! takes a slot toward the Command limit without counting.
+//! Issue-branch worktree, which needs an issue. Such a Pass is skipped,
+//! before any worktree, while its repository is at its Command limit, and
+//! takes no lock of a kind: it runs beside any other Pass up to the limit.
+//! It does not take an Architect run's Ready-issue or Architect-idea gates.
+//! A Process started with an issue is not a Pass: it takes a slot toward
+//! the Command limit without counting.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -552,7 +553,7 @@ fn run(command: &ProcessRun) -> Result<String> {
         match command_limit::hold_pass(
             &repo,
             config.command_limit,
-            command_limit::Sharing::Alone("a Custom process"),
+            command_limit::Sharing::UpToTheLimit,
         ) {
             Ok(Some(running)) => {
                 let reason = running.to_string();

@@ -19,6 +19,7 @@ use crate::security::reproduction::Reproduction;
 use anyhow::Result;
 
 use crate::asks::{Asks, Flags};
+use crate::command_limit::PassKind;
 use crate::config::UserConfig;
 use crate::github::{GitHub, Issue, ListedIssue};
 use crate::harness::Choice;
@@ -29,6 +30,7 @@ use crate::launch::{BaseBranch, LaunchDirectory};
 use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, PickupOrder, PriorityIssue, ReadyIssue};
+use crate::reservation::Reservation;
 use crate::run::{self, Ended, StartedBy};
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -59,6 +61,9 @@ pub enum Dispatch<'a> {
 /// its Harness, the Launch directory's pull, the Architecture review
 /// session, and the run it dispatches.
 pub trait Outside {
+    /// What holds an issue reserved on origin, released when it is
+    /// dropped.
+    type Reservation;
     /// Every open issue in the repository labelled `label`.
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
     /// Every closed issue in the repository labelled `label`.
@@ -67,6 +72,11 @@ pub trait Outside {
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
+    /// Reserve `issue`, which the pass published and is about to mark ready
+    /// and dispatch, on origin, as a Pickup run reserves the Ready issue it
+    /// takes, so an overlapping Pickup run passes it over. Fails if another
+    /// run holds it.
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Self::Reservation>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// The repository's Ready issue at `order`'s end of the issue numbers,
@@ -131,12 +141,14 @@ pub trait Outside {
         record: &SecurityRecord,
         reproduction: &Reproduction,
     ) -> Result<()>;
+    /// Publish the fix for `record`, its finding at `url`, and mark it
+    /// ready, having reserved it on origin first, as [`Self::reserve`] does.
     fn publish_security_fix(
         &mut self,
         base: &str,
         record: &SecurityRecord,
         url: &str,
-    ) -> (Result<IssueUrl>, Option<PathBuf>);
+    ) -> (Result<(IssueUrl, Self::Reservation)>, Option<PathBuf>);
     fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()>;
     /// Record the dispatch's ending in its private record, even after interruption.
     fn record_security_fix_ending(
@@ -191,6 +203,8 @@ pub struct LaunchAndGitHub<'a> {
 }
 
 impl Outside for LaunchAndGitHub<'_> {
+    type Reservation = Reservation;
+
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
         GitHub::new().open_issues_labelled(&self.repo.slug(), label)
     }
@@ -205,6 +219,10 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
         edit.apply(&GitHub::new())
+    }
+
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Reservation> {
+        Reservation::of_published(self.launch.git(), issue)
     }
 
     fn interrupted(&mut self) -> bool {
@@ -263,7 +281,12 @@ impl Outside for LaunchAndGitHub<'_> {
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let worktree = match ReviewWorktree::create(self.launch.git(), &self.repo.name, base) {
+        let worktree = match ReviewWorktree::create(
+            self.launch.git(),
+            &self.repo.name,
+            base,
+            PassKind::Architect,
+        ) {
             Ok(worktree) => worktree,
             Err(error) => return (Err(error), None),
         };
@@ -390,7 +413,7 @@ impl Outside for LaunchAndGitHub<'_> {
         base: &str,
         record: &SecurityRecord,
         url: &str,
-    ) -> (Result<IssueUrl>, Option<PathBuf>) {
+    ) -> (Result<(IssueUrl, Reservation)>, Option<PathBuf>) {
         logs::stage(logs::Stage::SecurityFixPublishing);
         crate::security::fixing::publish(
             self.launch.git(),
@@ -486,6 +509,8 @@ mod in_memory {
         Closed(&'static str),
         /// They viewed this issue.
         View(u64),
+        /// They reserved this issue on origin.
+        Reserve(u64),
         /// They applied an Edit to this issue, taking `off` off it and
         /// putting `on` on it, which leaves it with `labels`.
         Edit {
@@ -587,6 +612,8 @@ mod in_memory {
         closed_listing_fails: bool,
         /// The number of each issue an Edit to fails.
         failing_edits: Vec<u64>,
+        /// The number of each issue another run holds reserved on origin.
+        reserved_elsewhere: Vec<u64>,
         /// The Ready issue search's answers: each issue, and whether it is
         /// a Spec. A search takes the first in its order.
         ready: Vec<(ListedIssue, bool)>,
@@ -626,6 +653,7 @@ mod in_memory {
                 interrupted: false,
                 closed_listing_fails: false,
                 failing_edits: Vec::new(),
+                reserved_elsewhere: Vec::new(),
                 ready: Vec::new(),
                 harness_failing: false,
                 node_failing: false,
@@ -697,6 +725,12 @@ mod in_memory {
         /// Make an Edit to issue `number` fail.
         pub fn edit_failing(mut self, number: u64) -> Self {
             self.failing_edits.push(number);
+            self
+        }
+
+        /// Have another run hold issue `number` reserved on origin.
+        pub fn reserved_elsewhere(mut self, number: u64) -> Self {
+            self.reserved_elsewhere.push(number);
             self
         }
 
@@ -806,6 +840,8 @@ mod in_memory {
     }
 
     impl Outside for InMemory {
+        type Reservation = ();
+
         fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
             self.calls.push(Call::Open(label.name()));
             Ok(self.labelled(label, true))
@@ -844,6 +880,14 @@ mod in_memory {
             });
             if self.failing_edits.contains(&edit.issue().number) {
                 bail!("gh: could not edit #{}", edit.issue().number);
+            }
+            Ok(())
+        }
+
+        fn reserve(&mut self, issue: &IssueUrl) -> Result<()> {
+            self.calls.push(Call::Reserve(issue.number));
+            if self.reserved_elsewhere.contains(&issue.number) {
+                bail!("#{} is already reserved on origin", issue.number);
             }
             Ok(())
         }
@@ -1059,10 +1103,13 @@ mod in_memory {
             _base: &str,
             record: &SecurityRecord,
             _url: &str,
-        ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        ) -> (Result<(IssueUrl, ())>, Option<PathBuf>) {
             self.calls.push(Call::PublishSecurityFix(record.name()));
             (
-                Ok(IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap()),
+                Ok((
+                    IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap(),
+                    (),
+                )),
                 self.session_log.clone(),
             )
         }

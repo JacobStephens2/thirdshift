@@ -43,8 +43,13 @@ uncertain push result or failed release names the ref and token for recovery.
 ## Consequences
 
 - All Pickup hosts must run a version that honors reservations. Direct Issue URL
-  commands and other Pass kinds keep their existing behavior; this decision
-  arbitrates competing Pickup runs, not every possible writer.
+  commands keep their existing behavior; this decision arbitrates competing
+  Pickup runs, not every possible writer. Since Passes of different kinds
+  share a repository up to its Command limit, an Architect run takes the same
+  reservation for the plan it dispatches, and a Security run for its fix,
+  before marking it `ready-for-agent`, and releases it the same way, so an
+  overlapping Pickup run passes it over (amended 2026-10-28, #1572). One that
+  finds the ref already held fails, changing no label.
 - A crashed host can block an otherwise Ready issue until the Day shift confirms
   it stopped and deletes its reservation with the observed commit as the lease.
   Read the commit message for host, launch path, process, start time and token.

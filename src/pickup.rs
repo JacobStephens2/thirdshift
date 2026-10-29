@@ -3,12 +3,12 @@
 //! repository, saying why it passed over each issue labelled
 //! `ready-for-agent` before it, then that issue dispatched as a Spec run or
 //! a Run. One started while its repository is at its Command limit on this
-//! machine, or while a Pass that keeps the repository to itself runs, is
-//! skipped, before any search. One that runs first makes the Sweep, takes
-//! `agent-failed` off each open issue the Day shift has acted on, and is then
-//! skipped if it finds the repository at its Failure limit, or with no Ready
-//! issue it can reserve: one another Pickup run reserved, or whose selection
-//! went stale, is passed over for the next.
+//! machine is skipped, before any search. One that runs first makes the
+//! Sweep, takes `agent-failed` off each open issue the Day shift has acted
+//! on, and is then skipped if it finds the repository at its Failure limit,
+//! or with no Ready issue it can reserve: one another run reserved, a Pickup
+//! run, or an Architect run or Security run dispatching its own plan or fix,
+//! or whose selection went stale, is passed over for the next.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -26,9 +26,8 @@ use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::ready::{PickupOrder, ReadyIssue};
+use crate::reservation::Reservation;
 use crate::run::Ended;
-
-mod reservation;
 
 /// How a Pickup run ended, short of a failure.
 pub enum Outcome {
@@ -125,11 +124,11 @@ fn write_numbers(f: &mut fmt::Formatter, numbers: &[u64]) -> fmt::Result {
     Ok(())
 }
 
-/// The line on Ready issue `number`, passed over because another Pickup run
+/// The line on Ready issue `number`, passed over because another run
 /// reserved it or it ceased to be Ready once reserved.
 fn unreservable(number: u64) -> String {
     format!(
-        "#{number} is reserved by another Pickup run or is no longer Ready; \
+        "#{number} is reserved by another run or is no longer Ready; \
          check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved"
     )
 }
@@ -144,8 +143,8 @@ fn unreservable(number: u64) -> String {
 /// Launch directory's checkout, nor on the issue taken: the run it is
 /// dispatched as makes the Claim. An auxiliary origin ref reserves the
 /// issue across hosts before dispatch; a stale Ready selection is rechecked
-/// while it is held. An issue another Pickup run reserved, or whose selection
-/// went stale, is passed over for the next Ready issue in `order`.
+/// while it is held. An issue another run reserved, or whose selection went
+/// stale, is passed over for the next Ready issue in `order`.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if its repository is at `config`'s Command limit on this machine.
@@ -195,9 +194,7 @@ pub fn run(
         config.pickup_failure_limit,
         order,
         |ready| {
-            let Some(reservation) =
-                reservation::Reservation::take(directory.git(), &ready.listed.issue)?
-            else {
+            let Some(reservation) = Reservation::take(directory.git(), &ready.listed.issue)? else {
                 return Ok(None);
             };
             Ok(
@@ -213,7 +210,7 @@ fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<
     let Some(failure) = github.base_ci_failure(repo, base)? else {
         return Ok(());
     };
-    let Some(_reservation) = reservation::Reservation::ci_red(git)? else {
+    let Some(_reservation) = Reservation::ci_red(git)? else {
         return Ok(());
     };
     if let Some(issue) = github.file_ci_red_ticket(repo, failure)? {

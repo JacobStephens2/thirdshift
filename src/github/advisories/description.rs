@@ -137,8 +137,9 @@ impl<'a> Description<'a> {
     }
 
     pub(super) fn failed_fix(&self) -> Result<Option<IssueUrl>> {
-        // A Security run keeps its repository to itself, which rules out an
-        // active dispatch here. Pending also means
+        // A Security run reads this holding the lock of its kind, so no other
+        // Security run on the machine, the only Command that writes pending,
+        // is still dispatching this fix. Pending also means
         // failed/incomplete until a successful ending is recorded.
         if matches!(
             self.fix_status(),

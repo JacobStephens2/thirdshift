@@ -43,7 +43,9 @@ impl AcquisitionKind {
             Self::ContinuationAbsent | Self::ContinuationEqual => {
                 Worktree::continue_existing(launch, "work", BRANCH, "main").map(drop)
             }
-            Self::Review => ReviewWorktree::create(launch, "work", "main").map(drop),
+            Self::Review => {
+                ReviewWorktree::create(launch, "work", "main", PassKind::Architect).map(drop)
+            }
         }
     }
 
@@ -844,7 +846,7 @@ fn interrupted_add(test_name: &str, kind: AcquisitionKind, work: &str) {
         let git = Git::new(&path);
         let head = git.run(&["rev-parse", "HEAD"]).unwrap();
         let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1346,7 +1348,7 @@ fn acquisition_pins_origin_even_when_local_branches_shadow_remote_tracking_names
     assert_eq!(fresh.head().unwrap(), base_head);
     drop(fresh);
 
-    let review = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let review = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     assert_eq!(
         Git::new(review.path()).run(&["rev-parse", "HEAD"]).unwrap(),
         base_head
@@ -1417,7 +1419,7 @@ fn a_review_retry_preserves_work_retained_after_a_failed_hook() {
 #[test]
 fn a_review_retry_recovers_successful_scratch_and_detached_commits() {
     let (temp, launch) = super::tests::launch_directory();
-    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     let path = owner.path().to_path_buf();
     let git = Git::new(&path);
     std::fs::write(path.join("experiment.txt"), "disposable experiment\n").unwrap();
@@ -1430,7 +1432,7 @@ fn a_review_retry_recovers_successful_scratch_and_detached_commits() {
     let refs = launch.run(&["show-ref"]).unwrap();
     std::mem::forget(owner);
 
-    let next = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let next = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
 
     assert!(!next.path().join("experiment.txt").exists());
     assert!(!next.path().join("scratch.txt").exists());
@@ -1455,6 +1457,33 @@ fn a_review_retry_recovers_successful_scratch_and_detached_commits() {
             .unwrap(),
         launch.run(&["rev-parse", "main"]).unwrap()
     );
+}
+
+#[test]
+fn an_architect_run_and_a_security_run_review_in_worktrees_of_their_own_neither_disposing_of_the_other()
+ {
+    let (_temp, launch) = super::tests::launch_directory();
+    let architect = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
+    std::fs::write(architect.path().join("review.txt"), "live review\n").unwrap();
+
+    let security = ReviewWorktree::create(&launch, "work", "main", PassKind::Security).unwrap();
+
+    assert!(security.path().ends_with("work-security"));
+    assert!(architect.path().ends_with("work-architect"));
+    assert_eq!(
+        std::fs::read_to_string(architect.path().join("review.txt")).unwrap(),
+        "live review\n"
+    );
+    let audit = security.path().to_path_buf();
+    std::mem::forget(security);
+    drop(architect);
+    // The next Architect run's stale disposal leaves the Security run's
+    // worktree alone, and only the next Security run's removes it.
+    let next = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
+    assert!(audit.exists());
+    drop(next);
+    drop(ReviewWorktree::create(&launch, "work", "main", PassKind::Security).unwrap());
+    assert!(!audit.exists());
 }
 
 #[test]

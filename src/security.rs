@@ -12,7 +12,7 @@ use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
 use crate::issue::Repo;
-use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
+use crate::launch::{self, AlreadyRunning, Launch, PassKind, Sharing, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
@@ -148,7 +148,11 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base, config.command_limit, Sharing::Alone("a Security run")) {
+    } = match launch::start(
+        base,
+        config.command_limit,
+        Sharing::OneOfAKind(PassKind::Security),
+    ) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
             logs::skipped(Pass::Security, &running.repo, &running);
@@ -267,7 +271,9 @@ fn fix(
         outside.started(Work::SecurityRun(repo));
         let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
         log = session_log;
-        let issue = published?;
+        // Held through the dispatched run's ending, then released, as a
+        // Pickup run releases the Ready issue it took.
+        let (issue, _reservation) = published?;
         outside.link_security_fix(&record, &issue)?;
         let mut ended = outside.dispatch(crate::pass::Dispatch::SecurityFix {
             issue: &issue,
