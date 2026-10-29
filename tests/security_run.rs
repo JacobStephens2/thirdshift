@@ -5128,9 +5128,9 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
 #[test]
 fn review_acquisition_failure_is_pre_audit() {
     let scenario = Scenario::new();
-    fs::create_dir(scenario.path("work/widgets-architect")).unwrap();
+    fs::create_dir(scenario.path("work/widgets-security")).unwrap();
     fs::write(
-        scenario.path("work/widgets-architect/keep.txt"),
+        scenario.path("work/widgets-security/keep.txt"),
         "unowned user work",
     )
     .unwrap();
