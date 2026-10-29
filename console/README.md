@@ -40,6 +40,12 @@ The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
 session admission decision, also available with `thirdshift resources --json`.
 Reload to refresh it. Set `[resources] min_available_memory_mb` and
 `max_load_per_cpu_percent` in User config; zero disables each limit.
+Below the notification control on every reader page, a host indicator shows
+whether another session can start under those limits. It refreshes every ten
+seconds while the page is visible and links to Resources for measurements and
+blocking reasons. With both limits disabled it says **Host limits off**; a
+failed read says **Host resources unavailable**. Without JavaScript, reload
+the page to refresh the indicator. This is a snapshot, not reserved capacity.
 
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
