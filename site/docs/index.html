@@ -957,6 +957,14 @@ Session traces contribute minutes only.</p>
 <details class="fold"><summary><h3>Host resources</h3></summary>
 <div class="manual-content" id="host-resources">
 <p><code>thirdshift resources</code> (or <code>thirdshift resources --json</code>) reports this host&#39;s available and total RAM in MB (1,000,000 bytes), logical CPU count, one-minute load average, configured limits and whether another session may start. The Console&#39;s <strong>Resources</strong> page shows the same snapshot; reload to update it.</p>
+<p>Every Console reader page also shows the host&#39;s session admission status below
+the notification control in the top right. It links to Resources and refreshes
+every ten seconds while the page is visible. <strong>Host ready for another session</strong>
+means the configured limits currently pass; <strong>Host busy · new sessions wait</strong>
+means a limit blocks new sessions. <strong>Host limits off</strong> means neither limit is
+configured, and <strong>Host resources unavailable</strong> means the status could not be
+read. Without JavaScript, reload to refresh it. This indicator checks host
+resources only; it does not reserve capacity or check repository Pass gates.</p>
 <p>Set <code>[resources]</code> in <code>~/.thirdshift/config.toml</code> to delay new sessions when this machine is busy:</p>
 <pre><code class="language-toml">[resources]
 min_available_memory_mb = 2048

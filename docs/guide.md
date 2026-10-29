@@ -992,6 +992,15 @@ Uncommitted changes in your clone are fine: the Ticket run works in its own work
 
 `thirdshift resources` (or `thirdshift resources --json`) reports this host's available and total RAM in MB (1,000,000 bytes), logical CPU count, one-minute load average, configured limits and whether another session may start. The Console's **Resources** page shows the same snapshot; reload to update it.
 
+Every Console reader page also shows the host's session admission status below
+the notification control in the top right. It links to Resources and refreshes
+every ten seconds while the page is visible. **Host ready for another session**
+means the configured limits currently pass; **Host busy · new sessions wait**
+means a limit blocks new sessions. **Host limits off** means neither limit is
+configured, and **Host resources unavailable** means the status could not be
+read. Without JavaScript, reload to refresh it. This indicator checks host
+resources only; it does not reserve capacity or check repository Pass gates.
+
 Set `[resources]` in `~/.thirdshift/config.toml` to delay new sessions when this machine is busy:
 
 ```toml
