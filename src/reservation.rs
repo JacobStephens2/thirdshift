@@ -21,7 +21,7 @@ impl Reservation {
     /// lease. Existing reservations are never adopted, expired or overwritten.
     /// Errors with an uncertain remote outcome retain the ref for recovery.
     pub fn take(launch: &Git, issue: &IssueUrl) -> Result<Option<Self>> {
-        Self::take_ref(launch, reference(issue), &issue.url)
+        Self::take_ref(launch, reference(issue.number), &issue.url)
     }
 
     /// Reserve `issue`, which this run published and is about to mark
@@ -33,7 +33,7 @@ impl Reservation {
             format!(
                 "#{} is already reserved on origin, at {}",
                 issue.number,
-                reference(issue)
+                reference(issue.number)
             )
         })
     }
@@ -98,9 +98,9 @@ impl Reservation {
     }
 }
 
-/// The ref that reserves `issue` on origin.
-fn reference(issue: &IssueUrl) -> String {
-    format!("refs/heads/thirdshift/pickup/{}", issue.number)
+/// The ref that reserves issue `number` on origin.
+pub fn reference(number: u64) -> String {
+    format!("refs/heads/thirdshift/pickup/{number}")
 }
 
 impl Drop for Reservation {

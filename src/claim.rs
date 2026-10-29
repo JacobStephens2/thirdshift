@@ -334,12 +334,13 @@ impl<'a> Claimed<'a> {
             self.needs_info(outside);
             return;
         }
-        if let Some(ending) = outside.stop() {
-            self.stopped(outside, ending);
+        if let Some(stop) = outside.stop() {
+            self.stopped(outside, stop);
             return;
         }
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
+            // A NotReproduced ending was dealt with above.
             Ending::Reached(Goal::ReadyForReview) | Ending::Held | Ending::NotReproduced => {}
             Ending::Failed if self.security_fix => self.label_failed(outside),
             Ending::Failed => {

@@ -3263,13 +3263,15 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     let first = first.finish();
     assert!(resend.requests().is_empty());
     assert_eq!(first.code, Some(0), "{}", first.stderr);
-    for skipped in [second, pickup] {
+    for (skipped, reason) in [
+        (second, "a Security run is already running on acme/widgets"),
+        (
+            pickup,
+            "at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1",
+        ),
+    ] {
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
-        assert!(
-            skipped.stderr.contains("another Pass is already running"),
-            "{}",
-            skipped.stderr
-        );
+        assert!(skipped.stderr.contains(reason), "{}", skipped.stderr);
         assert!(
             !skipped.stderr.contains("Ready issue"),
             "{}",
@@ -3285,7 +3287,7 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     );
     let log = fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
         .unwrap();
-    assert!(log.contains("Security run skipped: another Pass is already running"));
+    assert!(log.contains("Security run skipped: a Security run is already running"));
 }
 
 /// Link the git on `PATH` into the scenario's `bin`, for a test that runs

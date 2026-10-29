@@ -3025,13 +3025,15 @@ fn a_missing_issue_value_or_extra_argument_is_a_usage_error() {
     }
 }
 
-/// What a skipped Pass says when another Pass is running on the scenario's
-/// repository. The same words a skipped Pickup run uses.
-const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+/// What a skipped Pass says when one other Command is running on the
+/// scenario's repository, at the default Command limit. The same words a
+/// skipped Pickup run uses.
+const AT_THE_COMMAND_LIMIT: &str = "thirdshift: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1\n";
 
 /// The reason kept on the Command record and in the Activity log, without
 /// the progress prefix.
-const ALREADY_RUNNING_REASON: &str = "another Pass is already running on acme/widgets";
+const AT_THE_COMMAND_LIMIT_REASON: &str =
+    "at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1";
 
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`.
@@ -3133,7 +3135,7 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
     assert_eq!(result.stdout, "");
     assert_eq!(
         after_start(&result.stderr, "Process review starting"),
-        ALREADY_RUNNING
+        AT_THE_COMMAND_LIMIT
     );
     assert!(!marker.exists(), "the step ran");
     assert_eq!(scenario.entries("work"), work);
@@ -3142,7 +3144,7 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
     let record = process_record(&scenario);
     assert_eq!(record["kind"], "Process");
     assert_eq!(record["outcome"], "skipped");
-    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    assert_eq!(record["cause"], AT_THE_COMMAND_LIMIT_REASON);
     assert!(
         record["name"]
             .as_str()
@@ -3152,9 +3154,11 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
         record["name"]
     );
     let (_, log) = command_log(&scenario);
-    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(log.contains(AT_THE_COMMAND_LIMIT_REASON), "{log}");
     assert!(
-        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        activity(&scenario).contains(&format!(
+            "Process review skipped: {AT_THE_COMMAND_LIMIT_REASON}"
+        )),
         "{}",
         activity(&scenario)
     );
@@ -3177,7 +3181,7 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
     assert_eq!(skipped.stdout, "");
     assert_eq!(
         after_start(&skipped.stderr, "Pickup run starting"),
-        ALREADY_RUNNING
+        AT_THE_COMMAND_LIMIT
     );
     assert!(scenario.claude_calls().is_empty(), "a session started");
     assert_eq!(scenario.gh_state(), github);
@@ -3268,7 +3272,7 @@ fn a_process_started_with_an_issue_runs_while_a_pickup_run_holds_the_repository(
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "ran\n");
     assert!(
-        !result.stderr.contains("another Pass is already running"),
+        !result.stderr.contains("at the Command limit"),
         "{}",
         result.stderr
     );
@@ -3295,7 +3299,7 @@ fn a_process_with_an_issue_fills_a_slot_so_a_pickup_run_runs_beside_it_only_abov
             assert_eq!(pickup.stdout, "");
             assert_eq!(
                 after_start(&pickup.stderr, "Pickup run starting"),
-                ALREADY_RUNNING
+                AT_THE_COMMAND_LIMIT
             );
             assert!(
                 scenario.claude_calls().is_empty(),
@@ -3337,7 +3341,7 @@ fn a_process_with_no_issue_does_not_stop_for_a_ready_issue_or_an_architect_idea(
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "ran\n");
     assert!(
-        !result.stderr.contains("another Pass is already running"),
+        !result.stderr.contains("at the Command limit"),
         "{}",
         result.stderr
     );
@@ -3375,11 +3379,13 @@ fn a_quiet_skip_of_a_process_with_no_issue_prints_nothing_and_keeps_the_record()
     assert!(!marker.exists(), "the step ran");
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "skipped");
-    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    assert_eq!(record["cause"], AT_THE_COMMAND_LIMIT_REASON);
     let (_, log) = command_log(&scenario);
-    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(log.contains(AT_THE_COMMAND_LIMIT_REASON), "{log}");
     assert!(
-        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        activity(&scenario).contains(&format!(
+            "Process review skipped: {AT_THE_COMMAND_LIMIT_REASON}"
+        )),
         "{}",
         activity(&scenario)
     );

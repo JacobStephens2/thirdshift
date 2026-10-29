@@ -374,8 +374,8 @@ fn main() -> ExitCode {
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session trace on stderr. One that is
-/// skipped says why on stderr, and is no failure: as another Command on its
-/// repository is still running, it puts nothing on stdout,
+/// skipped says why on stderr, and is no failure: at the Command limit, or
+/// as another Architect run is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
 /// triage there, the URL of each, or as it has a Ready issue, that issue's
 /// URL. If asked, by the command or the User config, it sends one Run

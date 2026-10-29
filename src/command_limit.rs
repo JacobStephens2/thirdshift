@@ -88,11 +88,6 @@ enum Why {
 impl fmt::Display for AlreadyRunning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (repo, limit) = (self.repo.slug(), self.limit);
-        // At the default limit every skip says what it said when one Pass at
-        // a time held the repository.
-        if limit.get() == 1 {
-            return write!(f, "another Pass is already running on {repo}");
-        }
         match self.why {
             Why::AtLimit { running } => write!(
                 f,

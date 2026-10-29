@@ -17,16 +17,17 @@ use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::claim;
+use crate::command_limit::{AlreadyRunning, Sharing};
 use crate::config::UserConfig;
 use crate::github::{GitHub, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{self, Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
-use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
+use crate::launch::{self, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::ready::{PickupOrder, ReadyIssue};
-use crate::reservation::Reservation;
+use crate::reservation::{self, Reservation};
 use crate::run::Ended;
 
 /// How a Pickup run ended, short of a failure.
@@ -51,8 +52,8 @@ pub struct Took {
 /// Why a Pickup run was skipped. Its `Display` is the reason, as the skipped
 /// run's one line gives it.
 pub enum Skipped {
-    /// Another Pass on this repository is still
-    /// running on this machine, the Spec run or Run it dispatched included.
+    /// The repository is at its Command limit on this machine, each Pass's
+    /// dispatched Spec run or Run counted as part of it.
     AlreadyRunning(AlreadyRunning),
     /// The repository is at its Failure limit: `failed` lists the open
     /// issues labelled `agent-failed` that still wait for the Day shift,
@@ -66,7 +67,7 @@ pub enum Skipped {
     /// The repository has no Ready issue.
     NoReadyIssue(Repo),
     /// Each Ready issue it found, `tried` in its order, was reserved by
-    /// another Pickup run or ceased to be Ready once reserved, and none is
+    /// another run or ceased to be Ready once reserved, and none is
     /// left past them.
     NoneReservable { repo: Repo, tried: Vec<u64> },
 }
@@ -96,7 +97,7 @@ impl fmt::Display for Skipped {
                 f.write_str("; check ")?;
                 for (index, number) in tried.iter().enumerate() {
                     let separator = if index == 0 { "" } else { ", " };
-                    write!(f, "{separator}refs/heads/thirdshift/pickup/{number}")?;
+                    write!(f, "{separator}{}", reservation::reference(*number))?;
                 }
                 let stays = if tried.len() == 1 {
                     "it stays"
@@ -129,7 +130,8 @@ fn write_numbers(f: &mut fmt::Formatter, numbers: &[u64]) -> fmt::Result {
 fn unreservable(number: u64) -> String {
     format!(
         "#{number} is reserved by another run or is no longer Ready; \
-         check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved"
+         check {} on origin if it stays reserved",
+        reservation::reference(number)
     )
 }
 

@@ -1003,7 +1003,7 @@ max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load pe
 command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
 
 [pickup]
-failure_limit = 3   # how many open issues labelled agent-failed, failures waiting for you, stop a Pickup run taking another; default 3
+failure_limit = 3   # how many open issues the factory failed on stop a Pickup run taking another; default 3
 wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::command_limit;
-pub use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
+use crate::command_limit::{AlreadyRunning, Sharing};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::{IssueInput, IssueUrl, Repo};

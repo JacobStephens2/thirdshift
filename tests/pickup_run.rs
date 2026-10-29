@@ -1790,9 +1790,9 @@ fn an_origin_that_is_not_on_github_stops_the_pass_before_any_label_changes() {
     );
 }
 
-/// What a skipped Pickup run or Architect run says when another of either is
-/// running on the scenario's repository.
-const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+/// What a skipped Pickup run or Architect run says when one other Command is
+/// running on the scenario's repository, at the default Command limit.
+const AT_THE_COMMAND_LIMIT: &str = "thirdshift: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1\n";
 
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`, or until the scenario is
@@ -1821,7 +1821,7 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(result.stdout, "");
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(scenario.gh_state(), github);
@@ -1852,7 +1852,7 @@ fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_ru
         assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
         assert_eq!(
             support::after_start(&skipped.stderr, starting),
-            ALREADY_RUNNING,
+            AT_THE_COMMAND_LIMIT,
             "{second}"
         );
         assert_eq!(skipped.stdout, "");
@@ -2011,7 +2011,7 @@ fn a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_t
     let skipped = scenario.run(&["pickup"]);
 
     assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
     release_issue(&scenario, 5);
     let by_hand = by_hand.finish();
@@ -2025,6 +2025,23 @@ fn a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_t
     );
     let next = scenario.run(&["pickup"]);
     assert_ended_with_pr(&next, &pr_from(&scenario, "issue-9"), "ready for review");
+}
+
+#[test]
+fn at_the_default_command_limit_a_pass_beside_a_hand_started_ticket_run_names_the_count_and_limit()
+{
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.issue_is(5, "OPEN");
+    scenario.agent_does_for(5, &agent_waits_on_its_own_then_opens_pr(5));
+    let by_hand = scenario.run_until(&[&scenario.issue_url(5)], &[], "started-5");
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
+    release_issue(&scenario, 5);
+    by_hand.finish();
 }
 
 #[test]
@@ -2072,7 +2089,7 @@ fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_
     let skipped = scenario.run(&["pickup"]);
 
     assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     drop(old_pass);
     let pickup = scenario.run_until(&["pickup"], &[], "started-7");
@@ -2480,7 +2497,7 @@ fn a_pass_skipped_for_the_lock_sends_no_notification() {
     let skipped = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
 
     assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(skipped.stdout, "");
     release(&scenario);
     first.finish();
@@ -2883,7 +2900,7 @@ fn the_sweep_does_not_run_on_a_pass_skipped_for_the_lock() {
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
     release(&scenario);
     architect.finish();

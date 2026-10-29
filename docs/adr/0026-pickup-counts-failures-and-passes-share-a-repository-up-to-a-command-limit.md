@@ -6,7 +6,7 @@ A **Pickup run** used to stop at its Claim limit: `pickup.limit` open issues lab
 
 So a Pickup run now counts only the issues the factory failed on: the **Failure limit**, `pickup.failure_limit`, 3 by default. When a **Failed ticket run** or a **Failed spec run** keeps its Claim, whatever started it, thirdshift labels the issue `agent-failed`. A pull request that is ready for review or merged never counts. The label comes off when the Day shift acts on the failure: by putting `ready-for-agent` back, by taking `in-progress` off, leaving no `needs-triage`, to take the issue over, or by closing it, which the **Sweep** clears. The issue's next Claim takes it off too.
 
-How many Commands may run at once on one repository becomes a setting of its own, the **Command limit**, `[pass] command_limit`, 1 by default. A **Pass** is skipped while that many Commands on its repository are running on the machine. A Command a person starts on an **Issue URL** counts towards it but is never refused. Later Tickets of #1564 build this.
+How many Commands may run at once on one repository becomes a setting of its own, the **Command limit**, `[pass] command_limit`, 1 by default. A **Pass** is skipped while that many Commands on its repository are running on the machine. A Command a person starts on an **Issue URL** counts towards it but is never refused.
 
 Decided in `docs/grill-with-docs/1532-keep-working-the-backlog.md`: Q1.1, Q1.2, Q2.1, Q2.2, Q2.3, Q2.5, Q3.1, Q3.3 and Q3.4.
 

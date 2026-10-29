@@ -1045,8 +1045,8 @@ to = \"me@example.com\"  # my inbox
         );
         assert!(
             completed.contains(
-                "\n[pickup]\nfailure_limit = 3   # how many open issues labelled agent-failed, \
-                 failures waiting for you, stop a Pickup run taking another; default 3\n"
+                "\n[pickup]\nfailure_limit = 3   # how many open issues the factory failed on \
+                 stop a Pickup run taking another; default 3\n"
             ),
             "{completed}"
         );
