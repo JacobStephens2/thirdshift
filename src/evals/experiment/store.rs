@@ -212,6 +212,14 @@ impl Stored {
                     .causes
                     .clone_from(&stored.description.bar.void_rules.causes);
             }
+            let stored_levels = stored.description.bar.levels;
+            if description.bar.levels.pass() == stored_levels.pass()
+                && description.bar.levels.fail() == stored_levels.fail()
+            {
+                // Equivalent CLI settings resume the original method and JSON,
+                // including a single-level Bar or ADR-0024's pass rule.
+                description.bar.levels = stored_levels;
+            }
             if stored.description.bar != description.bar {
                 ensure!(!started, "Bar cannot change after the first Trial");
                 stored.description.bar = description.bar;
@@ -296,11 +304,30 @@ impl Stored {
     }
 
     fn upgrade_verdict(&mut self) -> Result<()> {
+        let missing_flip_verdicts = self
+            .pending_rechecks
+            .iter()
+            .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
+        if matches!(
+            self.description.bar.levels,
+            crate::verdict::Levels::Legacy { .. }
+        ) && self.verdict.is_some()
+        {
+            // A saved single-level Verdict is evidence, not an invitation to
+            // recalculate it under a newer runner's recheck policy.
+            if self.state == State::Completed && missing_flip_verdicts {
+                let (_, pending) =
+                    super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
+                self.pending_rechecks = pending;
+            }
+            return Ok(());
+        }
         if self.state == State::Completed
-            && self
+            && (self
                 .verdict
                 .as_ref()
-                .is_none_or(|verdict| verdict.provisional_verdict.is_none())
+                .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
+                || missing_flip_verdicts)
         {
             self.refresh_verdict()?;
         }
@@ -364,7 +391,9 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
+                "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
+Baseline: {}
+Candidate: {}{}",
                 self.description.id,
                 view.name,
                 self.state,
@@ -375,6 +404,14 @@ impl Stored {
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome())
                     .replace('_', " "),
+                self.verdict
+                    .as_ref()
+                    .map(super::grading::Verdict::worse_within_margin_metrics)
+                    .filter(|metrics| !metrics.is_empty())
+                    .map_or(String::new(), |metrics| format!(
+                        " ({}: worse, within the margin)",
+                        metrics.join(", ")
+                    )),
                 view.minutes.baseline,
                 view.usage.baseline(),
                 view.minutes.candidate,
