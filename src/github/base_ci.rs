@@ -87,17 +87,20 @@ fn failing_test_name(line: &str) -> Option<&str> {
 }
 
 fn mentions_test(text: &str, test: &str) -> bool {
-    let name_character =
-        |character: char| character.is_alphanumeric() || "_:/-".contains(character);
+    fn continues_name(mut characters: impl Iterator<Item = char>) -> bool {
+        let name_character =
+            |character: char| character.is_alphanumeric() || "_:/-".contains(character);
+        match characters.next() {
+            // An internal dot joins an identifier; a sentence's final period
+            // still delimits a test named in prose.
+            Some('.') => characters.next().is_some_and(name_character),
+            Some(character) => name_character(character),
+            None => false,
+        }
+    }
     text.match_indices(test).any(|(start, _)| {
-        text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|character| !name_character(character))
-            && text[start + test.len()..]
-                .chars()
-                .next()
-                .is_none_or(|character| !name_character(character))
+        !continues_name(text[..start].chars().rev())
+            && !continues_name(text[start + test.len()..].chars())
     })
 }
 

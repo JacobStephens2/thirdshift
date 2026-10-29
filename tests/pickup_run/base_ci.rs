@@ -259,6 +259,24 @@ fn node_failure_summary_does_not_make_different_tests_duplicates() {
 }
 
 #[test]
+fn dotted_node_test_names_do_not_cover_a_different_test() {
+    let scenario = Scenario::new();
+    passed_rerun(&scenario);
+    let mut state = scenario.gh_state();
+    state["job_logs"]["901"] = json!("✖ render (123.45ms)\n");
+    state["titles"]["7"] = json!("Flaky CI on main: console-test");
+    state["bodies"]["7"] = json!("✖ render.details (12.34ms)\n");
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.gh_state()["titles"]["8"],
+        "Flaky CI on main: Rust (Linux)"
+    );
+}
+
+#[test]
 fn pickup_reads_origin_and_the_named_base_and_can_take_the_ticket_normally() {
     let scenario = Scenario::new();
     failed_push(&scenario);
