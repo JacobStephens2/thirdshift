@@ -65,6 +65,16 @@ issue_url = "https://github.com/acme/widgets/issues/7"
 base = "main"
 branch = "issue-7"
 pr_url = "https://github.com/acme/widgets/pull/1"
+
+# Optional; written by experiments <id> --record-difficulty.
+[difficulty]
+passes = 4
+trials = 6
+experiment = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+commit = "3333333333333333333333333333333333333333"
+harness = "claude"
+model = "opus"
+effort = "high"
 ```
 
 - `state` is `proposed` or `approved`. Proposals are listed with their state and
@@ -75,6 +85,22 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   It starts no work and affects future Experiments only; an existing
   Experiment keeps its fixed Eval tasks, including when resumed.
 - `session` is `code-review` or `spec-review`.
+- `difficulty` is an optional, replaceable A/A reading: passes and non-void
+  Trials pooled across both Arms, with the Experiment ID and its identical
+  commit, Harness, Model and Effort. `model` and `effort` are omitted when the
+  Experiment left them to the Harness's defaults. Passes cannot exceed Trials.
+  A missing table, or fewer than 6 Trials, means **unmeasured**. A measured Eval
+  task is **discriminating** when passes / Trials is in the inclusive band
+  0.15–0.95. These are constants of the method, not Bar settings.
+  `thirdshift experiments <id> --record-difficulty [--json]` records every Eval
+  task from a completed A/A Experiment, leaving Void Trials and retry attempts
+  out of both counts and using the latest rechecked Scores. It refuses an
+  unfinished Experiment or differing Arms before writing any manifest. Each
+  manifest is replaced atomically, preserving the rest of its contents, under
+  the same exclusive suite lock as approval. Re-recording replaces the previous
+  table. This changes neither the saved Experiment nor its Verdict.
+  `thirdshift evals` (also `evals list`, optionally `--json`) lists the table or
+  `null`, plus `measured` and `discriminating` booleans for each Eval task.
 - `repository` names a local Git repository holding both commits, absolute or
   relative to the Eval task's folder. Preparation never fetches from the network.
 - `base` and `change` are full commit object IDs (SHA-1 or SHA-256). The base must

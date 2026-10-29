@@ -1699,11 +1699,12 @@ test('Command details keeps its fallback selection across a live refresh', { ski
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
     await row.locator('.state').click();
     await page.locator('#peek [data-live="true"]').waitFor();
-    await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+    const line = page.locator('#peek .peek-cli').filter({ hasText: 'thirdshift show' });
+    await line.getByRole('button', { name: 'Copy CLI', exact: true }).click();
     await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
     const cli = await page.evaluate(() => getSelection().toString());
     assert.match(cli, /^thirdshift show '.*' --json$/);
-    const before = await page.locator('#peek .peek-cli').elementHandle();
+    const before = await line.elementHandle();
     await appendFile(session, traceRecord(' growth'));
     await appendFile(join(dir, '203-fixture.log'), ' more');
     await page.waitForFunction(old => !old.isConnected, before, { timeout: 5000 });
