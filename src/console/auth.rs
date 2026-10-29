@@ -278,16 +278,19 @@ struct AccountPage {
     csrf: String,
     signed_in: bool,
     theme: String,
+    resources: super::resources::Status,
 }
 
 pub(super) async fn account(Extension(viewer): Extension<Viewer>) -> Response {
     super::page(
         tokio::task::spawn_blocking(move || -> Result<String> {
+            let config = UserConfig::load()?;
             Ok(AccountPage {
                 email: viewer.email,
                 csrf: viewer.csrf,
                 signed_in: viewer.token.is_some(),
-                theme: UserConfig::load()?.console.theme,
+                resources: super::resources::Status::new(&config),
+                theme: config.console.theme,
             }
             .render()?)
         })
@@ -318,14 +321,17 @@ pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
 struct LogPage {
     events: Vec<accounts::Event>,
     theme: String,
+    resources: super::resources::Status,
 }
 
 pub(super) async fn log() -> Response {
     super::page(
         tokio::task::spawn_blocking(move || -> Result<String> {
+            let config = UserConfig::load()?;
             Ok(LogPage {
                 events: Accounts::load()?.events()?,
-                theme: UserConfig::load()?.console.theme,
+                resources: super::resources::Status::new(&config),
+                theme: config.console.theme,
             }
             .render()?)
         })
