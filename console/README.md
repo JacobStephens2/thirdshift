@@ -473,6 +473,8 @@ and `show`. Run `python3 console/reproductions/ready-dispatch.py` after a build
 to check both Inbox views.
 
 A live Command's Details offers Stop beside its equivalent CLI command.
+Like Dismiss and Show, the CLI stays on one line, with long commands cut off
+and a Copy CLI button that copies the full command. Hover for the full text.
 The confirmation page explains `needs-triage`, offers Requeue instead
 (`thirdshift stop --requeue`), and requires the current account's CSRF token.
 Both actions use the CLI's Stop, including its process identity checks and
