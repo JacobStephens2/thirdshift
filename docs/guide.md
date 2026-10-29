@@ -352,6 +352,8 @@ thirdshift console --no-sign-in
 
 Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
 
+Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
+
 #### Console on a server
 
 Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:
@@ -761,10 +763,12 @@ exhausted. A task still void in either Arm drops out of both Arms.
 
 Usage/rate limits, including provider capacity and overload errors, pause
 scheduling until the same Experiment is started again.
-Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
-85% usage in either window. A Trial cut short by a warning is void; a Trial
-already running on the other worker may finish, but neither worker starts
-another Trial or retry. Ordinary Runs do not stop at these warnings.
+Claude or Codex quota windows at 85%, or a Claude rejection, also pause it
+immediately. Claude warnings continue when all readable windows are below 85%;
+a warning with no readable utilization still pauses the Experiment. A Trial cut
+short by a quota stop is void; a Trial already running on the other worker may
+finish, but neither worker starts another Trial or retry. Ordinary Runs do not
+stop at these warnings.
 The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
@@ -2796,10 +2800,12 @@ Grader differs from the Run's Model. When the first Model matches the Built-with
 line (ignoring case), the second Harness/Model pair is used; if it also matches
 or is blank, grading fails without starting that Grader.
 
-A Claude plan-limit warning or rejection, or a Codex quota window at 85%, stops
-grading immediately. Completed Scores are checkpointed individually. The next
-`score` command scores the retained remainder before drawing a new window;
-completed pull requests are never graded again. Other Harnesses have no verified
+A Claude or Codex quota window at 85%, or a Claude rejection, stops grading
+immediately. Claude warnings continue when all readable windows are below 85%;
+a warning with no readable utilization still stops grading. Completed Scores
+are checkpointed individually. The next `score` command scores the retained
+remainder before drawing a new window; completed pull requests are never graded
+again. Other Harnesses have no verified
 warning protocol yet. Grader sessions use bwrap and socat on Linux; if isolation
 cannot start, grading fails and the sample remains pending. As for Experiments,
 `THIRDSHIFT_TRIAL_NO_SANDBOX=1` selects the pass-through launcher for fake Harness

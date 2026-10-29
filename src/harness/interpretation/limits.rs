@@ -2,12 +2,28 @@
 
 use serde_json::Value;
 
+/// Eval quota stops share the same 85% threshold across Claude and Codex.
+const PLAN_LIMIT_UTILIZATION: f64 = 0.85;
+
 pub(super) fn claude(event: &Value) -> bool {
-    event["type"] == "rate_limit_event"
-        && matches!(
-            event["rate_limit_info"]["status"].as_str(),
-            Some("allowed_warning" | "rejected")
-        )
+    if event["type"] != "rate_limit_event" {
+        return false;
+    }
+    let info = &event["rate_limit_info"];
+    match info["status"].as_str() {
+        Some("rejected") => true,
+        Some("allowed_warning") => {
+            let utilization = info["unifiedWindows"]
+                .as_object()
+                .into_iter()
+                .flat_map(|windows| windows.values())
+                .filter_map(|window| window["utilization"].as_f64())
+                .chain(info["utilization"].as_f64())
+                .reduce(f64::max);
+            utilization.is_none_or(|used| used >= PLAN_LIMIT_UTILIZATION)
+        }
+        _ => false,
+    }
 }
 
 /// Matches the replay policy's 85% stop, for either reported quota window.
@@ -25,6 +41,6 @@ pub(crate) fn codex(event: &Value) -> bool {
         || ["primary", "secondary"].into_iter().any(|window| {
             limits[window]["used_percent"]
                 .as_f64()
-                .is_some_and(|used| used >= 85.0)
+                .is_some_and(|used| used >= PLAN_LIMIT_UTILIZATION * 100.0)
         })
 }

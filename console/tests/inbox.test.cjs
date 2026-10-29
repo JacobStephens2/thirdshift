@@ -176,6 +176,40 @@ async function showDetails(page, row) {
   await row.locator(':scope > .row-head > .state').click();
 }
 
+test('Command details shows recent Command output and follows new output on desktop and phone', async t => {
+  const log = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.log');
+  const original = await readFile(log, 'utf8');
+  try {
+    for (const width of [1280, 390]) {
+      await writeFile(log, 'Old output\n' + 'Earlier progress\n'.repeat(1000)
+        + 'Checking CI\nWaiting for checks\nStill waiting\nChecks complete\nLatest <script>unsafe()</script>\n');
+      const page = await pageFor(t, { viewport: { width, height: 844 } });
+      await page.goto(origin);
+      await showDetails(page, page.locator('#inbox .command').filter({
+        has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#1$/ })
+      }));
+      const preview = page.getByRole('region', { name: 'Recent Command output', exact: true });
+      await preview.waitFor();
+      assert.match(await preview.textContent(), /Latest <script>unsafe\(\)<\/script>/);
+      assert.equal(await preview.locator('pre').textContent(),
+        'Checking CI\nWaiting for checks\nStill waiting\nChecks complete\nLatest <script>unsafe()</script>');
+      assert.equal(await preview.locator('script').count(), 0);
+      assert.equal(await preview.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      await appendFile(log, 'New progress ' + 'x'.repeat(500) + '\n');
+      await preview.getByText('New progress ', { exact: false }).waitFor();
+      assert.equal(await preview.locator('pre').evaluate(el => el.textContent.split('\n').length), 5);
+      assert.equal(await preview.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      assert.equal(await preview.locator('pre').evaluate(el =>
+        el.scrollHeight - el.scrollTop <= el.clientHeight + 1), true);
+      await page.getByRole('link', { name: 'Full Command log', exact: true }).click();
+      await page.locator('#log-content').getByText(/Old output/).waitFor();
+      await page.close();
+    }
+  } finally {
+    await writeFile(log, original);
+  }
+});
+
 test('Command details opens with the Inbox subject and full title above its actions', async t => {
   for (const width of [1280, 390]) {
     const page = await pageFor(t, { viewport: { width, height: 844 } });
