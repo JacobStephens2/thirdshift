@@ -322,6 +322,9 @@ names are not inspected or evaluated. Comments and environment assignments
 are omitted, and input after cron's first unescaped `%` is not searched.
 Other users, system crontabs and other schedulers are outside this view.
 Schedules retain cron's expressions and time zone; reload to see changes.
+The page reads like a terminal crontab: one monospace line per entry, schedule
+then command, with schedules highlighted in the current Theme. Long lines scroll
+horizontally within the listing; focus it to scroll with the arrow keys.
 No matching entries or no crontab shows an empty view; an unavailable `crontab`
 command or a read failure reports an error. This view never changes the crontab
 or starts a Command.

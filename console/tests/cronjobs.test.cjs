@@ -2,7 +2,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
@@ -31,6 +31,97 @@ after(async () => {
   if (server && server.exitCode === null) server.kill();
   await exited;
   if (home) await rm(home, { recursive: true, force: true });
+});
+
+test('Cron jobs reads like terminal crontab lines on desktop and phone, with or without JavaScript', async t => {
+  for (const javaScriptEnabled of [true, false]) {
+    for (const width of [1440, 390]) {
+      await t.test(`${width}px, JavaScript ${javaScriptEnabled}`, async t => {
+        const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height: 900 } });
+        t.after(() => context.close());
+        const page = await context.newPage();
+        await page.goto(`${origin}/cronjobs`);
+        const crontab = page.getByRole('region', { name: 'thirdshift crontab entries', exact: true });
+        await crontab.waitFor();
+        assert.equal(await crontab.textContent(), '*/5 * * * *  cd /srv/a-repository-with-a-long-name && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/cron.log 2>&1\n@reboot  thirdshift secure base main # <script>unsafe()</script>\n');
+        assert.equal(await crontab.locator('script').count(), 0);
+        assert.equal(await crontab.evaluate(el => getComputedStyle(el).whiteSpace), 'pre');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        const listing = await crontab.boundingBox();
+        const lastFired = await page.getByRole('heading', { name: 'Last fired by repository', exact: true }).boundingBox();
+        assert.ok(listing.height < 100, 'Two jobs should occupy two compact terminal lines');
+        assert.ok(lastFired.y >= listing.y + listing.height, 'Last-fired observations stay below the listing');
+        await crontab.focus();
+        await page.keyboard.press('ArrowRight');
+        // Poll from Node: page.waitForFunction cannot keep polling without JavaScript.
+        const deadline = Date.now() + 5000;
+        while (!await crontab.evaluate(el => el.scrollLeft > 0)) {
+          assert.ok(Date.now() < deadline, 'Arrow keys should scroll the focused crontab');
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      });
+    }
+  }
+});
+
+// The listing draws the schedule and command on one line. A mark in the
+// schedule must not restyle the command, and a carriage return in the
+// command must not paint another entry.
+function glyph(root, needle) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const index = walker.currentNode.data.indexOf(needle);
+    if (index < 0) continue;
+    const range = document.createRange();
+    range.setStart(walker.currentNode, index);
+    range.setEnd(walker.currentNode, index + 1);
+    const first = range.getBoundingClientRect();
+    range.setStart(walker.currentNode, index + 1);
+    range.setEnd(walker.currentNode, index + needle.length);
+    const second = range.getBoundingClientRect();
+    return { first, second };
+  }
+  return null;
+}
+
+async function withCrontab(t, contents) {
+  const original = await readFile(join(home, 'crontab'));
+  t.after(() => writeFile(join(home, 'crontab'), original));
+  await writeFile(join(home, 'crontab'), contents);
+  const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/cronjobs`);
+  const main = page.locator('main');
+  await main.waitFor();
+  return main;
+}
+
+test('a bidirectional mark in the schedule does not reverse the command', async t => {
+  const main = await withCrontab(t, '* * * * *\u202E thirdshift PQ\n');
+  const placed = await main.evaluate(glyph, 'PQ');
+  assert.ok(placed, 'The command text should be on the page');
+  assert.ok(placed.first.x < placed.second.x, 'The command should read in logical order, not reversed by the schedule');
+});
+
+test('a carriage return in the command does not forge another crontab line', async t => {
+  const main = await withCrontab(t, '@reboot thirdshift AB\r@daily echo SECOND\n');
+  const command = await main.evaluate(glyph, 'AB');
+  const forged = await main.evaluate(el => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const index = walker.currentNode.data.indexOf('SECOND');
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(walker.currentNode, index);
+      range.setEnd(walker.currentNode, index + 'SECOND'.length);
+      return range.getBoundingClientRect().y;
+    }
+    return null;
+  });
+  assert.ok(command, 'The command text should be on the page');
+  assert.ok(forged !== null, 'Text after the carriage return should still be shown');
+  assert.ok(Math.abs(command.first.y - forged) < 5, 'Text after the carriage return should stay on that entry');
 });
 
 test('Cron jobs is reachable by link and keyboard, escapes commands and fits a phone', async t => {
