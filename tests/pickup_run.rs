@@ -1879,6 +1879,299 @@ fn once_a_pickup_run_has_ended_the_next_takes_the_next_ready_issue() {
     assert_eq!(sessions(&scenario), ["7", "9"]);
 }
 
+/// A User config that lets two Commands run on a repository at once.
+const COMMAND_LIMIT_2: &str = "[pass]\ncommand_limit = 2\n";
+
+/// What a skipped Pass says when `running` Commands fill the scenario's
+/// repository at a Command limit of `limit` above 1.
+fn at_command_limit(running: usize, limit: usize) -> String {
+    format!(
+        "thirdshift: at the Command limit on acme/widgets: {running} Commands are running, \
+         pass.command_limit is {limit}\n"
+    )
+}
+
+/// A script in which the agent for issue `issue` touches `started-<issue>`
+/// in the scenario root, waits there until the test touches
+/// `release-<issue>`, or until the scenario is gone, then opens its PR into
+/// `main`.
+fn agent_waits_on_its_own_then_opens_pr(issue: u32) -> String {
+    format!(
+        r#"
+root=$(dirname "$FAKE_CLAUDE_RECORD")
+touch "$root/started-{issue}"
+while [ -d "$root" ] && [ ! -e "$root/release-{issue}" ]; do sleep 0.05; done
+{}"#,
+        agent_opens_pr(issue, "main")
+    )
+}
+
+/// Let the agent for `issue`, held by
+/// [`agent_waits_on_its_own_then_opens_pr`], go on.
+fn release_issue(scenario: &Scenario, issue: u32) {
+    fs::write(scenario.path(&format!("release-{issue}")), "").unwrap();
+}
+
+fn activity_log(scenario: &Scenario) -> String {
+    fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_naming_the_count() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+        scenario.agent_does_for(issue, &agent_waits_on_its_own_then_opens_pr(issue));
+    }
+    ready_issue(&scenario, 11, &[]);
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run_until(&["pickup"], &[], "started-9");
+    let (github, gh_calls) = (scenario.gh_state(), scenario.gh_calls());
+
+    let third = scenario.run(&["pickup"]);
+    let fourth = scenario.run(&["pickup"]);
+    let status = scenario.run(&["status", "--json"]);
+
+    for skipped in [&third, &fourth] {
+        assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+        assert_eq!(after_start(&skipped.stderr), at_command_limit(2, 2));
+        assert_eq!(skipped.stdout, "");
+    }
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.gh_calls(), gh_calls);
+    let reason = "Pickup run skipped: at the Command limit on acme/widgets: \
+                  2 Commands are running, pass.command_limit is 2";
+    assert_eq!(
+        activity_log(&scenario).matches(reason).count(),
+        1,
+        "{}",
+        activity_log(&scenario)
+    );
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let mut taken: Vec<_> = commands
+        .iter()
+        .map(|command| {
+            assert_eq!(command["kind"], "Pickup run", "{status}");
+            assert_eq!(command["state"], "live", "{status}");
+            command["dispatched"][0]["issue"]["number"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    taken.sort();
+    assert_eq!(taken, [7, 9], "{status}");
+    release_issue(&scenario, 7);
+    release_issue(&scenario, 9);
+    assert_ended_with_pr(
+        &first.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    assert_ended_with_pr(
+        &second.finish(),
+        &pr_from(&scenario, "issue-9"),
+        "ready for review",
+    );
+    assert_eq!(scenario.issue_labels(11), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_that_skips_a_pass() {
+    let scenario = Scenario::new();
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+    }
+    scenario.issue_is(5, "OPEN");
+    for issue in [5, 7, 9] {
+        scenario.agent_does_for(issue, &agent_waits_on_its_own_then_opens_pr(issue));
+    }
+    release_issue(&scenario, 9);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+
+    // The repository is at its Command limit of 1, and still the Ticket run
+    // starts its session.
+    let by_hand = scenario.run_until(&[&scenario.issue_url(5)], &[], "started-5");
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &pickup.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    release_issue(&scenario, 5);
+    let by_hand = by_hand.finish();
+    assert_eq!(by_hand.code, Some(0), "stderr: {}", by_hand.stderr);
+    assert_eq!(
+        by_hand.stdout,
+        format!(
+            "{}\n",
+            pr_from(&scenario, "issue-5")["url"].as_str().unwrap()
+        )
+    );
+    let next = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&next, &pr_from(&scenario, "issue-9"), "ready for review");
+}
+
+#[test]
+fn a_killed_pickup_run_or_ticket_run_frees_its_slot_for_the_next_pass() {
+    for by_hand in [false, true] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        ready_issue(&scenario, 9, &[]);
+        scenario.issue_is(5, "OPEN");
+        // The killed Command's agent waits; the next Pass's opens its PR.
+        let (killed, taken) = if by_hand { (5, 7) } else { (7, 9) };
+        scenario.agent_does_for(killed, &agent_waits_on_its_own_then_opens_pr(killed));
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        let started = format!("started-{killed}");
+        let mut held = if by_hand {
+            scenario.run_until(&[&scenario.issue_url(5)], &[], &started)
+        } else {
+            scenario.run_until(&["pickup"], &[], &started)
+        };
+        held.kill();
+
+        let next = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(
+            &next,
+            &pr_from(&scenario, &format!("issue-{taken}")),
+            "ready for review",
+        );
+        release_issue(&scenario, killed);
+        assert_eq!(held.finish().code, None);
+    }
+}
+
+#[test]
+fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_lock_and_takes_it_itself()
+ {
+    let scenario = Scenario::new();
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    drop(old_pass);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let old_pass = fs::File::create(&legacy).unwrap();
+    assert!(
+        matches!(old_pass.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "a Pass did not hold the lock a thirdshift from before the Command limit tries"
+    );
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &pickup.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    old_pass.try_lock().unwrap();
+}
+
+#[test]
+fn at_a_command_limit_of_2_a_pass_from_before_the_command_limit_and_a_pickup_run_fill_the_repository()
+ {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+
+    let second = scenario.run(&["pickup"]);
+
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(after_start(&second.stderr), at_command_limit(2, 2));
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &first.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    drop(old_pass);
+}
+
+#[test]
+fn at_a_command_limit_of_2_a_pass_that_runs_alone_is_skipped_beside_a_pickup_run_and_skips_every_pass_itself()
+ {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+
+    for (args, starting) in [
+        (vec!["architect", "--plan-only"], "Architect run starting"),
+        (vec!["secure"], "Security run starting"),
+    ] {
+        let skipped = scenario.run(&args);
+
+        assert_eq!(
+            skipped.code,
+            Some(0),
+            "{args:?}: stderr: {}",
+            skipped.stderr
+        );
+        assert_eq!(
+            support::after_start(&skipped.stderr, starting),
+            "thirdshift: 1 Command is running on acme/widgets, and this Pass runs only alone there\n",
+            "{args:?}"
+        );
+    }
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &pickup.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+
+    // No Ready issue is left, so only the Command limit can skip a Pass.
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    ready_issue(&scenario, 9, &[]);
+    for (args, starting) in [
+        (vec!["pickup"], "Pickup run starting"),
+        (vec!["architect", "--plan-only"], "Architect run starting"),
+    ] {
+        let skipped = scenario.run(&args);
+
+        assert_eq!(
+            skipped.code,
+            Some(0),
+            "{args:?}: stderr: {}",
+            skipped.stderr
+        );
+        assert_eq!(
+            support::after_start(&skipped.stderr, starting),
+            "thirdshift: an Architect run is running alone on acme/widgets\n",
+            "{args:?}"
+        );
+    }
+    release(&scenario);
+    architect.finish();
+}
+
 const KEY: &str = "re_test_123";
 
 const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;

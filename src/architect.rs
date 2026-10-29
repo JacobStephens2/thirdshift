@@ -7,9 +7,9 @@
 //! candidate published no plan, and the Architect run ends on the issue it
 //! named instead, labelled an
 //! Architect idea: the idea issue it filed for its top recommendation, or the
-//! open issue that already covers it. Only one Pass per repository runs at a
-//! time on a machine: an Architect run started while another Pass is still
-//! running is skipped, before any review. So is
+//! open issue that already covers it. An Architect run keeps its repository
+//! to itself on a machine: one started while any other Command runs there is
+//! skipped, before any review. So is
 //! one that finds an Architect plan still open on the repository: it never
 //! retries or dispatches an Architect plan that is already there. And so is
 //! one that finds an Architect idea there waiting for triage: the factory has
@@ -30,7 +30,7 @@ use crate::github::{Issue, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
-use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::prompt;
@@ -288,10 +288,14 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base) {
+    } = match launch::start(
+        base,
+        config.command_limit,
+        Sharing::Alone("an Architect run"),
+    ) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
-            logs::skipped(Pass::Architect, &running.0, &running);
+            logs::skipped(Pass::Architect, &running.repo, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
         Err(error) => return failed(error.into()),
@@ -317,7 +321,7 @@ pub fn run(
     run_through(&mut outside, &architect_run)
 }
 
-/// An Architect run past its lock and preflight checks: what it runs on,
+/// An Architect run past its slot and preflight checks: what it runs on,
 /// and what it was asked for.
 struct ArchitectRun<'a> {
     /// The repository it runs on.
@@ -338,7 +342,7 @@ struct ArchitectRun<'a> {
     plan_only: bool,
 }
 
-/// [`run`], once it holds its repository's lock, through `outside`: its
+/// [`run`], once it holds its repository alone, through `outside`: its
 /// [`gates`], a skip recorded with its reason if one skips; then the check of
 /// its Harness, failing before any work if it can't run; then the record
 /// that it started work, which keeps its Command log with its repository's
@@ -1142,7 +1146,7 @@ mod tests {
         assert_eq!(repo.calls, []);
     }
 
-    /// An Architect run on `repo`, past its lock, with no focus, no pull,
+    /// An Architect run on `repo`, past its slot, with no focus, no pull,
     /// and no plan-only, on the Base branch `main`, except as `asked`
     /// changes them, its dispatched run ending ready for review: how it
     /// ended, and what it did outside itself.

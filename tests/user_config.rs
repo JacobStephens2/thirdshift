@@ -142,6 +142,37 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
 }
 
 #[test]
+fn a_command_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_and_the_run() {
+    for config in [
+        "[pass]\ncommand_limit = 0\n",
+        "[pass]\ncommand_limit = -1\n",
+        "[pass]\ncommand_limit = 1.5\n",
+        "[pass]\ncommand_limit = \"2\"\n",
+    ] {
+        for pickup in [true, false] {
+            let scenario = Scenario::new();
+            let path = scenario.user_config_is(config);
+            let issue = scenario.issue_url(7);
+            let args = if pickup { "pickup" } else { issue.as_str() };
+
+            let result = scenario.run(&[args]);
+
+            assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+            assert!(
+                result
+                    .stderr
+                    .contains("pass.command_limit must be a whole number from 1 up")
+                    && result.stderr.contains(&path.display().to_string()),
+                "{config}: {}",
+                result.stderr
+            );
+            assert!(scenario.claude_calls().is_empty(), "a session was started");
+            assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
+        }
+    }
+}
+
+#[test]
 fn trial_memory_caps_reject_multiple_suffixes_before_work() {
     for value in ["2GG", "512KK", "1MK"] {
         let scenario = Scenario::new();

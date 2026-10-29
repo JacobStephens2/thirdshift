@@ -137,7 +137,8 @@ impl<'a> Description<'a> {
     }
 
     pub(super) fn failed_fix(&self) -> Result<Option<IssueUrl>> {
-        // The Pass lock rules out an active dispatch here. Pending also means
+        // A Security run keeps its repository to itself, which rules out an
+        // active dispatch here. Pending also means
         // failed/incomplete until a successful ending is recorded.
         if matches!(
             self.fix_status(),
