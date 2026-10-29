@@ -502,6 +502,7 @@ thirdshift experiment --release &lt;commit&gt; [--json] [--yes]  # use the last 
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
 thirdshift experiments &lt;id&gt; --name &lt;text&gt; [--json]  # rename an Experiment; --name &#39;&#39; brings back its default name
 thirdshift experiments &lt;id&gt; --session &lt;session-id&gt; [--json]  # read a Trial&#39;s retained session from its inventory
+thirdshift experiments &lt;id&gt; --record-difficulty [--json]  # replace each Eval task&#39;s Difficulty from a completed A/A
 thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
 thirdshift recheck &lt;id&gt; --pending [--json]  # review pending Scores and their fingerprint
 thirdshift recheck &lt;id&gt; --batch &lt;fingerprint&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
@@ -562,6 +563,41 @@ and Trial path (the commit&#39;s cached build may be reused), with separate Tria
 Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
 identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
 The ordinary resume rules below still apply.</p>
+<p>After it completes, <code>thirdshift experiments &lt;id&gt; --record-difficulty</code> pools
+both Arms&#39; retained, non-void Trials for each Eval task and replaces its
+optional <code>[difficulty]</code> table. It records passes, Trials, the Experiment ID,
+commit, Harness, Model and Effort, using the latest rechecked Scores. An
+unfinished Experiment, or Arms differing in any of those setup choices, is
+refused before writing. Each manifest is written atomically under the suite
+lock shared with approval; comments and Trial inputs are preserved. The saved
+Experiment and its Verdict stay unchanged.</p>
+<p>The command prints each Eval task&#39;s Difficulty as passes / Trials and whether
+it is <strong>discriminating</strong>: at least 6 Trials, with Difficulty between 0.15 and
+0.95 inclusive. Fewer than 6 Trials counts as <strong>unmeasured</strong>, as does a missing
+table. The band is fixed by the method, not a Bar flag. Add <code>--json</code> for the
+readings and their <code>measured</code> and <code>discriminating</code> flags. <code>thirdshift evals</code>
+(or <code>evals list</code>, optionally <code>--json</code>) lists every Eval task&#39;s table or <code>null</code>,
+with the same flags. See <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">the manifest format</a>.</p>
+<p>Before the first Trial, the Bar saves each selected suite&#39;s list of
+discriminating Eval tasks from recorded Difficulty. Only that list is judged.
+Other approved Eval tasks still run and are graded; each suite reports their
+Trials per Eval task under <code>measurement</code>. These Trials change no interval,
+required recheck or prediction of how many more Eval tasks are needed.
+<code>experiments &lt;id&gt;</code> and <code>--json</code> show each suite&#39;s counts: judged,
+measurement-only, void-dropped and judged tasks measured on another setup
+(commit, Harness, Model or Effort) than the Baseline&#39;s. The first three counts
+partition the suite: a task with an exhausted Void Trial counts as void-dropped,
+including when it was only measurement. Difficulty from another setup still
+qualifies. A suite with no discriminating Eval tasks is inconclusive.</p>
+<p>The Bar also fixes <code>min_discriminating_tasks</code>, defaulting to 20. Set it for one
+Experiment with <code>--min-discriminating-tasks &lt;count&gt;</code>; changing it after the first
+Trial refuses resume. A suite whose saved discriminating list is shorter is an
+<strong>Advisory suite</strong>. Its Verdict and intervals are still shown, with <code>advisory: true</code>
+in JSON and an Advisory mark in the text view and Console. The Console also shows
+the judged and measurement counts. Advisory suites cannot pass or block a release:
+only the other suites decide the overall Verdict. When every suite is advisory,
+the overall Verdict is inconclusive. The minimum uses the fixed list&#39;s size,
+before Void dropouts, rather than the retained judged count.</p>
 <p>Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
@@ -603,9 +639,10 @@ the production Spec review prompt. They have no PR service: <code>gh</code> call
 inside the sandbox and only their reports are graded.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,
 prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
-<code>1800</code>-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Advisory minimum of <code>20</code> discriminating Eval tasks, an <code>1800</code>-second per-Trial
+timeout, and up to two fresh retries for Void Trials.
 Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fail-level</code>, <code>--prior</code>, <code>--seed</code>,
-<code>--draws</code>, <code>--trials-per-task</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
+<code>--draws</code>, <code>--trials-per-task</code>, <code>--min-discriminating-tasks</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.</p>
 <p>The default pass level is the highest at which an A/A Experiment at the
@@ -753,7 +790,8 @@ incomplete or malformed Grader response pauses the Experiment; resuming retries
 grading without rerunning finished Trials,
 and reuses already validated Scores.</p>
 <p>The Verdict stays <code>waiting_on_rechecks</code> until you have rechecked every borderline
-Score and every decisive Score. A Score is decisive when flipping its pass/fail
+Score and every decisive Score on the Bar&#39;s judged list in suites that are not
+advisory. A Score is decisive when flipping its pass/fail
 or wrong-finding flag changes the Experiment&#39;s pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 <code>thirdshift experiments &lt;id&gt; --json</code> lists these under <code>pending_rechecks</code>, with
@@ -802,23 +840,31 @@ and in the Console. It doesn&#39;t change the decision.
 One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
-Any failed suite fails the Experiment; otherwise any inconclusive
-suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
-also makes it inconclusive. Results include the suite intervals, the Bar and
+Among suites that are not advisory, any failed suite fails the Experiment;
+otherwise any inconclusive suite makes it inconclusive. More than a tenth of their
+judged Eval tasks dropped as void also makes it inconclusive. When every suite is
+advisory, the Experiment is inconclusive. Results include the suite intervals, the Bar and
 each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.
 The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, <code>experiments --json</code> reports
 <code>pass_cubed</code>: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar&#39;s JSON carries <code>pass_level</code> and <code>fail_level</code>; each metric carries
-<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v3</code>, and
-their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code>. Saved Experiments under
+<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v4</code>, and
+their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code> and <code>discriminating_tasks</code> per suite.
+Saved Experiments without <code>min_discriminating_tasks</code>, including earlier v4
+Experiments, keep their original Bar, Verdict and aggregation policy when read
+or resumed; their suites omit <code>advisory</code>.
+Saved Experiments under <code>paired-dirichlet-v3</code> keep judging all their retained
+Eval tasks, with their stored Bar and Verdict. Saved Experiments under
 <code>paired-dirichlet-v2</code>, whose pass also needed the pass-level upper bound to
 reach zero, keep that rule and their stored Bar and Verdict when read, and
 when resumed with the same levels. Saved Experiments under <code>paired-dirichlet-v1</code>
 remain readable with their stored single-level Bar and Verdict unchanged. See
 <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0024-pass-and-fail-use-separate-levels.md">ADR-0024</a> and
 <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>.
+The judged-list decision is recorded in
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0026-judge-the-recorded-discriminating-tasks.md">ADR-0026</a>.
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed <code>--credible-level</code>
 flag. Reading that command does not rewrite its stored Bar or Verdict.
@@ -834,8 +880,10 @@ resuming exhausted history finishes without replaying its old pause.</p>
 <p>The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
+That includes a changed discriminating list or any changed Difficulty reading
+for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 2</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 4</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost
@@ -2248,9 +2296,11 @@ then starts <code>ticket-run</code> or <code>spec-run</code> as a command on tha
 <p>A pass is <strong>skipped</strong> when the lock is held, when the repository is at its Claim limit, when the repository has no Ready issue, or when the selected issue is reserved or stale: it exits <code>0</code> with stdout empty and a reason on stderr. A reserved or stale selection says <code>#&lt;n&gt; is reserved by another Pickup run or is no longer Ready</code>, with the reservation ref to inspect if it stays reserved. Skipped is not a failure. A skipped pass starts no agent session, makes no Claim, and sends no Run notification. One skipped for the lock changes no label at all; the others have made the Sweep, whose lines come before the reason.</p>
 <details class="fold"><summary><h3>When the Base branch stays red</h3></summary>
 <div class="manual-content" id="when-the-base-branch-stays-red">
-<p>After taking the Pass lock, Pickup reads the latest push workflow run for its Base branch in the repository named by <code>origin</code>. If that run failed and finished more than 30 minutes ago, it opens a Ticket titled <code>CI red on &lt;base&gt;: &lt;failed jobs&gt;</code>, labelled <code>bug</code> and <code>ready-for-agent</code>. The body names the failing commit and jobs, includes recognizable failing test lines from the job logs, and links to the run. A green or unfinished latest run, or a failure still within the grace period, files nothing. If any CI-red Ticket is already open in the repository, no second one is filed, even for a different Base branch.</p>
+<p>After taking the Pass lock, Pickup reads the latest push workflow run for its Base branch in the repository named by <code>origin</code>. A failed first attempt immediately requests one re-run of its failed jobs, names the run and jobs on stderr, and files nothing on that pass. Later attempts are never re-run by Pickup. A refused or impossible re-run warns and proceeds directly to ordinary filing.</p>
+<p>If the re-run also fails, Pickup waits 30 minutes from that attempt&#39;s completion, then opens a Ticket titled <code>CI red on &lt;base&gt;: &lt;failed jobs&gt;</code>, labelled <code>bug</code> and <code>ready-for-agent</code>. Its body names the failing commit, links both attempts, and includes recognizable failing test lines and job names. An open CI-red Ticket in <code>needs-info</code> does not block a new report. Another open CI-red Ticket suppresses a second Ticket, even across Base branches, but receives the new evidence as a comment when the failing commit differs, at most once per commit.</p>
+<p>If the same commit passes after a failed attempt, Pickup immediately files a <strong>Flaky-test Ticket</strong> titled <code>Flaky CI on &lt;base&gt;: &lt;failed jobs&gt;</code>, labelled <code>flaky-test</code>, <code>bug</code> and <code>ready-for-agent</code>. It records both attempt URLs and the failed attempt&#39;s jobs and test lines. Only one report is filed per failed attempt, including after the report closes, and an open Flaky-test Ticket naming the same test suppresses another. Its Ticket run uses the recorded failure as evidence and goes straight to implementation, removing dependence on timing or scheduling, or the race exposed by the test, without requiring reproduction on demand or ending with <code>needs-info</code> for lack of it. Other bug Tickets keep their ordinary diagnosis path. A green first attempt or an unfinished latest run files nothing.</p>
 <p>The Ticket follows the ordinary Ready issue rules, including settling and the Claim limit: this pass or a later one can take it. Filing does not hold Self-merges, and runs only in Pickup, never in a Ticket run, Spec run or Architect run. A failure to read CI or publish the Ticket is a warning; Pickup continues its ordinary search and dispatch.</p>
-<p>Concurrent hosts serialize filing with <code>refs/heads/thirdshift/pickup/ci-red</code> on <code>origin</code>, using the same empty-create and owner-token release leases as issue reservations. An occupied reservation skips only filing. After a crash, confirm its owner has stopped before releasing it with the exact observed SHA, as for the numbered reservation described above. CI evidence and issue deduplication must be readable before filing; unreadable job logs also leave filing for another pass.</p>
+<p>Concurrent hosts serialize evidence reads, re-running, filing and commenting with <code>refs/heads/thirdshift/pickup/ci-red</code> on <code>origin</code>, using the same empty-create and owner-token release leases as issue reservations. An occupied reservation skips only these CI actions. After a crash, confirm its owner has stopped before releasing it with the exact observed SHA, as for the numbered reservation described above. CI evidence and issue deduplication must be readable before filing; unreadable job logs also leave filing for another pass.</p>
 </div></details>
 <details class="fold"><summary><h3>The Claim limit</h3></summary>
 <div class="manual-content" id="the-claim-limit">
@@ -2536,6 +2586,8 @@ not change the Candidate on restart. The pin is removed after the branch push,
 when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite&#39;s accuracy and wrong-finding
 intervals and asks <code>release anyway? [y/N]</code>, including without <code>--review</code>.
+The summary lists every Advisory suite and its own Verdict. All suites advisory
+gives inconclusive and asks the same question.
 Only <code>y</code> or <code>yes</code> continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag

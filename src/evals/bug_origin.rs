@@ -84,6 +84,7 @@ pub(crate) fn propose(
     git.run(&["update-ref", "refs/heads/change", &review.head])?;
     fs::write(staging.path().join("issue.md"), review.input)?;
     let task = Task {
+        difficulty: None,
         format: 1,
         state: State::Proposed,
         session: Session::CodeReview,

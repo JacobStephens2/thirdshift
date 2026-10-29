@@ -304,7 +304,12 @@ echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-
 
 #[test]
 fn other_issue_labels_keep_the_implementation_prompt_and_ignore_a_diagnosis_marker() {
-    for labels in [vec![], vec!["enhancement"], vec!["bug", "security-fix"]] {
+    for labels in [
+        vec![],
+        vec!["enhancement"],
+        vec!["bug", "security-fix"],
+        vec!["bug", "FlAkY-TeSt"],
+    ] {
         let scenario = Scenario::new();
         scenario.issue_labelled(7, &labels);
         scenario.agent_does(&format!(r#"
@@ -317,6 +322,12 @@ echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let prompt = scenario.first_prompt();
         assert!(prompt.starts_with("/thirdshift-implement "), "{prompt}");
+        if labels.contains(&"FlAkY-TeSt") {
+            assert!(
+                prompt.contains("recorded CI failure is the evidence"),
+                "{prompt}"
+            );
+        }
         assert!(
             !prompt.contains("Use the `thirdshift-diagnosing-bugs` skill"),
             "{prompt}"

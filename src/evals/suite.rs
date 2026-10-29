@@ -70,6 +70,9 @@ pub(super) struct Entry {
     pub(super) name: String,
     pub(super) state: State,
     session: Session,
+    difficulty: Option<format::Difficulty>,
+    measured: bool,
+    discriminating: bool,
 }
 
 pub(super) fn list(root: &Path) -> Result<Vec<Suite>> {
@@ -85,6 +88,15 @@ pub(super) fn list(root: &Path) -> Result<Vec<Suite>> {
                         name,
                         state: task.state,
                         session: task.session,
+                        measured: task
+                            .difficulty
+                            .as_ref()
+                            .is_some_and(format::Difficulty::measured),
+                        discriminating: task
+                            .difficulty
+                            .as_ref()
+                            .is_some_and(format::Difficulty::discriminating),
+                        difficulty: task.difficulty,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -96,6 +108,15 @@ pub(super) fn list(root: &Path) -> Result<Vec<Suite>> {
             })
         })
         .collect()
+}
+
+/// Fence manifest read/modify/write operations for both approval and Difficulty.
+pub(super) fn lock(directory: &Path) -> Result<std::fs::File> {
+    Manifest::load(directory)?;
+    let lock = std::fs::File::create(directory.join("lock"))?;
+    lock.try_lock()
+        .with_context(|| format!("Eval suite {} is being updated", directory.display()))?;
+    Ok(lock)
 }
 
 pub(super) fn touched(root: &Path, paths: &[String]) -> Result<Vec<String>> {

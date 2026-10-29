@@ -60,6 +60,10 @@ pub const READY_FOR_AGENT: Label = Label::new("ready-for-agent", "Ready for an a
 
 pub const NEEDS_INFO: Label = Label::new("needs-info", "Waiting on reporter for more information");
 
+/// A recorded CI failure that passed on re-run, implemented without demanding
+/// an on-demand reproduction of timing or scheduling dependence.
+pub const FLAKY_TEST: Label = Label::new("flaky-test", "Recorded CI failure that passed on re-run");
+
 /// The triage labels that make an open Ticket an Unready Ticket, in the
 /// order they are looked for.
 pub const UNREADY: [Label; 4] = [
