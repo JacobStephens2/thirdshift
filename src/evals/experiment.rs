@@ -59,6 +59,9 @@ pub(crate) struct Bar {
     pub seed: u64,
     pub draws: usize,
     pub trials_per_task: BTreeMap<String, usize>,
+    /// Absent in Experiments that judged every approved Eval task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discriminating_tasks: Option<BTreeMap<String, Vec<String>>>,
     pub timeout_seconds: u64,
     pub void_rules: VoidRules,
 }
@@ -79,6 +82,7 @@ impl Default for Bar {
             seed: statistics.seed,
             draws: statistics.draws,
             trials_per_task: BTreeMap::new(),
+            discriminating_tasks: None,
             timeout_seconds: 1800,
             void_rules: VoidRules {
                 retries: 2,
@@ -95,6 +99,16 @@ impl Default for Bar {
                 .into(),
             },
         }
+    }
+}
+
+impl Bar {
+    fn judges(&self, suite: &str, task: &str) -> bool {
+        self.discriminating_tasks.as_ref().is_none_or(|suites| {
+            suites
+                .get(suite)
+                .is_some_and(|tasks| tasks.iter().any(|name| name == task))
+        })
     }
 }
 
@@ -201,6 +215,13 @@ pub fn run(options: Options) -> Result<()> {
     let baseline = options.baseline_setup.resolve(baseline, &config);
     let candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
+    // Keep the judged list and the retained manifest snapshots on one reading
+    // of Difficulty, fenced against approval and Difficulty publication.
+    let suite_locks = suites
+        .iter()
+        .map(|name| suite::lock(&suites_root.join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    let mut discriminating = BTreeMap::new();
     for name in &suites {
         let manifest = suite::Manifest::load(&suites_root.join(name))?;
         bar.trials_per_task.insert(
@@ -209,7 +230,21 @@ pub fn run(options: Options) -> Result<()> {
                 .trials_per_task
                 .unwrap_or(manifest.trials_per_arm.get()),
         );
+        let mut listed = Vec::new();
+        for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
+            let task = format::Task::load(&directory)?;
+            if task.state == format::State::Approved
+                && task
+                    .difficulty
+                    .as_ref()
+                    .is_some_and(format::Difficulty::discriminating)
+            {
+                listed.push(name);
+            }
+        }
+        discriminating.insert(name.clone(), listed);
     }
+    bar.discriminating_tasks = Some(discriminating);
     ensure!(
         bar.trials_per_task.values().all(|n| matches!(n, 1 | 3)),
         "Trials per Eval task must be one or three"
@@ -249,6 +284,7 @@ pub fn run(options: Options) -> Result<()> {
             options.json,
         );
     };
+    drop(suite_locks);
     if let Some(name) = options.name {
         experiment.rename(Some(name))?;
     }

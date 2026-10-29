@@ -43,12 +43,99 @@ fn bar(suites: &[&str]) -> Bar {
 }
 
 fn observation(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Value {
+    let baseline = setup();
     let inputs = serde_json::to_value((tasks, results, bar)).unwrap();
-    let first = serde_json::to_value(assess(tasks, results, bar).unwrap()).unwrap();
-    let second = serde_json::to_value(assess(tasks, results, bar).unwrap()).unwrap();
+    let first = serde_json::to_value(assess(tasks, results, bar, &baseline).unwrap()).unwrap();
+    let second = serde_json::to_value(assess(tasks, results, bar, &baseline).unwrap()).unwrap();
     assert_eq!(first, second, "fixed-seed assessment repeats completely");
     assert_eq!(inputs, serde_json::to_value((tasks, results, bar)).unwrap());
     first
+}
+
+fn setup() -> Setup {
+    Setup {
+        commit: "a".repeat(40),
+        harness: "claude".into(),
+        model: None,
+        effort: None,
+    }
+}
+
+#[test]
+fn unlisted_failure_padding_changes_neither_intervals_predictions_nor_rechecks() {
+    let mut tasks = vec![task("code-review", "judged")];
+    let mut results = vec![
+        result(&tasks[0], Arm::Baseline, true, false),
+        result(&tasks[0], Arm::Candidate, true, false),
+    ];
+    let mut settings = serde_json::to_value(bar(&["code-review"])).unwrap();
+    settings["prior"] = json!(1.0);
+    settings["discriminating_tasks"] = json!({"code-review": ["judged"]});
+    let settings: Bar = serde_json::from_value(settings).unwrap();
+    let original = observation(&tasks, &results, &settings);
+    assert!(original[0]["suites"]["code-review"]["accuracy"]["more_tasks"].is_object());
+    for index in 0..30 {
+        let task = task("code-review", &format!("unlisted-{index}"));
+        for arm in [Arm::Baseline, Arm::Candidate] {
+            let mut result = result(&task, arm, false, true);
+            result.score.as_mut().unwrap().borderline = true;
+            results.push(result);
+        }
+        tasks.push(task);
+    }
+    let padded = observation(&tasks, &results, &settings);
+    for metric in ["accuracy", "wrong_findings", "pass_cubed"] {
+        assert_eq!(
+            padded[0]["suites"]["code-review"][metric],
+            original[0]["suites"]["code-review"][metric]
+        );
+    }
+    assert_eq!(padded[1], original[1]);
+    assert_eq!(
+        padded[0]["suites"]["code-review"]["counts"],
+        json!({
+            "judged": 1, "measurement_only": 30, "void_dropped": 0, "other_setup": 0
+        })
+    );
+}
+
+#[test]
+fn measurement_voids_are_reported_but_do_not_enter_the_judged_dropout_guard() {
+    let tasks = [
+        task("code-review", "judged"),
+        task("code-review", "measurement"),
+    ];
+    let mut results = vec![
+        result(&tasks[0], Arm::Baseline, true, false),
+        result(&tasks[0], Arm::Candidate, true, false),
+        result(&tasks[1], Arm::Baseline, true, false),
+        result(&tasks[1], Arm::Candidate, false, false),
+    ];
+    results[3].outcome = Outcome::Void;
+    let mut settings = bar(&["code-review"]);
+    settings.discriminating_tasks = Some(BTreeMap::from([(
+        "code-review".into(),
+        vec!["judged".into()],
+    )]));
+    let measured_void = observation(&tasks, &results, &settings);
+    let suite = &measured_void[0]["suites"]["code-review"];
+    assert_eq!(measured_void[0]["provisional_verdict"], "pass");
+    assert_eq!(
+        suite["counts"],
+        json!({"judged": 1, "measurement_only": 0, "void_dropped": 1, "other_setup": 0})
+    );
+    assert_eq!(suite["dropped_tasks"], 0);
+    assert_eq!(suite["measurement"][0]["trials"][1]["outcome"], "void");
+    results[1].outcome = Outcome::Void;
+    let judged_void = observation(&tasks, &results, &settings);
+    let suite = &judged_void[0]["suites"]["code-review"];
+    assert_eq!(judged_void[0]["verdict"], "inconclusive");
+    assert_eq!(
+        suite["counts"],
+        json!({"judged": 0, "measurement_only": 0, "void_dropped": 2, "other_setup": 0})
+    );
+    assert_eq!(suite["dropped_tasks"], 1);
+    assert_eq!(judged_void[1], json!([]));
 }
 
 #[test]
@@ -303,7 +390,7 @@ fn rejected_assessments_repeat_and_leave_all_inputs_unchanged_including_void_pai
             };
             let inputs = serde_json::to_value((&tasks, &results, &bar)).unwrap();
             for _ in 0..2 {
-                let error = assess(&tasks, &results, &bar)
+                let error = assess(&tasks, &results, &bar, &setup())
                     .err()
                     .expect("assessment must fail");
                 assert_eq!(error.to_string(), expected, "{invalid}, Void={void}");

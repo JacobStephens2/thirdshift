@@ -578,6 +578,17 @@ table. The band is fixed by the method, not a Bar flag. Add <code>--json</code> 
 readings and their <code>measured</code> and <code>discriminating</code> flags. <code>thirdshift evals</code>
 (or <code>evals list</code>, optionally <code>--json</code>) lists every Eval task&#39;s table or <code>null</code>,
 with the same flags. See <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">the manifest format</a>.</p>
+<p>Before the first Trial, the Bar saves each selected suite&#39;s list of
+discriminating Eval tasks from recorded Difficulty. Only that list is judged.
+Other approved Eval tasks still run and are graded; each suite reports their
+Trials per Eval task under <code>measurement</code>. These Trials change no interval,
+required recheck or prediction of how many more Eval tasks are needed.
+<code>experiments &lt;id&gt;</code> and <code>--json</code> show each suite&#39;s counts: judged,
+measurement-only, void-dropped and judged tasks measured on another setup
+(commit, Harness, Model or Effort) than the Baseline&#39;s. The first three counts
+partition the suite: a task with an exhausted Void Trial counts as void-dropped,
+including when it was only measurement. Difficulty from another setup still
+qualifies. A suite with no discriminating Eval tasks is inconclusive.</p>
 <p>Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
@@ -769,7 +780,7 @@ incomplete or malformed Grader response pauses the Experiment; resuming retries
 grading without rerunning finished Trials,
 and reuses already validated Scores.</p>
 <p>The Verdict stays <code>waiting_on_rechecks</code> until you have rechecked every borderline
-Score and every decisive Score. A Score is decisive when flipping its pass/fail
+Score and every decisive Score on the Bar&#39;s judged list. A Score is decisive when flipping its pass/fail
 or wrong-finding flag changes the Experiment&#39;s pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 <code>thirdshift experiments &lt;id&gt; --json</code> lists these under <code>pending_rechecks</code>, with
@@ -819,7 +830,7 @@ One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
 Any failed suite fails the Experiment; otherwise any inconclusive
-suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
+suite makes it inconclusive. More than a tenth of judged Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.
 The code-review suite runs three Trials per Arm per Eval task by default; the
@@ -827,14 +838,18 @@ Spec-review suite runs one. For three-Trial suites, <code>experiments --json</co
 <code>pass_cubed</code>: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar&#39;s JSON carries <code>pass_level</code> and <code>fail_level</code>; each metric carries
-<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v3</code>, and
-their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code>. Saved Experiments under
+<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v4</code>, and
+their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code> and <code>discriminating_tasks</code> per suite.
+Saved Experiments under <code>paired-dirichlet-v3</code> keep judging all their retained
+Eval tasks, with their stored Bar and Verdict. Saved Experiments under
 <code>paired-dirichlet-v2</code>, whose pass also needed the pass-level upper bound to
 reach zero, keep that rule and their stored Bar and Verdict when read, and
 when resumed with the same levels. Saved Experiments under <code>paired-dirichlet-v1</code>
 remain readable with their stored single-level Bar and Verdict unchanged. See
 <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0024-pass-and-fail-use-separate-levels.md">ADR-0024</a> and
 <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>.
+The judged-list decision is recorded in
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0026-judge-the-recorded-discriminating-tasks.md">ADR-0026</a>.
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed <code>--credible-level</code>
 flag. Reading that command does not rewrite its stored Bar or Verdict.
@@ -850,8 +865,10 @@ resuming exhausted history finishes without replaying its old pause.</p>
 <p>The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
+That includes a changed discriminating list read from current Difficulty;
+a new reading inside the band that leaves the list unchanged can resume.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 2</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 3</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost

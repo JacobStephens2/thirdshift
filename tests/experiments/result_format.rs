@@ -86,6 +86,7 @@ fn documented_format_matches_real_experiment_results() {
     let run = fixture.run(&["--prior", "0.01"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
+    assert_eq!(experiment["format"], 3, "format 2 shipped in v0.17.4");
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(
         !experiment["pending_rechecks"]
