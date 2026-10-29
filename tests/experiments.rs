@@ -1651,13 +1651,7 @@ while true; do sleep 0.05; done
         fixture.scenario.path("started").display()
     ));
     let mut held = fixture.scenario.run_until(
-        &[
-            "experiment",
-            "candidate",
-            "--trials-per-task",
-            "3",
-            "--json",
-        ],
+        &Fixture::experiment_args(&["--trials-per-task", "3"]),
         &NO_SANDBOX,
         "started",
     );
