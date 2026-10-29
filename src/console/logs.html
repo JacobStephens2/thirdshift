@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" data-theme="{{ page.theme }}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Logs · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Logs · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main><div class="page-title"><h1>Logs</h1><code>thirdshift logs {% if !owner.is_empty() %}--command {{ owner }} {% endif %}--json</code></div>
 {# With several repositories each folds to its name and log count. #}
