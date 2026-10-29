@@ -147,6 +147,52 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
 }
 
 #[test]
+fn advisory_suites_are_listed_and_all_advisory_requires_the_release_question() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(true);
+    view["verdict"]["suites"]["code-review"]["verdict"] = json!("pass");
+    let mut spec = view["verdict"]["suites"]["code-review"].clone();
+    spec["verdict"] = json!("fail");
+    view["verdict"]["suites"]["spec-review"] = spec;
+    let before = release.origin_refs();
+    for answer in ["n\n", "yes\n"] {
+        cargo_reports(&release, &[view.clone()]);
+        let output = release.run_script_with(&["--with-experiment", "0.2.0"], answer, &[]);
+        let err = unstamped(&output);
+        assert!(err.contains("code-review: Advisory suite (pass)"), "{err}");
+        assert!(err.contains("spec-review: Advisory suite (fail)"), "{err}");
+        assert!(err.contains("release anyway?"), "{err}");
+        if answer == "yes\n" {
+            assert!(output.status.success(), "{err}");
+            assert!(release.origin_tag("v0.2.0").is_some());
+        } else {
+            assert!(!output.status.success(), "{err}");
+            assert_eq!(release.origin_refs(), before);
+        }
+    }
+}
+
+#[test]
+fn an_advisory_fail_is_listed_without_prompting_when_the_experiment_passes() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("pass");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(false);
+    let mut small = view["verdict"]["suites"]["code-review"].clone();
+    small["advisory"] = json!(true);
+    small["verdict"] = json!("fail");
+    view["verdict"]["suites"]["small"] = small;
+    cargo_reports(&release, &[view]);
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+    let err = unstamped(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("small: Advisory suite (fail)"), "{err}");
+    assert!(!err.contains("release anyway?"), "{err}");
+}
+
+#[test]
 fn two_level_experiments_show_both_intervals_before_the_release_prompt() {
     let release = Release::new();
     release.ci_reports(GREEN);

@@ -157,7 +157,7 @@ fn interrupted_check_cleans_up_without_a_score_and_experiment_resumes() {
     let script = waiting_check(&fixture);
     set_checks(&fixture, &[&["python3", "-c", &script]]);
     let run = fixture.scenario.run_and_signal_with_env(
-        &["experiment", "candidate", "--json"],
+        &Fixture::experiment_args(&[]),
         &NO_SANDBOX,
         "check-started",
         "TERM",

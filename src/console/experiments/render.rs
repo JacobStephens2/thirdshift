@@ -100,6 +100,7 @@ fn now(view: &View) -> String {
         ));
     }
     for (name, suite) in &verdict.suites {
+        let suite = &suite.statistics;
         if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 {
             reasons.push(format!(
                 "{name}: {} Eval tasks dropped",
@@ -367,6 +368,7 @@ fn list_intervals(view: &View) -> String {
         v.suites
             .iter()
             .map(|(name, suite)| {
+                let suite = &suite.statistics;
                 let (bounds, level, kind) = if suite.accuracy.verdict == Decision::Fail {
                     (
                         suite.accuracy.intervals.fail(),
@@ -403,6 +405,9 @@ fn verdict(view: &View) -> String {
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
     for (name, suite) in &verdict.suites {
+        let advisory = suite.advisory == Some(true);
+        let counts = suite.counts.as_ref();
+        let suite = &suite.statistics;
         // The gist shows the interval that decided each metric, as the list does.
         let decided = |assessment: &crate::verdict::Assessment| {
             if assessment.verdict == Decision::Fail {
@@ -414,16 +419,26 @@ fn verdict(view: &View) -> String {
         let (accuracy, wrong_findings) = (decided(&suite.accuracy), decided(&suite.wrong_findings));
         // Folded to its verdict and intervals; open it for the figures and why.
         html.push_str(&format!(
-            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
+            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span>{}</h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
             esc(name),
             esc(name),
             decision(suite.verdict),
             decision(suite.verdict),
+            if advisory { " <span class=\"experiment-tag\">Advisory suite</span>" } else { "" },
             points(accuracy.lower),
             points(accuracy.upper),
             points(wrong_findings.lower),
             points(wrong_findings.upper)
         ));
+        if let Some(counts) = counts {
+            html.push_str(&format!(
+                "<p>{} judged · {} measurement-only · {} void-dropped · {} other-setup.</p>",
+                counts.judged, counts.measurement_only, counts.void_dropped, counts.other_setup
+            ));
+        }
+        if advisory {
+            html.push_str("<p>This Advisory suite's Verdict cannot pass or block a release.</p>");
+        }
         for (metric, assessment) in [
             ("Accuracy", &suite.accuracy),
             ("Wrong findings", &suite.wrong_findings),
@@ -1139,6 +1154,13 @@ fn bar(view: &View) -> String {
             credible_level * 100.0
         ),
     };
+    let minimum = b
+        .min_discriminating_tasks
+        .map_or_else(String::new, |minimum| {
+            format!(
+                "<dt>Advisory minimum</dt><dd>{minimum} discriminating Eval tasks per suite</dd>"
+            )
+        });
     let method = view
         .verdict
         .as_ref()
@@ -1149,15 +1171,15 @@ fn bar(view: &View) -> String {
                     format!(
                         "<dt>{} method and version</dt><dd>{} · thirdshift {}</dd>",
                         esc(suite),
-                        esc(&v.method),
-                        esc(&v.thirdshift_version)
+                        esc(&v.statistics.method),
+                        esc(&v.statistics.thirdshift_version)
                     )
                 })
                 .collect::<String>()
         })
         .unwrap_or_default();
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth dropped makes the Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
         b.prior,
         b.seed,

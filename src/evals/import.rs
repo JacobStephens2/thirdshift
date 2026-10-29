@@ -165,6 +165,7 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
             "spec-review",
             &name,
             Task {
+                difficulty: None,
                 format: 1,
                 state: State::Approved,
                 session: Session::SpecReview,
@@ -269,6 +270,7 @@ fn bug_task(
         "code-review",
         &name,
         Task {
+            difficulty: None,
             format: 1,
             state: State::Approved,
             session: Session::CodeReview,
