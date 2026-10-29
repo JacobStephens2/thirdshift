@@ -14,6 +14,8 @@ mod published;
 mod security_audit;
 #[path = "process/security_review.rs"]
 mod security_review;
+#[path = "process/security_run.rs"]
+mod security_run;
 #[path = "process/spec_review.rs"]
 mod spec_review;
 #[path = "process/spec_run.rs"]
@@ -747,7 +749,7 @@ fn process_lists_custom_processes_with_their_descriptions() {
     assert_eq!(empty.code, Some(0), "{}", empty.stderr);
     assert_eq!(
         empty.stdout,
-        "architect-run (built-in): Review architecture, then run the Strong plan\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+        "architect-run (built-in): Review architecture, then run the Strong plan\nsecurity-run (built-in): Audit, reproduce, fix and close private Security findings\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
     );
 
     write_process(&scenario, "review", REVIEW);
@@ -771,7 +773,7 @@ skill = \"to-spec\"
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
             result.stdout,
-            "architect-run (built-in): Review architecture, then run the Strong plan\ngather: Gather notes\nreview: Review the diff\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+            "architect-run (built-in): Review architecture, then run the Strong plan\ngather: Gather notes\nreview: Review the diff\nsecurity-run (built-in): Audit, reproduce, fix and close private Security findings\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
         );
     }
 }
@@ -1058,7 +1060,10 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        let actions = if matches!(name, "ticket-run" | "spec-run" | "architect-run") {
+        let actions = if matches!(
+            name,
+            "ticket-run" | "spec-run" | "architect-run" | "security-run"
+        ) {
             vec![vec!["process", name]]
         } else {
             vec![
