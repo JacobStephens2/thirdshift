@@ -3,7 +3,7 @@
 
 use anyhow::{Result, bail, ensure};
 
-use super::{Catalog, DraftKind, StepDraft, WorktreeKind, validated};
+use super::{DraftKind, StepDraft, WorktreeKind, load_inherited_builtin};
 
 pub(crate) enum Step {
     Implement,
@@ -14,29 +14,11 @@ pub(crate) enum Step {
 }
 
 pub(super) fn steps(name: &str, worktree: WorktreeKind) -> Result<Vec<StepDraft>> {
-    let (path, text) = Catalog::installed()?.source(name)?;
-    let file = validated(&path, &text)?;
+    let file = load_inherited_builtin(name)?;
     ensure!(
         file.worktrees.len() == 1 && file.worktrees[0].kind == worktree,
         "{name} needs exactly one worktree of its run type"
     );
-    ensure!(
-        file.limits.repair_cap == crate::delivery::MAX_REPAIRS
-            && !file.limits.forbid_self_merge
-            && file.limits.protected_paths.is_empty(),
-        "{name} inherits the Command's limits"
-    );
-    for step in &file.steps {
-        ensure!(
-            step.harness.is_none()
-                && step.model.is_none()
-                && step.effort.is_none()
-                && !step.optional
-                && step.parallel.is_none(),
-            "{name} Step {} must inherit the Command's choices and run in sequence",
-            step.name
-        );
-    }
     Ok(file.steps)
 }
 

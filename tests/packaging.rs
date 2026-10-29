@@ -56,6 +56,7 @@ fn package_carries_the_built_in_process_folder() {
         "processes/README.md",
         "processes/ticket-run.toml",
         "processes/spec-run.toml",
+        "processes/architect-run.toml",
     ] {
         assert!(
             list.iter().any(|path| path == expected),

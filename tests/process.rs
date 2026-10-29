@@ -743,7 +743,7 @@ fn process_lists_custom_processes_with_their_descriptions() {
     assert_eq!(empty.code, Some(0), "{}", empty.stderr);
     assert_eq!(
         empty.stdout,
-        "spec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+        "architect-run (built-in): Review architecture, then run the Strong plan\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
     );
 
     write_process(&scenario, "review", REVIEW);
@@ -767,7 +767,7 @@ skill = \"to-spec\"
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
             result.stdout,
-            "gather: Gather notes\nreview: Review the diff\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+            "architect-run (built-in): Review architecture, then run the Strong plan\ngather: Gather notes\nreview: Review the diff\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
         );
     }
 }
@@ -1054,7 +1054,7 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        let actions = if matches!(name, "ticket-run" | "spec-run") {
+        let actions = if matches!(name, "ticket-run" | "spec-run" | "architect-run") {
             vec![vec!["process", name]]
         } else {
             vec![
