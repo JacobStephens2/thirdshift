@@ -6,7 +6,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | --- | --- | --- |
 | Verdict, Bar, paired Scores | `src/verdict.rs` — `judge`; `src/verdict/prediction.rs` — posterior-predictive assurance | `src/verdict/tests.rs` (parent #977's standalone Verdict seam) |
 | Claim, `agent-failed` | `src/claim.rs` — `Claim`, `make`, `end`, `Ending`, `AGENT_FAILED`; `src/run.rs` — `claim_ending`; `src/failed_run.rs` — `FailedRun::held` | Inline tests; `tests/pickup_run.rs`, `tests/failed_run.rs` |
-| Ready issue, Failure limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`, `failures`; `src/pickup/reservation.rs` — cross-machine Pickup reservation; `src/config.rs` — `pickup.failure_limit` and the ignored `pickup.limit` | Inline tests; `tests/pickup_run.rs`, `tests/activity_log.rs` |
+| Ready issue, Failure limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`, `clear_and_count_failures`; `src/pickup/reservation.rs` — cross-machine Pickup reservation; `src/config.rs` — `pickup.failure_limit` and the ignored `pickup.limit` | Inline tests; `tests/pickup_run.rs`, `tests/activity_log.rs` |
 | Ticket run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
 | Worktree | `src/worktree.rs` and `src/worktree/` | `src/worktree/acquisition_tests.rs`, `src/worktree/cleanup_tests.rs` |
 | Spec run, Spec branch, Spec PR | `src/spec_run.rs`; Spec PR accounting and the Self-merge check of a Spec PR changed under its Spec run: `src/pull_request.rs` — `SpecPrChanged`, `ensure_spec_pr_unchanged`, `gate_self_merge_on`; `src/child_run.rs` — `SpecPr` | `tests/spec_run.rs` |

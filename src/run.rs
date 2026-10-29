@@ -639,7 +639,7 @@ mod tests {
         Interrupted,
         /// Made the Claim.
         MakeClaim,
-        /// Ended the Claim with this goal reached, or none.
+        /// Ended the Claim as this says the Run ended.
         EndClaim(claim::Ending),
         /// Created the worktree for this Issue branch, so, on this Base
         /// branch.

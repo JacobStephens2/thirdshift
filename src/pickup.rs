@@ -19,7 +19,7 @@ use crate::config::UserConfig;
 use crate::github::{GitHub, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
-use crate::labels::{Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
+use crate::labels::{self, Edit, Label, Labels, NEEDS_TRIAGE, READY_FOR_AGENT};
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
@@ -268,7 +268,7 @@ fn gates(
     order: PickupOrder,
 ) -> Result<Decision> {
     sweep(outside);
-    let failed = failures(outside)?;
+    let failed = clear_and_count_failures(outside)?;
     if failed.len() >= limit.get() {
         return Ok(Decision::Skip(Skipped::AtFailureLimit {
             repo: repo.clone(),
@@ -310,7 +310,7 @@ fn sweep(outside: &mut impl Outside) {
     }
     for ListedIssue { issue, labels, .. } in closed {
         let edit = Edit::of(&issue, labels, &SWEPT, &[]);
-        let taken_off = names(SWEPT.into_iter().filter(|label| edit.takes_off(*label)));
+        let taken_off = labels::joined(SWEPT.into_iter().filter(|label| edit.takes_off(*label)));
         if taken_off.is_empty() {
             continue;
         }
@@ -327,18 +327,13 @@ fn sweep(outside: &mut impl Outside) {
     }
 }
 
-/// `labels`' names, joined by "and".
-fn names(labels: impl Iterator<Item = Label>) -> String {
-    labels.map(Label::name).collect::<Vec<_>>().join(" and ")
-}
-
 /// The open issues the factory failed on that still wait for the Day shift,
 /// lowest number first: those labelled `agent-failed`, except one the Day
 /// shift has acted on, labelled `ready-for-agent` again, or with neither
 /// `in-progress` nor `needs-triage` left, which has `agent-failed` taken
 /// off instead and is not counted. A failure to take it off is only a
 /// warning; a failure to list them fails the Pickup run.
-fn failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
+fn clear_and_count_failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
     let mut failed = Vec::new();
     for ListedIssue { issue, labels, .. } in outside.open_issues(claim::AGENT_FAILED)? {
         if !labels.has(claim::AGENT_FAILED) {

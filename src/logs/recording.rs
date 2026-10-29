@@ -48,6 +48,9 @@ enum Log<W> {
     Held {
         lines: Vec<(Stream, String)>,
         shown: bool,
+        /// The indexes of `lines` already on the terminal while the rest
+        /// were held, which showing them leaves out.
+        shown_early: Vec<usize>,
     },
     Kept {
         path: PathBuf,
@@ -132,6 +135,7 @@ impl<O: Outside> Record<O> {
         self.command_log = Log::Held {
             lines: Vec::new(),
             shown: !quiet,
+            shown_early: Vec::new(),
         };
         self.step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
     }
@@ -144,9 +148,28 @@ impl<O: Outside> Record<O> {
         }
         if !self.child {
             for warning in &config.warnings {
-                self.step(format_args!("warning: {warning}"));
+                self.step_shown(format_args!("warning: {warning}"));
             }
             self.config_warnings = config.warnings.clone();
+        }
+    }
+
+    /// Hand on the progress line `message`, to the terminal even while a
+    /// quiet pass holds its other lines, and to the Command log as any
+    /// other.
+    fn step_shown(&mut self, message: impl Display) {
+        let line = self.progress_line(message);
+        if let Log::Held {
+            lines,
+            shown: false,
+            shown_early,
+        } = &mut self.command_log
+        {
+            let _ = self.outside.emit(Stream::Stderr, &line);
+            shown_early.push(lines.len());
+            lines.push((Stream::Stderr, line));
+        } else {
+            self.output(Stream::Stderr, line);
         }
     }
 
@@ -539,11 +562,17 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn show_held(&mut self) {
-        if let Log::Held { lines, shown } = &mut self.command_log
+        if let Log::Held {
+            lines,
+            shown,
+            shown_early,
+        } = &mut self.command_log
             && !*shown
         {
-            for (stream, line) in lines.iter() {
-                let _ = self.outside.emit(*stream, line);
+            for (index, (stream, line)) in lines.iter().enumerate() {
+                if !shown_early.contains(&index) {
+                    let _ = self.outside.emit(*stream, line);
+                }
             }
             *shown = true;
         }

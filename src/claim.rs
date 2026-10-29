@@ -93,17 +93,6 @@ pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Cl
 }
 
 impl Claim<'_> {
-    /// A bug Ticket run handed reproduction back to the reporter. End its Claim
-    /// without making the issue Ready again, including in a Continuation.
-    pub fn needs_info(self) {
-        let launch = self.launch.completion();
-        self.claimed.needs_info(&mut OnGitHub {
-            launch: &launch,
-            github: GitHub::new().completion(),
-            branch: &self.branch,
-        });
-    }
-
     /// End the Claim once the Run or the Spec run that made it has ended as
     /// `ending` says:
     ///
@@ -111,7 +100,9 @@ impl Claim<'_> {
     ///   closed.
     /// - Ready for review, or held with its pull request ready: the Claim
     ///   stays while the pull request waits.
-    /// - Not reproduced: as [`Claim::needs_info`].
+    /// - Not reproduced: a bug Ticket run handed reproduction back to the
+    ///   reporter, so the Claim ends without making the issue Ready again,
+    ///   including in a Continuation, and even after a Stop.
     /// - Failed: the Claim is released if nothing of the run is on origin to
     ///   take over, except a Security fix, whose Claim stays. A Claim that
     ///   stays labels the issue `agent-failed` too.
@@ -289,27 +280,27 @@ impl<'a> Claimed<'a> {
             }
             return Ok(claimed);
         }
-        let replaced: Vec<&str> = [
-            (claimed.removed_ready_for_agent, READY_FOR_AGENT),
-            (removed_agent_failed, AGENT_FAILED),
-        ]
-        .into_iter()
-        .filter_map(|(removed, label)| removed.then_some(label.name()))
-        .collect();
+        let replaced = labels::joined(
+            [
+                (claimed.removed_ready_for_agent, READY_FOR_AGENT),
+                (removed_agent_failed, AGENT_FAILED),
+            ]
+            .into_iter()
+            .filter_map(|(removed, label)| removed.then_some(label)),
+        );
         if replaced.is_empty() {
             outside.step(format!("labelling #{} {IN_PROGRESS}", issue.number));
         } else {
             outside.step(format!(
-                "labelling #{} {IN_PROGRESS}, in place of {}",
-                issue.number,
-                replaced.join(" and ")
+                "labelling #{} {IN_PROGRESS}, in place of {replaced}",
+                issue.number
             ));
         }
         outside.apply(&edit)?;
         Ok(claimed)
     }
 
-    /// [`Claim::needs_info`], through `outside`.
+    /// [`Ending::NotReproduced`], through `outside`.
     fn needs_info(&self, outside: &mut impl Outside) {
         let issue = self.issue;
         let result = (|| {
@@ -339,17 +330,21 @@ impl<'a> Claimed<'a> {
 
     /// [`Claim::end`], through `outside`.
     fn end(&self, outside: &mut impl Outside, ending: Ending) {
+        if let Ending::NotReproduced = ending {
+            self.needs_info(outside);
+            return;
+        }
         if let Some(ending) = outside.stop() {
             self.stopped(outside, ending);
             return;
         }
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
-            Ending::Reached(Goal::ReadyForReview) | Ending::Held => {}
-            Ending::NotReproduced => self.needs_info(outside),
+            Ending::Reached(Goal::ReadyForReview) | Ending::Held | Ending::NotReproduced => {}
             Ending::Failed if self.security_fix => self.label_failed(outside),
             Ending::Failed => {
-                if self.release_if_nothing_on_origin(outside) {
+                let claim_stays = self.release_if_nothing_on_origin(outside);
+                if claim_stays {
                     self.label_failed(outside);
                 }
             }
@@ -1099,6 +1094,19 @@ mod tests {
         let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
         let claimed = claimed(&mut issue, &url);
         issue.started = true;
+
+        claimed.end(&mut issue, Ending::NotReproduced);
+
+        assert_eq!(labels(&issue), ["bug", "needs-info"]);
+    }
+
+    #[test]
+    fn a_bug_not_reproduced_ends_the_claim_with_needs_info_even_after_a_stop() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = true;
+        issue.stop = Some(crate::logs::stop::Ending::Triage);
 
         claimed.end(&mut issue, Ending::NotReproduced);
 

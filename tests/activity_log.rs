@@ -476,3 +476,51 @@ fn with_quiet_skips_a_pass_that_fails_prints_its_lines_and_its_error() {
         result.stderr
     );
 }
+
+#[test]
+fn an_ignored_pickup_limit_is_warned_of_on_stderr_even_by_a_quiet_skip() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n[pickup]\nlimit = 10\n");
+
+    let result = run_in_zone(&scenario, &["pickup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("warning: pickup.limit is ignored"),
+        "stderr: {:?}",
+        result.stderr
+    );
+}
+
+#[test]
+fn with_quiet_skips_a_pass_that_works_prints_an_ignored_pickup_limit_once_and_logs_it() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(&format!("{QUIET_SKIPS}[pickup]\nlimit = 10\n"));
+    ready_issue(&scenario, 7);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = run_in_zone(&scenario, &["pickup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        result
+            .stderr
+            .matches("warning: pickup.limit is ignored")
+            .count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
+    let command_log = scenario
+        .path(LOGS_DIR)
+        .join("acme/widgets")
+        .join(the_one_command_log(&scenario, "pickup"));
+    let command_log = fs::read_to_string(command_log).unwrap();
+    assert_eq!(
+        command_log
+            .matches("warning: pickup.limit is ignored")
+            .count(),
+        1,
+        "{command_log}"
+    );
+}
