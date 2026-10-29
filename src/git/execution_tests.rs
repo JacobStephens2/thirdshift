@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::interrupt;
+use crate::process::is_alive;
 use crate::test_support::with_recorded_signal;
 use std::fs;
 use std::sync::mpsc;
@@ -279,18 +280,12 @@ impl Fixture {
     }
 }
 
-fn exists(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 only probes the PID recorded by this fixture.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Some(pid) = self.pid()
-            && exists(pid)
+            && is_alive(pid)
         {
-            // SAFETY: this PID belongs to the test's finite executable.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = crate::process::signal(pid, libc::SIGKILL);
         }
     }
 }
@@ -318,10 +313,10 @@ fn a_parent_only_signal_stops_active_git_and_propagates_through_probes() {
             );
             let pid = fixture.pid().expect("the executable never started");
             let deadline = Instant::now() + Duration::from_secs(2);
-            while exists(pid) && Instant::now() < deadline {
+            while is_alive(pid) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            assert!(!exists(pid), "Git left its owned executable alive");
+            assert!(!is_alive(pid), "Git left its owned executable alive");
             assert_eq!(
                 git.run_optional(FIXTURE).unwrap_err().to_string(),
                 "interrupted"

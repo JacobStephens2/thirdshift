@@ -1,4 +1,5 @@
 use super::*;
+use crate::process::is_alive;
 #[test]
 fn first_bug_backfill_keeps_closures_in_the_cutoffs_second() {
     with_recorded_signal(
@@ -104,18 +105,12 @@ impl Fixture {
     }
 }
 
-fn exists(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 only probes the fixture's recorded PID.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Some(pid) = self.pid()
-            && exists(pid)
+            && is_alive(pid)
         {
-            // SAFETY: this PID belongs to the fixture executable.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = crate::process::signal(pid, libc::SIGKILL);
         }
     }
 }
@@ -665,7 +660,7 @@ fn parent_only_interruption_stops_active_github() {
                 "GitHub waited for natural expiry"
             );
             assert!(
-                !exists(fixture.pid().expect("the executable never started")),
+                !is_alive(fixture.pid().expect("the executable never started")),
                 "GitHub left its executable alive"
             );
         },
@@ -781,7 +776,7 @@ fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
                 .pr_snapshot(&issue(), "issue-7")
                 .expect_err("cancellation became absence");
             assert_eq!(error.to_string(), "interrupted");
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }
@@ -824,7 +819,7 @@ esac
             assert!(interrupt::requested());
             assert!(github.pr_snapshot(&issue(), "12").is_err());
             assert!(github.mark_ready(&issue(), "12").is_err());
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }
@@ -1364,7 +1359,7 @@ fn cancellation_during_a_ci_check_read_starts_no_further_request() {
             assert_eq!(error.to_string(), "interrupted");
             assert_eq!(fs::read_to_string(fixture.path("reads")).unwrap(), "read\n");
             assert!(started.elapsed() < Duration::from_secs(2));
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }

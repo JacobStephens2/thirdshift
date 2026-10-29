@@ -812,9 +812,7 @@ impl Handle {
         if !self.reaped && !self.stop_sent {
             // The process group is shared. Signal only this unreaped child,
             // allowing its Failed run path to finish before reaping it.
-            // SAFETY: kill has no memory-safety preconditions; this PID is
-            // still owned and has not been reaped.
-            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            let _ = crate::process::signal(self.child.id() as libc::pid_t, libc::SIGTERM);
             self.stop_sent = true;
         }
         // Setup may have failed before either pipe got its reader.
