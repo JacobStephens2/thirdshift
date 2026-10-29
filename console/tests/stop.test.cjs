@@ -142,3 +142,40 @@ for (const requeue of [false, true]) {
     assert.deepEqual(errors, []);
   });
 }
+
+test('Stop copy fallback does not move to another CLI when the Command ends', { skip: process.platform !== 'linux' }, async t => {
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const ticks = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  const identity = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${ticks}`;
+  const path = join(folder, '8-fixture.command.json');
+  const record = {
+    version: 1, kind: 'Run', name: 'acme/widgets#8', repository: 'acme/widgets', hostname: 'fixture',
+    issue: { number: 8, url: 'https://github.com/acme/widgets/issues/8', title: 'Copy Stop during a live update' },
+    process_id: server.pid, process_start: identity, harness: 'codex',
+    started_at: new Date().toISOString(), ended_at: null, stages: [], outcome: null
+  };
+  await writeFile(path, JSON.stringify(record));
+  t.after(() => rm(path, { force: true }));
+  await writeFile(join(folder, '8-fixture.log'), 'Working\n');
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+  });
+  await page.goto(`${origin}/waterfall`);
+  await page.locator('.span-row').filter({ hasText: 'acme/widgets#8' }).first().click();
+  await page.getByRole('button', { name: 'Command details', exact: true }).click();
+  const stop = page.locator('#peek form[action="/stop"]');
+  const expected = await stop.locator('code').textContent();
+  await stop.getByRole('button', { name: 'Copy CLI', exact: true }).click();
+  await stop.getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
+  assert.equal(await page.evaluate(() => getSelection().toString()), expected);
+  record.outcome = 'interrupted';
+  record.ended_at = new Date().toISOString();
+  await writeFile(path, JSON.stringify(record));
+  await stop.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).count(), 1);
+  assert.deepEqual(await page.locator('#peek .peek-cli [role="status"]').allTextContents(), ['']);
+  assert.equal(await page.evaluate(() => getSelection().toString()), '');
+});

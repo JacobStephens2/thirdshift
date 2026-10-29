@@ -330,15 +330,20 @@ async function refreshPeek() {
 // A live refresh replaces the pane; keep each copy's status and its by-hand selection.
 function keepCopy() {
   const selection = getSelection();
-  const kept = [...content.querySelectorAll('.peek-cli')].map(line => ({
-    status: line.querySelector('[role="status"]').textContent,
-    selected: line.contains(selection.anchorNode) && selection.toString() === line.querySelector('code').textContent
+  const kept = new Map([...content.querySelectorAll('.peek-cli')].map(line => {
+    const code = line.querySelector('code');
+    return [code.textContent, {
+      status: line.querySelector('[role="status"]').textContent,
+      selected: line.contains(selection.anchorNode) && selection.toString() === code.textContent
+    }];
   }));
   return () => {
-    content.querySelectorAll('.peek-cli').forEach((fresh, index) => {
-      if (!kept[index]) return;
-      fresh.querySelector('[role="status"]').textContent = kept[index].status;
-      if (kept[index].selected) selection.selectAllChildren(fresh.querySelector('code'));
+    content.querySelectorAll('.peek-cli').forEach(fresh => {
+      const code = fresh.querySelector('code');
+      const previous = kept.get(code.textContent);
+      if (!previous) return;
+      fresh.querySelector('[role="status"]').textContent = previous.status;
+      if (previous.selected) selection.selectAllChildren(code);
     });
   };
 }
