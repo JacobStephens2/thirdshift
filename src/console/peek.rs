@@ -261,11 +261,11 @@ impl Fact {
             children,
         }
     }
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only objects and arrays have children; every scalar JSON value has none"
-    )]
     fn children(value: Value, in_metrics: bool, parent: &str) -> Vec<Self> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only objects and arrays have children; every scalar JSON value has none"
+        )]
         match value {
             Value::Object(fields) => fields
                 .into_iter()

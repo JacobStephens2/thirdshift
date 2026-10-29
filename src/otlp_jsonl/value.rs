@@ -48,10 +48,6 @@ impl Serialize for AnyValue {
 }
 
 impl<'de> Deserialize<'de> for AnyValue {
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "a double other than a JSON string goes to serde_json, to read as a number or reject"
-    )]
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let fields = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
         let mut selected = None;
@@ -65,19 +61,25 @@ impl<'de> Deserialize<'de> for AnyValue {
                 }
                 "boolValue" => Self::Bool(serde_json::from_value(value).map_err(D::Error::custom)?),
                 "intValue" => Self::Int(integer::deserialize(value).map_err(D::Error::custom)?),
-                "doubleValue" => Self::Double(match value {
-                    serde_json::Value::String(s) => match s.as_str() {
-                        "NaN" => f64::NAN,
-                        "Infinity" => f64::INFINITY,
-                        "-Infinity" => f64::NEG_INFINITY,
-                        _ => s
-                            .parse::<f64>()
-                            .ok()
-                            .filter(|v| v.is_finite())
-                            .ok_or_else(|| D::Error::custom("invalid double"))?,
+                "doubleValue" => Self::Double(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "a double other than a JSON string goes to serde_json, to read as a number or reject"
+                    )]
+                    match value {
+                        serde_json::Value::String(s) => match s.as_str() {
+                            "NaN" => f64::NAN,
+                            "Infinity" => f64::INFINITY,
+                            "-Infinity" => f64::NEG_INFINITY,
+                            _ => s
+                                .parse::<f64>()
+                                .ok()
+                                .filter(|v| v.is_finite())
+                                .ok_or_else(|| D::Error::custom("invalid double"))?,
+                        },
+                        v => serde_json::from_value(v).map_err(D::Error::custom)?,
                     },
-                    v => serde_json::from_value(v).map_err(D::Error::custom)?,
-                }),
+                ),
                 "arrayValue" => Self::Array(
                     serde_json::from_value::<Values<Vec<AnyValue>>>(value)
                         .map_err(D::Error::custom)?

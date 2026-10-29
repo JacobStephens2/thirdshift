@@ -52,9 +52,7 @@ stateright = "=0.31.0"
 tower-layer = "0.3.3"
 
 [lints.clippy]
-# A match on Run state or an outcome lists every variant, so a new variant
-# fails to compile until each match decides it. Only parsing streams, logs,
-# traces and JSON keeps a wildcard, under an #[expect] whose reason says why.
+# List every variant of a match on Run state or an outcome; keep a wildcard only under an #[expect] whose reason says why.
 wildcard_enum_match_arm = "warn"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies

@@ -825,16 +825,18 @@ mod tests {
     }
 
     /// The progress lines among `did`.
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "a test helper that picks the progress lines out of what the loop did"
-    )]
     fn lines(did: &[Did]) -> Vec<&str> {
         did.iter()
-            .filter_map(|did| match did {
-                Did::Line(line) => Some(line.as_str()),
-                _ => None,
-            })
+            .filter_map(
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "keeps only progress lines; a new kind of step must be listed to count"
+                )]
+                |did| match did {
+                    Did::Line(line) => Some(line.as_str()),
+                    _ => None,
+                },
+            )
             .collect()
     }
 
@@ -1701,10 +1703,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "the test picks out the merges among what the loop did"
-    )]
     fn a_sixth_foreign_batch_is_refused_before_its_merge() {
         let (delivered, did) = deliver(
             Goal::Merged,
@@ -1720,6 +1718,10 @@ mod tests {
             cause(delivered),
             "origin/issue-7 kept moving: merged it again 5 times"
         );
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test asserts on merges only; the loop's other steps are not under test"
+        )]
         let merged: Vec<_> = did
             .iter()
             .filter_map(|did| match did {

@@ -171,10 +171,6 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
 
     #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "the test picks out the events it asserts on; the other events are not under test"
-    )]
     fn retained_only_model_completions_remain_distinct_calls_without_task_envelopes() {
         let records = [10, 20].map(|input| {
             json!({
@@ -191,6 +187,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let log = SessionLog::parse(&text, "s").unwrap();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test picks out the events it asserts on; the other events are not under test"
+        )]
         let starts: Vec<_> = log
             .events
             .iter()
@@ -199,6 +199,10 @@ mod tests {
                 _ => None,
             })
             .collect();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test picks out the events it asserts on; the other events are not under test"
+        )]
         let ends: Vec<_> = log
             .events
             .iter()

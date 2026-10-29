@@ -185,10 +185,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "the test picks out the events it asserts on; the other events are not under test"
-    )]
     fn normalized_muse_lifecycle_edges_are_ordered_and_tool_results_enrich_the_same_call() {
         use crate::harness::interpretation::event::{Event, Outcome};
         let mut stream = stream(Harness::Muse, "");
@@ -200,13 +196,19 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter_map(|event| match event {
-                    Event::ModelCallStarted { id, .. }
-                    | Event::ModelCallEnded { id, .. }
-                    | Event::ToolCallStarted { id, .. }
-                    | Event::ToolCallEnded { id, .. } => Some(id.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "the test asserts on call ids; other events are not under test"
+                    )]
+                    |event| match event {
+                        Event::ModelCallStarted { id, .. }
+                        | Event::ModelCallEnded { id, .. }
+                        | Event::ToolCallStarted { id, .. }
+                        | Event::ToolCallEnded { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect::<Vec<_>>(),
             ["r:m1", "r:m1", "r:t1", "r:t1"]
         );

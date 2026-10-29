@@ -1732,11 +1732,11 @@ const GITHUB_CACHE: &str = "home/.thirdshift/logs/github-inbox.json";
 
 #[test]
 fn review_open_pr_row_exposes_when_github_observed_it() {
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only strings hold a time; arrays and objects are searched, and other values hold none"
-    )]
     fn has_time(value: &Value) -> bool {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only strings hold a time; arrays and objects are searched, and other values hold none"
+        )]
         match value {
             Value::String(text) => chrono::DateTime::parse_from_rfc3339(text).is_ok(),
             Value::Array(values) => values.iter().any(has_time),

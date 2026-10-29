@@ -2501,7 +2501,7 @@ fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&s
         .map(|edit| {
             #[expect(
                 clippy::wildcard_enum_match_arm,
-                reason = "a fake edit's author is null or a login"
+                reason = "a fake edit's author is null or, whatever else the fake stores, a login"
             )]
             let actor = match edit.at("by") {
                 Null => Null,
@@ -2548,7 +2548,7 @@ fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
             };
             #[expect(
                 clippy::wildcard_enum_match_arm,
-                reason = "a fake comment's author is null or a login"
+                reason = "a fake comment's author is null or, whatever else the fake stores, a login"
             )]
             let author = match by {
                 Null => Null,

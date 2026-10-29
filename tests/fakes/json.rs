@@ -43,22 +43,22 @@ pub fn object<const N: usize>(fields: [(&str, Json); N]) -> Json {
 impl Json {
     /// The value under `key` of an object; `None` for a missing key or a
     /// value that isn't an object.
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only an object has keys; any other value has none"
-    )]
     pub fn get(&self, key: &str) -> Option<&Json> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only an object has keys; any other value has none"
+        )]
         match self {
             Json::Object(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
 
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only an object has keys; any other value has none"
-    )]
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Json> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only an object has keys; any other value has none"
+        )]
         match self {
             Json::Object(fields) => fields.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
@@ -102,11 +102,11 @@ impl Json {
         self.at_mut(key)
     }
 
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only a string reads as one; any other value is none"
-    )]
     pub fn as_str(&self) -> Option<&str> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only a string reads as one; any other value is none"
+        )]
         match self {
             Json::String(text) => Some(text),
             _ => None,
@@ -119,33 +119,33 @@ impl Json {
             .unwrap_or_else(|| panic!("{self} is not a string"))
     }
 
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only a number reads as an integer; any other value is none"
-    )]
     pub fn as_i64(&self) -> Option<i64> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only a number reads as an integer; any other value is none"
+        )]
         match self {
             Json::Number(text) => text.parse().ok(),
             _ => None,
         }
     }
 
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only a list has items; any other value fails the test"
-    )]
     pub fn items(&self) -> &[Json] {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only a list has items; any other value fails the test"
+        )]
         match self {
             Json::Array(items) => items,
             _ => panic!("{self} is not a list"),
         }
     }
 
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "only a list has items; any other value fails the test"
-    )]
     pub fn items_mut(&mut self) -> &mut Vec<Json> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only a list has items; any other value fails the test"
+        )]
         match self {
             Json::Array(items) => items,
             _ => panic!("{self} is not a list"),
@@ -166,11 +166,11 @@ impl Json {
 
     /// The value as a Python f-string shows it: strings bare, `None`,
     /// `True` and `False` for the rest of the scalars.
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "the scalars Python spells its own way are listed; every other value shows as JSON"
-    )]
     pub fn python(&self) -> String {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the scalars Python spells its own way are listed; every other value shows as JSON"
+        )]
         match self {
             Json::Null => "None".to_owned(),
             Json::Bool(true) => "True".to_owned(),

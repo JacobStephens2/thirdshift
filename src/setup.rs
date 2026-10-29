@@ -527,32 +527,36 @@ mod scripted {
         }
 
         /// Every prompt shown, plain or hidden, in order.
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "a test helper that picks the prompts out of the fake terminal's calls"
-        )]
         pub fn prompts(&self) -> Vec<&str> {
             self.calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::Ask(prompt) | Call::AskHidden(prompt) => Some(prompt.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "keeps only prompting calls; a new kind must be listed to count"
+                    )]
+                    |call| match call {
+                        Call::Ask(prompt) | Call::AskHidden(prompt) => Some(prompt.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect()
         }
 
         /// Every line said on the terminal, in order.
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "a test helper that picks the lines said out of the fake terminal's calls"
-        )]
         pub fn said(&self) -> Vec<&str> {
             self.calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::Say(line) => Some(line.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "keeps only lines said; a new kind of call must be listed to count"
+                    )]
+                    |call| match call {
+                        Call::Say(line) => Some(line.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect()
         }
 

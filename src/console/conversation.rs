@@ -203,10 +203,6 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
     }
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "message content that is neither text nor blocks shows as the raw log line"
-)]
 fn parts(line: &str) -> Vec<Part> {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return vec![Part::Plain(line.into())];
@@ -220,6 +216,10 @@ fn parts(line: &str) -> Vec<Part> {
         }
         Some("assistant" | "user") => {
             let role = text(&event, "type");
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "message content that is neither text nor blocks shows as the raw log line"
+            )]
             match &event["message"]["content"] {
                 Value::String(content) => vec![Part::Message(role.into(), content.clone(), None)],
                 Value::Array(blocks) if !blocks.is_empty() => blocks

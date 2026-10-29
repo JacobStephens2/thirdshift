@@ -1109,10 +1109,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::wildcard_enum_match_arm,
-        reason = "the test picks out advisories and reproductions among the calls it asserts on"
-    )]
     fn repeated_fingerprints_preserve_counts_metadata_order_and_reproduce_once() {
         use crate::github::{DraftAdvisory, Package};
         use serde_json::json;
@@ -1154,10 +1150,16 @@ mod tests {
             outside
                 .calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::CreateAdvisory(fingerprint) => Some(fingerprint.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "asserts on advisories created; other calls are not under test"
+                    )]
+                    |call| match call {
+                        Call::CreateAdvisory(fingerprint) => Some(fingerprint.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect::<Vec<_>>(),
             vec!["new"]
         );
@@ -1165,10 +1167,16 @@ mod tests {
             outside
                 .calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::Reproduce(record) => Some(record.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "asserts on reproductions; other calls are not under test"
+                    )]
+                    |call| match call {
+                        Call::Reproduce(record) => Some(record.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect::<Vec<_>>(),
             vec!["new"]
         );

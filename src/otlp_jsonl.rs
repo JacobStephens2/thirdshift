@@ -313,11 +313,11 @@ impl<B: BufRead, R: Request> Iterator for Reader<B, R> {
     }
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "only objects and arrays hold fields; JSON scalars have none to remove"
-)]
 fn remove_null_fields(value: &mut serde_json::Value) {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only objects and arrays hold fields; JSON scalars have none to remove"
+    )]
     match value {
         serde_json::Value::Object(fields) => {
             fields.retain(|_, value| !value.is_null());

@@ -90,11 +90,10 @@ fn print_steps(command: &Command, indent: &str) {
 }
 
 fn step_message(line: &str) -> Option<&str> {
-    match crate::progress::ChildLine::of(line) {
-        crate::progress::ChildLine::Own(message) if message.starts_with("step ") => Some(message),
-        crate::progress::ChildLine::Own(_)
-        | crate::progress::ChildLine::Relayed
-        | crate::progress::ChildLine::Continuation => None,
+    use crate::progress::ChildLine;
+    match ChildLine::of(line) {
+        ChildLine::Own(message) if message.starts_with("step ") => Some(message),
+        ChildLine::Own(_) | ChildLine::Relayed | ChildLine::Continuation => None,
     }
 }
 
