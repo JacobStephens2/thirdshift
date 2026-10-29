@@ -334,6 +334,38 @@ test("homepage accessible names use steps in place of press units", async (t) =>
   assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
 });
 
+for (const javaScriptEnabled of [false, true]) {
+  test(`the Third shift overview stays compact and its details expand (JavaScript: ${javaScriptEnabled})`, async (t) => {
+    for (const width of [320, 390, 768, 1280]) {
+      const page = await pageForTest(t, { javaScriptEnabled, viewport: { width, height: 900 } });
+      await page.goto(`${origin}/`);
+      await page.evaluate(() => document.fonts.ready);
+      const card = page.locator(".shift.third");
+      const height = await card.evaluate(node => node.getBoundingClientRect().height);
+      assert.ok(height < 800, `${width}px: Third shift overview occupies ${height}px`);
+      await card.getByText("thirdshift takes an Issue URL:").waitFor({ state: "visible" });
+      assert.equal(await card.getByRole("link", { name: "/thirdshift-implement", exact: true }).count(), 1);
+      assert.equal(await card.locator("details").count(), 2);
+      assert.equal(await card.locator("details[open]").count(), 0);
+      for (const fold of await card.locator("details").all()) {
+        const summary = fold.locator(":scope > summary");
+        const content = fold.locator(":scope > .reading-content");
+        await content.waitFor({ state: "hidden" });
+        await summary.click();
+        await content.waitFor({ state: "visible" });
+        await assertFits(page, ".shifts, .shift, .shift details", `${width}px: expanded Third shift details fit`);
+        await summary.focus();
+        await page.keyboard.press("Space");
+        await content.waitFor({ state: "hidden" });
+        await page.keyboard.press("Enter");
+        await content.waitFor({ state: "visible" });
+        await page.keyboard.press("Enter");
+        await content.waitFor({ state: "hidden" });
+      }
+    }
+  });
+}
+
 test("the homepage keeps six workflows compact and expandable without JavaScript", async (t) => {
   const names = ["Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Scoring run"];
   for (const width of [320, 390, 768, 1280]) {
@@ -509,6 +541,33 @@ test("the homepage, the guide and the videos page link to the architecture page 
     await page.goto(`${origin}${path}`);
     await page.getByRole("link", { name: "Architecture", exact: true }).first().click();
     await page.waitForURL(url => url.pathname === "/architecture/");
+  }
+});
+
+test("architecture supporting topics start compact and expand independently without JavaScript", async (t) => {
+  for (const width of [320, 1280]) {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/architecture/`);
+    const notes = page.locator("#factory .reading-more");
+    assert.deepEqual(await notes.locator(":scope > summary").allTextContents(), [
+      "Console and host resources", "Processes and Session traces", "Experiments and Scores", "Run metrics and Command details",
+    ]);
+    assert.equal(await page.locator("#factory details[open]").count(), 0);
+    const height = await notes.evaluateAll(nodes => nodes.reduce((sum, node) => sum + node.getBoundingClientRect().height, 0));
+    assert.ok(height < 500, `${width}px: closed supporting topics occupy ${height}px`);
+    await page.locator("#factory .arch-stages").waitFor({ state: "visible" });
+    for (const fold of await notes.all()) {
+      const summary = fold.locator(":scope > summary");
+      const content = fold.locator(":scope > .reading-content");
+      await content.waitFor({ state: "hidden" });
+      await summary.click();
+      await content.waitFor({ state: "visible" });
+      assert.equal(await page.locator("#factory details[open]").count(), 1);
+      await assertFits(page, "#factory, #factory details", `${width}px: supporting topics fit`);
+      await summary.focus();
+      await page.keyboard.press("Space");
+      await content.waitFor({ state: "hidden" });
+    }
   }
 });
 

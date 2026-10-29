@@ -235,9 +235,9 @@ body::after { /* scanlines */
 @keyframes blink { 50% { opacity: 0; } }
 
 /* ---------- Day shift / third shift ---------- */
-.shifts { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--rule); border: 1px solid var(--rule); }
+.shifts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; background: var(--rule); border: 1px solid var(--rule); }
 @media (max-width: 760px) { .shifts { grid-template-columns: 1fr; } }
-.shift { background: var(--k); padding: 26px; display: grid; gap: 14px; align-content: start; }
+.shift { min-width: 0; background: var(--k); padding: 26px; display: grid; gap: 14px; align-content: start; }
 .shift h3 { font-size: 34px; }
 .shift p { margin: 0; }
 .shift .who { color: var(--dim); }
@@ -249,6 +249,13 @@ body::after { /* scanlines */
 .chain a { color: inherit; }
 .chain a:hover { color: var(--nc); }
 .shift code { font-size: .92em; color: var(--paper); white-space: nowrap; }
+
+/* Supporting reading stays available without stretching the overview. */
+.reading-more { min-width: 0; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
+.reading-more > summary { font-weight: 700; }
+.reading-content { display: grid; gap: 14px; margin-top: 14px; }
+.reading-content > p { margin: 0; }
+.reading-content code { white-space: normal; overflow-wrap: anywhere; }
 
 /* ---------- What comes off the press ---------- */
 .offpress { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
