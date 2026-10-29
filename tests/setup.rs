@@ -217,6 +217,9 @@ fn setup_probe_scope_tracks_security_skill_requirements() {
     // requiring a decision about Setup's probe coverage. #608 checks network,
     // read-only host home and scratch writes; it does not certify the remaining
     // environment/resource/credential controls of the target-code runner (#726).
+    // The non-Linux report (`unavailable_report` in src/setup/sandbox.rs), the
+    // User manual's Setup section and the Architecture page restate these
+    // controls; update them with it.
     let skill = include_str!("../skills/thirdshift-security-audit/SKILL.md");
     let requirements = skill
         .split_once("provides all of these controls:\n\n")
