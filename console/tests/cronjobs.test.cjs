@@ -33,6 +33,37 @@ after(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
+test('Cron jobs reads like terminal crontab lines on desktop and phone, with or without JavaScript', async t => {
+  for (const javaScriptEnabled of [true, false]) {
+    for (const width of [1440, 390]) {
+      await t.test(`${width}px, JavaScript ${javaScriptEnabled}`, async t => {
+        const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height: 900 } });
+        t.after(() => context.close());
+        const page = await context.newPage();
+        await page.goto(`${origin}/cronjobs`);
+        const crontab = page.getByRole('region', { name: 'thirdshift crontab entries', exact: true });
+        await crontab.waitFor();
+        assert.equal(await crontab.textContent(), '*/5 * * * *  cd /srv/a-repository-with-a-long-name && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/cron.log 2>&1\n@reboot  thirdshift secure base main # <script>unsafe()</script>\n');
+        assert.equal(await crontab.locator('script').count(), 0);
+        assert.equal(await crontab.evaluate(el => getComputedStyle(el).whiteSpace), 'pre');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        const listing = await crontab.boundingBox();
+        const lastFired = await page.getByRole('heading', { name: 'Last fired by repository', exact: true }).boundingBox();
+        assert.ok(listing.height < 100, 'Two jobs should occupy two compact terminal lines');
+        assert.ok(lastFired.y >= listing.y + listing.height, 'Last-fired observations stay below the listing');
+        await crontab.focus();
+        await page.keyboard.press('ArrowRight');
+        // Poll from Node: page.waitForFunction cannot keep polling without JavaScript.
+        const deadline = Date.now() + 5000;
+        while (!await crontab.evaluate(el => el.scrollLeft > 0)) {
+          assert.ok(Date.now() < deadline, 'Arrow keys should scroll the focused crontab');
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      });
+    }
+  }
+});
+
 test('Cron jobs is reachable by link and keyboard, escapes commands and fits a phone', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());

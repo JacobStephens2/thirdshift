@@ -29,6 +29,9 @@ h2 { margin: 0; font-weight: var(--head-weight); }
 .peek-output pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 8em; padding: 8px; border: 1px solid var(--rule); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; }
 code, .now, .subject, .plan { font-family: var(--font-mono); font-size: 12px; }
 code { overflow-wrap: anywhere; }
+.crontab { max-width: 100%; overflow: auto; white-space: pre; padding: 16px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); font: 13px/1.6 var(--font-mono); }
+.crontab code { font: inherit; overflow-wrap: normal; }
+.cron-schedule { color: var(--look-text); font-weight: 600; }
 /* A CLI line stays one line, cut off at the edge; Copy CLI copies all of it. */
 .peek-cli { display: flex; align-items: baseline; gap: 8px; }
 .peek-cli code { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
