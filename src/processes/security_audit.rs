@@ -73,6 +73,9 @@ pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Res
         let mut findings = findings::Findings::default();
         findings.log = attempt.log;
         findings.record(&mut outside, attempt.outcome?, None)?;
+        if let Some(earlier) = state.as_mut() {
+            findings.carry_unreproduced_from(earlier);
+        }
         let message = findings.recorded.to_string();
         *state = Some(findings);
         Ok(message)

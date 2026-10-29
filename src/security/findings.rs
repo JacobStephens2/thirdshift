@@ -86,6 +86,13 @@ impl Findings {
         !self.pending.is_empty()
     }
 
+    /// Keep earlier records ahead of this audit's, in the order they were created.
+    pub(crate) fn carry_unreproduced_from(&mut self, earlier: &mut Self) {
+        let mut pending = std::mem::take(&mut earlier.pending);
+        pending.append(&mut self.pending);
+        self.pending = pending;
+    }
+
     pub fn record(
         &mut self,
         outside: &mut impl Outside,
