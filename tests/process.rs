@@ -743,7 +743,7 @@ fn process_lists_custom_processes_with_their_descriptions() {
     assert_eq!(empty.code, Some(0), "{}", empty.stderr);
     assert_eq!(
         empty.stdout,
-        "ticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+        "spec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
     );
 
     write_process(&scenario, "review", REVIEW);
@@ -767,7 +767,7 @@ skill = \"to-spec\"
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
             result.stdout,
-            "gather: Gather notes\nreview: Review the diff\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+            "gather: Gather notes\nreview: Review the diff\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
         );
     }
 }
