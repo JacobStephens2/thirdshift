@@ -228,6 +228,14 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
         .next()
         .unwrap();
     assert!(notice.contains("Last recorded skipped Passes"), "{notice}");
+    assert!(
+        notice.contains("<li>2026-01-01 12:00 · <span>Pickup run idle on acme/widgets:"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<li>2026-01-01 12:01 · <span>Architect run idle on acme/widgets:"),
+        "{notice}"
+    );
     let status = Command::new(binary)
         .args(["status", "--json"])
         .env("HOME", home.path())
@@ -236,6 +244,15 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
     assert!(status.status.success());
     let status: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status["idle_passes"].as_array().unwrap().len(), 2);
+    assert!(
+        status["idle_passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pass| {
+                pass["kind"] == "Pickup run" && pass["recorded_at"] == "2026-01-01T12:00:00"
+            })
+    );
     assert!(notice.contains("Pickup run idle on acme/widgets: Claim limit reached &#60;script&#62;unsafe&#60;/script&#62;"), "{notice}");
     assert!(
         notice.contains("Architect run idle on acme/widgets: plan still open"),
@@ -700,11 +717,8 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
     configure(home.path());
     let root = home.path().join(".thirdshift/logs/acme/widgets");
     fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("pickup.last-fired"),
-        chrono::Utc::now().to_rfc3339(),
-    )
-    .unwrap();
+    let fired = "2026-10-29T12:34:56-04:00";
+    fs::write(root.join("pickup.last-fired"), fired).unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
     let notice = html
@@ -723,6 +737,14 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
         .unwrap();
     assert!(starts.contains("Pickup last fired"), "{starts}");
     assert!(starts.contains("on acme/widgets"), "{starts}");
+    assert!(
+        starts.contains(&format!(
+            "<li><time datetime=\"{fired}\">{}",
+            super::support::local_minute(fired)
+        )),
+        "{starts}"
+    );
+    assert!(starts.contains("</time> · Pickup last fired"), "{starts}");
 }
 
 #[test]
