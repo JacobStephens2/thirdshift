@@ -267,6 +267,9 @@ sections. It points to pull requests in Ready for review, and offers the last re
 under **Last recorded skipped Passes**, and when each Pass last fired under
 **Last fired Passes**, both folded closed on each page load. Open either to
 read it; live updates keep it open while you read.
+Each bullet starts with its recorded date and time: the Activity log time for a
+skipped reason, or the saved Pass start for a last-fired entry. Repeated skips
+keep the reason's original recorded time while updating the last-fired time.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. A live Command in
 Needs you, or in a hidden section, still counts as running.

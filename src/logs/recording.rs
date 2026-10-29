@@ -743,7 +743,7 @@ impl<O: Outside> Record<O> {
             } else {
                 &text
             };
-            if activity::last_of(whole, kind) == Some(line) {
+            if activity::last_of(whole, kind).map(|(_, text)| text) == Some(line) {
                 return Ok(());
             }
         }

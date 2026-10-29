@@ -186,7 +186,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             }
         }
         for pass in status.idle_passes {
-            println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
+            println!("{}", pass.line());
         }
         for pass in status.pass_starts {
             println!("{}", pass.line());

@@ -841,12 +841,14 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
   const config = join(home, '.thirdshift/config.toml');
   const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
   const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
+  const fired = join(home, '.thirdshift/logs/acme/widgets/pickup.last-fired');
   const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
   Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
   fixture.issue.number = 203;
   await replaceRecord(ready, JSON.stringify(fixture));
   await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
   await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
+  await writeFile(fired, '2026-01-02T15:04:05Z');
   try {
     for (const javaScriptEnabled of [false, true]) {
       const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
@@ -861,6 +863,12 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
       await summary.focus();
       await page.keyboard.press('Enter');
       await reason.waitFor({ state: 'visible' });
+      assert.match(await notice.locator('#idle-passes li').textContent(), /^2026-01-01 12:00 · Pickup run idle/);
+      await notice.locator('#pass-starts summary').click();
+      const started = notice.locator('#pass-starts li');
+      await started.waitFor({ state: 'visible' });
+      assert.equal(await started.locator('time').getAttribute('datetime'), '2026-01-02T15:04:05Z');
+      assert.match(await started.textContent(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+ · Pickup last fired/);
       assert.equal(await notice.locator('script').count(), 0);
       assert.equal((await notice.textContent()).includes('Needs you'), false);
       for (const [label, section] of [['Ready for review', 'ready-for-review']]) {
@@ -874,6 +882,10 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
         await replaceRecord(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
         const updated = notice.getByText('Pickup run idle on acme/widgets: Claim limit reached', { exact: true });
         await updated.waitFor({ state: 'visible' });
+        assert.match(await notice.locator('#idle-passes li').textContent(), /^2026-01-01 12:01 · Pickup run idle/);
+        await replaceRecord(fired, '2026-01-03T15:04:05Z');
+        await page.waitForFunction(() => document.querySelector('#pass-starts time')?.dateTime === '2026-01-03T15:04:05Z');
+        assert.match(await started.textContent(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+ · Pickup last fired/);
         assert.equal(await page.evaluate(() => window.visitMarker), 'same idle Inbox');
         await summary.click();
         await updated.waitFor({ state: 'hidden' });
@@ -889,6 +901,7 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
     }
   } finally {
     await rm(activity, { force: true });
+    await rm(fired, { force: true });
     await rm(ready, { force: true });
     await writeFile(config, '[console]\nport = 0\n');
   }

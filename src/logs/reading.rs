@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
@@ -311,10 +311,24 @@ pub(super) struct RetainedWork {
 }
 
 #[derive(Serialize)]
-pub(super) struct IdlePass {
+pub(crate) struct IdlePass {
     pub(super) repository: String,
     pub(super) kind: String,
     pub(super) reason: String,
+    pub(super) recorded_at: Option<NaiveDateTime>,
+}
+
+impl IdlePass {
+    pub fn timestamp(&self) -> String {
+        self.recorded_at.map_or_else(
+            || "Time unknown".into(),
+            |time| time.format("%Y-%m-%d %H:%M").to_string(),
+        )
+    }
+
+    pub fn line(&self) -> String {
+        format!("{} idle on {}: {}", self.kind, self.repository, self.reason)
+    }
 }
 
 #[derive(Serialize)]
@@ -578,13 +592,14 @@ fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let mut idle = Vec::new();
     for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
         let kind = activity::Kind::Pass(pass);
-        if let Some(line) = activity::last_of(&activity, kind)
+        if let Some((time, line)) = activity::last_of(&activity, kind)
             && let Some(reason) = line.strip_prefix(&format!("{kind} skipped: "))
         {
             idle.push(IdlePass {
                 repository: repository.clone(),
                 kind: kind.to_string(),
                 reason: reason.into(),
+                recorded_at: NaiveDateTime::parse_from_str(time, activity::TIME_FORMAT).ok(),
             });
         }
     }
