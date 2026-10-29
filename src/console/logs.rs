@@ -78,15 +78,8 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
         .saturating_sub(BUDGET as u64);
     let batch = log.reader.read(offset, Framing::Raw, BUDGET)?;
     let text = String::from_utf8_lossy(&batch.bytes);
-    // Drop the cut first line when possible, retaining a tail even for a
-    // single line longer than the budget or output without a final newline.
-    let text = if offset > 0 {
-        text.split_once('\n')
-            .filter(|(_, tail)| !tail.is_empty())
-            .map_or(text.as_ref(), |(_, tail)| tail)
-    } else {
-        text.as_ref()
-    };
+    // The byte window can cut the oldest line; keep that suffix too, so a
+    // complete line at the window boundary and very long lines stay visible.
     let mut lines: Vec<_> = text.lines().rev().take(5).collect();
     lines.reverse();
     Ok(lines.join("\n"))

@@ -1992,6 +1992,37 @@ fn command_output_preview_handles_long_lines_empty_and_unavailable_logs() {
 }
 
 #[test]
+fn command_output_preview_keeps_a_complete_line_at_the_budget_boundary() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("failed"), 0);
+    let log = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.log");
+    let suffix = "\nsecond\nthird\nfourth\nfifth\n";
+    let tail = format!("{}{suffix}", "x".repeat(4096 - suffix.len()));
+    assert_eq!(tail.len(), 4096);
+    fs::write(&log, format!("older\n{tail}")).unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let response = console.get("/peek?command=acme/widgets%237");
+    assert_eq!(response.status(), 200);
+    let html = response.text().unwrap();
+    let output = html
+        .split_once("<pre>")
+        .expect("recent output should be present")
+        .1
+        .split_once("</pre>")
+        .unwrap()
+        .0;
+    assert_eq!(
+        output,
+        tail.trim_end_matches('\n'),
+        "the 4 KiB tail begins with a complete line; preserve all five lines"
+    );
+}
+
+#[test]
 fn stages_and_command_details_link_the_github_issue() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
