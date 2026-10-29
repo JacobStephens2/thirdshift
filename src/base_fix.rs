@@ -280,6 +280,9 @@ impl BaseFix {
             Ended::NotReproduced { comment_url } => {
                 bail!("Base fix #{number} did not reproduce: {comment_url}")
             }
+            Ended::ArchitectureReview { reason } => {
+                bail!("Base fix #{number} ended before Delivery: {reason}")
+            }
             Ended::Reached { .. } => {
                 taken.reached = true;
                 outside.merged(running);

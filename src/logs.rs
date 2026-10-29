@@ -38,6 +38,7 @@ mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
@@ -260,6 +261,20 @@ pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
 }
 
+/// Capture the Custom process's loaded source before recording its start or skip.
+pub(crate) fn process_loaded(identity: crate::processes::Identity) {
+    record().process_loaded(identity);
+}
+
+/// A selected Ticket Process belongs to the active dispatched run.
+pub(crate) fn process_running(identity: crate::processes::Identity) {
+    record().process_running(identity);
+}
+
+pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
+    record().custom_process()
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
@@ -418,8 +433,38 @@ pub(crate) fn trace_context() -> Option<trace::Context> {
     record().trace_context()
 }
 
+/// Sessions started while this is held export nothing. `fix-findings` and
+/// `close-findings` hold it so a Process command does not send private
+/// Security records, or the Ticket runs those Steps start, to OTLP.
+static OTLP_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct SuppressOtlp;
+
+impl SuppressOtlp {
+    pub(crate) fn new() -> Self {
+        OTLP_SUPPRESSED.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for SuppressOtlp {
+    fn drop(&mut self) {
+        OTLP_SUPPRESSED.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn otlp_suppressed() -> bool {
+    OTLP_SUPPRESSED.load(Ordering::Acquire) > 0
+}
+
+/// The configured OTLP endpoint, or none for a Security or Scoring command
+/// and while a [`SuppressOtlp`] guard is held.
 pub(crate) fn otlp_endpoint() -> Option<String> {
-    record().otlp_endpoint()
+    if otlp_suppressed() {
+        None
+    } else {
+        record().otlp_endpoint()
+    }
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
@@ -438,6 +483,21 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 }
 
 impl<'a> Work<'a> {
+    fn process(self) -> crate::processes::Identity {
+        use crate::processes::Identity;
+        let file = match self {
+            Self::Run(_) | Self::BaseFix(_) => "ticket-run",
+            Self::SpecRun(_) => "spec-run",
+            Self::ArchitectRun(_) => "architect-run",
+            Self::SecurityRun(_) => "security-run",
+            Self::PickupRun(_) => "pickup-run",
+            Self::ScoringRun(_) => "scoring-run",
+            Self::Experiment(_) => "experiment",
+            Self::Process { name, .. } => return Identity::custom(name, None),
+        };
+        Identity::built_in(file, &self.kind().to_string())
+    }
+
     fn initial_stage(self) -> Option<Stage> {
         match self {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),

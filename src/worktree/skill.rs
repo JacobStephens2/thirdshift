@@ -52,6 +52,6 @@ impl SkillWorktree {
 
 impl Drop for SkillWorktree {
     fn drop(&mut self) {
-        self.checkout.cleanup_skill(&self.launch);
+        self.checkout.cleanup_preserving_work(&self.launch);
     }
 }

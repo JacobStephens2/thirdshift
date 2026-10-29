@@ -95,7 +95,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
-       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security-review flags match a Ticket run (experimental)
+       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security flags match a Ticket run (experimental)
        thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
@@ -142,7 +142,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.
-  --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
+  --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
   https://thirdshift.app/docs/
 ";
@@ -336,6 +336,12 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => *run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    // A finding Step's child Ticket run carries this so its sessions stay
+    // local even though the owning command is a Process, not a Security run.
+    let _suppress_otlp = given
+        .as_ref()
+        .filter(|given| given.suppress_otlp)
+        .map(|_| logs::SuppressOtlp::new());
     let issue = match launch::resolve_issue(issue) {
         Ok(issue) => issue,
         Err(error) => return failure(&error),
@@ -357,7 +363,11 @@ fn main() -> ExitCode {
     let started_by = given
         .as_ref()
         .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
-    let ended = run::run_to_end(&issue, &mut asks, started_by);
+    let process = given
+        .as_ref()
+        .and_then(|given| given.process.as_deref())
+        .unwrap_or("ticket-run");
+    let ended = run::run_process_to_end(&issue, &mut asks, started_by, process);
     started.built_with(&asks.harness);
     started.finish(Ending::Run(ended))
 }

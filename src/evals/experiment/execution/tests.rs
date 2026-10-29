@@ -129,6 +129,7 @@ impl Fixture {
                 stage: crate::logs::trace::id(&[b"trials"]),
                 identity: "execution-fixture".into(),
                 repository: "acme/widgets".into(),
+                process: Default::default(),
             },
         }
     }

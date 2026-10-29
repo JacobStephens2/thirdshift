@@ -162,12 +162,14 @@ impl Fixture {
             &self.0.path().join("run"),
             &IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap(),
             &Given {
+                process: None,
                 kind: Kind::Ticket {
                     spec_branch: "issue-237".to_string(),
                     spec_pr: None,
                 },
                 stamp: "20261003T120000-0400".to_string(),
                 command: logs::CommandKind::Issue,
+                suppress_otlp: false,
                 base_fix: BaseFixAsk::Forbid,
                 asks: super::ChildAsks::default(),
             },
@@ -255,7 +257,10 @@ fn malformed_stderr_preserves_a_successful_ending_and_base_fix_account() {
                 Some("https://github.com/acme/widgets/issues/8 merged")
             );
         }
-        Ended::NotReproduced { .. } | Ended::Failed { .. } | Ended::Interrupted { .. } => {
+        Ended::NotReproduced { .. }
+        | Ended::ArchitectureReview { .. }
+        | Ended::Failed { .. }
+        | Ended::Interrupted { .. } => {
             panic!("the successful child lost its ending")
         }
     }

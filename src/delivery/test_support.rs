@@ -188,12 +188,18 @@ fn deliver(outside: &mut Scripted, goal: Goal, spec: bool) -> Result<String, Fai
         prompt: String::new(),
     };
     let outcome = if spec {
-        route.spec_steps(outside, &opening.prompt, Some("Tickets"))
+        route.process_steps(
+            outside,
+            &opening,
+            crate::processes::spec::sequence().unwrap().delivery,
+            Some("Tickets"),
+        )
     } else {
         route.process_steps(
             outside,
             &opening,
             crate::processes::ticket::steps().unwrap(),
+            None,
         )
     };
     outcome

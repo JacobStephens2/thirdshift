@@ -36,6 +36,11 @@ pub struct ProcessRun {
     pub goal: Option<Goal>,
     /// Whether this Process's Security review Step is requested.
     pub security_review: Option<crate::security::review::Ask>,
+    /// Whether Security finding Steps are allowed to fix findings.
+    pub security_fix: Option<crate::security::FixAsk>,
+    pub security_close: Option<crate::security::CloseAsk>,
+    /// Stop architecture-review after publishing a plan, without dispatch.
+    pub plan_only: bool,
 }
 
 /// What thirdshift was asked to do.
@@ -862,7 +867,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review]";
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() || matches!(args, [word] if word == "list") {
@@ -882,11 +887,19 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut email = None;
     let mut goal = None;
     let mut review_flags = Flags::default();
+    let mut plan_only = false;
     let mut asked = harness::Asked::default();
     let mut check = false;
     let mut expect_issue = false;
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
+        if arg == PLAN_ONLY {
+            if plan_only {
+                bail!("repeated argument: {arg}");
+            }
+            plan_only = true;
+            continue;
+        }
         if take_harness_flag(&mut asked, arg, &mut words)? {
             continue;
         }
@@ -898,7 +911,18 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         }
         if matches!(
             arg.as_str(),
-            "security-review" | "--security-review" | "no-security-review" | "--no-security-review"
+            "security-review"
+                | "--security-review"
+                | "no-security-review"
+                | "--no-security-review"
+                | "security-fix"
+                | "--security-fix"
+                | "no-security-fix"
+                | "--no-security-fix"
+                | "security-close"
+                | "--security-close"
+                | "no-security-close"
+                | "--no-security-close"
         ) && (name.is_some() || arg.starts_with("--"))
         {
             take_flag(&mut review_flags, arg, &mut words)?;
@@ -934,7 +958,12 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         name = Some(process_name(arg)?);
     }
     if expect_issue
-        || ((email.is_some() || goal.is_some() || review_flags.security_review.is_some())
+        || ((email.is_some()
+            || goal.is_some()
+            || review_flags.security_review.is_some()
+            || review_flags.security_fix.is_some()
+            || review_flags.security_close.is_some()
+            || plan_only)
             && (check || name.is_none()))
     {
         bail!(PROCESS_USAGE);
@@ -949,6 +978,9 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         email,
         goal,
         security_review: review_flags.security_review,
+        security_fix: review_flags.security_fix,
+        security_close: review_flags.security_close,
+        plan_only,
     };
     Ok(if check {
         ProcessAction::Check(command)
@@ -1299,6 +1331,7 @@ mod tests {
                         tickets_at_once: NonZeroUsize::new(5).unwrap(),
                         parallel_asked: false,
                         security_fix: true,
+                        security_close: true,
                         security_review: true,
                         launch_pull: false,
                         notification: NotificationAsk::Skip,

@@ -1,0 +1,18 @@
+version = 1
+description = "Audit, reproduce, fix and close private Security findings"
+
+[[steps]]
+name = "security-audit"
+catalogue = "security-audit"
+
+[[steps]]
+name = "reproduce-findings"
+catalogue = "reproduce-findings"
+
+[[steps]]
+name = "fix-findings"
+catalogue = "fix-findings"
+
+[[steps]]
+name = "close-findings"
+catalogue = "close-findings"
