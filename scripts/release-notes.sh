@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prints the body of the GitHub Release for <tag>: the summary section of the
-# bump PR that release.sh merged as <tag>'s commit, then GitHub's generated
-# notes, then <install notes>, dist's install instructions. If no PR was merged
-# as that commit (say, a tag pushed by hand), or its body has no summary
+# bump PR whose head (or legacy merge) is <tag>'s commit, then GitHub's generated
+# notes, then <install notes>, dist's install instructions. If no PR matches
+# that commit (say, a tag pushed by hand), or its body has no summary
 # section, the body is the generated notes and the install instructions alone.
 #
 # Usage: scripts/release-notes.sh <tag> <install notes>
@@ -35,15 +35,14 @@ main() {
 }
 
 # bump_summary <commit>
-# The summary section of the body of the PR merged as <commit>, or nothing.
-# GitHub lists every PR the commit belongs to, including one whose head it
-# is, so only a PR whose merge commit it is counts.
+# The summary section of the PR whose head or legacy merge is <commit>, or
+# nothing. An open bump PR still supplies the summary when its merge failed.
 bump_summary() {
 	local number
 	# Errors are returned explicitly, as the caller's if turns errexit off.
 	number=$(gh api "repos/{owner}/{repo}/commits/$1/pulls" \
-		--jq '.[] | "\(.merge_commit_sha) \(.number)"' |
-		awk -v commit="$1" '$1 == commit && !number { number = $2 } END { print number }') ||
+		--jq '.[] | "\(.merge_commit_sha) \(.head.sha) \(.number)"' |
+		awk -v commit="$1" '($1 == commit || $2 == commit) && !number { number = $3 } END { print number }') ||
 		return
 	if [ -n "$number" ]; then
 		gh pr view "$number" --json body --jq .body | summary_section

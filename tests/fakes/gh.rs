@@ -547,6 +547,7 @@ const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRep
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
 const COMMIT_PR_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.number)""#;
+const COMMIT_PR_HEAD_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.head.sha) \(.number)""#;
 
 const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#;
 
@@ -1618,7 +1619,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 }
                 return;
             }
-            if jq != Some(COMMIT_PR_LINES) {
+            if jq != Some(COMMIT_PR_LINES) && jq != Some(COMMIT_PR_HEAD_LINES) {
                 unsupported_jq(jq);
             }
             for pr in commit_prs(state, sha) {
@@ -1626,7 +1627,16 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                     Some(commit) if commit.truthy() => commit.python(),
                     _ => "null".to_owned(),
                 };
-                println!("{merge} {}", pr.at("number").python());
+                if jq == Some(COMMIT_PR_HEAD_LINES) {
+                    let head = pr_fields(pr, &["headRefOid".to_owned()]);
+                    println!(
+                        "{merge} {} {}",
+                        head.at("headRefOid").python(),
+                        pr.at("number").python()
+                    );
+                } else {
+                    println!("{merge} {}", pr.at("number").python());
+                }
             }
             return;
         }
