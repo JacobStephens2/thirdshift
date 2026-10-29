@@ -93,6 +93,26 @@ async function unfoldGuide(page) {
   }
 }
 
+// Exercises the shared supporting-reading disclosures through their summaries.
+async function checkReadingToggles(page, selector) {
+  for (const fold of await page.locator(selector).all()) {
+    const summary = fold.locator(":scope > summary");
+    const content = fold.locator(":scope > .reading-content");
+    await content.waitFor({ state: "hidden" });
+    await summary.click();
+    await content.waitFor({ state: "visible" });
+    assert.equal(await page.locator(`${selector}[open]`).count(), 1);
+    await assertFits(page, selector, `${page.viewportSize().width}px: expanded reading fits`);
+    await summary.focus();
+    await page.keyboard.press("Space");
+    await content.waitFor({ state: "hidden" });
+    await page.keyboard.press("Enter");
+    await content.waitFor({ state: "visible" });
+    await page.keyboard.press("Enter");
+    await content.waitFor({ state: "hidden" });
+  }
+}
+
 test('the architecture page identifies the current Verdict method', async () => {
   const page = await readFile(join(__dirname, '..', 'architecture', 'index.html'), 'utf8');
   assert.doesNotMatch(page, /New Verdicts use <code>paired-dirichlet-v3<\/code>/);
@@ -347,21 +367,7 @@ for (const javaScriptEnabled of [false, true]) {
       assert.equal(await card.getByRole("link", { name: "/thirdshift-implement", exact: true }).count(), 1);
       assert.equal(await card.locator("details").count(), 2);
       assert.equal(await card.locator("details[open]").count(), 0);
-      for (const fold of await card.locator("details").all()) {
-        const summary = fold.locator(":scope > summary");
-        const content = fold.locator(":scope > .reading-content");
-        await content.waitFor({ state: "hidden" });
-        await summary.click();
-        await content.waitFor({ state: "visible" });
-        await assertFits(page, ".shifts, .shift, .shift details", `${width}px: expanded Third shift details fit`);
-        await summary.focus();
-        await page.keyboard.press("Space");
-        await content.waitFor({ state: "hidden" });
-        await page.keyboard.press("Enter");
-        await content.waitFor({ state: "visible" });
-        await page.keyboard.press("Enter");
-        await content.waitFor({ state: "hidden" });
-      }
+      await checkReadingToggles(page, ".shift.third .reading-more");
     }
   });
 }
@@ -544,6 +550,18 @@ test("the homepage, the guide and the videos page link to the architecture page 
   }
 });
 
+test("the architecture overview reaches Figure 1 without screens of supporting text", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 900 } });
+  await page.goto(`${origin}/architecture/`);
+  await page.evaluate(() => document.fonts.ready);
+  const gap = await page.locator("#factory").evaluate(section => {
+    const lede = section.querySelector("p.lede");
+    const figure = section.querySelector("figure");
+    return figure.getBoundingClientRect().top - lede.getBoundingClientRect().bottom;
+  });
+  assert.ok(gap <= 900, `Supporting text before Figure 1 occupies ${gap}px at 390px; shorten or collapse it`);
+});
+
 test("architecture supporting topics start compact and expand independently without JavaScript", async (t) => {
   for (const width of [320, 1280]) {
     const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
@@ -556,18 +574,7 @@ test("architecture supporting topics start compact and expand independently with
     const height = await notes.evaluateAll(nodes => nodes.reduce((sum, node) => sum + node.getBoundingClientRect().height, 0));
     assert.ok(height < 500, `${width}px: closed supporting topics occupy ${height}px`);
     await page.locator("#factory .arch-stages").waitFor({ state: "visible" });
-    for (const fold of await notes.all()) {
-      const summary = fold.locator(":scope > summary");
-      const content = fold.locator(":scope > .reading-content");
-      await content.waitFor({ state: "hidden" });
-      await summary.click();
-      await content.waitFor({ state: "visible" });
-      assert.equal(await page.locator("#factory details[open]").count(), 1);
-      await assertFits(page, "#factory, #factory details", `${width}px: supporting topics fit`);
-      await summary.focus();
-      await page.keyboard.press("Space");
-      await content.waitFor({ state: "hidden" });
-    }
+    await checkReadingToggles(page, "#factory .reading-more");
   }
 });
 
