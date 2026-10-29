@@ -179,14 +179,23 @@ pub fn run(
 
 fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<()> {
     let github = GitHub::new();
-    let Some(failure) = github.base_ci_failure(repo, base)? else {
-        return Ok(());
-    };
     let Some(_reservation) = reservation::Reservation::ci_red(git)? else {
         return Ok(());
     };
-    if let Some(issue) = github.file_ci_red_ticket(repo, failure)? {
-        crate::progress::step(format!("filed CI-red Ticket {}", issue.url));
+    let Some(failure) = github.base_ci_failure(repo, base)? else {
+        return Ok(());
+    };
+    match github.file_ci_red_ticket(repo, failure)? {
+        crate::github::BaseCiAction::Nothing | crate::github::BaseCiAction::RerunRequested => {}
+        crate::github::BaseCiAction::CiRedFiled(issue) => {
+            crate::progress::step(format!("filed CI-red Ticket {}", issue.url));
+        }
+        crate::github::BaseCiAction::FlakyFiled(issue) => {
+            crate::progress::step(format!("filed Flaky-test Ticket {}", issue.url));
+        }
+        crate::github::BaseCiAction::Commented(issue) => {
+            crate::progress::step(format!("commented new CI failure on {}", issue.url));
+        }
     }
     Ok(())
 }

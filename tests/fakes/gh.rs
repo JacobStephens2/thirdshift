@@ -1484,6 +1484,20 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(n) = rest
+            .strip_prefix("issues/")
+            .and_then(|rest| rest.strip_suffix("/comments?per_page=100"))
+    {
+        check_repo_is(state, Some(repo));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".[]"));
+        for comment in listed(state, "comments", n) {
+            let body = comment.get("body").unwrap_or(&comment);
+            println!("{}", object([("body", body.clone())]));
+        }
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
         && rest.starts_with("issues?")
     {
         check_repo_is(state, Some(repo));
@@ -1542,6 +1556,40 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 Array(latest.cloned().into_iter().collect())
             )])
         );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some((id, attempt)) = rest
+            .strip_prefix("actions/runs/")
+            .and_then(|rest| rest.split_once("/attempts/"))
+    {
+        check_repo_is(state, Some(repo));
+        let (attempt, jobs) = match attempt.strip_suffix("/jobs?per_page=100") {
+            Some(attempt) => (attempt, true),
+            None => (attempt, false),
+        };
+        let run = state
+            .at("runs")
+            .items()
+            .iter()
+            .find(|run| run.at("id").python() == id)
+            .unwrap();
+        let run = if run.at("run_attempt").python() == attempt {
+            run
+        } else {
+            let previous = run.at("previous_attempt");
+            assert_eq!(previous.at("run_attempt").python(), attempt);
+            previous
+        };
+        if jobs {
+            assert!(flags.contains_key("paginate"));
+            assert_eq!(flag(flags, "jq"), Some(".jobs[]"));
+            for job in run.at("jobs").items() {
+                println!("{job}");
+            }
+        } else {
+            println!("{run}");
+        }
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
@@ -1847,6 +1895,24 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
         );
     }
     let run = &positional[0];
+    let mut runs = state.get("runs").cloned().unwrap_or(Array(Vec::new()));
+    if let Some(push) = runs.items_mut().iter_mut().find(|push| {
+        push.get("id").is_some_and(|id| id.python() == *run)
+            && push.get("event").and_then(Json::as_str) == Some("push")
+    }) {
+        if push.at("status").str() != "completed" || push.at("jobs").items().is_empty() {
+            die("run cannot be rerun; its workflow file may be broken", 1);
+        }
+        let previous = push.clone();
+        let attempt = push.get("run_attempt").and_then(Json::as_i64).unwrap_or(1);
+        push.set("previous_attempt", previous);
+        push.set("run_attempt", number(attempt + 1));
+        push.set("status", string("in_progress"));
+        push.set("conclusion", Null);
+        state.set("runs", runs);
+        save(state);
+        return;
+    }
     let of_run = format!("/actions/runs/{run}/job/");
     let mut checks = state.get("checks").cloned().unwrap_or(object([]));
     let Json::Object(commits) = &mut checks else {
