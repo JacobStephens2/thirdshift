@@ -191,10 +191,10 @@ mod tests {
             unavailable_report("macos"),
             "Security sandbox probe: unavailable on macos; Setup did not check isolation on this OS.\n\
 Before running target code, each Security session must enforce:\n\
-  - no external network;\n\
-  - an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
-  - a read-only target and toolchain, with writes only inside scratch;\n\
-  - explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
+- no external network;\n\
+- an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
+- a read-only target and toolchain, with writes only inside scratch;\n\
+- explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
 If a session cannot enforce every control, Security runs and reviews here report findings as needs-validation instead of reproducing them.\n\
 Setup only prints this guidance; it still saves the User config and exits successfully.\n\
 On macOS, sandbox-exec (Seatbelt) is the usual route, but Setup has not verified that it meets every control."
