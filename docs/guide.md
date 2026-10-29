@@ -756,10 +756,12 @@ exhausted. A task still void in either Arm drops out of both Arms.
 
 Usage/rate limits, including provider capacity and overload errors, pause
 scheduling until the same Experiment is started again.
-Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
-85% usage in either window. A Trial cut short by a warning is void; a Trial
-already running on the other worker may finish, but neither worker starts
-another Trial or retry. Ordinary Runs do not stop at these warnings.
+Claude or Codex quota windows at 85%, or a Claude rejection, also pause it
+immediately. Claude warnings continue when all readable windows are below 85%;
+a warning with no readable utilization still pauses the Experiment. A Trial cut
+short by a quota stop is void; a Trial already running on the other worker may
+finish, but neither worker starts another Trial or retry. Ordinary Runs do not
+stop at these warnings.
 The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
@@ -2791,10 +2793,12 @@ Grader differs from the Run's Model. When the first Model matches the Built-with
 line (ignoring case), the second Harness/Model pair is used; if it also matches
 or is blank, grading fails without starting that Grader.
 
-A Claude plan-limit warning or rejection, or a Codex quota window at 85%, stops
-grading immediately. Completed Scores are checkpointed individually. The next
-`score` command scores the retained remainder before drawing a new window;
-completed pull requests are never graded again. Other Harnesses have no verified
+A Claude or Codex quota window at 85%, or a Claude rejection, stops grading
+immediately. Claude warnings continue when all readable windows are below 85%;
+a warning with no readable utilization still stops grading. Completed Scores
+are checkpointed individually. The next `score` command scores the retained
+remainder before drawing a new window; completed pull requests are never graded
+again. Other Harnesses have no verified
 warning protocol yet. Grader sessions use bwrap and socat on Linux; if isolation
 cannot start, grading fails and the sample remains pending. As for Experiments,
 `THIRDSHIFT_TRIAL_NO_SANDBOX=1` selects the pass-through launcher for fake Harness
