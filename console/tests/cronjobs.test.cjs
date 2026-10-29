@@ -2,7 +2,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
@@ -62,6 +62,45 @@ test('Cron jobs reads like terminal crontab lines on desktop and phone, with or 
       });
     }
   }
+});
+
+// The listing draws the schedule and command on one line. A mark in the
+// schedule must not restyle the command.
+function glyph(root, needle) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const index = walker.currentNode.data.indexOf(needle);
+    if (index < 0) continue;
+    const range = document.createRange();
+    range.setStart(walker.currentNode, index);
+    range.setEnd(walker.currentNode, index + 1);
+    const first = range.getBoundingClientRect();
+    range.setStart(walker.currentNode, index + 1);
+    range.setEnd(walker.currentNode, index + needle.length);
+    const second = range.getBoundingClientRect();
+    return { first, second };
+  }
+  return null;
+}
+
+async function withCrontab(t, contents) {
+  const original = await readFile(join(home, 'crontab'));
+  t.after(() => writeFile(join(home, 'crontab'), original));
+  await writeFile(join(home, 'crontab'), contents);
+  const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/cronjobs`);
+  const main = page.locator('main');
+  await main.waitFor();
+  return main;
+}
+
+test('a bidirectional mark in the schedule does not reverse the command', async t => {
+  const main = await withCrontab(t, '* * * * *\u202E thirdshift PQ\n');
+  const placed = await main.evaluate(glyph, 'PQ');
+  assert.ok(placed, 'The command text should be on the page');
+  assert.ok(placed.first.x < placed.second.x, 'The command should read in logical order, not reversed by the schedule');
 });
 
 test('Cron jobs is reachable by link and keyboard, escapes commands and fits a phone', async t => {
