@@ -896,7 +896,7 @@ That includes a changed discriminating list read from current Difficulty;
 a new reading inside the band that leaves the list unchanged can resume.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 2`.
+[Experiment results format](experiment-results.md), identified by `format: 3`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

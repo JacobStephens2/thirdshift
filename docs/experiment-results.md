@@ -1,4 +1,4 @@
-# Experiment results (format 2)
+# Experiment results (format 3)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 2` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 2.
+`format: 3` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 3.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -29,8 +29,9 @@ two-level Bar: `pass_level`, `fail_level` and `pass_rule` in each Bar,
 `worse_within_margin`. It also added `decisive_verdicts` to pending rechecks
 and lets a saved single-level Verdict omit `provisional_verdict`. Experiments
 saved before the two-level Bar still show `credible_level` and `interval`.
-Before format 2's release, it also gained `bar.discriminating_tasks` and each
-suite's `counts` and `measurement` fields for `paired-dirichlet-v4`.
+Format 2 shipped in v0.17.4. Format 3 adds `bar.discriminating_tasks` and each
+suite's `counts` and `measurement` fields for `paired-dirichlet-v4`, without
+rewriting the stored Bar or Verdict of older Experiments.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
 
@@ -185,7 +186,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
 ```json
 {
   "Experiment": {
-    "format": 2,
+    "format": 3,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
