@@ -20,6 +20,9 @@ use crate::harness::{Choice, process};
 use crate::logs::owner::Owner;
 use crate::{logs, progress};
 
+#[cfg(test)]
+mod lifetime_tests;
+
 /// Immutable Command identity, captured after Command logging is established.
 #[derive(Clone)]
 pub struct Recording {

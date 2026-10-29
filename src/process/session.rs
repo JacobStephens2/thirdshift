@@ -1,0 +1,229 @@
+//! Final cleanup of work that escaped a Harness's process-tree snapshot.
+
+use std::collections::BTreeSet;
+use std::io;
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+
+use crate::progress;
+
+pub(crate) const MARKER: &str = "THIRDSHIFT_SESSION";
+
+/// Explicit overrides fence nested and parallel sessions from inherited IDs.
+pub(crate) fn mark(command: &mut Command) {
+    if marker(command).is_none() {
+        command.env(MARKER, format!("{:032x}", rand::random::<u128>()));
+    }
+}
+
+fn marker(command: &Command) -> Option<String> {
+    command.get_envs().find_map(|(name, value)| {
+        (name == MARKER)
+            .then_some(value)
+            .flatten()
+            .map(|value| value.to_string_lossy().into_owned())
+    })
+}
+
+pub(super) struct Session {
+    marker: String,
+    #[cfg(test)]
+    fault: super::faults::Fault,
+}
+
+impl Session {
+    pub fn of(command: &Command) -> Option<Self> {
+        Some(Self {
+            marker: marker(command)?,
+            #[cfg(test)]
+            fault: super::faults::Fault::from(command),
+        })
+    }
+
+    pub fn sweep(self, scope: Option<&crate::scope::Scope>) {
+        let mut warning = None;
+        let mut killed = BTreeSet::new();
+        let result = (|| {
+            #[cfg(test)]
+            self.fault.fire("session-sweep")?;
+            let deadline = Instant::now() + super::tree::STOP_GRACE;
+            let mut killed_at = None;
+            loop {
+                let pids = match scope {
+                    Some(scope) => scope.processes()?,
+                    None => marked_processes(&self.marker, &mut warning)?,
+                };
+                if pids.is_empty() {
+                    break;
+                }
+                if killed_at.is_some_and(|at: Instant| at.elapsed() >= Duration::from_secs(2)) {
+                    bail!("{} processes remain after SIGKILL", pids.len());
+                }
+                let signal = if Instant::now() >= deadline {
+                    libc::SIGKILL
+                } else {
+                    libc::SIGTERM
+                };
+                if let Some(scope) = scope {
+                    scope.signal(signal)?;
+                    killed.extend(pids);
+                } else {
+                    for pid in pids {
+                        if signal == libc::SIGTERM && killed.contains(&pid) {
+                            continue;
+                        }
+                        match super::signal(pid, signal) {
+                            Ok(()) => {
+                                killed.insert(pid);
+                            }
+                            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+                            Err(error) => {
+                                warning.get_or_insert(error.into());
+                            }
+                        }
+                    }
+                }
+                if signal == libc::SIGKILL {
+                    killed_at.get_or_insert_with(Instant::now);
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            warning.get_or_insert(error);
+        }
+        if !killed.is_empty() {
+            progress::step(format_args!(
+                "session {}: killed {} surviving processes",
+                self.marker,
+                killed.len()
+            ));
+        }
+        if let Some(error) = warning {
+            progress::step(format_args!(
+                "warning: could not fully sweep session {}: {error:#}",
+                self.marker
+            ));
+        }
+    }
+}
+
+fn marked_processes(marker: &str, warning: &mut Option<anyhow::Error>) -> Result<Vec<libc::pid_t>> {
+    let output = Command::new("ps")
+        .args(["-A", "-o", "pid=", "-o", "uid=", "-o", "stat="])
+        .output()
+        .context("could not list processes for the session sweep")?;
+    if !output.status.success() {
+        bail!(
+            "could not list processes for the session sweep: {}",
+            output.status
+        );
+    }
+    // SAFETY: geteuid has no arguments or memory preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let expected = format!("{MARKER}={marker}");
+    let mut found = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let pid: libc::pid_t = fields.next().context("missing process ID")?.parse()?;
+        let owner: libc::uid_t = fields.next().context("missing process owner")?.parse()?;
+        let state = fields.next().context("missing process state")?;
+        if owner != uid
+            || state.starts_with('Z')
+            || pid <= 0
+            || pid == std::process::id() as libc::pid_t
+        {
+            continue;
+        }
+        match environment(pid) {
+            Ok(bytes)
+                if bytes
+                    .split(|&byte| byte == 0)
+                    .any(|entry| entry == expected.as_bytes()) =>
+            {
+                found.push(pid);
+            }
+            Ok(_) => {}
+            Err(error) if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT)) => {}
+            Err(error) => {
+                warning.get_or_insert_with(|| {
+                    anyhow::anyhow!("could not read process {pid}'s environment: {error}")
+                });
+            }
+        }
+    }
+    Ok(found)
+}
+
+#[cfg(target_os = "linux")]
+fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
+    std::fs::read(format!("/proc/{pid}/environ"))
+}
+
+#[cfg(target_os = "macos")]
+fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size = 0;
+    // SAFETY: mib and size point to initialized writable storage; the first
+    // sysctl queries the required size without an output buffer.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let mut bytes = vec![0u8; size];
+    // SAFETY: bytes has the queried capacity and size is its writable length.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    bytes.truncate(size);
+    // KERN_PROCARGS2 prefixes the environment with argc, the executable path
+    // and argv. Do not mistake a marker in a command argument for ownership.
+    let integer = std::mem::size_of::<libc::c_int>();
+    let argc = bytes
+        .get(..integer)
+        .ok_or_else(|| io::Error::other("missing argc"))?;
+    let argc = libc::c_int::from_ne_bytes(argc.try_into().unwrap());
+    if argc < 0 {
+        return Err(io::Error::other("negative argc"));
+    }
+    let mut rest = &bytes[integer..];
+    let executable = rest
+        .iter()
+        .position(|&byte| byte == 0)
+        .ok_or_else(|| io::Error::other("missing executable"))?;
+    rest = &rest[executable..];
+    while rest.first() == Some(&0) {
+        rest = &rest[1..];
+    }
+    for _ in 0..argc {
+        let end = rest
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or_else(|| io::Error::other("missing argument"))?;
+        rest = &rest[end + 1..];
+    }
+    Ok(rest.to_vec())
+}

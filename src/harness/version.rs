@@ -44,12 +44,17 @@ impl Version {
         command_log: Option<&Path>,
         session: &Command,
     ) -> Self {
-        let mut command = Command::new(session.get_program());
+        let mut command = Command::new(crate::scope::unwrapped_program(session));
         command.arg("--version");
         if let Some(dir) = session.get_current_dir() {
             command.current_dir(dir);
         }
         for (key, value) in session.get_envs() {
+            // A metadata probe is a separate execution. Reusing the live
+            // session's marker would let its cleanup kill that session.
+            if key == crate::process::session::MARKER {
+                continue;
+            }
             if let Some(value) = value {
                 command.env(key, value);
             } else {

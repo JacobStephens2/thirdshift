@@ -16,6 +16,7 @@ pub(super) fn output(
     invocation
         .command()
         .envs(adapter.environment().iter().copied());
+    process::session::mark(invocation.command());
     process::output(
         invocation,
         input.map(str::as_bytes),
@@ -38,6 +39,7 @@ pub(crate) fn streaming<T: Send + 'static>(
     invocation
         .command()
         .envs(adapter.environment().iter().copied());
+    process::session::mark(invocation.command());
     process::streaming(
         invocation,
         input.map(str::as_bytes),

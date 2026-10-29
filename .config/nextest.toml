@@ -21,6 +21,8 @@ final-status-level = "slow"
 #   exercised by command pushes, account revocation and executable replacement.
 # - Setup's non-Linux sandbox guidance (src/setup/sandbox.rs), exercised by
 #   its platform-independent wording tests and tests/setup.rs.
+# - detached Harness cleanup on macOS (src/process/session.rs), exercised
+#   through Session recording, including the macOS-only nohup fixture.
 # The console installer's Linux-only refusal (src/console/install.rs) has no
 # test that runs off Linux, so nothing here covers it.
 [profile.macos-gate]
@@ -29,6 +31,7 @@ default-filter = """
 | binary_id(thirdshift::stop)
 | (binary_id(thirdshift::bin/thirdshift) & test(/^console::changes::tests::/))
 | (binary_id(thirdshift::bin/thirdshift) & test(/^setup::sandbox::tests::/))
+| (binary_id(thirdshift::bin/thirdshift) & test(/^session::recording::lifetime_tests::/))
 | (binary_id(thirdshift::setup) & test(=security_sandbox_unavailable_report_preserves_saved_settings))
 | (binary_id(thirdshift::console) & (
     test(/^watching::/)

@@ -261,6 +261,16 @@ impl Launch {
         Ok(command)
     }
 
+    pub(crate) fn session_command(
+        &self,
+        args: &[String],
+    ) -> Result<Box<dyn crate::process::Invocation>> {
+        let mut launched =
+            crate::scope::session_command(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
+        self.configure_command(launched.command(), args)?;
+        Ok(launched)
+    }
+
     /// A Grader's scope must enclose bwrap and all processes it starts.
     pub(crate) fn scoped_command(
         &self,
@@ -275,7 +285,19 @@ impl Launch {
     }
 
     fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
+        crate::process::session::mark(command);
         command.args(&self.argv);
+        if let Some((_, Some(marker))) = command
+            .get_envs()
+            .find(|(name, _)| *name == crate::process::session::MARKER)
+        {
+            let marker = marker.to_owned();
+            command.args([
+                std::ffi::OsStr::new("--setenv"),
+                std::ffi::OsStr::new(crate::process::session::MARKER),
+                &marker,
+            ]);
+        }
         command.arg("--");
         command.args(&self.prefix);
         command.arg(&self.program);

@@ -1,4 +1,4 @@
-//! A memory cap for each Trial and each Grader: its own systemd scope.
+//! Session ownership and Trial/Grader memory caps through systemd scopes.
 //!
 //! Each Trial and each Grader runs in a scope of its own, from
 //! `systemd-run --user --scope`, with `MemoryHigh`, `MemoryMax` and
@@ -145,6 +145,9 @@ fn override_or(env: &str, configured: &str) -> Result<String> {
 /// Whether `systemd-run --user --scope` can reach this user's manager here.
 /// Cron and other logged-out launchers need lingering for this to hold.
 pub fn available() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
     if crate::process::find_executable("systemd-run").is_none() {
         return false;
     }
@@ -231,6 +234,14 @@ impl Scope {
         &self.unit
     }
 
+    pub(crate) fn processes(&self) -> Result<Vec<libc::pid_t>> {
+        self.observation.processes(&self.unit)
+    }
+
+    pub(crate) fn signal(&self, signal: libc::c_int) -> Result<()> {
+        self.observation.signal(&self.unit, signal)
+    }
+
     /// Resolve and sample the live scope lazily: it only exists after launch.
     pub fn sample(&self) {
         let mut watch = self.watch.borrow_mut();
@@ -265,11 +276,46 @@ trait Observation {
     fn events(&self, unit: &str) -> Option<PathBuf>;
     fn acknowledge(&self) {}
     fn journal_oom_killed(&self, unit: &str) -> bool;
+    // Memory-only fixtures own no real cgroup. Native observation supplies
+    // the same scope's process ownership alongside its memory evidence.
+    fn processes(&self, _unit: &str) -> Result<Vec<libc::pid_t>> {
+        Ok(Vec::new())
+    }
+    fn signal(&self, _unit: &str, _signal: libc::c_int) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct Native;
 
 impl Observation for Native {
+    fn processes(&self, unit: &str) -> Result<Vec<libc::pid_t>> {
+        let Some(group) = read_control_group(unit)? else {
+            return Ok(Vec::new());
+        };
+        let directory = events_path(&group).parent().unwrap().to_path_buf();
+        let mut pids = Vec::new();
+        read_group_processes(&directory, &mut pids)?;
+        Ok(pids)
+    }
+
+    fn signal(&self, unit: &str, signal: libc::c_int) -> Result<()> {
+        let output = manager_command("systemctl")
+            .args([
+                "--user",
+                "kill",
+                "--kill-who=all",
+                &format!("--signal={signal}"),
+                unit,
+            ])
+            .output()
+            .context("could not signal the session scope")?;
+        if !output.status.success() && !self.processes(unit)?.is_empty() {
+            anyhow::bail!("could not signal session scope {unit}: {}", output.status);
+        }
+        Ok(())
+    }
+
     fn events(&self, unit: &str) -> Option<PathBuf> {
         let events = events_path(&control_group(unit)?);
         events.is_file().then_some(events)
@@ -362,20 +408,66 @@ fn kill_count(events: &Path) -> Option<u64> {
 /// One scope's cgroup path, as the user manager reports it while the scope
 /// runs. `None` once the scope is gone.
 fn control_group(unit: &str) -> Option<String> {
+    read_control_group(unit).ok().flatten()
+}
+
+fn read_control_group(unit: &str) -> Result<Option<String>> {
     let output = manager_command("systemctl")
-        .args(["--user", "show", unit, "-p", "ControlGroup", "--value"])
+        .args([
+            "--user",
+            "show",
+            unit,
+            "-p",
+            "ControlGroup",
+            "-p",
+            "LoadState",
+        ])
         .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+        .context("could not read the session scope")?;
+    let properties = String::from_utf8_lossy(&output.stdout);
+    if properties.lines().any(|line| line == "LoadState=not-found") {
+        return Ok(None);
     }
-    let group = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!group.is_empty()).then_some(group)
+    if !output.status.success() {
+        anyhow::bail!("could not read scope {unit}: {}", output.status);
+    }
+    let group = properties
+        .lines()
+        .find_map(|line| line.strip_prefix("ControlGroup="))
+        .context("scope response has no ControlGroup")?;
+    Ok((!group.is_empty()).then(|| group.to_owned()))
+}
+
+fn read_group_processes(directory: &Path, pids: &mut Vec<libc::pid_t>) -> Result<()> {
+    let contents = match std::fs::read_to_string(directory.join("cgroup.procs")) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("could not read the session cgroup's processes"),
+    };
+    for pid in contents.lines() {
+        let pid: libc::pid_t = pid.parse().context("invalid cgroup process ID")?;
+        if pid > 0 {
+            pids.push(pid);
+        }
+    }
+    match std::fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    read_group_processes(&entry.path(), pids)?;
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("could not inspect the session cgroup"),
+    }
+    Ok(())
 }
 
 /// `systemd-run --user --scope` with `unit` and the caps, before the `--`
 /// that starts the scope's command.
-fn scope_base(unit: &str, caps: &Caps) -> Command {
+fn scope_base(unit: &str, caps: Option<&Caps>) -> Command {
     // Resolve before a sandbox applies its own PATH to the command. That
     // PATH belongs to the Harness, not to the outer scope launcher.
     let program = crate::process::find_executable("systemd-run")
@@ -384,16 +476,66 @@ fn scope_base(unit: &str, caps: &Caps) -> Command {
     command.args([
         "--user",
         "--scope",
+        "--quiet",
+        "--collect",
         &format!("--unit={unit}"),
-        &format!("--property=MemoryHigh={}", caps.high),
-        &format!("--property=MemoryMax={}", caps.max),
-        &format!("--property=MemorySwapMax={}", caps.swap_max),
-        // A killed tool must take its whole Trial or Grader with it, even
-        // when its parent catches the failure or ignores SIGTERM.
-        "--property=OOMPolicy=kill",
-        "--",
     ]);
+    if let Some(caps) = caps {
+        command.args([
+            &format!("--property=MemoryHigh={}", caps.high),
+            &format!("--property=MemoryMax={}", caps.max),
+            &format!("--property=MemorySwapMax={}", caps.swap_max),
+            // A killed tool must take its whole Trial or Grader with it, even
+            // when its parent catches the failure or ignores SIGTERM.
+            "--property=OOMPolicy=kill",
+        ]);
+    }
+    command.arg("--");
     command
+}
+
+/// Ordinary sessions get ownership without Trial resource limits. Without a
+/// user manager the shared execution owner uses the environment-marker sweep.
+pub(crate) fn session_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> Box<dyn crate::process::Invocation> {
+    let program = program.as_ref();
+    let mut invocation: Box<dyn crate::process::Invocation> = if available() {
+        let unit = unit_name("session", "harness");
+        let mut command = scope_base(&unit, None);
+        command.arg(program);
+        Box::new(Launch {
+            command,
+            scope: Scope {
+                unit,
+                watch: RefCell::new(None),
+                observation: Box::new(Native),
+            },
+        })
+    } else {
+        Box::new(Command::new(program))
+    };
+    crate::process::session::mark(invocation.command());
+    invocation
+}
+
+/// Metadata probes must still name the Harness after the scope launcher is
+/// prepended. Trial launches also carry thirdshift's oom-exec wrapper.
+pub(crate) fn unwrapped_program(command: &Command) -> &std::ffi::OsStr {
+    let original = command.get_program();
+    if Path::new(original).file_name() != Some(std::ffi::OsStr::new("systemd-run")) {
+        return original;
+    }
+    let mut args = command.get_args().skip_while(|arg| *arg != "--");
+    args.next();
+    let Some(program) = args.next() else {
+        return original;
+    };
+    if args.next() == Some(std::ffi::OsStr::new("--oom-exec")) {
+        args.next().unwrap_or(program)
+    } else {
+        program
+    }
 }
 
 /// Build a Trial's command under the caps. The wrapper raises the scope's own
@@ -440,7 +582,7 @@ fn launch<S: AsRef<std::ffi::OsStr>>(
              run `loginctl enable-linger <user>` once and check `systemctl --user status`"
         );
     }
-    let mut command = scope_base(&unit, caps);
+    let mut command = scope_base(&unit, Some(caps));
     command
         .arg(current_exe()?)
         .arg("--oom-exec")

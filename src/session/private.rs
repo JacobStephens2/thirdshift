@@ -4,7 +4,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -160,10 +159,10 @@ fn execute(session: Session<'_>) -> Result<()> {
         Profile::Scoring { repo, ordinal } => {
             let invocation = adapter.session(choice, None, prompt);
             let command = match &launch {
-                Some(launch) => launch.command(&invocation.args)?,
+                Some(launch) => launch.session_command(&invocation.args)?,
                 None => {
-                    let mut command = Command::new(adapter.name());
-                    command.args(&invocation.args);
+                    let mut command = crate::scope::session_command(adapter.name());
+                    command.command().args(&invocation.args);
                     command
                 }
             };
@@ -175,7 +174,7 @@ fn execute(session: Session<'_>) -> Result<()> {
             );
             (
                 invocation,
-                Box::new(command) as Box<dyn Invocation>,
+                command,
                 recording,
                 log,
                 // Scores need only the stream; retained exports can read

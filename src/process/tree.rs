@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use crate::progress;
 
 const POLL: Duration = Duration::from_millis(100);
-const STOP_GRACE: Duration = Duration::from_secs(10);
+pub(super) const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// Probe with signal 0; only ESRCH means gone. Permission denied counts as alive.
 pub(crate) fn is_alive(pid: libc::pid_t) -> bool {
