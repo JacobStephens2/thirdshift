@@ -203,6 +203,17 @@ impl Stored {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
             let started = directory.join("started").exists();
+            if started && stored.description.bar.discriminating_tasks.is_some() {
+                for task in &stored.tasks {
+                    let current = crate::evals::format::Task::load(&task.directory)?;
+                    ensure!(
+                        current.difficulty == task.manifest.difficulty,
+                        "Bar cannot change after the first Trial: Difficulty changed for {}/{}",
+                        task.suite,
+                        task.name
+                    );
+                }
+            }
             if stored.description.bar.min_discriminating_tasks.is_none() {
                 // Saved Experiments keep their original aggregation policy.
                 description.bar.min_discriminating_tasks = None;
@@ -228,10 +239,12 @@ impl Stored {
                 // including a single-level Bar or ADR-0024's pass rule.
                 description.bar.levels = stored_levels;
             }
-            if stored.description.bar != description.bar {
+            if stored.description.bar != description.bar
+                || (!started && description.bar.discriminating_tasks.is_some())
+            {
                 ensure!(!started, "Bar cannot change after the first Trial");
-                // A newly accepted judged list must use the same Difficulty
-                // snapshots as initial creation, before any Trial is spent.
+                // Before any Trial, refresh retained Difficulty even when a
+                // new reading leaves the judged list unchanged.
                 let Some(tasks) = tasks(&description)? else {
                     return Ok(None);
                 };

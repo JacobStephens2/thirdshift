@@ -2,8 +2,16 @@ use super::*;
 
 #[test]
 fn a_pre_trial_resume_uses_the_difficulty_that_selected_its_judged_tasks() {
+    for measured in [false, true] {
+        pre_trial_resume_uses_current_difficulty(measured);
+    }
+}
+
+fn pre_trial_resume_uses_current_difficulty(measured: bool) {
     let fixture = Fixture::new();
-    unmeasured(&fixture);
+    if !measured {
+        unmeasured(&fixture);
+    }
     fixture.scenario.agent_does(review_reports_prelude());
     let builds = fixture.scenario.path("home/.thirdshift/evals/builds");
     fs::remove_dir_all(&builds).unwrap();
@@ -17,7 +25,7 @@ fn a_pre_trial_resume_uses_the_difficulty_that_selected_its_judged_tasks() {
     assert_eq!(saved["bar"]["min_discriminating_tasks"], 1);
     assert_eq!(
         saved["bar"]["discriminating_tasks"],
-        json!({"spec-review": []})
+        json!({"spec-review": if measured { vec!["fixture"] } else { vec![] }})
     );
     let directory = fixture.scenario.path(&format!(
         "home/.thirdshift/evals/experiments/{}",
@@ -58,6 +66,8 @@ fn a_pre_trial_resume_uses_the_difficulty_that_selected_its_judged_tasks() {
         saved["verdict"]["suites"]["spec-review"]["counts"]["other_setup"],
         1
     );
+    let unchanged = fixture.run(&[]);
+    assert_eq!(unchanged.code, Some(0), "{}", unchanged.stderr);
 }
 
 pub(super) fn unmeasured(fixture: &Fixture) {
@@ -95,6 +105,38 @@ pub(super) fn pre_selection_experiment(saved: &mut Value) {
     }
 }
 
+#[test]
+fn resume_refuses_changed_difficulty_inside_the_discriminating_band() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    difficulty(&fixture, "fixture", 3, 6);
+    let initial = fixture.run(&[]);
+    assert_eq!(initial.code, Some(0), "{}", initial.stderr);
+    let saved: Value = serde_json::from_str(&initial.stdout).unwrap();
+    assert_eq!(saved["state"], "completed");
+    assert_eq!(
+        saved["bar"]["discriminating_tasks"],
+        json!({"spec-review": ["fixture"]})
+    );
+    assert!(!fixture.trial_calls().is_empty());
+    let calls = fixture.trial_calls().len();
+
+    difficulty(&fixture, "fixture", 4, 6);
+    let resumed = fixture.run(&[]);
+    assert_eq!(
+        resumed.code,
+        Some(1),
+        "Difficulty changed after Trials ran, but resume succeeded: {}",
+        resumed.stdout
+    );
+    assert!(
+        resumed.stderr.contains("Bar cannot change"),
+        "{}",
+        resumed.stderr
+    );
+    assert_eq!(fixture.trial_calls().len(), calls);
+}
+
 fn difficulty(fixture: &Fixture, task: &str, passes: usize, trials: usize) {
     let path = fixture.scenario.path(&format!(
         "home/.thirdshift/evals/suites/spec-review/tasks/{task}/task.toml"
@@ -120,11 +162,10 @@ fn the_bar_fixes_discriminating_tasks_and_refuses_a_changed_list() {
         json!({"spec-review": ["fixture"]})
     );
     let calls = fixture.trial_calls().len();
-    difficulty(&fixture, "fixture", 4, 6);
-    let unchanged_list = fixture.run(&[]);
-    assert_eq!(unchanged_list.code, Some(0), "{}", unchanged_list.stderr);
+    let unchanged = fixture.run(&[]);
+    assert_eq!(unchanged.code, Some(0), "{}", unchanged.stderr);
     assert_eq!(
-        serde_json::from_str::<Value>(&unchanged_list.stdout).unwrap()["verdict"],
+        serde_json::from_str::<Value>(&unchanged.stdout).unwrap()["verdict"],
         saved["verdict"]
     );
     difficulty(&fixture, "fixture", 0, 6);

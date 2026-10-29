@@ -2413,13 +2413,7 @@ fn review_code_graders_raise_their_own_oom_score() {
 fn review_an_unreachable_manager_cannot_dispatch_uncapped_trials() {
     let fixture = Fixture::new();
     let run = fixture.scenario.run_with_env(
-        &[
-            "experiment",
-            "candidate",
-            "--json",
-            "--min-discriminating-tasks",
-            "1",
-        ],
+        &Fixture::experiment_args(&[]),
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("XDG_RUNTIME_DIR", "/nonexistent-thirdshift-review-runtime"),
@@ -2496,13 +2490,7 @@ print(json.dumps(dict(version=1, outcome='succeeded', void_cause=None, cause=Non
     )
     .unwrap();
     let run = fixture.scenario.run_with_env(
-        &[
-            "experiment",
-            "candidate",
-            "--json",
-            "--min-discriminating-tasks",
-            "1",
-        ],
+        &Fixture::experiment_args(&[]),
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
@@ -2562,13 +2550,7 @@ fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
     )
     .unwrap();
     let run = fixture.scenario.run_with_env(
-        &[
-            "experiment",
-            "candidate",
-            "--json",
-            "--min-discriminating-tasks",
-            "1",
-        ],
+        &Fixture::experiment_args(&[]),
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
@@ -2827,17 +2809,10 @@ while true; do sleep 0.05; done
 "#,
         root = fixture.scenario.path("").display()
     ));
-    let mut held = fixture.scenario.run_until(
-        &[
-            "experiment",
-            "candidate",
-            "--json",
-            "--min-discriminating-tasks",
-            "1",
-        ],
-        &NO_SANDBOX,
-        "started",
-    );
+    let mut held =
+        fixture
+            .scenario
+            .run_until(&Fixture::experiment_args(&[]), &NO_SANDBOX, "started");
     let status = fixture.scenario.run(&["status", "--json"]);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
     let name = status["commands"][0]["name"].as_str().unwrap();

@@ -40,7 +40,7 @@ pub(super) struct Task {
 }
 
 /// One replaceable A/A reading, with the setup that produced it.
-#[derive(Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Difficulty {
     pub passes: usize,

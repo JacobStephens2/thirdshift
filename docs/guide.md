@@ -908,8 +908,8 @@ resuming exhausted history finishes without replaying its old pause.
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
-That includes a changed discriminating list read from current Difficulty;
-a new reading inside the band that leaves the list unchanged can resume.
+That includes a changed discriminating list or any changed Difficulty reading
+for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
 [Experiment results format](experiment-results.md), identified by `format: 4`.

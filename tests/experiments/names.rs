@@ -70,17 +70,10 @@ fn renaming_a_running_experiment_survives_its_later_writes() {
         "touch '{}'\nwhile true; do sleep 0.05; done\n",
         fixture.scenario.path("started").display()
     ));
-    let mut held = fixture.scenario.run_until(
-        &[
-            "experiment",
-            "candidate",
-            "--json",
-            "--min-discriminating-tasks",
-            "1",
-        ],
-        &NO_SANDBOX,
-        "started",
-    );
+    let mut held =
+        fixture
+            .scenario
+            .run_until(&Fixture::experiment_args(&[]), &NO_SANDBOX, "started");
     let running = fixture.experiment();
     assert_eq!(running["state"], "running");
     let renamed = rename(&fixture, running["id"].as_str().unwrap(), "Live rename");
