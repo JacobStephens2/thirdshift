@@ -1,6 +1,6 @@
 # thirdshift never schedules itself: the operating system's scheduler starts each pass
 
-An **Architect run** and a **Pickup run** find their own work, so they are meant to run with nobody typing the command. thirdshift still has no daemon, no `watch` command and no `--every`: each is one pass, started by the operating system's scheduler from a crontab line per repository, and each is the same command a person would type. What makes a pass safe to start from a timer lives in the command, not in a scheduled mode: the Base branch named on the command line, one unattended run per repository at a time on a machine, and a skipped outcome that exits `0` when there is nothing to do.
+An **Architect run** and a **Pickup run** find their own work, so they are meant to run with nobody typing the command. thirdshift still has no daemon, no `watch` command and no `--every`: each is one pass, started by the operating system's scheduler from a crontab line per repository, and each is the same command a person would type. What makes a pass safe to start from a timer lives in the command, not in a scheduled mode: the Base branch named on the command line, one unattended run per repository at a time on a machine, and a skipped outcome that exits `0` when there is nothing to do. ([ADR 0026](0026-pickup-counts-failures-and-passes-share-a-repository-up-to-a-command-limit.md) replaces one run at a time with a Command limit per repository.)
 
 ## Considered Options
 
@@ -14,6 +14,6 @@ An **Architect run** and a **Pickup run** find their own work, so they are meant
 ## Consequences
 
 - A **Ready issue** waits up to the scheduler's interval before it is taken, and throughput is set by how often the crontab line fires.
-- An issue is taken at most once across passes by state on GitHub, since no process outlives a pass to remember it. The **Claim** prevents later pickup, but its label edit does not arbitrate simultaneous Pickup runs. [ADR 0017](0017-pickup-reserves-issues-on-origin.md) adds an atomic reservation before dispatch. The Pass lock only covers one machine.
+- An issue is taken at most once across passes by state on GitHub, since no process outlives a pass to remember it. The **Claim** prevents later pickup, but its label edit does not arbitrate simultaneous Pickup runs. [ADR 0017](0017-pickup-reserves-issues-on-origin.md) adds an atomic reservation before dispatch. The Command limit only covers one machine.
 - Several repositories means several crontab lines, at hours the user staggers. thirdshift keeps no list of repositories.
 - A frequent pass must be quiet when it does nothing: a skipped Pickup run or Architect run sends no **Run notification**, so either can be started every few minutes. A skip left only its line in the scheduler's log; since ADR 0011 it leaves one in the repository's **Activity log** instead, and only when its reason changes.

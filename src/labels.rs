@@ -257,6 +257,15 @@ pub fn by_hand(issue: &IssueUrl, off: &[Label], on: &[Label]) -> String {
     removes.chain(adds).collect::<Vec<_>>().join(" && ")
 }
 
+/// `labels`' names, joined by "and", as a step line names them.
+pub fn joined(labels: impl IntoIterator<Item = Label>) -> String {
+    labels
+        .into_iter()
+        .map(Label::name)
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,7 +36,7 @@ pub(crate) fn run(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Outcome
     }
 }
 
-fn run_steps(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Outcome, FailedRun> {
+fn run_steps<O: Outside>(outside: &mut O, run: &ArchitectRun<'_>) -> Result<Outcome, FailedRun> {
     let steps = steps()?;
     outside.check_harness(!run.plan_only)?;
     outside.started(Work::ArchitectRun(run.repo));
@@ -51,10 +51,14 @@ fn run_steps(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Outco
     }
     let mut reviewed = None;
     let mut dispatched = None;
+    // Keep the plan reserved from before marking it Ready through the
+    // dispatched run's ending, or until a plan-only run ends here.
+    let mut _reservation = None;
     for step in steps {
         match step {
             DraftKind::ArchitectureReview { .. } => {
-                let review = review(outside, run)?;
+                let (review, reservation) = review(outside, run)?;
+                _reservation = reservation;
                 let end = run.plan_only || !matches!(review, Reviewed::PlanReady(..));
                 reviewed = Some(review);
                 if end {
@@ -99,7 +103,10 @@ fn run_steps(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Outco
     })
 }
 
-fn review(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Reviewed, FailedRun> {
+fn review<O: Outside>(
+    outside: &mut O,
+    run: &ArchitectRun<'_>,
+) -> Result<(Reviewed, Option<O::Reservation>), FailedRun> {
     let starting = match run.focus {
         Some(focus) => format!(
             "starting the Architecture review of {}, focused on: {focus}",
@@ -109,7 +116,7 @@ fn review(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Reviewed
     };
     let prompt = prompt::architecture_review(run.base, run.focus);
     let (reviewed, log) = outside.review(run.base, starting, &prompt, |outside, final_message| {
-        conclude(outside, final_message, run.origin, run.started)
+        conclude(outside, final_message, run.origin, run.started, O::reserve)
     });
     reviewed.map_err(|error| FailedRun {
         log,

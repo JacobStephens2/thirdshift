@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
+use crate::command_limit::PassKind;
 use crate::git::Git;
 use crate::github::SecurityRecord;
 use crate::harness::Choice;
@@ -29,7 +30,7 @@ pub fn recheck(
     record: &SecurityRecord,
     harness: &Choice,
 ) -> (Result<Check>, Option<PathBuf>) {
-    let worktree = match ReviewWorktree::create(launch, &repo.name, base) {
+    let worktree = match ReviewWorktree::create(launch, &repo.name, base, PassKind::Security) {
         Ok(worktree) => worktree,
         Err(error) => return (Err(error), None),
     };

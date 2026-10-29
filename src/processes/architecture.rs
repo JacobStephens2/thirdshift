@@ -7,7 +7,12 @@ use crate::worktree::ReviewWorktree;
 pub(super) fn run(run: &StepRun<'_>, step: &ResolvedStep) -> Result<String> {
     let launch = Git::new(std::env::current_dir()?);
     let repo = launch::repo()?;
-    let checkout = ReviewWorktree::create(&launch, &repo.name, run.base)?;
+    let checkout = ReviewWorktree::create(
+        &launch,
+        &repo.name,
+        run.base,
+        crate::command_limit::PassKind::Architect,
+    )?;
     link_harnesses(checkout.path(), std::slice::from_ref(step))?;
     let origin = launch.run(&["config", "remote.origin.url"])?;
     let started = Utc::now();
@@ -21,8 +26,15 @@ pub(super) fn run(run: &StepRun<'_>, step: &ResolvedStep) -> Result<String> {
             session::Kind::ProcessStep(index),
             &prompt::architecture_review(run.base, None),
         )?;
-        let reviewed =
-            crate::architect::conclude(&mut GitHub::new(), message.as_deref(), &origin, started)?;
+        // Custom processes retain their own dispatch policy; the built-in
+        // Architect adapter owns its plan reservation across both Steps.
+        let (reviewed, _) = crate::architect::conclude(
+            &mut GitHub::new(),
+            message.as_deref(),
+            &origin,
+            started,
+            |_, _| Ok(()),
+        )?;
         let ending = match &reviewed {
             crate::architect::Reviewed::PlanReady(..) if run.plan_only => {
                 Some(format!("{reviewed}; --plan-only requested"))

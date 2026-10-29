@@ -1,6 +1,8 @@
-//! Atomic, per-issue exclusion between Pickup runs on different machines.
-//! Label edits and ordinary Issue branch pushes cannot arbitrate that race.
-//! A separate origin ref is created only if absent, then held through dispatch.
+//! Atomic, per-issue exclusion between Pickup runs on different machines,
+//! and between a Pickup run and the Architect run or Security run that marks
+//! its own issue ready and dispatches it. Label edits and ordinary Issue
+//! branch pushes cannot arbitrate that race. A separate origin ref is
+//! created only if absent, then held through dispatch.
 
 use anyhow::{Context, Result};
 
@@ -8,7 +10,7 @@ use crate::git::Git;
 use crate::issue::IssueUrl;
 use crate::progress;
 
-pub(super) struct Reservation {
+pub struct Reservation {
     launch: Git,
     reference: String,
     token: String,
@@ -18,13 +20,26 @@ impl Reservation {
     /// Create a unique commit and atomically reserve `issue` with an empty
     /// lease. Existing reservations are never adopted, expired or overwritten.
     /// Errors with an uncertain remote outcome retain the ref for recovery.
-    pub(super) fn take(launch: &Git, issue: &IssueUrl) -> Result<Option<Self>> {
-        let reference = format!("refs/heads/thirdshift/pickup/{}", issue.number);
-        Self::take_ref(launch, reference, &issue.url)
+    pub fn take(launch: &Git, issue: &IssueUrl) -> Result<Option<Self>> {
+        Self::take_ref(launch, reference(issue.number), &issue.url)
+    }
+
+    /// Reserve `issue`, which this run published and is about to mark
+    /// ready and dispatch itself, as a Pickup run reserves its Ready issue,
+    /// so that an overlapping Pickup run passes it over. Fails if another
+    /// run already holds it.
+    pub fn of_published(launch: &Git, issue: &IssueUrl) -> Result<Self> {
+        Self::take(launch, issue)?.with_context(|| {
+            format!(
+                "#{} is already reserved on origin, at {}",
+                issue.number,
+                reference(issue.number)
+            )
+        })
     }
 
     /// Serialize CI-red Ticket publication across all Base branches and hosts.
-    pub(super) fn ci_red(launch: &Git) -> Result<Option<Self>> {
+    pub fn ci_red(launch: &Git) -> Result<Option<Self>> {
         Self::take_ref(
             launch,
             "refs/heads/thirdshift/pickup/ci-red".into(),
@@ -81,6 +96,11 @@ impl Reservation {
             token,
         }))
     }
+}
+
+/// The ref that reserves issue `number` on origin.
+pub fn reference(number: u64) -> String {
+    format!("refs/heads/thirdshift/pickup/{number}")
 }
 
 impl Drop for Reservation {

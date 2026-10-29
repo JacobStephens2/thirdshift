@@ -44,6 +44,7 @@ pub mod guidance;
 mod executable;
 pub use executable::write_executable;
 
+pub mod concurrency;
 pub mod fakes;
 pub mod resend;
 pub mod scoring;

@@ -7,9 +7,11 @@
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, with the repository at
-//! its Claim limit, or while an Architect run or another Pickup run on the
+//! its Failure limit, or while an Architect run or another Pickup run on the
 //! repository is still running, it is skipped. Each pass that gets the lock
-//! first sweeps `in-progress` off the repository's closed issues.
+//! first sweeps `in-progress` and `agent-failed` off the repository's closed
+//! issues, then takes `agent-failed` off each open issue the Day shift has
+//! acted on.
 //! Asked for a Run notification, a pass that took an issue sends one naming
 //! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
@@ -19,6 +21,7 @@ mod support;
 
 use std::fs;
 
+use support::concurrency::{release as release_issue, waits_on};
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{
     HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log, write_executable,
@@ -30,6 +33,10 @@ const READY_FOR_AGENT: &str = "ready-for-agent";
 /// The label of a Claimed issue, which the dispatched run swaps the issue's
 /// `ready-for-agent` for.
 const IN_PROGRESS: &str = "in-progress";
+
+/// The label of an issue a failed run kept its Claim on, which the Failure
+/// limit counts.
+const AGENT_FAILED: &str = "agent-failed";
 
 /// Make issue `number` open and labelled `ready-for-agent` on the fake
 /// GitHub, with `more` labels after it.
@@ -281,8 +288,18 @@ fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
 }
 
 #[test]
+fn two_machines_racing_for_two_ready_issues_each_take_one() {
+    pickup_race(PickupRace::TwoIssues);
+}
+
+#[test]
 fn delayed_selector_after_failed_winner_still_starts_only_one_run() {
     pickup_race(PickupRace::FailedWinner);
+}
+
+#[test]
+fn delayed_selector_after_failed_winner_passes_over_its_stale_selection_for_the_next() {
+    pickup_race(PickupRace::FailedWinnerThenNext);
 }
 
 #[test]
@@ -294,25 +311,43 @@ enum PickupRace {
     Issue,
     Spec,
     SuccessfulWinner,
+    /// Issue, with #9 Ready too, which the loser takes.
+    TwoIssues,
     FailedWinner,
+    /// FailedWinner, with #9 Ready too, which the loser takes once its
+    /// selection of #7 went stale.
+    FailedWinnerThenNext,
     ActiveClaimHistory,
 }
 
+/// Two machines' Pickup runs both select #7 before either reserves it. The
+/// selector held back, the loser, loses the reservation or finds its
+/// selection stale, and moves on: to #9 when that is Ready too, otherwise
+/// to a skip with no Ready issue it can reserve.
 fn pickup_race(race: PickupRace) {
-    let (is_spec, winner_finishes_first, winner_fails, active_history) = match race {
-        PickupRace::Issue => (false, false, false, false),
-        PickupRace::Spec => (true, false, false, false),
-        PickupRace::SuccessfulWinner => (false, true, false, false),
-        PickupRace::FailedWinner => (false, true, true, false),
-        PickupRace::ActiveClaimHistory => (false, true, true, true),
+    let (is_spec, winner_finishes_first, winner_fails, active_history, next_ready) = match race {
+        PickupRace::Issue => (false, false, false, false, false),
+        PickupRace::Spec => (true, false, false, false, false),
+        PickupRace::SuccessfulWinner => (false, true, false, false, false),
+        PickupRace::TwoIssues => (false, false, false, false, true),
+        PickupRace::FailedWinner => (false, true, true, false, false),
+        PickupRace::FailedWinnerThenNext => (false, true, true, false, true),
+        PickupRace::ActiveClaimHistory => (false, true, true, true, false),
     };
     let scenario = Scenario::new();
     // The generation check must protect even a repository that disables
     // settling, regardless of timestamp precision or either host's clock.
-    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+    scenario.user_config_is(&format!("[pickup]\nwait_minutes = 0\n{EMAIL_ALWAYS}"));
+    // Only the loser can send a Run notification here: the winner's User
+    // config asks for none.
+    let resend = ResendStandIn::replying(200, ACCEPTED);
     ready_issue(&scenario, 7, &[]);
     if is_spec {
         scenario.spec_has_tickets(7, &[(8, &[])]);
+    }
+    if next_ready {
+        ready_issue(&scenario, 9, &[]);
+        scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
     }
     fs::create_dir_all(scenario.path("machine-2")).unwrap();
     scenario.launch_git(&[
@@ -397,7 +432,11 @@ exec "$(dirname "$0")/real/gh" "$@"
     } else {
         "tmp/ready-read"
     };
-    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], started);
+    let stale = scenario.run_until(
+        &["pickup"],
+        &[[("HOLD_READY_READ", "1")].as_slice(), &resend_env(&resend)].concat(),
+        started,
+    );
     let other_home = scenario.path("other-home");
     let winner = std::panic::catch_unwind(|| {
         scenario.run_from_until(
@@ -436,15 +475,28 @@ exec "$(dirname "$0")/real/gh" "$@"
     } else {
         None
     };
-    let labels = scenario.issue_labels(7);
-    let branches = scenario.origin_git(&["show-ref"]);
-    let prs = scenario.gh_state()["prs"].clone();
+    // What the loser could change of #7: its labels, refs and pull requests.
+    let of_7 = || {
+        let refs: Vec<String> = scenario
+            .origin_git(&["show-ref"])
+            .lines()
+            .filter(|line| line.ends_with("issue-7") || line.ends_with("pickup/7"))
+            .map(String::from)
+            .collect();
+        let prs: Vec<serde_json::Value> = scenario.gh_state()["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|pr| pr["head"] == "issue-7")
+            .cloned()
+            .collect();
+        (scenario.issue_labels(7), refs, prs)
+    };
+    let before = of_7();
     fs::write(scenario.path("tmp/release-ready"), "").unwrap();
     fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
     let stale = stale.finish();
-    let labels_after = scenario.issue_labels(7);
-    let branches_after = scenario.origin_git(&["show-ref"]);
-    let prs_after = scenario.gh_state()["prs"].clone();
+    let after = of_7();
     fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
     if let Some(winner) = winner {
         winner.finish();
@@ -463,11 +515,51 @@ exec "$(dirname "$0")/real/gh" "$@"
             winner.stderr
         );
     }
-    assert!(stale.stdout.is_empty(), "{}", stale.stdout);
-    assert_eq!(scenario.claude_calls().len(), 1, "{}", stale.stderr);
-    assert_eq!(labels_after, labels);
-    assert_eq!(branches_after, branches);
-    assert_eq!(prs_after, prs);
+    // With the winner's Claim active in its history, or its pull request
+    // open, the loser's search passes #7 over without reserving it.
+    let skipped = if active_history || (winner_finishes_first && !winner_fails) {
+        "thirdshift: no Ready issue on acme/widgets"
+    } else {
+        assert!(stale.stderr.contains(&unreservable(7)), "{}", stale.stderr);
+        "thirdshift: no Ready issue on acme/widgets it can reserve, past #7; \
+         check refs/heads/thirdshift/pickup/7 on origin if it stays reserved"
+    };
+    assert_eq!(after, before);
+    let sessions: Vec<String> = scenario
+        .claude_calls()
+        .iter()
+        .map(|call| call["prompt"].as_str().unwrap().to_string())
+        .collect();
+    let issue_of = |prompt: &String, number: u32| {
+        let url = scenario.issue_url(number);
+        prompt.contains(&format!("{url}\n")) || prompt.ends_with(&url)
+    };
+    if next_ready {
+        assert_ended_with_pr(&stale, &pr_from(&scenario, "issue-9"), "ready for review");
+        assert_eq!(sessions.len(), 2, "{sessions:?}");
+        assert_eq!(
+            sessions.iter().filter(|prompt| issue_of(prompt, 7)).count(),
+            1,
+            "{sessions:?}"
+        );
+        assert_eq!(
+            sessions.iter().filter(|prompt| issue_of(prompt, 9)).count(),
+            1,
+            "{sessions:?}"
+        );
+        assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+        assert_eq!(resend.requests().len(), 1, "{}", stale.stderr);
+    } else {
+        assert!(stale.stdout.is_empty(), "{}", stale.stdout);
+        assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+        assert_eq!(sessions.len(), 1, "{}", stale.stderr);
+        assert_eq!(
+            stale.stderr.lines().last(),
+            Some(skipped),
+            "{}",
+            stale.stderr
+        );
+    }
 }
 
 #[test]
@@ -515,22 +607,268 @@ fn pickup_reservation_does_not_publish_unrelated_local_head() {
     );
 }
 
+/// Reserve issue `number` on origin as another host's Pickup run would, its
+/// reservation commit's message `message`.
+fn reserved_elsewhere(scenario: &Scenario, number: u32, message: &str) {
+    let tree = scenario.launch_git(&["mktree"]);
+    let token = scenario.launch_git(&["commit-tree", tree.trim(), "-m", message]);
+    scenario.launch_git(&[
+        "push",
+        "origin",
+        &format!("{}:refs/heads/thirdshift/pickup/{number}", token.trim()),
+    ]);
+}
+
+/// Reserve issue `number` on origin as a live Pickup run on another host
+/// would.
+fn reserved_by_another_host(scenario: &Scenario, number: u32) {
+    reserved_elsewhere(
+        scenario,
+        number,
+        &format!(
+            "thirdshift Pickup reservation for {}\n\nToken: other-token\nHost: other-host\nLaunch: /other/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
+            scenario.issue_url(number)
+        ),
+    );
+}
+
+/// The line a Pickup run gives Ready issue `number`, which it could not
+/// reserve.
+fn unreservable(number: u32) -> String {
+    format!(
+        "thirdshift: #{number} is reserved by another run or is no longer Ready; \
+         check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved\n"
+    )
+}
+
+#[test]
+fn a_ready_issue_another_host_reserved_is_passed_over_for_the_next_in_its_order() {
+    for (order, reserved, taken) in [("lowest-first", 7, 9), ("highest-first", 9, 7)] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        ready_issue(&scenario, 8, &["needs-info"]);
+        ready_issue(&scenario, 9, &[]);
+        reserved_by_another_host(&scenario, reserved);
+        let reservation = scenario.origin_git(&[
+            "rev-parse",
+            &format!("refs/heads/thirdshift/pickup/{reserved}"),
+        ]);
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+
+        let result = scenario.run(&["pickup", order]);
+
+        let pr = pr_from(&scenario, &format!("issue-{taken}"));
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        let url = scenario.issue_url(taken);
+        assert!(
+            after_start(&result.stderr).starts_with(&format!(
+                "{}thirdshift: #8 labelled needs-info\n\
+                 thirdshift: taking Ready issue #{taken} \"Issue {taken}\", as thirdshift {url} would\n",
+                unreservable(reserved)
+            )),
+            "{order}: {}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 1, "{order}");
+        assert_eq!(
+            scenario.issue_labels(reserved),
+            [READY_FOR_AGENT],
+            "{order}"
+        );
+        assert!(scenario.origin_log(&format!("issue-{reserved}")).is_none());
+        // The other host's reservation is never released or replaced.
+        assert_eq!(
+            scenario.origin_git(&[
+                "for-each-ref",
+                "--format=%(objectname) %(refname)",
+                "refs/heads/thirdshift/pickup"
+            ]),
+            format!(
+                "{} refs/heads/thirdshift/pickup/{reserved}\n",
+                reservation.trim()
+            ),
+            "{order}"
+        );
+    }
+}
+
+#[test]
+fn with_every_ready_issue_reserved_elsewhere_the_pass_is_skipped_with_no_notification() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    reserved_by_another_host(&scenario, 9);
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &format!(
+            "{}{}thirdshift: no Ready issue on acme/widgets it can reserve, past #7 and #9; \
+             check refs/heads/thirdshift/pickup/7, refs/heads/thirdshift/pickup/9 on origin \
+             if one stays reserved\n",
+            unreservable(7),
+            unreservable(9)
+        ),
+    );
+    assert!(resend.requests().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_issue_that_stopped_being_ready_once_reserved_is_released_and_the_next_taken() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    // The Day shift takes ready-for-agent off #7 just after it is reserved.
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+"{git}" "$@" || exit $?
+case "$1 $*" in
+push*' '[0-9a-f]*:refs/heads/thirdshift/pickup/7) gh fake labels 7 '[]' ;;
+esac
+"#,
+        )
+    });
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-9"), "ready for review");
+    assert!(
+        after_start(&result.stderr).starts_with(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(scenario.issue_labels(7).is_empty());
+    assert!(scenario.origin_log("issue-7").is_none());
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+}
+
+#[test]
+fn the_next_ready_issue_tried_is_reserved_recording_the_host_holding_it() {
+    let scenario = Scenario::new();
+    let hostname = std::process::Command::new("hostname").output().unwrap();
+    assert!(hostname.status.success());
+    let hostname = String::from_utf8(hostname.stdout).unwrap();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let held = scenario.run_until(&["pickup"], &[], "started");
+    let message = scenario.origin_git(&[
+        "show",
+        "-s",
+        "--format=%B",
+        "refs/heads/thirdshift/pickup/9",
+    ]);
+    release(&scenario);
+    held.finish();
+
+    assert!(
+        message
+            .lines()
+            .any(|line| line == format!("Host: {}", hostname.trim())),
+        "reservation did not identify its host: {message}"
+    );
+}
+
+#[test]
+fn a_rejected_reservation_of_the_next_ready_issue_fails_before_any_claim_or_session() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    let hook = scenario.origin_dir().join("hooks/pre-receive");
+    write_executable(
+        &hook,
+        "#!/bin/sh\nif grep -q refs/heads/thirdshift/pickup/9; then echo 'reservations forbidden' >&2; exit 1; fi\n",
+    );
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("could not reserve refs/heads/thirdshift/pickup/9"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_uncertain_push_reserving_the_next_ready_issue_retains_it_without_dispatching() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    reserved_by_another_host(&scenario, 7);
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+case "$*" in
+*refs/heads/thirdshift/pickup/9*)
+    if [ "$1" = push ]; then
+        "{git}" "$@" || exit $?
+        echo 'lost push acknowledgement' >&2
+        exit 1
+    fi
+    ;;
+esac
+exec "{git}" "$@"
+"#,
+        )
+    });
+
+    let failed = scenario.run(&["pickup"]);
+
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed.stderr.contains("check origin by hand"),
+        "{}",
+        failed.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    assert!(
+        !scenario
+            .origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup/9"])
+            .is_empty()
+    );
+    assert!(scenario.origin_log("issue-9").is_none());
+}
+
 #[test]
 fn a_legacy_reservation_without_a_host_is_not_stolen() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
-    let tree = scenario.launch_git(&["mktree"]);
-    let token = scenario.launch_git(&[
-        "commit-tree",
-        tree.trim(),
-        "-m",
+    reserved_elsewhere(
+        &scenario,
+        7,
         "thirdshift Pickup reservation for https://github.com/acme/widgets/issues/7\n\nToken: old-token\nLaunch: /old/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
-    ]);
-    scenario.launch_git(&[
-        "push",
-        "origin",
-        &format!("{}:refs/heads/thirdshift/pickup/7", token.trim()),
-    ]);
+    );
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 
@@ -538,7 +876,7 @@ fn a_legacy_reservation_without_a_host_is_not_stolen() {
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(
-        result.stderr.contains("reserved by another Pickup run"),
+        result.stderr.contains("reserved by another run"),
         "{}",
         result.stderr
     );
@@ -630,7 +968,7 @@ exec "{git}" "$@"
         failed.stderr
     );
     assert_eq!(retried.code, Some(0), "{}", retried.stderr);
-    assert!(retried.stderr.contains("reserved by another Pickup run"));
+    assert!(retried.stderr.contains("reserved by another run"));
     assert!(scenario.claude_calls().is_empty());
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert_eq!(
@@ -1106,7 +1444,8 @@ fn a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    // Ticket #8 can't start, so the Spec run fails and keeps its Claim.
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS, AGENT_FAILED]);
     assert_eq!(sessions(&scenario).first().map(String::as_str), Some("9"));
 }
 
@@ -1452,9 +1791,9 @@ fn an_origin_that_is_not_on_github_stops_the_pass_before_any_label_changes() {
     );
 }
 
-/// What a skipped Pickup run or Architect run says when another of either is
-/// running on the scenario's repository.
-const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+/// What a skipped Pickup run or Architect run says when one other Command is
+/// running on the scenario's repository, at the default Command limit.
+const AT_THE_COMMAND_LIMIT: &str = "thirdshift: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1\n";
 
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`, or until the scenario is
@@ -1483,7 +1822,7 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(result.stdout, "");
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(scenario.gh_state(), github);
@@ -1514,7 +1853,7 @@ fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_ru
         assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
         assert_eq!(
             support::after_start(&skipped.stderr, starting),
-            ALREADY_RUNNING,
+            AT_THE_COMMAND_LIMIT,
             "{second}"
         );
         assert_eq!(skipped.stdout, "");
@@ -1546,6 +1885,336 @@ fn once_a_pickup_run_has_ended_the_next_takes_the_next_ready_issue() {
     assert_eq!(after_start(&third.stderr), NO_READY_ISSUE);
     assert_eq!(third.stdout, "");
     assert_eq!(sessions(&scenario), ["7", "9"]);
+}
+
+/// A User config that lets two Commands run on a repository at once.
+const COMMAND_LIMIT_2: &str = "[pass]\ncommand_limit = 2\n";
+
+/// What a skipped Pass says when `running` Commands fill the scenario's
+/// repository at a Command limit of `limit` above 1.
+fn at_command_limit(running: usize, limit: usize) -> String {
+    format!(
+        "thirdshift: at the Command limit on acme/widgets: {running} Commands are running, \
+         pass.command_limit is {limit}\n"
+    )
+}
+
+fn activity_log(scenario: &Scenario) -> String {
+    fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_naming_the_count() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
+    }
+    ready_issue(&scenario, 11, &[]);
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run_until(&["pickup"], &[], "started-9");
+    let (github, gh_calls) = (scenario.gh_state(), scenario.gh_calls());
+
+    let third = scenario.run(&["pickup"]);
+    let fourth = scenario.run(&["pickup"]);
+    let status = scenario.run(&["status", "--json"]);
+
+    for skipped in [&third, &fourth] {
+        assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+        assert_eq!(after_start(&skipped.stderr), at_command_limit(2, 2));
+        assert_eq!(skipped.stdout, "");
+    }
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.gh_calls(), gh_calls);
+    let reason = "Pickup run skipped: at the Command limit on acme/widgets: \
+                  2 Commands are running, pass.command_limit is 2";
+    assert_eq!(
+        activity_log(&scenario).matches(reason).count(),
+        1,
+        "{}",
+        activity_log(&scenario)
+    );
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let mut taken: Vec<_> = commands
+        .iter()
+        .map(|command| {
+            assert_eq!(command["kind"], "Pickup run", "{status}");
+            assert_eq!(command["state"], "live", "{status}");
+            command["dispatched"][0]["issue"]["number"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    taken.sort();
+    assert_eq!(taken, [7, 9], "{status}");
+    release_issue(&scenario, 7);
+    release_issue(&scenario, 9);
+    assert_ended_with_pr(
+        &first.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    assert_ended_with_pr(
+        &second.finish(),
+        &pr_from(&scenario, "issue-9"),
+        "ready for review",
+    );
+    assert_eq!(scenario.issue_labels(11), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_that_skips_a_pass() {
+    let scenario = Scenario::new();
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+    }
+    scenario.issue_is(5, "OPEN");
+    for issue in [5, 7, 9] {
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
+    }
+    release_issue(&scenario, 9);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+
+    // The repository is at its Command limit of 1, and still the Ticket run
+    // starts its session.
+    let by_hand = scenario.run_until(&[&scenario.issue_url(5)], &[], "started-5");
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &pickup.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    release_issue(&scenario, 5);
+    let by_hand = by_hand.finish();
+    assert_eq!(by_hand.code, Some(0), "stderr: {}", by_hand.stderr);
+    assert_eq!(
+        by_hand.stdout,
+        format!(
+            "{}\n",
+            pr_from(&scenario, "issue-5")["url"].as_str().unwrap()
+        )
+    );
+    let next = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&next, &pr_from(&scenario, "issue-9"), "ready for review");
+}
+
+#[test]
+fn at_the_default_command_limit_a_pass_beside_a_hand_started_ticket_run_names_the_count_and_limit()
+{
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.issue_is(5, "OPEN");
+    scenario.agent_does_for(5, &format!("{}{}", waits_on(5), agent_opens_pr(5, "main")));
+    let by_hand = scenario.run_until(&[&scenario.issue_url(5)], &[], "started-5");
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
+    release_issue(&scenario, 5);
+    by_hand.finish();
+}
+
+#[test]
+fn a_killed_pickup_run_or_ticket_run_frees_its_slot_for_the_next_pass() {
+    for by_hand in [false, true] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        ready_issue(&scenario, 9, &[]);
+        scenario.issue_is(5, "OPEN");
+        // The killed Command's agent waits; the next Pass's opens its PR.
+        let (killed, taken) = if by_hand { (5, 7) } else { (7, 9) };
+        scenario.agent_does_for(
+            killed,
+            &format!("{}{}", waits_on(killed), agent_opens_pr(killed, "main")),
+        );
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        let started = format!("started-{killed}");
+        let mut held = if by_hand {
+            scenario.run_until(&[&scenario.issue_url(5)], &[], &started)
+        } else {
+            scenario.run_until(&["pickup"], &[], &started)
+        };
+        held.kill();
+
+        let next = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(
+            &next,
+            &pr_from(&scenario, &format!("issue-{taken}")),
+            "ready for review",
+        );
+        release_issue(&scenario, killed);
+        assert_eq!(held.finish().code, None);
+    }
+}
+
+#[test]
+fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_lock_and_takes_it_itself()
+ {
+    let scenario = Scenario::new();
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    drop(old_pass);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let old_pass = fs::File::create(&legacy).unwrap();
+    assert!(
+        matches!(old_pass.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "a Pass did not hold the lock a thirdshift from before the Command limit tries"
+    );
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &pickup.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+    old_pass.try_lock().unwrap();
+}
+
+#[test]
+fn an_older_pass_stays_excluded_until_the_last_overlapping_new_pass_ends() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
+    }
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run_until(&["pickup"], &[], "started-9");
+    release_issue(&scenario, 7);
+    assert_eq!(first.finish().code, Some(0));
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    let old_pass = fs::File::create(legacy).unwrap();
+    let lock_result = old_pass.try_lock();
+    release_issue(&scenario, 9);
+    second.finish();
+    assert!(
+        matches!(lock_result, Err(fs::TryLockError::WouldBlock)),
+        "an older Pass acquired the legacy lock while the second Pickup run was live: {lock_result:?}"
+    );
+}
+
+#[test]
+fn an_older_pass_cannot_restart_while_a_newer_pickup_is_live() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
+    let skipped = scenario.run(&["pickup"]);
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: an older thirdshift's Pass is running on acme/widgets\n"
+    );
+    drop(old_pass);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let restarted_old_pass = fs::File::create(&legacy).unwrap();
+    let lock_result = restarted_old_pass.try_lock();
+    release_issue(&scenario, 7);
+    pickup.finish();
+    assert!(
+        matches!(lock_result, Err(fs::TryLockError::WouldBlock)),
+        "an older Pass restarted while the newer Pickup run was live: {lock_result:?}"
+    );
+}
+
+#[test]
+fn at_a_command_limit_of_2_a_pickup_run_is_skipped_until_a_pass_from_before_the_command_limit_ends()
+{
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    ready_issue(&scenario, 9, &[]);
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    let skipped = scenario.run(&["pickup"]);
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: an older thirdshift's Pass is running on acme/widgets\n"
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    assert!(scenario.claude_calls().is_empty());
+    drop(old_pass);
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&second, &pr_from(&scenario, "issue-9"), "ready for review");
+    release_issue(&scenario, 7);
+    assert_ended_with_pr(
+        &first.finish(),
+        &pr_from(&scenario, "issue-7"),
+        "ready for review",
+    );
+}
+
+#[test]
+fn at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_a_pass_from_before_the_command_limit()
+ {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+
+    for (args, starting) in [
+        (vec!["architect", "--plan-only"], "Architect run starting"),
+        (vec!["secure"], "Security run starting"),
+    ] {
+        let skipped = scenario.run(&args);
+
+        assert_eq!(
+            skipped.code,
+            Some(0),
+            "{args:?}: stderr: {}",
+            skipped.stderr
+        );
+        assert_eq!(
+            support::after_start(&skipped.stderr, starting),
+            "thirdshift: an older thirdshift's Pass is running on acme/widgets\n",
+            "{args:?}"
+        );
+        assert_eq!(skipped.stdout, "");
+    }
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    drop(old_pass);
 }
 
 const KEY: &str = "re_test_123";
@@ -1870,7 +2539,7 @@ fn a_pass_skipped_for_the_lock_sends_no_notification() {
     let skipped = run_with_resend(&scenario, &resend, &["pickup", "email", "me@example.com"]);
 
     assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
-    assert_eq!(after_start(&skipped.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&skipped.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(skipped.stdout, "");
     release(&scenario);
     first.finish();
@@ -2000,46 +2669,57 @@ fn a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_c
     }
 }
 
-/// Make each of `issues` open and labelled `in-progress` on the fake GitHub:
-/// an issue that carries a Claim.
-fn claimed_issues(scenario: &Scenario, issues: &[u32]) {
+/// Make each of `issues` open and labelled `in-progress` and `agent-failed`
+/// on the fake GitHub: an issue a failed run kept its Claim on.
+fn failed_issues(scenario: &Scenario, issues: &[u32]) {
     for issue in issues {
         scenario.issue_is(*issue, "OPEN");
-        scenario.issue_labelled(*issue, &[IN_PROGRESS]);
+        scenario.issue_labelled(*issue, &[IN_PROGRESS, AGENT_FAILED]);
     }
 }
 
 #[test]
-fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_requests() {
+fn a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_requests() {
     let scenario = Scenario::new();
-    claimed_issues(&scenario, &[953, 924, 936]);
+    failed_issues(&scenario, &[953, 924, 936]);
 
     let result = scenario.run(&["pickup"]);
 
-    let mut expected = vec![vec![
-        "api".to_string(),
-        "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
-    ]];
-    expected.extend(["closed", "open"].map(|state| vec![
+    let listing = |state: &str, label: &str| {
+        vec![
             "api".to_string(),
             "--paginate".into(),
             "--jq".into(),
             ".[]".into(),
-            format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
-        ]));
-    assert_eq!(scenario.gh_calls(), expected);
+            format!(
+                "repos/acme/widgets/issues?state={state}&labels={label}&sort=created&direction=desc&per_page=100"
+            ),
+        ]
+    };
+    assert_eq!(
+        scenario.gh_calls(),
+        [
+            vec![
+                "api".to_string(),
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
+            ],
+            listing("closed", IN_PROGRESS),
+            listing("closed", AGENT_FAILED),
+            listing("open", AGENT_FAILED),
+        ]
+    );
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #924, #936 and #953 are labelled \
-         in-progress, pickup.limit is 3\n",
+        "thirdshift: at the Failure limit on acme/widgets: #924, #936 and #953 are labelled \
+         agent-failed, pickup.failure_limit is 3\n",
     );
 }
 
 #[test]
-fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
+fn a_pass_skipped_for_the_failure_limit_sends_no_notification() {
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
+    failed_issues(&scenario, &[1, 2, 3]);
     scenario.user_config_is(EMAIL_ALWAYS);
     let resend = ResendStandIn::replying(200, ACCEPTED);
 
@@ -2048,67 +2728,173 @@ fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #1, #2 and #3 are labelled in-progress, \
-         pickup.limit is 3\n",
+        "thirdshift: at the Failure limit on acme/widgets: #1, #2 and #3 are labelled \
+         agent-failed, pickup.failure_limit is 3\n",
     );
     assert!(resend.requests().is_empty());
 }
 
 #[test]
-fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
-    // Raised, three Claims no longer stop the pass.
+fn pickup_failure_limit_in_the_user_config_raises_and_lowers_the_failure_limit() {
+    // Raised, three failures no longer stop the pass.
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
-    scenario.user_config_is("[pickup]\nlimit = 4\n");
+    failed_issues(&scenario, &[1, 2, 3]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 4\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
 
-    // Lowered, one Claim stops it.
+    // Lowered, one failure stops it.
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1]);
-    scenario.user_config_is("[pickup]\nlimit = 1\n");
+    failed_issues(&scenario, &[1]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: #1 is labelled in-progress, \
-         pickup.limit is 1\n",
+        "thirdshift: at the Failure limit on acme/widgets: #1 is labelled agent-failed, \
+         pickup.failure_limit is 1\n",
     );
 }
 
 #[test]
-fn a_closed_issue_labelled_in_progress_does_not_count_against_the_claim_limit() {
+fn claims_whose_pull_requests_are_ready_draft_or_merged_never_count() {
     let scenario = ready_ticket();
-    claimed_issues(&scenario, &[1, 2, 3]);
-    scenario.issue_is(3, "CLOSED");
+    for (number, state, draft) in [(1, "OPEN", false), (2, "OPEN", true), (3, "MERGED", false)] {
+        scenario.issue_is(number, "OPEN");
+        scenario.issue_labelled(number, &[IN_PROGRESS]);
+        scenario.github_has_pr(&format!("issue-{number}"), "main", state);
+        if draft {
+            let mut github = scenario.gh_state();
+            github["prs"].as_array_mut().unwrap().last_mut().unwrap()["isDraft"] = true.into();
+            scenario.write_gh_state(&github);
+        }
+    }
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    for number in [1, 2, 3] {
+        assert_eq!(scenario.issue_labels(number), [IN_PROGRESS]);
+    }
 }
 
 #[test]
-fn a_pickup_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key() {
+fn a_closed_issue_labelled_agent_failed_does_not_count_and_is_swept() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[1, 2, 3]);
+    scenario.issue_is(3, "CLOSED");
+    scenario.issue_labelled(3, &["bug", IN_PROGRESS, AGENT_FAILED]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: taking in-progress and agent-failed off #3, which is closed\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(3), ["bug"]);
+}
+
+#[test]
+fn a_failure_the_day_shift_handed_back_or_took_over_loses_agent_failed_and_does_not_count() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[11, 12, 13, 14]);
+    // Handed back, with or without the Claim taken off: Ready, but above #7.
+    scenario.issue_labelled(11, &[IN_PROGRESS, AGENT_FAILED, READY_FOR_AGENT]);
+    scenario.issue_labelled(12, &[AGENT_FAILED, READY_FOR_AGENT]);
+    // Taken over: no Claim and no needs-triage left.
+    scenario.issue_labelled(13, &[AGENT_FAILED, "bug"]);
+    // Still waiting for triage, so still counted.
+    scenario.issue_labelled(14, &[AGENT_FAILED, "needs-triage"]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 2\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    for (number, acted) in [(11, "handed back"), (12, "handed back"), (13, "took over")] {
+        let line =
+            format!("thirdshift: taking agent-failed off #{number}, which the Day shift {acted}\n");
+        assert!(result.stderr.contains(&line), "stderr: {}", result.stderr);
+    }
+    assert_eq!(scenario.issue_labels(11), [IN_PROGRESS, READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(12), [READY_FOR_AGENT]);
+    assert_eq!(scenario.issue_labels(13), ["bug"]);
+    assert_eq!(scenario.issue_labels(14), [AGENT_FAILED, "needs-triage"]);
+}
+
+#[test]
+fn a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted() {
+    let scenario = ready_ticket();
+    scenario.issue_is(1, "OPEN");
+    scenario.issue_labelled(1, &[AGENT_FAILED, "bug"]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
+    scenario.gh_fails("api --method DELETE repos/acme/widgets/issues/1/labels/agent-failed");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: warning: could not take agent-failed off #1: "),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(1), [AGENT_FAILED, "bug"]);
+}
+
+#[test]
+fn a_pickup_failure_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key()
+ {
     for limit in ["0", "-1", "1.5", "\"3\"", "true"] {
         let scenario = ready_ticket();
-        let path = scenario.user_config_is(&format!("[pickup]\nlimit = {limit}\n"));
+        let path = scenario.user_config_is(&format!("[pickup]\nfailure_limit = {limit}\n"));
 
         let result = scenario.run(&["pickup"]);
 
         scenario.assert_rejected_before_any_work(
             &result,
             &format!(
-                "thirdshift: pickup.limit must be a whole number from 1 up in the User config {}\n",
+                "thirdshift: pickup.failure_limit must be a whole number from 1 up in the User \
+                 config {}\n",
                 path.display()
             ),
         );
         assert_eq!(result.code, Some(1), "{limit}: {}", result.stderr);
         assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
     }
+}
+
+#[test]
+fn an_old_pickup_limit_is_ignored_with_a_warning_naming_pickup_failure_limit() {
+    let scenario = ready_ticket();
+    failed_issues(&scenario, &[1]);
+    scenario.issue_is(2, "OPEN");
+    scenario.issue_labelled(2, &[IN_PROGRESS]);
+    let path = scenario.user_config_is("[pickup]\nlimit = 1\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let warning = format!(
+        "thirdshift: warning: pickup.limit is ignored: a Pickup run now counts the issues it \
+         failed on, up to pickup.failure_limit; remove pickup.limit from the User config {}\n",
+        path.display()
+    );
+    assert_eq!(
+        result.stderr.matches(&warning).count(),
+        1,
+        "stderr: {}",
+        result.stderr
+    );
 }
 
 #[test]
@@ -2156,7 +2942,7 @@ fn the_sweep_does_not_run_on_a_pass_skipped_for_the_lock() {
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(after_start(&result.stderr), ALREADY_RUNNING);
+    assert_eq!(after_start(&result.stderr), AT_THE_COMMAND_LIMIT);
     assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
     release(&scenario);
     architect.finish();

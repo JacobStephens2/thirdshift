@@ -33,7 +33,8 @@ impl Fixture {
                 (owner.path().to_path_buf(), Owner::Run(owner))
             }
             Lifetime::Review | Lifetime::Stale => {
-                let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+                let owner =
+                    ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
                 let path = owner.path().to_path_buf();
                 let owner = if matches!(lifetime, Lifetime::Stale) {
                     std::mem::forget(owner);
@@ -73,7 +74,8 @@ impl Fixture {
                 drop(owner);
             }
             Owner::Stale => {
-                let result = ReviewWorktree::create(&self.launch, "work", "main");
+                let result =
+                    ReviewWorktree::create(&self.launch, "work", "main", PassKind::Architect);
                 if let Some(reason) = reason {
                     let error = result.err().expect("stale recovery must refuse");
                     let message = format!("{error:#}");
@@ -614,7 +616,7 @@ fi
         return;
     }
     let fixture = Fixture::new(Lifetime::Stale);
-    let error = ReviewWorktree::create(&fixture.launch, "work", "main")
+    let error = ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
         .err()
         .expect("stale disposal must refuse");
     let message = format!("{error:#}");

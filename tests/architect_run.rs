@@ -24,6 +24,7 @@ mod support;
 
 use std::fs;
 
+use support::concurrency::{release as release_issue, reservations, waits_on};
 use support::resend::ResendStandIn;
 use support::{REPO, RunResult, Scenario, TimelineEvent, before_command_log, leaves_running};
 
@@ -1097,7 +1098,11 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    // The plan's failed run kept its Claim, so the Failure limit counts it.
+    assert_eq!(
+        scenario.issue_labels(8),
+        [ARCHITECT_PLAN, IN_PROGRESS, "agent-failed"]
+    );
 }
 
 /// A script that records the commit the session's worktree is at as
@@ -1844,7 +1849,7 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
 
 /// What a skipped Architect run says when another is running on the
 /// scenario's repository.
-const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+const ALREADY_RUNNING: &str = "thirdshift: an Architect run is already running on acme/widgets\n";
 
 /// Assert the Architect run was skipped as one is already running: exit 0,
 /// that line alone on stderr, and nothing on stdout.
@@ -1971,12 +1976,15 @@ fn a_dispatch_that_fails_its_launch_checks_still_has_a_record() {
     let scenario = scenario();
     scenario.agent_does_in_session(
         1,
-        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.name ''\n"),
+        // An empty email still makes the plan's reservation commit, but not
+        // the dispatched run's launch checks.
+        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.email ''\n"),
     );
     let ended = scenario.run(&["architect"]);
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert_eq!(reservations(&scenario), "");
     assert!(
-        ended.stderr.contains("git user.name is not set"),
+        ended.stderr.contains("git user.email is not set"),
         "{}",
         ended.stderr
     );
@@ -2959,4 +2967,120 @@ fn an_architect_run_retains_damaged_review_registration_through_launch_preflight
             );
         }
     }
+}
+
+/// A User config that lets `limit` Commands run on a repository at once.
+fn command_limit(limit: usize) -> String {
+    format!("[pass]\ncommand_limit = {limit}\n")
+}
+
+#[test]
+fn at_a_command_limit_of_3_an_architect_run_reserves_its_plan_beside_a_live_pickup_run_and_another_passes_it_over()
+ {
+    let scenario = scenario();
+    // With no settling, the Pickup runs take an issue as soon as it is
+    // labelled Ready.
+    scenario.user_config_is(&format!("{}[pickup]\nwait_minutes = 0\n", command_limit(3)));
+    scenario.issue_is(7, "OPEN");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    scenario.agent_does_for(8, &format!("{}{}", waits_on(8), agent_opens_pr(8, "main")));
+
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    // Once the plan, #8, is marked ready, and before the run it is
+    // dispatched as Claims it, #9 is filed Ready and another Pickup run
+    // starts, finding both Ready.
+    let mut state = scenario.gh_state();
+    state["on_issue_view"]["8"] = serde_json::json!({
+        "fields": "labels",
+        "script": format!(
+            "cd \"{}\" && gh issue create --title 'Issue 9' --body 'Next' --label ready-for-agent > /dev/null \
+             && {{ \"{}\" pickup > \"$FAKE_GH_STATE.next.out\" 2> \"$FAKE_GH_STATE.next.err\" || true; }}",
+            scenario.launch_dir().display(),
+            env!("CARGO_BIN_EXE_thirdshift"),
+        ),
+    });
+    scenario.write_gh_state(&state);
+
+    // #7 carries the Pickup run's Claim, so it is no Ready issue that goes
+    // first.
+    let architect = scenario.run_until(&["architect"], &[], "started-8");
+
+    assert_eq!(
+        reservations(&scenario),
+        "refs/heads/thirdshift/pickup/7\nrefs/heads/thirdshift/pickup/8"
+    );
+    let next = fs::read_to_string(scenario.path("gh-state.json.next.err")).unwrap();
+    assert!(
+        next.contains(
+            " #8 is reserved by another run or is no longer Ready; \
+             check refs/heads/thirdshift/pickup/8 on origin if it stays reserved\n"
+        ),
+        "{next}"
+    );
+    assert_eq!(
+        fs::read_to_string(scenario.path("gh-state.json.next.out")).unwrap(),
+        format!(
+            "{}\n",
+            pr_from(&scenario, "issue-9")["url"].as_str().unwrap()
+        )
+    );
+    release_issue(&scenario, 8);
+    let architect = architect.finish();
+    assert_eq!(architect.code, Some(0), "{}", architect.stderr);
+    assert_eq!(
+        architect.stdout,
+        format!(
+            "{}\n",
+            pr_from(&scenario, "issue-8")["url"].as_str().unwrap()
+        )
+    );
+    assert_eq!(reservations(&scenario), "refs/heads/thirdshift/pickup/7");
+    release_issue(&scenario, 7);
+    let pickup = pickup.finish();
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert_eq!(reservations(&scenario), "");
+}
+
+#[test]
+fn a_second_architect_run_is_skipped_while_one_runs_saying_why_and_a_pickup_run_runs_beside_it() {
+    let scenario = scenario();
+    scenario.user_config_is(&command_limit(2));
+    scenario.agent_does(&format!(
+        "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+    ));
+    let held = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+
+    let skipped = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: an Architect run is already running on acme/widgets\n"
+    );
+    assert_eq!(skipped.stdout, "");
+    assert_eq!(scenario.claude_calls().len(), 1, "a second review started");
+    scenario.issue_is(9, "OPEN");
+    scenario.issue_labelled(9, &["ready-for-agent"]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    let pickup = scenario.run(&["pickup"]);
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert_eq!(
+        pickup.stdout,
+        format!(
+            "{}\n",
+            pr_from(&scenario, "issue-9")["url"].as_str().unwrap()
+        )
+    );
+    release(&scenario);
+    let held = held.finish();
+    assert_eq!(held.code, Some(0), "{}", held.stderr);
+    assert!(
+        held.stdout
+            .starts_with("https://github.com/acme/widgets/issues/"),
+        "{}",
+        held.stdout
+    );
 }

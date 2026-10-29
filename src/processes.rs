@@ -17,11 +17,12 @@
 //! one Issue-branch or one Spec-branch worktree, and either needs an issue.
 //!
 //! A Process started with no issue is a Pass, unless it declares an
-//! Issue-branch or Spec-branch worktree, which needs an issue. A Pass takes the repository's
-//! Pass lock and is skipped, before any worktree, while another Pass holds
-//! it. It does not take an Architect run's Ready-issue or Architect-idea
-//! gates. A Process started with an issue is not a Pass and does not take the
-//! lock.
+//! Issue-branch or Spec-branch worktree, which needs an issue. Such a Pass is
+//! skipped before any worktree while its repository is at its Command limit, and
+//! takes no lock of a kind: it runs beside any other Pass up to the limit.
+//! It does not take an Architect run's Ready-issue or Architect-idea gates.
+//! A Process started with an issue is not a Pass: it takes a slot toward
+//! the Command limit without counting.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -42,6 +43,7 @@ use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::ChildAsks;
 use crate::claim::{self, Claim};
+use crate::command_limit;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::GitHub;
@@ -475,28 +477,22 @@ struct HeldClaim<'a> {
 }
 
 impl HeldClaim<'_> {
-    fn needs_info(&mut self) {
-        if let Some(claim) = self.claim.take() {
-            claim.needs_info();
-        }
-    }
-
     fn remove(&mut self) {
         if let Some(claim) = self.claim.take() {
             claim.remove();
         }
     }
 
-    fn release(&mut self) {
+    fn end(&mut self, ending: claim::Ending) {
         if let Some(claim) = self.claim.take() {
-            claim.end(None);
+            claim.end(ending);
         }
     }
 }
 
 impl Drop for HeldClaim<'_> {
     fn drop(&mut self) {
-        self.release();
+        self.end(claim::Ending::Failed);
     }
 }
 
@@ -644,9 +640,10 @@ fn run(command: &ProcessRun) -> Result<String> {
     if let Err(error) = require_issue(&path, &file, issue.as_ref()) {
         return Err(failed_before_steps(notification, error));
     }
-    // No issue: a Pass. The Base branch is checked before the lock, so a bad
-    // checkout fails instead of being skipped, and a skip creates no worktree.
-    // The lock is then held until this process exits, through every Step.
+    // No issue: a Pass. The Base branch is checked before the Command limit,
+    // so a bad checkout fails instead of being skipped, and a skip creates no
+    // worktree. Its slot is then held until this process exits, through
+    // every Step.
     // `pass` holds the first lines, so a quiet skip prints nothing. A skip
     // sends no Run notification.
     if issue.is_none() {
@@ -660,7 +657,11 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        match launch::hold_pass(&repo) {
+        match command_limit::hold_pass(
+            &repo,
+            config.command_limit,
+            command_limit::Sharing::UpToTheLimit,
+        ) {
             Ok(Some(running)) => {
                 let reason = running.to_string();
                 let choice = Choice::of(&command.asked, &config.harness);
@@ -696,6 +697,9 @@ fn run(command: &ProcessRun) -> Result<String> {
         return finish_run(name, &repo, prepared, notification);
     }
     let issue = issue.expect("an issue");
+    // Started with an issue, it counts toward the Command limit, but is
+    // never refused for it.
+    command_limit::hold_slot(&issue.repo());
     let started = Utc::now() - crate::run::STARTED_MARGIN;
     if file
         .worktrees
@@ -978,11 +982,13 @@ fn run_issue_branch(
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
     drop(completed);
     if result.is_ok() && not_reproduced {
-        claim.needs_info();
+        claim.end(claim::Ending::NotReproduced);
     } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
+    } else if result.is_ok() {
+        claim.end(claim::Ending::BeforeDelivery);
     } else {
-        claim.release();
+        claim.end(claim::Ending::Failed);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));

@@ -7,12 +7,13 @@ use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::base_fix::Advice;
+use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
 use crate::issue::Repo;
-use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::launch::{self, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
@@ -150,10 +151,14 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base) {
+    } = match launch::start(
+        base,
+        config.command_limit,
+        Sharing::OneOfAKind(PassKind::Security),
+    ) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
-            logs::skipped(Pass::Security, &running.0, &running);
+            logs::skipped(Pass::Security, &running.repo, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
         Err(error) => return Outcome::Audited(error.into()),
@@ -184,7 +189,7 @@ fn run_through(
     closing: bool,
     offer_command: Option<&str>,
 ) -> Outcome {
-    match outside.ready_issue(crate::ready::PickupOrder::LowestFirst) {
+    match outside.ready_issue(crate::ready::PickupOrder::LowestFirst, None) {
         Ok(Some(ready)) => {
             let skipped = Skipped::ReadyIssue(ready.listed);
             outside.skipped(Pass::Security, &skipped);
@@ -255,7 +260,9 @@ pub(crate) fn fix_record<O: Outside>(
         outside.started(Work::SecurityRun(repo));
         let (published, session_log) = outside.publish_security_fix(base, record, &metadata.url);
         log = session_log;
-        let issue = published?;
+        // Held through the dispatched run's ending, then released, as a
+        // Pickup run releases the Ready issue it took.
+        let (issue, _reservation) = published?;
         let size = record.fix_size()?;
         outside.link_security_fix(record, &issue)?;
         let mut ended = dispatch(outside, &issue, size);

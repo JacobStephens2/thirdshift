@@ -45,6 +45,12 @@ fn a_spec_branch_lands_dependent_tickets_and_leaves_the_spec_pr_draft() {
             .issue_labels(7)
             .contains(&"in-progress".to_string())
     );
+    assert!(
+        !scenario
+            .issue_labels(7)
+            .contains(&"agent-failed".to_string()),
+        "a successful Process leaving a draft Spec PR is not a failed run"
+    );
 }
 
 #[test]

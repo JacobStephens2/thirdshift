@@ -58,10 +58,10 @@ printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout.trim(), scenario.issue_url(9));
     assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
-    assert!(
-        !scenario
-            .issue_labels(8)
-            .contains(&"in-progress".to_string())
+    assert_eq!(
+        scenario.issue_labels(8),
+        Vec::<String>::new(),
+        "a successful Architecture review must release the Claim without adding needs-info or agent-failed"
     );
     scenario.assert_cleaned_up("issue-8");
 }

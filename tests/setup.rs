@@ -261,6 +261,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[activity]",
             "[spec]",
             "[resources]",
+            "[pass]",
             "[pickup]",
             "[harness]",
             "[harness.claude]",
@@ -305,7 +306,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         config["resources"]["max_load_per_cpu_percent"].as_integer(),
         Some(0)
     );
-    assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
+    assert_eq!(config["pickup"]["failure_limit"].as_integer(), Some(3));
+    assert!(config["pickup"].get("limit").is_none(), "{text}");
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
@@ -386,6 +388,7 @@ effort = 'high' # my Effort
             "[inbox]",
             "[console]",
             "[resources]",
+            "[pass]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",

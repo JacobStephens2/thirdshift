@@ -7,9 +7,9 @@
 //! candidate published no plan, and the Architect run ends on the issue it
 //! named instead, labelled an
 //! Architect idea: the idea issue it filed for its top recommendation, or the
-//! open issue that already covers it. Only one Pass per repository runs at a
-//! time on a machine: an Architect run started while another Pass is still
-//! running is skipped, before any review. So is
+//! open issue that already covers it. One started while its repository is
+//! at its Command limit on this machine, or while another Architect run
+//! runs there, is skipped, before any review. So is
 //! one that finds an Architect plan still open on the repository: it never
 //! retries or dispatches an Architect plan that is already there. And so is
 //! one that finds an Architect idea there waiting for triage: the factory has
@@ -24,13 +24,14 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::asks::Flags;
+use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::{Issue, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::labels::{Edit, Label, NEEDS_TRIAGE, READY_FOR_AGENT};
-use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::launch::{self, Launch, Start};
 use crate::logs::{self, Pass};
 use crate::pass::{LaunchAndGitHub, Outside};
 use crate::processes::architect::{self as process, ArchitectRun};
@@ -74,8 +75,9 @@ pub enum Outcome {
 /// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
-    /// Another Pass on this repository is still
-    /// running on this machine, the Spec run or Run it dispatched included.
+    /// Its repository is at its Command limit on this machine, the Spec run
+    /// or Run each Pass dispatched counted, or another Architect run is
+    /// still running there.
     AlreadyRunning(AlreadyRunning),
     /// These Architect plans are still open on this repository: at least
     /// one.
@@ -92,8 +94,8 @@ pub enum Skipped {
 impl Skipped {
     /// The URLs of the issues the Architect run was skipped for, as its
     /// stdout carries them: each open Architect plan, or each Architect idea
-    /// waiting for triage, or the Ready issue. None when it was skipped as
-    /// another, or a Pickup run, is still running.
+    /// waiting for triage, or the Ready issue. None when it was skipped at
+    /// its start, at the Command limit or beside another Architect run.
     pub fn urls(&self) -> Vec<&str> {
         match self {
             Self::AlreadyRunning(_) => Vec::new(),
@@ -274,8 +276,9 @@ impl fmt::Display for Reviewed {
 /// a failed review too.
 ///
 /// Once the preflight checks pass, and before anything else, the Architect
-/// run is skipped, with nothing done, if another on the same repository, or a
-/// Pickup run, is still running on this machine: see [`launch::start`]. A
+/// run is skipped, with nothing done, if its repository is at its Command
+/// limit on this machine, or another Architect run is still running there:
+/// see [`launch::start`]. A
 /// skip is recorded in the repository's Activity log. The rest, from the
 /// gates to the dispatch, is [`run_through`], through the Launch directory,
 /// GitHub, the logs and `harness`, the Harness, Model and Effort its review,
@@ -294,10 +297,14 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base) {
+    } = match launch::start(
+        base,
+        config.command_limit,
+        Sharing::OneOfAKind(PassKind::Architect),
+    ) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
-            logs::skipped(Pass::Architect, &running.0, &running);
+            logs::skipped(Pass::Architect, &running.repo, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
         Err(error) => return failed(error.into()),
@@ -414,47 +421,52 @@ impl Report {
 
 /// End the Architecture review on the issue the last line of its
 /// `final_message` names, reaching it through `outside`: a
-/// plan is marked ready, and an idea issue, or the issue that already covers
-/// the top recommendation, is labelled an Architect idea. Fails, with no
-/// call made, if the session had no final message or its last line is not
-/// one the prompt asks for, and fails if the plan can't be marked ready or
-/// the idea labelled.
-pub(crate) fn conclude(
-    outside: &mut impl conclusion::Outside,
+/// plan is reserved and marked ready, and an idea issue, or the issue that
+/// already covers the top recommendation, is labelled an Architect idea.
+/// Fails, with no call made, if the session had no final message or its
+/// last line is not one the prompt asks for, and fails if the plan can't be
+/// reserved or marked ready or the idea labelled. The caller supplies its
+/// reservation policy and holds the returned reservation through dispatch.
+pub(crate) fn conclude<O: conclusion::Outside, R>(
+    outside: &mut O,
     final_message: Option<&str>,
     origin: &str,
     started: DateTime<Utc>,
-) -> Result<Reviewed> {
+    reserve: impl FnOnce(&mut O, &IssueUrl) -> Result<R>,
+) -> Result<(Reviewed, Option<R>)> {
     match final_message.and_then(Report::read) {
         Some(Report::Plan(plan)) => {
-            let title = mark_plan_ready(outside, &plan, origin, started)?;
-            Ok(Reviewed::PlanReady(plan, title))
+            let (title, reservation) = mark_plan_ready(outside, &plan, origin, started, reserve)?;
+            Ok((Reviewed::PlanReady(plan, title), Some(reservation)))
         }
         Some(Report::Idea(idea)) => {
             let title = label_idea(outside, &idea)?;
             let strength = final_message.and_then(Strength::read);
-            Ok(Reviewed::IdeaFiled(idea, title, strength))
+            Ok((Reviewed::IdeaFiled(idea, title, strength), None))
         }
         Some(Report::AlreadyFiled(issue)) => {
             let title = label_idea(outside, &issue)?;
             let strength = final_message.and_then(Strength::read);
-            Ok(Reviewed::AlreadyFiled(issue, title, strength))
+            Ok((Reviewed::AlreadyFiled(issue, title, strength), None))
         }
         None => bail!("the Architecture review ended without the final line its prompt asks for"),
     }
 }
 
-/// Mark `plan` ready: check it, then swap its `needs-triage` for
+/// Mark `plan` ready: check it, reserve it on origin, so that an
+/// overlapping Pickup run never takes it, then swap its `needs-triage` for
 /// `ready-for-agent` and label it `architect-plan`, in one request that
 /// keeps its other labels, as viewed for the checks, having added each label
 /// it puts on to the repository if it lacks it. Fails, changing no label, if
-/// the plan fails its checks. Returns its title, as viewed, if known.
-fn mark_plan_ready(
-    outside: &mut impl conclusion::Outside,
+/// the plan fails its checks or can't be reserved. Returns its title, as
+/// viewed, if known, and its reservation.
+fn mark_plan_ready<O: conclusion::Outside, R>(
+    outside: &mut O,
     plan: &IssueUrl,
     origin: &str,
     started: DateTime<Utc>,
-) -> Result<Option<String>> {
+    reserve: impl FnOnce(&mut O, &IssueUrl) -> Result<R>,
+) -> Result<(Option<String>, R)> {
     outside.step(format!(
         "the Architecture review published the plan {}",
         plan.url
@@ -463,6 +475,7 @@ fn mark_plan_ready(
     if outside.interrupted() {
         bail!("interrupted");
     }
+    let reservation = reserve(outside, plan)?;
     outside.step(format!(
         "marking the plan ready: swapping {NEEDS_TRIAGE} for {READY_FOR_AGENT} and adding {ARCHITECT_PLAN} on #{}",
         plan.number
@@ -473,7 +486,7 @@ fn mark_plan_ready(
         &[NEEDS_TRIAGE],
         &[READY_FOR_AGENT, ARCHITECT_PLAN],
     ))?;
-    Ok(issue.title)
+    Ok((issue.title, reservation))
 }
 
 /// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
@@ -727,9 +740,15 @@ mod tests {
     /// The Architect run's conclusion on `final_message`, through `repo`:
     /// how the review ended, or the cause it failed with, and what it did.
     fn concluded(mut repo: InMemory, final_message: &str) -> (Result<String, String>, Vec<Call>) {
-        let ended = conclude(&mut repo, Some(final_message), ORIGIN, started())
-            .map(|reviewed| reviewed.to_string())
-            .map_err(|error| format!("{error:#}"));
+        let ended = conclude(
+            &mut repo,
+            Some(final_message),
+            ORIGIN,
+            started(),
+            Outside::reserve,
+        )
+        .map(|(reviewed, _)| reviewed.to_string())
+        .map_err(|error| format!("{error:#}"));
         (ended, repo.calls)
     }
 
@@ -749,7 +768,7 @@ mod tests {
         "labelling #8 an Architect idea: adding needs-triage and architect-idea";
 
     #[test]
-    fn a_plan_is_viewed_once_and_marked_ready_in_one_edit_keeping_its_other_labels() {
+    fn a_plan_is_viewed_once_reserved_and_marked_ready_in_one_edit_keeping_its_other_labels() {
         let repo = InMemory::default().viewable(
             8,
             viewed(true, 0, &["architecture", "needs-triage", "Spec"]),
@@ -766,6 +785,7 @@ mod tests {
             [
                 step(PUBLISHED),
                 Call::View(8),
+                Call::Reserve(8),
                 step(MARKING),
                 edit(
                     8,
@@ -775,6 +795,18 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_plan_another_run_holds_reserved_is_refused_with_no_edit() {
+        let repo = InMemory::default()
+            .viewable(8, viewed(true, 0, &["needs-triage"]))
+            .reserved_elsewhere(8);
+
+        let (ended, calls) = concluded(repo, &message(prompt::PLAN_LINE));
+
+        assert_eq!(ended.unwrap_err(), "#8 is already reserved on origin");
+        assert_eq!(calls, [step(PUBLISHED), Call::View(8), Call::Reserve(8)]);
     }
 
     #[test]
@@ -1020,7 +1052,7 @@ mod tests {
     fn no_final_message_fails_with_no_call_made() {
         let mut repo = InMemory::default();
 
-        let ended = conclude(&mut repo, None, ORIGIN, started());
+        let ended = conclude(&mut repo, None, ORIGIN, started(), Outside::reserve);
 
         assert_eq!(
             ended.unwrap_err().to_string(),

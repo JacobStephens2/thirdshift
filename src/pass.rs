@@ -19,6 +19,7 @@ use crate::security::reproduction::Reproduction;
 use anyhow::Result;
 
 use crate::asks::{Asks, Flags};
+use crate::command_limit::PassKind;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::{GitHub, Issue, ListedIssue};
@@ -30,6 +31,7 @@ use crate::launch::BaseBranch;
 use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, PickupOrder, PriorityIssue, ReadyIssue};
+use crate::reservation::Reservation;
 use crate::run::{self, Ended, StartedBy};
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -60,6 +62,9 @@ pub enum Dispatch<'a> {
 /// its Harness, the Launch directory's pull, the Architecture review
 /// session, and the run it dispatches.
 pub trait Outside {
+    /// What holds an issue reserved on origin, released when it is
+    /// dropped.
+    type Reservation;
     /// Every open issue in the repository labelled `label`.
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>>;
     /// Every closed issue in the repository labelled `label`.
@@ -68,12 +73,18 @@ pub trait Outside {
     fn issue(&mut self, issue: &IssueUrl) -> Result<Issue>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
+    /// Reserve `issue`, which the pass published and is about to mark ready
+    /// and dispatch, on origin, as a Pickup run reserves the Ready issue it
+    /// takes, so an overlapping Pickup run passes it over. Fails if another
+    /// run holds it.
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Self::Reservation>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// The repository's Ready issue at `order`'s end of the issue numbers,
     /// if it has one, by the Ready issue search, with its lines on the
-    /// issues passed over.
-    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>>;
+    /// issues passed over. With `past`, an issue already tried, only the
+    /// issues after it in `order` are searched.
+    fn ready_issue(&mut self, order: PickupOrder, past: Option<u64>) -> Result<Option<ReadyIssue>>;
     /// The lowest-numbered issue that goes before an Architect run: Ready
     /// or meeting every Ready issue condition except settling.
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>>;
@@ -131,12 +142,14 @@ pub trait Outside {
         record: &SecurityRecord,
         reproduction: &Reproduction,
     ) -> Result<()>;
+    /// Publish the fix for `record`, its finding at `url`, and mark it
+    /// ready, having reserved it on origin first, as [`Self::reserve`] does.
     fn publish_security_fix(
         &mut self,
         base: &str,
         record: &SecurityRecord,
         url: &str,
-    ) -> (Result<IssueUrl>, Option<PathBuf>);
+    ) -> (Result<(IssueUrl, Self::Reservation)>, Option<PathBuf>);
     fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()>;
     /// Record the dispatch's ending in its private record, even after interruption.
     fn record_security_fix_ending(
@@ -191,6 +204,8 @@ pub struct LaunchAndGitHub<'a> {
 }
 
 impl Outside for LaunchAndGitHub<'_> {
+    type Reservation = Reservation;
+
     fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
         GitHub::new().open_issues_labelled(&self.repo.slug(), label)
     }
@@ -207,12 +222,16 @@ impl Outside for LaunchAndGitHub<'_> {
         edit.apply(&GitHub::new())
     }
 
+    fn reserve(&mut self, issue: &IssueUrl) -> Result<Reservation> {
+        Reservation::of_published(self.launch, issue)
+    }
+
     fn interrupted(&mut self) -> bool {
         interrupt::requested()
     }
 
-    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch, self.repo, self.config.pickup_wait, order)
+    fn ready_issue(&mut self, order: PickupOrder, past: Option<u64>) -> Result<Option<ReadyIssue>> {
+        ready::first(self.launch, self.repo, self.config.pickup_wait, order, past)
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
@@ -257,10 +276,11 @@ impl Outside for LaunchAndGitHub<'_> {
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let worktree = match ReviewWorktree::create(self.launch, &self.repo.name, base) {
-            Ok(worktree) => worktree,
-            Err(error) => return (Err(error), None),
-        };
+        let worktree =
+            match ReviewWorktree::create(self.launch, &self.repo.name, base, PassKind::Architect) {
+                Ok(worktree) => worktree,
+                Err(error) => return (Err(error), None),
+            };
         let logs = Logs::of_architect_run(self.repo);
         // Cloned, so the conclusion can take the seam itself.
         let harness = self.harness.clone();
@@ -378,7 +398,7 @@ impl Outside for LaunchAndGitHub<'_> {
         base: &str,
         record: &SecurityRecord,
         url: &str,
-    ) -> (Result<IssueUrl>, Option<PathBuf>) {
+    ) -> (Result<(IssueUrl, Reservation)>, Option<PathBuf>) {
         logs::stage(logs::Stage::SecurityFixPublishing);
         crate::security::fixing::publish(self.launch, self.repo, base, record, url, self.harness)
     }
@@ -460,6 +480,8 @@ mod in_memory {
         Closed(&'static str),
         /// They viewed this issue.
         View(u64),
+        /// They reserved this issue on origin.
+        Reserve(u64),
         /// They applied an Edit to this issue, taking `off` off it and
         /// putting `on` on it, which leaves it with `labels`.
         Edit {
@@ -470,6 +492,8 @@ mod in_memory {
         },
         /// They asked for the Ready issue.
         ReadySearch,
+        /// They asked for the Ready issue after this one, in their order.
+        ReadySearchPast(u64),
         /// They handed on this progress line.
         Step(String),
         /// It recorded that it was skipped, for this reason.
@@ -559,9 +583,11 @@ mod in_memory {
         closed_listing_fails: bool,
         /// The number of each issue an Edit to fails.
         failing_edits: Vec<u64>,
-        /// The Ready issue search's answer: the issue, and whether it is a
-        /// Spec.
-        ready: Option<(ListedIssue, bool)>,
+        /// The number of each issue another run holds reserved on origin.
+        reserved_elsewhere: Vec<u64>,
+        /// The Ready issue search's answers: each issue, and whether it is
+        /// a Spec. A search takes the first in its order.
+        ready: Vec<(ListedIssue, bool)>,
         /// Whether the Harness check fails.
         harness_failing: bool,
         node_failing: bool,
@@ -598,7 +624,8 @@ mod in_memory {
                 interrupted: false,
                 closed_listing_fails: false,
                 failing_edits: Vec::new(),
-                ready: None,
+                reserved_elsewhere: Vec::new(),
+                ready: Vec::new(),
                 harness_failing: false,
                 node_failing: false,
                 audit_findings: Vec::new(),
@@ -672,9 +699,16 @@ mod in_memory {
             self
         }
 
-        /// Make the Ready issue search find issue `number`, a Spec or not.
+        /// Have another run hold issue `number` reserved on origin.
+        pub fn reserved_elsewhere(mut self, number: u64) -> Self {
+            self.reserved_elsewhere.push(number);
+            self
+        }
+
+        /// Make issue `number`, a Spec or not, a Ready issue the search
+        /// finds.
         pub fn ready(mut self, number: u64, is_spec: bool) -> Self {
-            self.ready = Some((listed(number, &[]), is_spec));
+            self.ready.push((listed(number, &[]), is_spec));
             self
         }
 
@@ -777,6 +811,8 @@ mod in_memory {
     }
 
     impl Outside for InMemory {
+        type Reservation = ();
+
         fn open_issues(&mut self, label: Label) -> Result<Vec<ListedIssue>> {
             self.calls.push(Call::Open(label.name()));
             Ok(self.labelled(label, true))
@@ -819,22 +855,46 @@ mod in_memory {
             Ok(())
         }
 
+        fn reserve(&mut self, issue: &IssueUrl) -> Result<()> {
+            self.calls.push(Call::Reserve(issue.number));
+            if self.reserved_elsewhere.contains(&issue.number) {
+                bail!("#{} is already reserved on origin", issue.number);
+            }
+            Ok(())
+        }
+
         fn interrupted(&mut self) -> bool {
             self.interrupted
         }
 
-        fn ready_issue(&mut self, _order: PickupOrder) -> Result<Option<ReadyIssue>> {
-            self.calls.push(Call::ReadySearch);
-            Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
-                listed,
-                is_spec,
-                claim_generation: 0,
-            }))
+        fn ready_issue(
+            &mut self,
+            order: PickupOrder,
+            past: Option<u64>,
+        ) -> Result<Option<ReadyIssue>> {
+            self.calls.push(match past {
+                None => Call::ReadySearch,
+                Some(past) => Call::ReadySearchPast(past),
+            });
+            let mut ready = self.ready.clone();
+            ready.sort_by_key(|(listed, _)| listed.issue.number);
+            if order == PickupOrder::HighestFirst {
+                ready.reverse();
+            }
+            let is_past = |number| past.is_none_or(|past| order.comes_after(number, past));
+            Ok(ready
+                .into_iter()
+                .find(|(listed, _)| is_past(listed.issue.number))
+                .map(|(listed, is_spec)| ReadyIssue {
+                    listed,
+                    is_spec,
+                    claim_generation: 0,
+                }))
         }
 
         fn before_architect(&mut self) -> Result<Option<super::PriorityIssue>> {
             Ok(self
-                .ready_issue(PickupOrder::LowestFirst)?
+                .ready_issue(PickupOrder::LowestFirst, None)?
                 .map(super::PriorityIssue::Ready))
         }
 
@@ -1014,10 +1074,13 @@ mod in_memory {
             _base: &str,
             record: &SecurityRecord,
             _url: &str,
-        ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        ) -> (Result<(IssueUrl, ())>, Option<PathBuf>) {
             self.calls.push(Call::PublishSecurityFix(record.name()));
             (
-                Ok(IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap()),
+                Ok((
+                    IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap(),
+                    (),
+                )),
                 self.session_log.clone(),
             )
         }

@@ -3086,13 +3086,15 @@ fn a_missing_issue_value_or_extra_argument_is_a_usage_error() {
     }
 }
 
-/// What a skipped Pass says when another Pass is running on the scenario's
-/// repository. The same words a skipped Pickup run uses.
-const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+/// What a skipped Pass says when one other Command is running on the
+/// scenario's repository, at the default Command limit. The same words a
+/// skipped Pickup run uses.
+const AT_THE_COMMAND_LIMIT: &str = "thirdshift: at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1\n";
 
 /// The reason kept on the Command record and in the Activity log, without
 /// the progress prefix.
-const ALREADY_RUNNING_REASON: &str = "another Pass is already running on acme/widgets";
+const AT_THE_COMMAND_LIMIT_REASON: &str =
+    "at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1";
 
 /// A script in which the agent touches `started` in the scenario root, then
 /// waits there until the test touches `release`.
@@ -3194,7 +3196,7 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
     assert_eq!(result.stdout, "");
     assert_eq!(
         after_start(&result.stderr, "Process review starting"),
-        ALREADY_RUNNING
+        AT_THE_COMMAND_LIMIT
     );
     assert!(!marker.exists(), "the step ran");
     assert_eq!(scenario.entries("work"), work);
@@ -3203,7 +3205,7 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
     let record = process_record(&scenario);
     assert_eq!(record["kind"], "Process");
     assert_eq!(record["outcome"], "skipped");
-    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    assert_eq!(record["cause"], AT_THE_COMMAND_LIMIT_REASON);
     assert!(
         record["name"]
             .as_str()
@@ -3213,9 +3215,11 @@ fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
         record["name"]
     );
     let (_, log) = command_log(&scenario);
-    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(log.contains(AT_THE_COMMAND_LIMIT_REASON), "{log}");
     assert!(
-        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        activity(&scenario).contains(&format!(
+            "Process review skipped: {AT_THE_COMMAND_LIMIT_REASON}"
+        )),
         "{}",
         activity(&scenario)
     );
@@ -3238,12 +3242,78 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
     assert_eq!(skipped.stdout, "");
     assert_eq!(
         after_start(&skipped.stderr, "Pickup run starting"),
-        ALREADY_RUNNING
+        AT_THE_COMMAND_LIMIT
     );
     assert!(scenario.claude_calls().is_empty(), "a session started");
     assert_eq!(scenario.gh_state(), github);
     assert_eq!(scenario.gh_calls(), gh_calls);
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    release(&scenario);
+    let process = process.finish();
+    assert_eq!(process.code, Some(0), "{}", process.stderr);
+    assert_eq!(process.stdout, "held\n");
+}
+
+#[test]
+fn at_a_command_limit_of_2_a_process_with_no_issue_runs_beside_any_other_command_up_to_the_limit() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[pass]\ncommand_limit = 2\n");
+    waiting_process(&scenario, "review");
+    command_process(&scenario, "notes", "printf ran");
+    ready_issue(&scenario, 7);
+    scenario.agent_does(&agent_opens_pr(7));
+    let with_issue = scenario.run_until(&["process", "review", "issue", "7"], &[], "started");
+
+    let beside = scenario.run(&["process", "notes"]);
+
+    assert_eq!(beside.code, Some(0), "{}", beside.stderr);
+    assert_eq!(beside.stdout, "ran\n");
+    release(&scenario);
+    let with_issue = with_issue.finish();
+    assert_eq!(with_issue.code, Some(0), "{}", with_issue.stderr);
+    fs::remove_file(scenario.path("started")).unwrap();
+    fs::remove_file(scenario.path("release")).unwrap();
+    // It takes no lock of a kind, so a Pickup run runs beside it.
+    let no_issue = scenario.run_until(&["process", "review"], &[], "started");
+
+    let pickup = scenario.run(&["pickup"]);
+
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert!(
+        pickup
+            .stdout
+            .contains("https://github.com/acme/widgets/pull/"),
+        "{}",
+        pickup.stdout
+    );
+    assert_ne!(scenario.issue_labels(7), ["ready-for-agent"]);
+    release(&scenario);
+    let no_issue = no_issue.finish();
+    assert_eq!(no_issue.code, Some(0), "{}", no_issue.stderr);
+    assert_eq!(no_issue.stdout, "held\n");
+}
+
+#[test]
+fn at_a_command_limit_of_2_an_architect_run_reviews_beside_a_process_with_no_issue() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.user_config_is("[pass]\ncommand_limit = 2\n");
+    waiting_process(&scenario, "review");
+    scenario.agent_does(
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The plan" --label needs-triage)
+printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let process = scenario.run_until(&["process", "review"], &[], "started");
+
+    let architect = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(architect.code, Some(0), "{}", architect.stderr);
+    assert_eq!(
+        architect.stdout,
+        "https://github.com/acme/widgets/issues/8\n"
+    );
     release(&scenario);
     let process = process.finish();
     assert_eq!(process.code, Some(0), "{}", process.stderr);
@@ -3263,7 +3333,7 @@ fn a_process_started_with_an_issue_runs_while_a_pickup_run_holds_the_repository(
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "ran\n");
     assert!(
-        !result.stderr.contains("another Pass is already running"),
+        !result.stderr.contains("at the Command limit"),
         "{}",
         result.stderr
     );
@@ -3273,38 +3343,50 @@ fn a_process_started_with_an_issue_runs_while_a_pickup_run_holds_the_repository(
 }
 
 #[test]
-fn a_pickup_run_takes_a_ready_issue_while_a_process_with_an_issue_is_running() {
-    let scenario = Scenario::new();
-    waiting_process(&scenario, "notes");
-    ready_issue(&scenario, 9);
-    scenario.agent_does_for(9, &agent_opens_pr(9));
-    let process = scenario.run_until(&["process", "notes", "issue", "7"], &[], "started");
+fn a_process_with_an_issue_fills_a_slot_so_a_pickup_run_runs_beside_it_only_above_a_command_limit_of_1()
+ {
+    for limit in [1, 2] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!("[pass]\ncommand_limit = {limit}\n"));
+        waiting_process(&scenario, "notes");
+        ready_issue(&scenario, 9);
+        scenario.agent_does_for(9, &agent_opens_pr(9));
+        let process = scenario.run_until(&["process", "notes", "issue", "7"], &[], "started");
 
-    let pickup = scenario.run(&["pickup"]);
+        let pickup = scenario.run(&["pickup"]);
 
-    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
-    assert!(
-        pickup
-            .stdout
-            .contains("https://github.com/acme/widgets/pull/"),
-        "{}",
-        pickup.stdout
-    );
-    assert!(
-        !pickup.stderr.contains("another Pass is already running"),
-        "{}",
-        pickup.stderr
-    );
-    assert_eq!(
-        scenario.claude_calls().len(),
-        1,
-        "pickup started no session"
-    );
-    assert_ne!(scenario.issue_labels(9), ["ready-for-agent"]);
-    release(&scenario);
-    let process = process.finish();
-    assert_eq!(process.code, Some(0), "{}", process.stderr);
-    assert_eq!(process.stdout, "held\n");
+        assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+        if limit == 1 {
+            assert_eq!(pickup.stdout, "");
+            assert_eq!(
+                after_start(&pickup.stderr, "Pickup run starting"),
+                AT_THE_COMMAND_LIMIT
+            );
+            assert!(
+                scenario.claude_calls().is_empty(),
+                "pickup started a session"
+            );
+            assert_eq!(scenario.issue_labels(9), ["ready-for-agent"]);
+        } else {
+            assert!(
+                pickup
+                    .stdout
+                    .contains("https://github.com/acme/widgets/pull/"),
+                "{}",
+                pickup.stdout
+            );
+            assert_eq!(
+                scenario.claude_calls().len(),
+                1,
+                "pickup started no session"
+            );
+            assert_ne!(scenario.issue_labels(9), ["ready-for-agent"]);
+        }
+        release(&scenario);
+        let process = process.finish();
+        assert_eq!(process.code, Some(0), "{}", process.stderr);
+        assert_eq!(process.stdout, "held\n");
+    }
 }
 
 #[test]
@@ -3320,7 +3402,7 @@ fn a_process_with_no_issue_does_not_stop_for_a_ready_issue_or_an_architect_idea(
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "ran\n");
     assert!(
-        !result.stderr.contains("another Pass is already running"),
+        !result.stderr.contains("at the Command limit"),
         "{}",
         result.stderr
     );
@@ -3358,11 +3440,13 @@ fn a_quiet_skip_of_a_process_with_no_issue_prints_nothing_and_keeps_the_record()
     assert!(!marker.exists(), "the step ran");
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "skipped");
-    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    assert_eq!(record["cause"], AT_THE_COMMAND_LIMIT_REASON);
     let (_, log) = command_log(&scenario);
-    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(log.contains(AT_THE_COMMAND_LIMIT_REASON), "{log}");
     assert!(
-        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        activity(&scenario).contains(&format!(
+            "Process review skipped: {AT_THE_COMMAND_LIMIT_REASON}"
+        )),
         "{}",
         activity(&scenario)
     );
@@ -5000,7 +5084,8 @@ exit 1
         scenario.origin_file("issue-7", "left.txt").as_deref(),
         Some("left\n")
     );
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    // The work on origin keeps the Claim, so the failure is labelled.
+    assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
     scenario.assert_cleaned_up("issue-7");
 }
 

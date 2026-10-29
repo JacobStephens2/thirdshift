@@ -56,9 +56,13 @@ pub struct UserConfig {
     /// `spec.parallel`: how many Tickets a Spec run runs at once, by
     /// default 3.
     pub spec_parallel: NonZeroUsize,
-    /// `pickup.limit`: the Claim limit, how many open issues carrying a
-    /// Claim stop a Pickup run from taking another, by default 3.
-    pub pickup_limit: NonZeroUsize,
+    /// `pickup.failure_limit`: the Failure limit, how many open issues
+    /// labelled `agent-failed` stop a Pickup run from taking another, by
+    /// default 3.
+    pub pickup_failure_limit: NonZeroUsize,
+    /// `pass.command_limit`: the Command limit, how many live Commands on
+    /// one repository on this machine skip a Pass there, by default 1.
+    pub command_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
     /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
@@ -81,6 +85,9 @@ pub struct UserConfig {
     pub security_review: bool,
     /// The `[trial]` memory caps for each Trial and Grader scope.
     pub trial_caps: crate::scope::Caps,
+    /// What every Command warns of about the file: a setting it accepts
+    /// but ignores, such as the old `pickup.limit`.
+    pub warnings: Vec<String>,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -140,7 +147,8 @@ impl UserConfig {
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
-            pickup_limit: NonZeroUsize::new(3).unwrap(),
+            pickup_failure_limit: NonZeroUsize::new(3).unwrap(),
+            command_limit: NonZeroUsize::MIN,
             pickup_wait: TimeDelta::minutes(5),
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
@@ -149,12 +157,16 @@ impl UserConfig {
             security_close: None,
             security_review: false,
             trial_caps: crate::scope::Caps::default(),
+            warnings: Vec::new(),
         }
     }
 
     /// Parse `text`, the contents of the User config at `path`, expanding a
     /// leading `~` to `home`. Any key or section thirdshift doesn't know is an
-    /// error, so a typo can't silently leave a setting unset.
+    /// error, so a typo can't silently leave a setting unset. The old
+    /// `pickup.limit`, whatever its value, is accepted and ignored, with a
+    /// warning naming `pickup.failure_limit`, so a scheduled Pass keeps
+    /// running across an update.
     pub fn parse(text: &str, path: &Path, home: &Path) -> Result<Self> {
         let file = format!("the User config {}", path.display());
         let table: Table = text
@@ -204,6 +216,7 @@ impl UserConfig {
                     | "email"
                     | "spec"
                     | "pickup"
+                    | "pass"
                     | "harness"
                     | "security"
                     | "trial"
@@ -279,8 +292,17 @@ impl UserConfig {
                     ("spec", "parallel", value) => {
                         config.spec_parallel = whole_number_from_1(value, "spec.parallel", &file)?
                     }
-                    ("pickup", "limit", value) => {
-                        config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    ("pickup", "failure_limit", value) => {
+                        config.pickup_failure_limit =
+                            whole_number_from_1(value, "pickup.failure_limit", &file)?
+                    }
+                    ("pickup", "limit", _) => config.warnings.push(format!(
+                        "pickup.limit is ignored: a Pickup run now counts the issues it \
+                         failed on, up to pickup.failure_limit; remove pickup.limit from {file}"
+                    )),
+                    ("pass", "command_limit", value) => {
+                        config.command_limit =
+                            whole_number_from_1(value, "pass.command_limit", &file)?
                     }
                     ("pickup", "wait_minutes", value) => {
                         config.pickup_wait = value
@@ -981,8 +1003,11 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
 max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
 
+[pass]
+command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
+
 [pickup]
-limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
+failure_limit = 3   # how many open issues the factory failed on stop a Pickup run taking another; default 3
 wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
@@ -1203,7 +1228,8 @@ mod tests {
                 "spec.parallel",
                 "resources.min_available_memory_mb",
                 "resources.max_load_per_cpu_percent",
-                "pickup.limit",
+                "pass.command_limit",
+                "pickup.failure_limit",
                 "pickup.wait_minutes",
                 "pickup.order",
                 "harness.default",
@@ -1397,11 +1423,46 @@ mod tests {
     }
 
     #[test]
-    fn pickup_limit_is_read_and_defaults_to_3() {
-        let config = parse("[pickup]\nlimit = 1\n").unwrap();
-        assert_eq!(config.pickup_limit.get(), 1);
+    fn pickup_failure_limit_is_read_and_defaults_to_3() {
+        let config = parse("[pickup]\nfailure_limit = 1\n").unwrap();
+        assert_eq!(config.pickup_failure_limit.get(), 1);
         for text in ["", "[pickup]\n"] {
-            assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
+            let config = parse(text).unwrap();
+            assert_eq!(config.pickup_failure_limit.get(), 3, "{text:?}");
+            assert!(config.warnings.is_empty(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn an_old_pickup_limit_of_any_value_is_ignored_with_a_warning_naming_failure_limit() {
+        for value in ["10", "0", "\"3\"", "true"] {
+            let config = parse(&format!("[pickup]\nlimit = {value}\nfailure_limit = 2\n")).unwrap();
+            assert_eq!(config.pickup_failure_limit.get(), 2, "{value}");
+            assert_eq!(
+                config.warnings,
+                [
+                    "pickup.limit is ignored: a Pickup run now counts the issues it failed on, \
+                     up to pickup.failure_limit; remove pickup.limit from the User config \
+                     /home/me/.thirdshift/config.toml"
+                ],
+                "{value}"
+            );
+        }
+        assert_eq!(
+            parse("[pickup]\nlimit = 10\n")
+                .unwrap()
+                .pickup_failure_limit
+                .get(),
+            3
+        );
+    }
+
+    #[test]
+    fn command_limit_is_read_and_defaults_to_1() {
+        let config = parse("[pass]\ncommand_limit = 2\n").unwrap();
+        assert_eq!(config.command_limit.get(), 2);
+        for text in ["", "[pass]\n"] {
+            assert_eq!(parse(text).unwrap().command_limit.get(), 1, "{text:?}");
         }
     }
 
@@ -1617,23 +1678,44 @@ mod tests {
                 "[spec]\nparallel = \"2\"\n",
                 "spec.parallel must be a whole number from 1 up",
             ),
+            (
+                "[pass]\ncomand_limit = 2\n",
+                "unknown key pass.comand_limit",
+            ),
+            ("pass = 2\n", "pass must be the section [pass]"),
+            (
+                "[pass]\ncommand_limit = 0\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = -1\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = 2.5\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = \"2\"\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
             ("[pickup]\nlimt = 2\n", "unknown key pickup.limt"),
             ("pickup = 2\n", "pickup must be the section [pickup]"),
             (
-                "[pickup]\nlimit = 0\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = 0\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = -1\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = -1\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = 2.5\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = 2.5\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = \"2\"\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = \"2\"\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());
@@ -1717,7 +1799,7 @@ mod tests {
         assert_eq!(config.harness.codex.effort.as_deref(), Some("max"));
         assert_eq!(config.logs_dir, home.join(".thirdshift/logs"));
         assert_eq!(config.spec_parallel.get(), 3);
-        assert_eq!(config.pickup_limit.get(), 3);
+        assert_eq!(config.pickup_failure_limit.get(), 3);
     }
 
     /// `text` completed, after checking a Run reads it with the settings it
@@ -2028,7 +2110,7 @@ mod tests {
             assert_eq!(config.logs_dir, before.logs_dir);
             assert_eq!(config.quiet_skips, before.quiet_skips);
             assert_eq!(config.spec_parallel, before.spec_parallel);
-            assert_eq!(config.pickup_limit, before.pickup_limit);
+            assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
             if let Some(comment) = text.lines().next().filter(|line| line.starts_with('#')) {
                 assert!(rendered.starts_with(comment), "{rendered}");
             }
@@ -2069,7 +2151,7 @@ mod tests {
         let mut text = "[email]\nalways = true # enabled\nto = 'saved@example.com' # inbox\n\
                         from = 'saved@example.net' # sender\n\
                         [logs]\ndir = '~/custom'\n[activity]\nquiet_skips = true\n\
-                        [spec]\nparallel = 1_000 # capacity\n[pickup]\nlimit = 7\n\
+                        [spec]\nparallel = 1_000 # capacity\n[pickup]\nfailure_limit = 7\n\
                         [harness]\ndefault = 'muse' # chosen\n"
             .to_string();
         for harness in Harness::ALL {
@@ -2099,7 +2181,7 @@ mod tests {
         assert_eq!(config.logs_dir, before.logs_dir);
         assert_eq!(config.quiet_skips, before.quiet_skips);
         assert_eq!(config.spec_parallel, before.spec_parallel);
-        assert_eq!(config.pickup_limit, before.pickup_limit);
+        assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
         assert!(config.merge_always && config.launch_pull);
         assert!(!config.base_fix);
         assert!(rendered.starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");

@@ -23,15 +23,15 @@ run. The optional Security review and Self-merge keep
 their command and User config gates. Commands still appear as Ticket runs.
 
 `architect-run.toml` defines `architecture-review` → `run-published-issue`.
-Architect runs execute it after the Pass lock and the open-plan, waiting-idea
-and Ready-or-settling-issue gates. The review Step owns the session and the
+Architect runs execute it after the Command limit, the lock of their kind and
+the open-plan, waiting-idea and Ready-or-settling-issue gates. The review Step owns the session and the
 plan-or-idea conclusion and labels. It ends the Process successfully on an idea
 or when `--plan-only` was requested; otherwise the next Step runs the plan.
 The Command keeps its Architect run name, progress, logs and notification.
 Inspect it with `thirdshift process show architect-run` and validate it with
 `thirdshift process check architect-run`. Save a copy under a new name to run
-it as a Custom process, which takes only the shared Pass lock, without the
-Architect run's other skip gates. Pickup has no Process file: it selects work
+it as a Custom process, which follows the Command limit without a lock of a kind
+or the Architect run's other skip gates. Pickup has no Process file: it selects work
 and dispatches to `ticket-run` or `spec-run`.
 
 A Custom process can declare a `spec-branch` worktree and use `land-tickets`
@@ -78,8 +78,8 @@ finding per invocation.
 
 `security-run.toml` defines `security-audit` → `reproduce-findings` →
 `fix-findings` → `close-findings`, inheriting the Command's choices and limits.
-The Pass lock and the Ready-issue, failed-fix and unchanged-Base skip gates
-stay before the file. When an earlier reproduced finding awaits an allowed
+The Command limit, the lock of its kind and the Ready-issue, failed-fix and
+unchanged-Base skip gates stay before the file. When an earlier reproduced finding awaits an allowed
 fix, the first two Steps skip themselves. Fixing and closing keep their
 permission gates, and a close checks only the fix this invocation merged.
 The Command keeps its Security run name, sessions, progress, logs, endings

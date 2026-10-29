@@ -1,4 +1,4 @@
-//! The Built-in Security process, after the Pass lock and skip gates.
+//! The Built-in Security process, after its Command limit, kind lock and skip gates.
 //! Existing adapters retain session identity, privacy and one fix per run.
 
 use anyhow::{Result, bail, ensure};

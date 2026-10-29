@@ -8,6 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+use crate::command_limit::PassKind;
 use crate::git::Git;
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, Package};
 use crate::harness::Choice;
@@ -96,7 +97,7 @@ pub(crate) fn run_with_session(
     session: super::findings::Session<'_>,
 ) -> Attempt {
     let prepared = (|| -> Result<_> {
-        let worktree = ReviewWorktree::create(launch, &repo.name, base)?;
+        let worktree = ReviewWorktree::create(launch, &repo.name, base, PassKind::Security)?;
         let commit = Git::new(worktree.path()).run(&["rev-parse", "HEAD"])?;
         let root = logs::root(repo).join("audits");
         fs::create_dir_all(&root)

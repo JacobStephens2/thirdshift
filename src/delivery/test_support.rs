@@ -1,6 +1,7 @@
 use super::stage::Recorded;
 pub(crate) use super::stage::Stage;
 use super::*;
+use crate::failed_run::PolicyRefusal;
 use anyhow::{anyhow, bail};
 
 pub(crate) const PR_URL: &str = "https://github.com/acme/widgets/pull/12";

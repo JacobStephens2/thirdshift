@@ -55,7 +55,7 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
 | Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores, calibration and proposals by week; `thirdshift scores <pull request> --mine` records yours before revealing the model's. |
 | One skill | `thirdshift skill <skill> [issue <issue>]` | A [standalone skill](docs/guide.md#standalone-skills) runs headlessly and prints its final message. |
-| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and neither an Issue-branch nor a Spec-branch worktree, it is a Pass and skips while another Pass on the repository is running. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
+| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and neither an Issue-branch nor a Spec-branch worktree, it is a Pass and skips while the repository is at its Command limit. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
 
 A Custom process can use `implement` → `delivery` on an Issue-branch worktree for the Ticket run's implementation and bug diagnosis. An unreproduced bug ends successfully with `needs-info`, skipping later Steps and cleaning up the Claim and worktree.
 
@@ -158,7 +158,7 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="no-strong-candidate"></a>[No Strong candidate](docs/guide.md#no-strong-candidate)
 - <a name="an-architect-idea-waits-for-triage"></a>[An Architect idea waits for triage](docs/guide.md#an-architect-idea-waits-for-triage)
 - <a name="a-ready-issue-goes-first"></a>[A Ready issue goes first](docs/guide.md#a-ready-issue-goes-first)
-- <a name="one-at-a-time"></a>[One at a time](docs/guide.md#one-at-a-time)
+- <a name="one-at-a-time"></a>[The Command limit](docs/guide.md#the-command-limit)
 - <a name="one-architect-plan-at-a-time"></a>[One Architect plan at a time](docs/guide.md#one-architect-plan-at-a-time)
 - <a name="on-a-schedule"></a>[On a schedule](docs/guide.md#on-a-schedule)
 - <a name="weeding"></a>[Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes)
@@ -166,7 +166,7 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="security-review"></a>[Security review](docs/guide.md#security-review)
 - <a name="fencing"></a>[Security runs on a schedule, with fixing allowed](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed)
 - <a name="pickup-runs"></a>[Pickup runs](docs/guide.md#pickup-runs)
-- <a name="the-claim-limit"></a>[The Claim limit](docs/guide.md#the-claim-limit)
+- <a name="the-claim-limit"></a>[The Failure limit](docs/guide.md#the-failure-limit)
 - <a name="the-sweep"></a>[The Sweep](docs/guide.md#the-sweep)
 - <a name="why-an-issue-was-passed-over"></a>[Why an issue was passed over](docs/guide.md#why-an-issue-was-passed-over)
 - <a name="one-run-notification-for-the-issue-taken"></a>[One Run notification for the issue taken](docs/guide.md#one-run-notification-for-the-issue-taken)

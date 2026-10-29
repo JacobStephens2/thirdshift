@@ -7,6 +7,7 @@ mod child_run;
 mod ci;
 mod claim;
 mod command;
+mod command_limit;
 mod config;
 mod console;
 mod cronjobs;
@@ -41,6 +42,7 @@ mod pull_request;
 mod ready;
 mod recovery;
 mod resend_key;
+mod reservation;
 mod resources;
 mod run;
 mod run_ending;
@@ -382,8 +384,8 @@ fn main() -> ExitCode {
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session trace on stderr. One that is
-/// skipped says why on stderr, and is no failure: as another Pass on its
-/// repository is still running, it puts nothing on stdout,
+/// skipped says why on stderr, and is no failure: at the Command limit, or
+/// as another Architect run is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
 /// triage there, the URL of each, or as it has a Ready issue, that issue's
 /// URL. If asked, by the command or the User config, it sends one Run
@@ -423,7 +425,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// on the Pickup run's Base branch, whatever the Launch directory has
 /// checked out. The dispatched run's ending
 /// is the Pickup run's. One that is skipped, as when the repository is at the
-/// User config's Claim limit, says why on stderr, puts nothing on stdout, and
+/// User config's Failure limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
 /// an issue sends one Run notification, naming the Pickup run and the kind
 /// of run it dispatched, and that run sends none of its own; one that is skipped
