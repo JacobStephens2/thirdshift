@@ -44,7 +44,7 @@ use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 use crate::base_fix::{self, BaseFix};
 use crate::child_run::ChildAsks;
 use crate::ci::{self, Ci, FailedChecks};
-use crate::failed_run::{FailedRun, MergeHold, PolicyRefusal, interrupted_or};
+use crate::failed_run::{FailedRun, interrupted_or, is_hold};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::harness::Choice;
@@ -648,8 +648,7 @@ fn fail(
     // to its first line: the reason goes in the failure commit's subject.
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
-    let keep_ready =
-        error.is::<PolicyRefusal>() || error.is::<SecurityHold>() || error.is::<MergeHold>();
+    let keep_ready = is_hold(&error);
     let log = error
         .downcast_ref::<SecurityHold>()
         .and_then(SecurityHold::log)

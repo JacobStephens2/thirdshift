@@ -321,6 +321,8 @@ fn stopping_after_a_push_keeps_the_claim_and_reports_the_branch_and_pull_request
     let ended = held.finish();
     assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    // The Claim stays, and a Stop adds no agent-failed: the person who
+    // stopped the run has dealt with the issue.
     assert_eq!(scenario.issue_labels(7), ["in-progress", "needs-triage"]);
     assert!(
         stopped.stdout.contains("Issue branch left: issue-7"),

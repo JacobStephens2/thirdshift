@@ -24,6 +24,8 @@ pub(super) enum Kind {
     Experiment,
     Process,
     Pass(Pass),
+    /// A warning about the User config.
+    UserConfig,
 }
 
 impl Display for Kind {
@@ -35,6 +37,7 @@ impl Display for Kind {
             Kind::Experiment => f.write_str("Experiment"),
             Kind::Process => f.write_str("Process"),
             Kind::Pass(pass) => pass.fmt(f),
+            Kind::UserConfig => f.write_str("User config"),
         }
     }
 }

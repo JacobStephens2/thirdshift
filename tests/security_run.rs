@@ -1919,9 +1919,10 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
         "{}",
         result.stderr
     );
+    // A failed Security fix keeps its Claim, so it counts as a failure.
     assert_eq!(
         scenario.gh_state()["labels"]["8"],
-        json!(["security-fix", "in-progress"])
+        json!(["security-fix", "in-progress", "agent-failed"])
     );
     let (subject, body) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
@@ -1960,9 +1961,14 @@ fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
             assert_eq!(
                 scenario.issue_labels(issue),
                 if private {
-                    vec!["security-finding", "security-fix", "in-progress"]
+                    vec![
+                        "security-finding",
+                        "security-fix",
+                        "in-progress",
+                        "agent-failed",
+                    ]
                 } else {
-                    vec!["security-fix", "in-progress"]
+                    vec!["security-fix", "in-progress", "agent-failed"]
                 }
             );
             // Even contradictory ready labelling cannot make Pickup retry a Claim.
@@ -2076,9 +2082,14 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
         assert_eq!(
             scenario.issue_labels(spec),
             if private {
-                vec!["security-finding", "security-fix", "in-progress"]
+                vec![
+                    "security-finding",
+                    "security-fix",
+                    "in-progress",
+                    "agent-failed",
+                ]
             } else {
-                vec!["security-fix", "in-progress"]
+                vec!["security-fix", "in-progress", "agent-failed"]
             }
         );
         let state = scenario.gh_state();
@@ -4968,7 +4979,7 @@ fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
     assert_eq!(
         scenario.issue_labels(8),
-        vec!["security-fix", "in-progress"]
+        vec!["security-fix", "in-progress", "agent-failed"]
     );
 
     let mut state = scenario.gh_state();

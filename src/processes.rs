@@ -398,28 +398,22 @@ struct HeldClaim<'a> {
 }
 
 impl HeldClaim<'_> {
-    fn needs_info(&mut self) {
-        if let Some(claim) = self.claim.take() {
-            claim.needs_info();
-        }
-    }
-
     fn remove(&mut self) {
         if let Some(claim) = self.claim.take() {
             claim.remove();
         }
     }
 
-    fn release(&mut self) {
+    fn end(&mut self, ending: claim::Ending) {
         if let Some(claim) = self.claim.take() {
-            claim.end(None);
+            claim.end(ending);
         }
     }
 }
 
 impl Drop for HeldClaim<'_> {
     fn drop(&mut self) {
-        self.release();
+        self.end(claim::Ending::Failed);
     }
 }
 
@@ -855,11 +849,11 @@ fn run_issue_branch(
         .unreproduced_bug
         .is_some();
     if result.is_ok() && not_reproduced {
-        claim.needs_info();
+        claim.end(claim::Ending::NotReproduced);
     } else if result.is_ok() || delivered {
         claim.remove();
     } else {
-        claim.release();
+        claim.end(claim::Ending::Failed);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));

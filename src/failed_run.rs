@@ -24,6 +24,22 @@ pub struct FailedRun {
     pub ticket_lines: Vec<String>,
 }
 
+impl FailedRun {
+    /// Whether a policy, security or merge hold held its Self-merge, leaving
+    /// its pull request ready for review on the head whose CI was watched.
+    pub fn held(&self) -> bool {
+        is_hold(&self.error)
+    }
+}
+
+/// Whether `error` is a policy, security or merge hold: a Self-merge held
+/// with its pull request already ready.
+pub fn is_hold(error: &anyhow::Error) -> bool {
+    error.is::<PolicyRefusal>()
+        || error.is::<crate::security::review::Hold>()
+        || error.is::<MergeHold>()
+}
+
 /// A repository policy that prevents Self-merge of a ready PR. The Run
 /// fails without pushing a failure commit or converting the PR to a draft.
 #[derive(Debug)]
