@@ -65,7 +65,8 @@ test('Cron jobs reads like terminal crontab lines on desktop and phone, with or 
 });
 
 // The listing draws the schedule and command on one line. A mark in the
-// schedule must not restyle the command.
+// schedule must not restyle the command, and a carriage return in the
+// command must not paint another entry.
 function glyph(root, needle) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
@@ -101,6 +102,26 @@ test('a bidirectional mark in the schedule does not reverse the command', async 
   const placed = await main.evaluate(glyph, 'PQ');
   assert.ok(placed, 'The command text should be on the page');
   assert.ok(placed.first.x < placed.second.x, 'The command should read in logical order, not reversed by the schedule');
+});
+
+test('a carriage return in the command does not forge another crontab line', async t => {
+  const main = await withCrontab(t, '@reboot thirdshift AB\r@daily echo SECOND\n');
+  const command = await main.evaluate(glyph, 'AB');
+  const forged = await main.evaluate(el => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const index = walker.currentNode.data.indexOf('SECOND');
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(walker.currentNode, index);
+      range.setEnd(walker.currentNode, index + 'SECOND'.length);
+      return range.getBoundingClientRect().y;
+    }
+    return null;
+  });
+  assert.ok(command, 'The command text should be on the page');
+  assert.ok(forged !== null, 'Text after the carriage return should still be shown');
+  assert.ok(Math.abs(command.first.y - forged) < 5, 'Text after the carriage return should stay on that entry');
 });
 
 test('Cron jobs is reachable by link and keyboard, escapes commands and fits a phone', async t => {

@@ -5,7 +5,7 @@
 <main><div class="page-title"><h1>Cron jobs</h1><code>thirdshift cronjobs --json</code></div>
 <p>thirdshift entries in this account's crontab (<code>crontab -l</code>). Schedules use cron's time zone. Reload to see changes.</p>
 <p>Other accounts, system crontabs and other schedulers are outside this view.</p>
-{% if !inventory.jobs.is_empty() %}<pre class="crontab" tabindex="0" role="region" aria-label="thirdshift crontab entries"><code>{% for job in inventory.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command }}</bdi>
+{% if !inventory.jobs.is_empty() %}<pre class="crontab" tabindex="0" role="region" aria-label="thirdshift crontab entries"><code>{% for job in inventory.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi>
 {% endfor %}</code></pre>{% endif %}
 {% if inventory.jobs.is_empty() %}<p>No thirdshift cron jobs in this account's crontab.</p>{% endif %}
 <h2>Last fired by repository</h2>

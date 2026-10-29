@@ -3,6 +3,8 @@ use anyhow::Result;
 use askama::Template;
 use axum::response::Response;
 
+use super::filters;
+
 use crate::config::UserConfig;
 use crate::cronjobs::{self, CronJobs};
 

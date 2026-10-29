@@ -18,6 +18,13 @@ pub fn readable(text: impl std::fmt::Display, _: &dyn Values) -> Result<String> 
     Ok(crate::local_time::readable(&text.to_string()).into_owned())
 }
 
+/// `text` on one line. A carriage return in the terminal-style crontab
+/// listing would start another line and look like a separate entry.
+#[askama::filter_fn]
+pub fn one_line(text: impl std::fmt::Display, _: &dyn Values) -> Result<String> {
+    Ok(text.to_string().replace('\r', "\u{240D}"))
+}
+
 /// Escaped HTML for `text`, with each `https://` URL a link. Trailing
 /// sentence punctuation, and a `)` the URL did not open, stay outside it.
 pub(super) fn linked(text: &str) -> String {
@@ -101,6 +108,25 @@ mod tests {
             linked("http://x.test javascript:alert(1) https://"),
             "http://x.test javascript:alert(1) https://"
         );
+    }
+
+    #[derive(askama::Template)]
+    #[template(source = "{{ text|one_line }}", ext = "html")]
+    struct OneLine<'a> {
+        text: &'a str,
+    }
+
+    #[test]
+    fn shows_a_carriage_return_without_starting_a_line() {
+        let html = askama::Template::render(&OneLine {
+            text: "thirdshift AB\r@daily echo SECOND <script>",
+        })
+        .unwrap();
+        assert_eq!(
+            html,
+            "thirdshift AB\u{240D}@daily echo SECOND &#60;script&#62;"
+        );
+        assert!(!html.contains('\r'));
     }
 
     #[test]
