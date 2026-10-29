@@ -104,6 +104,35 @@ fn architect_run_records_its_compiled_process_in_records_and_traces() {
 }
 
 #[test]
+fn security_run_records_its_compiled_process_in_records_and_traces() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+output=$(sed -n 's/^Output directory: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$output"
+printf '%s\n' '[]' > "$output/findings.json"
+printf '%s\n' '[]' > "$output/coverage-ledger.json"
+printf '%s\n' '{"run_status":"complete"}' > "$output/run-metadata.json"
+printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["secure"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/secure";
+    let expected_hash = hash(include_bytes!("../processes/security-run.toml"));
+    assert_record(
+        &scenario.command_record(folder),
+        "security-run",
+        "built-in",
+        Some(&expected_hash),
+    );
+    for path in traces(&scenario, folder) {
+        assert_trace(&path, "security-run", "built-in", Some(&expected_hash));
+    }
+}
+
+#[test]
 fn ticket_run_records_its_compiled_process_in_records_and_traces() {
     let scenario = Scenario::new();
     scenario.agent_does(&opens_pr(7, "main"));

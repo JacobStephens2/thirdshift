@@ -63,6 +63,7 @@ pub(crate) mod builtin;
 mod catalog;
 mod findings;
 mod identity;
+pub(crate) mod security;
 mod security_audit;
 pub(crate) mod spec;
 mod spec_review;

@@ -933,6 +933,20 @@ and validate it with `thirdshift process check architect-run`. A copy saved
 under a new name runs as a Custom process, with only the shared Pass lock
 and without the Architect run's open-plan, waiting-idea or Ready-issue gates.
 
+The Built-in `security-run` owns `security-audit` → `reproduce-findings` →
+`fix-findings` → `close-findings`, inheriting the Command's Harness, Model and
+Effort and limits. Its Pass lock and Ready-issue, failed-fix and unchanged-Base
+skip gates stay before the file. The first two Steps skip when an earlier
+reproduced finding awaits an allowed fix; fixing and closing retain their
+permission gates. The Security run fixes at most one finding per invocation,
+and closes only that finding after its fix merges and its proof passes.
+Inspect it with `thirdshift process show security-run` or validate it with
+`thirdshift process check security-run`. A copy under a new Custom process
+name takes only the shared Pass lock and can fix several findings.
+
+Pickup has no Process file: it selects and reserves a Ready issue, then
+dispatches `ticket-run` or `spec-run`.
+
 Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
 rules as a Ticket run. If the Resume ends the same way, a progress line
@@ -1217,7 +1231,8 @@ With `security-fix` (or `--security-fix`) on the command, or `[security] fix = t
 each Step skips itself when a recorded finding awaits an allowed fix;
 `no-security-fix` overrides the config. Before the Process name use the dashed
 flags. These Steps publish no fix or finding, and a file cannot loosen their
-privacy rules. Security runs keep their existing sequence and skip gates.
+privacy rules. Security runs execute the Built-in `security-run` sequence
+after their existing skip gates.
 
 ```toml
 version = 1
@@ -1886,10 +1901,10 @@ attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
 the compiled-in file's hash by default. A `run-published-issue` Step that selects
 a Custom process records that name, Custom kind and loaded file's hash on its
 child instead. Custom processes record the file loaded for that
-run, so editing it changes the next run's hash. Spec runs record `spec-run`
-and Architect runs record `architect-run`, each with its compiled-in file's hash. A Security
-run records its run type until its Built-in file lands; a run with no Process
-file has no hash. Older records can omit these fields. Status, the Console,
+run, so editing it changes the next run's hash. Spec runs record `spec-run`,
+Architect runs record `architect-run`, and Security runs record `security-run`,
+each with its compiled-in file's hash. A run with no Process file has no hash.
+Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.
 
 When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
@@ -2287,6 +2302,13 @@ thirdshift secure base main harness claude
 thirdshift secure base main harness codex model gpt-6.1-sol effort high
 ```
 
+After its Pass lock and skip gates, the Security run executes the Built-in
+`security-run` file: `security-audit` → `reproduce-findings` → `fix-findings` →
+`close-findings`. Read it with `thirdshift process show security-run` and
+validate it with `thirdshift process check security-run`. The file owns the
+sequence; sessions, progress, logs, Run notifications and the Security run name
+stay the same.
+
 The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `email-unless-merged`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
@@ -2355,6 +2377,9 @@ thirdshift pickup merge parallel 2     # merge its pull request; two Tickets at 
 thirdshift pickup base main no-merge   # run it on main, whatever branch the clone is on, and leave its pull request for review
 thirdshift pickup highest-first        # take the highest-numbered Ready issue instead, for that one pass
 ```
+
+Pickup has no Built-in process file. It selects and reserves the Ready issue,
+then starts `ticket-run` or `spec-run` as a command on that Issue URL would.
 
 Which end of the issue numbers the pass takes is its order: `lowest-first` by default, `highest-first` with `pickup.order = "highest-first"` in the [User config](#user-config), or for one pass with `lowest-first` or `highest-first` on the command, which wins over the User config. Two schedules working through the same queue from opposite ends, one with each order, collide less often; the reservation below still protects either choice.
 

@@ -32,7 +32,7 @@ Inspect it with `thirdshift process show architect-run` and validate it with
 `thirdshift process check architect-run`. Save a copy under a new name to run
 it as a Custom process, which takes only the shared Pass lock, without the
 Architect run's other skip gates. Pickup has no Process file: it selects work
-and dispatches to a Ticket run (defaulting to `ticket-run`) or a Spec run.
+and dispatches to `ticket-run` or `spec-run`.
 
 A Custom process can declare a `spec-branch` worktree and use `land-tickets`
 to push the Spec branch, run its Tickets in dependency order up to
@@ -63,8 +63,7 @@ on throwaway worktrees. Completed reproductions and the Day shift's grades are
 kept on repeated findings. With `security-fix` or `[security] fix = true`, both
 skip themselves when a recorded finding awaits an allowed fix; `no-security-fix`
 overrides the config. Findings and their Session traces remain private even
-with OTLP export configured. The Security run's existing sequence and gates stay
-as they are; its Built-in process file is a later move.
+with OTLP export configured.
 
 `fix-findings` → `close-findings` lets a Custom process fix each pending
 reproduced Security finding, then recheck merged fixes against the merged
@@ -74,8 +73,21 @@ Ticket runs off any OTLP endpoint, run outside parallel groups and use
 throwaway worktrees. `fix-findings` takes the same optional `process` setting
 as `run-published-issue`, defaulting to `ticket-run`. A failed fix stays with
 the Day shift. `security-fix` and `security-close` (or their `no-` forms)
-override `[security]` settings. The existing Security run is unchanged and
-still fixes at most one finding per invocation.
+override `[security]` settings. The Security run still fixes at most one
+finding per invocation.
+
+`security-run.toml` defines `security-audit` → `reproduce-findings` →
+`fix-findings` → `close-findings`, inheriting the Command's choices and limits.
+The Pass lock and the Ready-issue, failed-fix and unchanged-Base skip gates
+stay before the file. When an earlier reproduced finding awaits an allowed
+fix, the first two Steps skip themselves. Fixing and closing keep their
+permission gates, and a close checks only the fix this invocation merged.
+The Command keeps its Security run name, sessions, progress, logs, endings
+and Run notification, and records the compiled file's hash. Inspect it with
+`thirdshift process show security-run` and validate it with
+`thirdshift process check security-run`. Its name is reserved; save a copy
+under a new name to run a Custom process, which takes only the shared Pass
+lock and can fix several findings per invocation.
 
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
