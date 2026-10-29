@@ -195,12 +195,7 @@ impl Fixture {
 
     fn assert_stopped(&self) {
         let pid = self.read("pid").parse::<libc::pid_t>().unwrap();
-        // SAFETY: probe only the exact PID recorded by this finite fixture.
-        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child {pid} survived");
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        assert!(!crate::process::is_alive(pid), "child {pid} survived");
     }
 }
 
@@ -209,8 +204,7 @@ impl Drop for Fixture {
         if let Ok(pid) = fs::read_to_string(self.0.path().join("pid"))
             && let Ok(pid) = pid.parse::<libc::pid_t>()
         {
-            // SAFETY: assertion-failure cleanup uses this fixture's exact PID.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = crate::process::signal(pid, libc::SIGKILL);
         }
     }
 }
