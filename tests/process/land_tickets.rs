@@ -473,17 +473,7 @@ worktree = "spec"
     let result = scenario.run(&["process", "gather", "issue", "7"]);
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
-    let preserved = scenario.origin_file("issue-7", "proof.txt").or_else(|| {
-        if scenario
-            .launch_git(&["branch", "--list", "issue-7"])
-            .trim()
-            .is_empty()
-        {
-            None
-        } else {
-            Some(scenario.launch_git(&["show", "issue-7:proof.txt"]))
-        }
-    });
+    let preserved = preserved_spec_proof(&scenario);
     assert_eq!(
         preserved.as_deref().map(str::trim),
         Some("proof"),
@@ -510,7 +500,17 @@ worktree = "spec"
     let result = scenario.run(&["process", "gather", "issue", "7"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let preserved = scenario.origin_file("issue-7", "proof.txt").or_else(|| {
+    let preserved = preserved_spec_proof(&scenario);
+    assert_eq!(
+        preserved.as_deref().map(str::trim),
+        Some("proof"),
+        "the successful Spec-branch Step lost its committed work: {}",
+        result.stderr
+    );
+}
+
+fn preserved_spec_proof(scenario: &Scenario) -> Option<String> {
+    scenario.origin_file("issue-7", "proof.txt").or_else(|| {
         if scenario
             .launch_git(&["branch", "--list", "issue-7"])
             .trim()
@@ -520,11 +520,5 @@ worktree = "spec"
         } else {
             Some(scenario.launch_git(&["show", "issue-7:proof.txt"]))
         }
-    });
-    assert_eq!(
-        preserved.as_deref().map(str::trim),
-        Some("proof"),
-        "the successful Spec-branch Step lost its committed work: {}",
-        result.stderr
-    );
+    })
 }

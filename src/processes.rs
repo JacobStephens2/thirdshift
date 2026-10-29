@@ -1221,6 +1221,7 @@ fn execute_groups(
                 StepKind::SecurityAudit | StepKind::ReproduceFindings
             ) {
                 security_audit::run(prepared, &group[0], range.start)
+                    .map_err(findings::private_failure)
             } else if matches!(group[0].kind, StepKind::SpecReview) {
                 spec_review::run(
                     prepared,
@@ -1635,6 +1636,7 @@ fn run_land_tickets(
         } else {
             crate::security::FixAsk::Forbid
         }),
+        security_close: prepared.security_flags.security_close,
         ..Flags::default()
     };
     let mut asks = Asks::of_run(run.issue, &flags, &config);
@@ -2090,6 +2092,7 @@ fn run_published(
         } else {
             crate::security::FixAsk::Forbid
         }),
+        security_close: run.security_flags.security_close,
         ..Flags::default()
     };
     let mut asks = Asks::of_run(&issue, &flags, &config);

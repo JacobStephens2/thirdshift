@@ -1331,6 +1331,7 @@ mod tests {
                         tickets_at_once: NonZeroUsize::new(5).unwrap(),
                         parallel_asked: false,
                         security_fix: true,
+                        security_close: true,
                         security_review: true,
                         launch_pull: false,
                         notification: NotificationAsk::Skip,

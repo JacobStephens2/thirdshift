@@ -894,6 +894,7 @@ mod tests {
             security_review_harness: None,
             security_review_default: None,
             security_fix: false,
+            security_close: false,
             security_review: false,
             goal: Goal::ReadyForReview,
             notification: NotificationAsk::Skip,

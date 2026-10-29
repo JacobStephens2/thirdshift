@@ -142,6 +142,7 @@ const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
 const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
 const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
+const ALLOW_SECURITY_CLOSE: &str = "--allow-security-close";
 const DELIVERY_LIMITS: &str = "--delivery-limits";
 const TICKET_PROCESS: &str = "--ticket-process";
 
@@ -194,6 +195,9 @@ impl Given {
         }
         if self.asks.security_fix {
             args.push(ALLOW_SECURITY_FIX);
+        }
+        if self.asks.security_close {
+            args.push(ALLOW_SECURITY_CLOSE);
         }
         if self.suppress_otlp {
             args.push(SUPPRESS_OTLP);
@@ -321,6 +325,7 @@ pub struct Reader {
     base_fix: Option<BaseFixAsk>,
     security_review: bool,
     security_fix: bool,
+    security_close: bool,
     suppress_otlp: bool,
     sessions: PendingChoice,
     review: PendingChoice,
@@ -375,6 +380,12 @@ impl Reader {
                     bail!("repeated argument: {arg}");
                 }
                 self.security_fix = true;
+            }
+            ALLOW_SECURITY_CLOSE => {
+                if self.security_close {
+                    bail!("repeated argument: {arg}");
+                }
+                self.security_close = true;
             }
             SUPPRESS_OTLP => {
                 if self.suppress_otlp {
@@ -467,6 +478,7 @@ impl Reader {
                 || self.base_fix.is_some()
                 || self.security_review
                 || self.security_fix
+                || self.security_close
                 || self.suppress_otlp
                 || self.sessions.is_given()
                 || self.review.is_given()
@@ -507,6 +519,7 @@ impl Reader {
                 security_review_harness,
                 security_review_default,
                 security_fix: self.security_fix,
+                security_close: self.security_close,
                 security_review: self.security_review,
             },
         }))
@@ -1068,7 +1081,14 @@ mod tests {
         };
         let harnesses = [on_claude, on_opus];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
-        let securities = [(false, false), (true, false), (false, true), (true, true)];
+        let securities = [
+            (false, false, false),
+            (false, false, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+        ];
         for ((kind, harness), security_review_harness) in [
             ticket(),
             ticket_with_its_spec_pr(),
@@ -1079,7 +1099,7 @@ mod tests {
         .zip(harnesses.iter().cycle())
         .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
-            for (base_fix, (security_fix, security_review)) in
+            for (base_fix, (security_fix, security_close, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]
                     .into_iter()
                     .flat_map(|base_fix| securities.map(|security| (base_fix.clone(), security)))
@@ -1102,6 +1122,7 @@ mod tests {
                             chosen_by: ChosenBy::UserConfig,
                         }),
                         security_fix,
+                        security_close,
                         security_review,
                     },
                 };

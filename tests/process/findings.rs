@@ -34,6 +34,61 @@ fn stage_fix(record: usize) -> String {
     )
 }
 
+fn select_finding_ticket(scenario: &Scenario, catalogue: &str, ticket: usize) {
+    write_process(
+        scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_process(
+        scenario,
+        "contractor",
+        &format!(
+            r#"version = 1
+description = "Selected Ticket with finding Step"
+[worktrees.ticket]
+kind = "issue-branch"
+[worktrees.findings]
+kind = "throwaway"
+[[steps]]
+name = "finding"
+catalogue = "{catalogue}"
+worktree = "findings"
+[[steps]]
+name = "edit"
+command = "echo child > child.txt; git add child.txt; git commit -qm child; gh pr create --base main --head issue-{ticket} --title Child --body 'Closes #{ticket}'"
+worktree = "ticket"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#
+        ),
+    );
+}
+
+#[test]
+fn selected_child_finding_step_keeps_the_parent_fix_forbiddance() {
+    let scenario = findings();
+    scenario.user_config_is("[security]\nfix = true\n");
+    select_finding_ticket(&scenario, "fix-findings", 8);
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(2, &stage_fix(0));
+    let result = scenario.run(&["process", "publish", "no-security-fix"]);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "forbidden fixing started a session: {}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+}
+
 fn implement(issue: usize) -> String {
     format!(
         r#"echo bounded > bounded-{issue}.txt
@@ -42,6 +97,44 @@ git commit -qm 'Bound accepted input'
 gh pr create --base main --head issue-{issue} --title Fix --body 'Closes #{issue}'
 "#
     )
+}
+
+#[test]
+fn selected_ticket_finding_steps_inherit_command_fix_permission() {
+    for (config, flag, allowed) in [
+        ("[security]\nfix = false\n", "security-fix", true),
+        ("[security]\nfix = true\n", "no-security-fix", false),
+    ] {
+        let scenario = findings();
+        let mut state = scenario.gh_state();
+        state["advisories"].as_array_mut().unwrap().truncate(1);
+        scenario.write_gh_state(&state);
+        scenario.user_config_is(config);
+        select_finding_ticket(&scenario, "fix-findings", 8);
+        scenario.agent_does_in_session(
+            1,
+            r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        );
+        // Dispatch already accepted the outer Ticket's fresh publication.
+        // Keep it outside the next publisher's second-granularity window.
+        scenario.agent_does_in_session(
+            2,
+            &format!("gh fake created 8 2020-01-01T00:00:00Z\n{}", stage_fix(0)),
+        );
+        scenario.agent_does_for(9, &implement(9));
+        let result = scenario.run(&["process", "publish", flag]);
+        assert_eq!(result.code, Some(0), "flag={flag}: {}", result.stderr);
+        let state = scenario.gh_state();
+        let description = state["advisories"][0]["description"].as_str().unwrap();
+        assert_eq!(
+            description.contains("Fix Ticket:"),
+            allowed,
+            "flag={flag}: {description}\n{}",
+            result.stderr
+        );
+    }
 }
 
 #[test]
@@ -114,6 +207,49 @@ fn otlp_never_receives_private_finding_sessions_or_nested_ticket_runs() {
             "spec={spec}: private finding sessions were exported: {exported}"
         );
     }
+}
+
+#[test]
+fn selected_child_close_step_keeps_the_parent_close_forbiddance() {
+    let scenario = findings();
+    let mut state = scenario.gh_state();
+    state["advisories"].as_array_mut().unwrap().truncate(1);
+    scenario.write_gh_state(&state);
+    scenario.user_config_is("[security]\nfix = true\nclose = true\n");
+    scenario.agent_does_in_session(1, &stage_fix(0));
+    scenario.agent_does_for(8, &implement(8));
+    let fixed = scenario.run(&[
+        "process",
+        "findings",
+        "security-fix",
+        "merge",
+        "no-security-close",
+    ]);
+    assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert_eq!(scenario.gh_state()["advisories"][0]["state"], "draft");
+    select_finding_ticket(&scenario, "close-findings", 9);
+    scenario.agent_does_in_session(
+        3,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for_in_session(
+        8,
+        2,
+        r#"printf 'Security close check: passes\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["process", "publish", "no-security-close"]);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        3,
+        "forbidden closing started a session: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["advisories"][0]["state"], "draft");
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
 }
 
 #[test]

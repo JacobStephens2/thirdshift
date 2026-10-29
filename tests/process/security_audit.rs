@@ -44,6 +44,32 @@ printf '%s\n' 'Private reproduction evidence and impact reasoning.' 'Security re
 "#;
 
 #[test]
+fn audit_failure_does_not_email_private_background_work() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "audit", AUDIT);
+    let secret = "Private exploit trace: POST /admin/debug with token";
+    scenario.agent_does(&support::leaves_running(secret));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &["process", "audit", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    assert!(result.stderr.contains(secret), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        !requests[0].body.to_string().contains(secret),
+        "private audit evidence leaked to Resend: {}",
+        requests[0].body
+    );
+}
+
+#[test]
 fn audit_reproduction_fix_and_close_compose_with_command_permissions() {
     let receiver = ResendStandIn::replying(200, "{}");
     let scenario = Scenario::new();

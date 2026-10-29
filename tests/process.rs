@@ -43,6 +43,48 @@ name = \"review\"
 skill = \"code-review\"
 ";
 
+fn assert_compiled_process(
+    scenario: &Scenario,
+    name: &str,
+    steps: &[&str],
+    issue: Option<&str>,
+) -> String {
+    let shown = scenario.run(&["process", "show", name]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let mut remaining = shown.stdout.as_str();
+    for step in steps {
+        remaining = remaining
+            .split_once(&format!("catalogue = \"{step}\""))
+            .unwrap_or_else(|| panic!("missing or out-of-order Step {step}: {}", shown.stdout))
+            .1;
+    }
+    for choice in ["harness =", "model =", "effort ="] {
+        assert!(!shown.stdout.contains(choice), "{}", shown.stdout);
+    }
+    let listed = scenario.run(&["process", "list"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert!(
+        listed.stdout.contains(&format!("{name} (built-in):")),
+        "{}",
+        listed.stdout
+    );
+    let mut args = vec!["process", "check", name];
+    if let Some(issue) = issue {
+        args.extend(["issue", issue]);
+    }
+    let checked = scenario.run(&args);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    for step in steps {
+        assert!(
+            checked.stdout.contains(&format!("{step}: {step}")),
+            "{}",
+            checked.stdout
+        );
+    }
+    assert!(scenario.claude_calls().is_empty());
+    shown.stdout
+}
+
 #[test]
 fn each_process_skill_step_retains_its_session_trace() {
     let scenario = Scenario::new();

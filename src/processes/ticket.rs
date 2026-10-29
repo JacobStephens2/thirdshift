@@ -23,6 +23,16 @@ pub(crate) fn run_custom(
     file.goal = delivery.goal;
     file.security_review = delivery.security_review;
     file.security_fix = delivery.child_asks.security_fix;
+    file.security_flags.security_fix = Some(if file.security_fix {
+        crate::security::FixAsk::Allow
+    } else {
+        crate::security::FixAsk::Forbid
+    });
+    file.security_flags.security_close = Some(if delivery.child_asks.security_close {
+        crate::security::CloseAsk::Allow
+    } else {
+        crate::security::CloseAsk::Forbid
+    });
     file.limits.repair_cap = file.limits.repair_cap.min(delivery.repair_cap);
     file.limits
         .protected_paths
