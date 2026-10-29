@@ -309,7 +309,7 @@ mod tests {
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: n(3),
-            pickup_limit: n(3),
+            pickup_failure_limit: n(3),
             command_limit: n(1),
             pickup_wait: chrono::TimeDelta::minutes(30),
             pickup_order: crate::ready::PickupOrder::LowestFirst,
@@ -319,6 +319,7 @@ mod tests {
             security_close: None,
             security_review: false,
             trial_caps: crate::scope::Caps::default(),
+            warnings: Vec::new(),
         }
     }
 

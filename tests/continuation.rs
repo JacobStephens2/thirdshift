@@ -199,9 +199,10 @@ git checkout -q main
         assert_eq!(
             scenario.issue_labels(7),
             if continuing {
-                ["in-progress"]
+                // The failed Continuation keeps its Claim, so it is labelled.
+                vec!["in-progress", "agent-failed"]
             } else {
-                ["ready-for-agent"]
+                vec!["ready-for-agent"]
             }
         );
         assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
@@ -349,7 +350,8 @@ fn occupied_checkouts_stop_the_cli_with_recovery_advice_and_preserve_work() {
             "keep this work"
         );
         assert!(scenario.claude_calls().is_empty());
-        assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+        // Earlier work is on origin, so the failed run keeps its Claim.
+        assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
         assert!(!scenario.path("work/widgets-issue-7").exists());
     }
 }

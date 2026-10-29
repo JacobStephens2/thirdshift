@@ -1097,7 +1097,11 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    // The plan's failed run kept its Claim, so the Failure limit counts it.
+    assert_eq!(
+        scenario.issue_labels(8),
+        [ARCHITECT_PLAN, IN_PROGRESS, "agent-failed"]
+    );
 }
 
 /// A script that records the commit the session's worktree is at as

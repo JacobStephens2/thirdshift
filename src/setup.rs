@@ -1045,8 +1045,8 @@ to = \"me@example.com\"  # my inbox
         );
         assert!(
             completed.contains(
-                "\n[pickup]\nlimit = 3   # how many open issues labelled in-progress stop a \
-                 Pickup run taking another; default 3\n"
+                "\n[pickup]\nfailure_limit = 3   # how many open issues labelled agent-failed, \
+                 failures waiting for you, stop a Pickup run taking another; default 3\n"
             ),
             "{completed}"
         );
@@ -1236,7 +1236,7 @@ max_load_per_cpu_percent = 0
 command_limit = 2
 
 [pickup]
-limit = 5
+failure_limit = 5
 wait_minutes = 60
 order = \"highest-first\"
 

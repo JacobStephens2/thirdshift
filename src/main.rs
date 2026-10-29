@@ -414,7 +414,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// on the Pickup run's Base branch, whatever the Launch directory has
 /// checked out. The dispatched run's ending
 /// is the Pickup run's. One that is skipped, as when the repository is at the
-/// User config's Claim limit, says why on stderr, puts nothing on stdout, and
+/// User config's Failure limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
 /// an issue sends one Run notification, naming the Pickup run and the kind
 /// of run it dispatched, and that run sends none of its own; one that is skipped

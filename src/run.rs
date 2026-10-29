@@ -336,9 +336,21 @@ fn start<O: Outside>(
         }
     }
     if claims {
-        outside.end_claim(outcome.as_ref().ok().map(|reached| &reached.resolution));
+        outside.end_claim(claim_ending(&outcome));
     }
     outcome
+}
+
+/// How `outcome`, a Run's or a Spec run's, ends its Claim.
+fn claim_ending(outcome: &Result<Reached, FailedRun>) -> claim::Ending {
+    match outcome {
+        Ok(reached) => match reached.resolution.goal() {
+            Some(goal) => claim::Ending::Reached(goal),
+            None => claim::Ending::NotReproduced,
+        },
+        Err(failed) if failed.held() => claim::Ending::Held,
+        Err(_) => claim::Ending::Failed,
+    }
 }
 
 /// [`start`], from the worktree on: create it for the branch `selection`
@@ -402,8 +414,8 @@ trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Make the Claim on the issue.
     fn make_claim(&mut self) -> Result<()>;
-    /// End the Claim made, with `reached`, the goal the Run reached, or none.
-    fn end_claim(&mut self, resolution: Option<&Resolution>);
+    /// End the Claim made, as `ending` says the Run ended.
+    fn end_claim(&mut self, ending: claim::Ending);
     /// Create the worktree for the Issue branch `branch`, by `checkout`, on
     /// the Base branch `base`.
     fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Self::Worktree>;
@@ -550,12 +562,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         Ok(())
     }
 
-    fn end_claim(&mut self, resolution: Option<&Resolution>) {
+    fn end_claim(&mut self, ending: claim::Ending) {
         if let Some(claim) = self.claim.take() {
-            match resolution {
-                Some(Resolution::NotReproduced { .. }) => claim.needs_info(),
-                _ => claim.end(resolution.and_then(Resolution::goal)),
-            }
+            claim.end(ending);
         }
     }
 
@@ -633,8 +642,8 @@ mod tests {
         Interrupted,
         /// Made the Claim.
         MakeClaim,
-        /// Ended the Claim with this goal reached, or none.
-        EndClaim(Option<Goal>),
+        /// Ended the Claim as this says the Run ended.
+        EndClaim(claim::Ending),
         /// Created the worktree for this Issue branch, so, on this Base
         /// branch.
         Worktree(Checkout, String, String),
@@ -664,6 +673,9 @@ mod tests {
         worktree_fails: bool,
         /// Whether the Spec run or the Delivery fails.
         work_fails: bool,
+        /// Whether the Delivery fails for a merge hold, its pull request
+        /// left ready.
+        work_held: bool,
     }
 
     /// The outside world as `script` answers it, with each call recorded in
@@ -687,6 +699,12 @@ mod tests {
         fn work_ends(&self) -> Result<Reached, FailedRun> {
             if self.script.work_fails {
                 return Err(anyhow!("the work failed").into());
+            }
+            if self.script.work_held {
+                return Err(anyhow::Error::new(crate::failed_run::MergeHold {
+                    reason: "a protected path changed".to_string(),
+                })
+                .into());
             }
             Ok(Reached {
                 resolution: Resolution::PullRequest {
@@ -766,9 +784,8 @@ mod tests {
             Ok(())
         }
 
-        fn end_claim(&mut self, resolution: Option<&Resolution>) {
-            self.calls
-                .push(Call::EndClaim(resolution.and_then(Resolution::goal)));
+        fn end_claim(&mut self, ending: claim::Ending) {
+            self.calls.push(Call::EndClaim(ending));
         }
 
         fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Checkout> {
@@ -988,7 +1005,7 @@ mod tests {
                 Call::MakeClaim,
                 worktree(Checkout::Fresh, "main"),
                 deliver_fresh("main"),
-                Call::EndClaim(Some(Goal::ReadyForReview)),
+                Call::EndClaim(claim::Ending::Reached(Goal::ReadyForReview)),
             ]
         );
     }
@@ -1015,7 +1032,7 @@ mod tests {
                 Call::MakeClaim,
                 worktree(Checkout::Fresh, "develop"),
                 deliver_fresh("develop"),
-                Call::EndClaim(Some(Goal::ReadyForReview)),
+                Call::EndClaim(claim::Ending::Reached(Goal::ReadyForReview)),
             ]
         );
     }
@@ -1299,12 +1316,12 @@ mod tests {
         assert!(ended.is_ok());
         assert_eq!(
             outside.calls.last(),
-            Some(&Call::EndClaim(Some(Goal::Merged)))
+            Some(&Call::EndClaim(claim::Ending::Reached(Goal::Merged)))
         );
     }
 
     #[test]
-    fn the_claim_is_ended_with_none_when_the_worktree_cannot_be_created() {
+    fn the_claim_is_ended_as_failed_when_the_worktree_cannot_be_created() {
         let (calls, ended) = run_on(Script {
             worktree_fails: true,
             ..Script::default()
@@ -1313,12 +1330,15 @@ mod tests {
         assert_eq!(cause(ended), "could not create the worktree");
         assert_eq!(
             calls[calls.len() - 2..],
-            [worktree(Checkout::Fresh, "main"), Call::EndClaim(None)]
+            [
+                worktree(Checkout::Fresh, "main"),
+                Call::EndClaim(claim::Ending::Failed)
+            ]
         );
     }
 
     #[test]
-    fn the_claim_is_ended_with_none_when_the_delivery_fails() {
+    fn the_claim_is_ended_as_failed_when_the_delivery_fails() {
         let (calls, ended) = run_on(Script {
             work_fails: true,
             ..Script::default()
@@ -1327,12 +1347,26 @@ mod tests {
         assert!(ended.is_err());
         assert_eq!(
             calls[calls.len() - 2..],
-            [deliver_fresh("main"), Call::EndClaim(None)]
+            [deliver_fresh("main"), Call::EndClaim(claim::Ending::Failed)]
         );
     }
 
     #[test]
-    fn the_claim_is_ended_with_none_when_the_spec_run_fails() {
+    fn the_claim_is_ended_as_held_when_a_hold_left_the_pull_request_ready() {
+        let (calls, ended) = run_on(Script {
+            work_held: true,
+            ..Script::default()
+        });
+
+        assert!(ended.is_err());
+        assert_eq!(
+            calls[calls.len() - 2..],
+            [deliver_fresh("main"), Call::EndClaim(claim::Ending::Held)]
+        );
+    }
+
+    #[test]
+    fn the_claim_is_ended_as_failed_when_the_spec_run_fails() {
         let (calls, ended) = run_on(Script {
             tickets: vec![true],
             work_fails: true,
@@ -1344,7 +1378,7 @@ mod tests {
             calls[calls.len() - 2..],
             [
                 Call::SpecRun(Checkout::Fresh, 1, "main".to_string(), 1),
-                Call::EndClaim(None),
+                Call::EndClaim(claim::Ending::Failed),
             ]
         );
     }

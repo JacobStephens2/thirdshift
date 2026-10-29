@@ -148,7 +148,7 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="security-review"></a>[Security review](docs/guide.md#security-review)
 - <a name="fencing"></a>[Security runs on a schedule, with fixing allowed](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed)
 - <a name="pickup-runs"></a>[Pickup runs](docs/guide.md#pickup-runs)
-- <a name="the-claim-limit"></a>[The Claim limit](docs/guide.md#the-claim-limit)
+- <a name="the-claim-limit"></a>[The Failure limit](docs/guide.md#the-failure-limit)
 - <a name="the-sweep"></a>[The Sweep](docs/guide.md#the-sweep)
 - <a name="why-an-issue-was-passed-over"></a>[Why an issue was passed over](docs/guide.md#why-an-issue-was-passed-over)
 - <a name="one-run-notification-for-the-issue-taken"></a>[One Run notification for the issue taken](docs/guide.md#one-run-notification-for-the-issue-taken)
