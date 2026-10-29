@@ -6,12 +6,17 @@
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1120px; padding: 20px 28px; background: var(--bg); color: var(--text); font: var(--body-size)/1.4 var(--font-body); }
 header { border-bottom: 2px solid var(--head); padding-bottom: 14px; }
-/* Notifications sit top right, beside the machine's name, not under it. */
+/* Host admission sits below notifications, beside the machine's name. */
 header { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; }
 header > * { grid-column: 1; }
-header > .notifications { grid-column: 2; grid-row: 1 / span 2; align-self: start; margin: 0; text-align: right; }
+header > .header-status { grid-column: 2; grid-row: 1 / span 2; align-self: start; text-align: right; min-width: 0; max-width: 28em; }
+.header-status .notifications { margin: 0; }
+#host-resources { margin: 6px 0 0; font-size: 13px; }
+#host-resources[data-state="ready"] a { color: var(--ready-text); }
+#host-resources[data-state="busy"] a { color: var(--look-text); }
+#host-resources[data-state="unknown"] a { color: var(--urgent-text); }
 header::after { grid-column: 1 / -1; }
-@media (max-width: 760px) { header { display: block; } header > .notifications { text-align: left; } }
+@media (max-width: 760px) { header { display: block; } header > .header-status { text-align: left; } }
 .brand, .harness, .age, .empty, aside { color: var(--dim); }
 .brand { margin: 0; }
 h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; text-transform: var(--head-case); text-shadow: var(--title-shadow); }

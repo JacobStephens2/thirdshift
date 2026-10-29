@@ -269,6 +269,9 @@ body::after { /* scanlines */
 .workflow-description { display: block; margin-top: 8px; color: var(--dim); font-size: 13px; }
 .workflow-content { padding: 0 16px 16px; overflow-wrap: anywhere; }
 .workflow-content p { margin: 16px 0 0; }
+.console-shot { margin: 16px 0; }
+.console-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+.console-shot figcaption { margin-top: 8px; color: var(--dim); font-size: 13px; }
 .workflow-tools { display: grid; gap: 8px; }
 .workflow-tools .workflow { border-top-width: 1px; }
 .workflow-tools summary { padding: 10px 16px; }

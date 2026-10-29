@@ -89,6 +89,16 @@ thirdshift console --no-sign-in
 
 Open the localhost address it prints. The Console never starts work. Use [`thirdshift stop <command>`](docs/guide.md#stopping-a-command) to stop a live Command and wait for cleanup; add `--requeue` to return its issue to Pickup. A signed-in Console account can do the same.
 
+These screenshots show the Console's Focus light Theme with sample Commands. Open either image for the full-size view.
+
+[![Console Inbox: a failed Command in Needs you, two pull requests Ready for review, and the selected Command's details.](site/screenshots/inbox.png)](site/screenshots/inbox.png)
+
+The Inbox groups Commands by what needs you. Select a row to inspect its cause, CLI commands and logs alongside the list.
+
+[![Console Waterfall: a Command's stages and Session tool calls drawn on one time axis, with the slowest calls listed above.](site/screenshots/waterfall.png)](site/screenshots/waterfall.png)
+
+Waterfall expands a Command into stages, Sessions and individual calls, so you can see where the time went.
+
 ### Console on a server
 
 The Console and `status` show the serving OS account's Commands by default. To add readable Commands from other local accounts, use `thirdshift console other-accounts readable` (or a comma-separated list of account names). Other-account Commands show their owner and are read-only. See [account visibility](docs/guide.md#other-local-accounts) for filesystem access requirements.

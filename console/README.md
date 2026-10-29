@@ -15,6 +15,26 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+## Documentation screenshots
+
+The README and public site's Console section share the PNGs in
+[`site/screenshots/`](../site/screenshots/). After the build and browser setup
+above, refresh both from the repository root:
+
+```sh
+node console/screenshots.cjs
+```
+
+The capture needs Python 3 for its fake `gh`. It opens the real Console in
+Chromium at 1440 × 1200, using the Focus light Theme, and captures the full page
+below the machine header. It creates sample Commands and Session spans in a temporary home,
+answers GitHub reads with a local fake `gh`, and closes its browser and server
+before removing that home. It reads no personal logs or GitHub data. Inspect
+both images before committing them; the Console layout can change. The images
+show Inbox with Command details and Waterfall with every call expanded.
+
+## Development and behavior
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
@@ -40,6 +60,12 @@ The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
 session admission decision, also available with `thirdshift resources --json`.
 Reload to refresh it. Set `[resources] min_available_memory_mb` and
 `max_load_per_cpu_percent` in User config; zero disables each limit.
+Below the notification control on every reader page, a host indicator shows
+whether another session can start under those limits. It refreshes every ten
+seconds while the page is visible and links to Resources for measurements and
+blocking reasons. With both limits disabled it says **Host limits off**; a
+failed read says **Host resources unavailable**. Without JavaScript, reload
+the page to refresh the indicator. This is a snapshot, not reserved capacity.
 
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
