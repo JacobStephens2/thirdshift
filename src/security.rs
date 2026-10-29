@@ -182,7 +182,7 @@ fn run_through(
     closing: bool,
     offer_command: Option<&str>,
 ) -> Outcome {
-    match outside.ready_issue(crate::ready::PickupOrder::LowestFirst) {
+    match outside.ready_issue(crate::ready::PickupOrder::LowestFirst, None) {
         Ok(Some(ready)) => {
             let skipped = Skipped::ReadyIssue(ready.listed);
             outside.skipped(Pass::Security, &skipped);
