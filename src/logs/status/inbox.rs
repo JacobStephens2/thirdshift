@@ -8,13 +8,13 @@ use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
 use crate::logs::pass_starts::PassStart;
-use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
+use crate::logs::reading::{Command, Entry, Group, Health, IdlePass, Observation, Snapshot};
 
 pub(crate) struct Inbox {
     /// Outer Command trees with live work, independent of sections and rows.
     pub active_runs: usize,
     pub sections: Vec<Section>,
-    pub idle_passes: Vec<String>,
+    pub idle_passes: Vec<IdlePass>,
     pub pass_starts: Vec<PassStart>,
     pub warning: Option<&'static str>,
     pub github_warning: Option<String>,
@@ -351,7 +351,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         active_runs: snapshot.active_runs(),
         sections,
         github_warning: kept.warning(),
-        idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
+        idle_passes: snapshot.idle_passes,
         pass_starts: snapshot.pass_starts,
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),

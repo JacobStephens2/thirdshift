@@ -283,13 +283,13 @@ fn a_failure_limit_skip_is_recorded_again_only_when_its_failures_change() {
     let result = scenario.run(&["status", "--json"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+    let idle = status["idle_passes"].as_array().unwrap();
+    assert_eq!(idle.len(), 1);
+    assert_eq!(idle[0]["repository"], "acme/widgets");
+    assert_eq!(idle[0]["kind"], "Pickup run");
     assert_eq!(
-        status["idle_passes"],
-        serde_json::json!([{
-            "repository": "acme/widgets",
-            "kind": "Pickup run",
-            "reason": "at the Failure limit on acme/widgets: #5, #6 and #8 are labelled agent-failed, pickup.failure_limit is 3",
-        }])
+        idle[0]["reason"],
+        "at the Failure limit on acme/widgets: #5, #6 and #8 are labelled agent-failed, pickup.failure_limit is 3"
     );
 }
 

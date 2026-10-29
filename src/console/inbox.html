@@ -49,12 +49,12 @@
       {% else %}
       <details id="idle-passes">
         <summary>Last recorded skipped Passes:</summary>
-        <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
+        <ul>{% for pass in inbox.idle_passes %}<li>{{ pass.timestamp() }} · <span>{{ pass.line()|linkify }}</span></li>{% endfor %}</ul>
       </details>
       {% endif %}
       {% if !inbox.pass_starts.is_empty() %}
       <details id="pass-starts"><summary>Last fired Passes:</summary>
-        <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
+        <ul>{% for pass in inbox.pass_starts %}<li><time datetime="{{ pass.datetime() }}">{{ pass.datetime()|readable }}</time> · {% include "console/pass_start.html" %}</li>{% endfor %}</ul>
       </details>
       {% endif %}
     </section>
@@ -68,7 +68,7 @@
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </section>
     {% endfor %}
-    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}</aside>{% endif %}
     {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
