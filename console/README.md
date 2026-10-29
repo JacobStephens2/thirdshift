@@ -180,8 +180,12 @@ Command details open with the Inbox subject and the full issue title, before
 Stop and Dismiss. The subject links to the issue, and long titles wrap. A
 Command without an issue shows its Inbox subject alone; an unknown issue title
 says “(title unavailable)”. The same recorded title is in
-`thirdshift show <command> --json`. Below the heading is one line per recorded fact,
-label then value. A long value, or a fact with its own facts, such as stages,
+`thirdshift show <command> --json`. An ended, unsuccessful Command shows its full
+failure reason immediately below the heading, before Stop and Dismiss, with URLs
+as links. When its own cause is absent, it uses the first cause from failed
+dispatched work. Successful or live Commands, and those with no cause, show no reason.
+The cause also stays in the facts list below, one line per recorded fact, label
+then value. A long value, or a fact with its own facts, such as stages,
 the dispatched Run or run metrics, starts folded behind a one-line preview (a
 title, a name or a count); open it to drill down, as deep as the record goes.
 Session traces fold into one count. Folds stay as you left them while live

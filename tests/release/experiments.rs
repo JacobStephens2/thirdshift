@@ -47,8 +47,9 @@ fn calls(release: &Release) -> Vec<Value> {
 }
 
 #[test]
-fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
+fn a_resumed_release_tags_its_candidate_when_main_gains_other_content() {
     let release = Release::new();
+    let candidate = release.origin(&["rev-parse", "main"]);
     cargo_reports(&release, &[json!(1)]);
     let interrupted = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
     assert!(!interrupted.status.success());
@@ -61,18 +62,18 @@ fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
     release.ci_reports(GREEN);
     cargo_reports(&release, &[verdict("pass")]);
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed).contains("main contains content absent from the measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_eq!(
+        release.origin(&["rev-parse", &format!("{head}^")]),
+        candidate
     );
-    assert!(!release.origin_branch("release-0.2.0"));
-    assert!(release.origin_tag("v0.2.0").is_none());
+    assert_eq!(calls(&release)[1]["args"][2], candidate);
 }
 
 #[test]
-fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
+fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -82,14 +83,12 @@ fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
 
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
 
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed)
-            .contains("release merge contains content absent from its measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_ne!(
+        release.origin(&["rev-parse", "main^{tree}"]),
+        release.origin(&["rev-parse", &format!("{head}^{{tree}}")])
     );
-    assert!(release.origin_tag("v0.2.0").is_none());
 }
 
 #[test]
@@ -145,6 +144,38 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
             "resume must use the same content commit"
         );
     }
+}
+
+#[test]
+fn two_level_experiments_show_both_intervals_before_the_release_prompt() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    let suite = &mut view["verdict"]["suites"]["code-review"];
+    suite["bar"] = json!({"pass_level": 0.8, "fail_level": 0.95});
+    for metric in ["accuracy", "wrong_findings"] {
+        let assessment = suite[metric].as_object_mut().unwrap();
+        let interval = assessment.remove("interval").unwrap();
+        assessment.insert("pass_interval".into(), interval);
+        assessment.insert("fail_interval".into(), json!({"lower": -0.3, "upper": 0.2}));
+    }
+    cargo_reports(&release, &[view]);
+    let before = release.origin_refs();
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "n\n", &[]);
+    let err = unstamped(&output);
+    assert!(!output.status.success());
+    assert!(err.contains("accuracy pass (80%) [-0.25, 0.12]"), "{err}");
+    assert!(err.contains("accuracy fail (95%) [-0.3, 0.2]"), "{err}");
+    assert!(
+        err.contains("wrong findings pass (80%) [-0.02, 0.18]"),
+        "{err}"
+    );
+    assert!(
+        err.contains("wrong findings fail (95%) [-0.3, 0.2]"),
+        "{err}"
+    );
+    assert!(err.contains("release anyway?"), "{err}");
+    assert_eq!(release.origin_refs(), before);
 }
 
 #[test]

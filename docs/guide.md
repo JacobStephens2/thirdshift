@@ -547,6 +547,8 @@ thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift experiments <id> --name <text> [--json]  # rename an Experiment; --name '' brings back its default name
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
+thirdshift recheck <id> --pending [--json]  # review pending Scores and their fingerprint
+thirdshift recheck <id> --batch <fingerprint> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -593,6 +595,26 @@ Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a `[trial]` table. This check also precedes the release Baseline probe.
 
+For an **A/A Experiment**, use one commit and the same flags in both Arms.
+This measures how often the Arms disagree when nothing differs, so you can
+assess ordinary Trial variation before weighing a change. For example:
+
+```sh
+thirdshift experiment HEAD --baseline HEAD \
+  --suite code-review --suite spec-review \
+  --baseline-harness claude --candidate-harness claude \
+  --baseline-model opus --candidate-model opus \
+  --baseline-effort high --candidate-effort high
+```
+
+Choose matching Harness, Model and Effort values available on your machine.
+Select the suites explicitly with `--suite`: identical commits touch no paths
+from which to select them automatically. Both Arms follow the ordinary build
+and Trial path (the commit's cached build may be reused), with separate Trials,
+Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
+identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
+The ordinary resume rules below still apply.
+
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar's timeout, in session-minutes; and, for each suite and Harness that has
@@ -638,11 +660,51 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
-The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
+The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 `1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
-Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
+Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+Both levels are credible levels strictly between zero and one. Changing
+either level after the first Trial is refused, as with the rest of the Bar.
+
+The default pass level is the highest at which an A/A Experiment at the
+measured disagreement rate passes at least 80% of the time on each suite at
+its size, but never below 70% (#1268). #1370's A/A Experiment measured these
+rates, as paired task differences:
+
+| Suite | Size | Accuracy disagreements | Wrong-finding disagreements |
+| --- | --- | --- | --- |
+| `code-review` | 10 tasks × 3 Trials | 2 of 10 tasks (one by two Trials, one by one) | none |
+| `spec-review` | 30 tasks × 1 Trial | 5 of 30 tasks | 2 of 30 tasks |
+
+No pass level from 70% to 95% reaches 80% on either suite at today's size, so
+the default is the 70% floor; without ADR-0024's upper-bound clause a higher
+pass level only lowers the pass rate. Simulated A/A Experiments at those rates,
+each judged by the Verdict at a 70% pass level, pass this often under the
+current rule ([ADR-0025](adr/0025-a-pass-needs-only-the-margin.md)) and
+ADR-0024's rule, whose pass also needed the pass-level upper bound to reach zero:
+
+| Suite size | `code-review`, ADR-0025 | `code-review`, ADR-0024 | `spec-review`, ADR-0025 | `spec-review`, ADR-0024 |
+| --- | --- | --- | --- | --- |
+| Today (10 / 30) | 67% | 67% | 56% | 46% |
+| 40 | 94% | 86% | 67% | 53% |
+| 60 | 97% | 85% | 76% | 61% |
+| 80 | 98% | 86% | 84% | 68% |
+| 100 | 98% | 86% | 89% | 71% |
+
+#1370's own counts give these 70% intervals: `code-review` accuracy
+[−0.171, −0.018] and wrong findings [−0.039, +0.039]; `spec-review` accuracy
+[−0.042, +0.108] and wrong findings [−0.047, +0.048]. At 95% (before #1268),
+the A/A pass rates were 0% and 13%.
+
+Both suites fall short at today's size. `code-review` needs about 20 Eval tasks
+(between today's 10 and the table's 40) to reach 80% at 70%, and #1434 grows
+it. `spec-review` needs about 80. Under
+ADR-0024's rule `spec-review` could not reach 80% at 70% at any size: for
+identical Arms a 70% interval's upper bound falls below zero about 15% of the
+time per noisy metric, capping the pass rate near 72%.
+
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work,
 provider capacity or overload errors, a plan-limit stop, or a host kill or
@@ -710,6 +772,11 @@ or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 `thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
 each Trial's `id`, suite, task, Arm, Trial number and borderline/decisive flags.
+`decisive_flips` names `passed`, `wrong_finding`, or both;
+`decisive_verdicts` maps each named flip to the provisional Verdict it would
+give (`pass`, `fail` or `inconclusive`). These are separate one-flag flips,
+not both flags flipped together. A Score pending only because it is borderline
+has an empty list and map.
 The text view lists the same IDs. `verdict.provisional_verdict` and suite
 intervals show the calculation while `verdict.verdict` waits.
 
@@ -730,8 +797,35 @@ history and recalculated Verdict, then prints the updated Experiment, with
 the updated pending list. Trials and Graders never rerun for a recheck, and the
 Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.
 
+To record the same decision and reason for every Score on a reviewed list:
+
+```sh
+thirdshift recheck <experiment-id> --pending --json
+thirdshift recheck <experiment-id> --batch <fingerprint> pass --reason 'I checked every listed Trial against the written criteria.'
+```
+
+The first command lists every pending Score with its suite, Eval task, Arm,
+Trial number, ID and borderline/decisive reason, plus a `fingerprint` of that
+Experiment's list. Omit `--json` for text. The second command takes that
+fingerprint and appends one timestamped recheck to each listed Score's history,
+using one exclusive lock and one atomic save. It accepts `--wrong-finding` and
+`--json` just like a single recheck. A stale fingerprint refuses the entire
+batch without changing anything; list the pending Scores again and review
+them before retrying. An empty pending list refuses a batch too. The batch
+only covers the reviewed list: its decisions may make other Scores decisive,
+so check the updated pending list afterwards. Rechecks stay in the CLI.
+
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
-or three). Any failed suite fails the Experiment; otherwise any inconclusive
+or three). For each metric, fail when the upper bound at the fail level is below
+zero. Otherwise pass when the lower bound at the pass level is above the margin;
+otherwise the metric is inconclusive. A pass whose whole pass-level interval is
+below zero is reported as worse, within the margin: in JSON as
+`worse_within_margin: true` on that metric, in the text view after the Verdict
+and in the Console. It doesn't change the decision.
+One set of draws supplies both intervals. Both accuracy and wrong findings must
+pass; either can fail the suite. The prediction of how many more Eval tasks
+would settle an inconclusive metric uses the same two-level decision.
+Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
@@ -739,6 +833,18 @@ The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
 `pass_cubed`: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
+The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
+`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v3`, and
+their Bar records `"pass_rule": "margin"`. Saved Experiments under
+`paired-dirichlet-v2`, whose pass also needed the pass-level upper bound to
+reach zero, keep that rule and their stored Bar and Verdict when read, and
+when resumed with the same levels. Saved Experiments under `paired-dirichlet-v1`
+remain readable with their stored single-level Bar and Verdict unchanged. See
+[ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md) and
+[ADR-0025](adr/0025-a-pass-needs-only-the-margin.md).
+For a paused single-level Experiment, its saved view and Console show a resume
+command using both recorded levels in place of the removed `--credible-level`
+flag. Reading that command does not rewrite its stored Bar or Verdict.
 Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or
@@ -754,7 +860,7 @@ skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 1`.
+[Experiment results format](experiment-results.md), identified by `format: 2`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1637,7 +1743,16 @@ Every key holds its real value, so a Ticket run reading it does exactly what it 
 
 For Claude's Model, Setup suggests `default`, `best`, `fable`, `opus`, `sonnet`, `haiku`, `opusplan`, `sonnet[1m]` and `opus[1m]` from [Claude Code's documented model settings](https://code.claude.com/docs/en/model-config#model-aliases). These are suggestions: you can type any Model ID. Enter keeps the current value, or Claude's own default when none is set. The suggestions are maintained with thirdshift against that documentation; Setup does not fetch a live catalog or pin the Model versions the aliases resolve to.
 
-When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. On macOS the probe reports that it is unavailable. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
+When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
+
+On non-Linux systems, the report starts `Security sandbox probe: unavailable on <os>` (`macos` on macOS) and says Setup did not check isolation on this OS. Before running target code, each Security session must enforce:
+
+- no external network;
+- an empty environment populated from an explicit allowlist with safe values, with scratch-local `HOME`, temporary directories and caches;
+- a read-only target and toolchain, with writes only inside scratch; and
+- explicit low CPU, memory, process, file-size, disk and wall-clock limits.
+
+If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them. On macOS, `sandbox-exec` (Seatbelt) is the usual route, but Setup has not verified that it meets every control. Setup only prints this guidance and runs nothing. The User config is already saved by then, and the probe result does not stop Setup.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.limit`, `pickup.wait_minutes`, `pickup.order` and `security.harness` are not asked about. Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, the Resend key is not asked about and stays as it was, so `--email` on a single Ticket run still works. The Claude setup token is offered independently. Credentials a Ticket run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Ticket run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
@@ -2772,13 +2887,16 @@ and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
 prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
-open or merged bump PR before merging or tagging. An already pushed tag only
-resumes the release workflow. Python 3 is needed to read the Experiment results.
+open or merged bump PR before tagging. An already pushed tag resumes merging
+an open PR and waiting for the release workflow, skipping the Experiment. Python 3 is needed to read the Experiment results.
 
-If `main` gains different content after the Candidate was selected, the script
-refuses to push or merge that release; choose a fresh release version for current
-`main`. It also checks the merged tree before tagging, so a concurrent merge
-cannot publish different content. These checks apply even without an Experiment.
+The release base is the newest commit on `main` whose latest push `CI` run
+succeeded, newer than the last release tag. The script uses it immediately even
+if the tip's CI is pending or failed. If none qualifies, it waits for a run to
+succeed, still considering older pending commits when `main` moves. The
+Experiment's Candidate is that release base. The tag names exactly that content
+plus the version bump, so merges to `main` during a release do not change what
+is measured or shipped.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
@@ -2786,11 +2904,11 @@ From a clone of this repo, signed in to `gh` and the User config's default Harne
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). It then merges the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the tag and release stand: it names the open PR for the Day shift to merge, then still waits for publication. The script waits for the release workflow on the bump commit, printing the run's URL so you can watch it. CI's run on `main` for the merge isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before tagging and leaves the pull request open and untagged. A failed merge after tagging still exits `0` once the release workflow succeeds. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
 
-Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, a `v<version>` tag that already exists locally or on origin, or a CI run on main's current tip that ended without success. It prints a progress line and waits for that tip's CI run to appear and finish, with no overall timeout. While waiting, it fetches `main` again: if the tip moves, it names the old and new commits and waits for the new tip's CI, checking that the requested version is still higher. Once CI succeeds, it bumps the version from that commit and starts the release automatically; if CI ends without success, it names the commit and conclusion and stops without pushing anything.
+Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. Once the tag is on the merge of the pull request, it says the release is already tagged and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
+If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, merges the PR, then waits for publication. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged, merges the PR if still open and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 

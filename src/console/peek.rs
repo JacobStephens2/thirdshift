@@ -26,6 +26,7 @@ pub(super) struct Peek {
     pub experiment_url: Option<String>,
     pub subject: String,
     pub title: String,
+    pub failure_reason: Option<String>,
 }
 
 pub(super) struct Log {
@@ -110,6 +111,7 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            failure_reason: failure_reason(&value),
             account: value["account"].as_str().map(str::to_owned),
             dismissal: inspection.dismissal.map(|action| {
                 let (path, label, suffix) = match action {
@@ -151,6 +153,31 @@ impl Peek {
     fn fact<'a>(&self, fact: &'a Fact) -> FactTemplate<'a> {
         FactTemplate { fact }
     }
+}
+
+fn failure_reason(value: &Value) -> Option<String> {
+    if value["state"] != "ended" || !unsuccessful(value) {
+        return None;
+    }
+    std::iter::once(value)
+        .chain(value["dispatched"].as_array().into_iter().flatten())
+        .filter(|run| unsuccessful(run))
+        .find_map(|run| {
+            run["cause"]
+                .as_str()
+                .filter(|cause| !cause.trim().is_empty())
+        })
+        .map(str::to_owned)
+}
+
+fn unsuccessful(value: &Value) -> bool {
+    value["outcome"].as_str().is_some_and(|outcome| {
+        outcome.contains("failed")
+            || matches!(
+                outcome,
+                "interrupted" | "review required" | "fail" | "inconclusive" | "waiting_on_rechecks"
+            )
+    })
 }
 
 fn step_facts(value: &Value) -> Vec<Fact> {
@@ -325,6 +352,123 @@ mod tests {
         Peek::new("widgets#7".into(), inspection, "csrf".into())
             .render()
             .unwrap()
+    }
+
+    #[test]
+    fn failed_command_shows_its_full_cause_right_after_the_heading() {
+        let cause = "codex exited 1: Selected model is at capacity. Please try a different model.";
+        let html = render_peek(json!({
+            "kind": "Pickup run", "state": "ended", "outcome": "failed", "cause": cause
+        }));
+        let after_heading = html.split_once("</h2>").unwrap().1.trim_start();
+        assert!(
+            after_heading.starts_with(&format!("<p class=\"peek-failure\">Failed: {cause}</p>")),
+            "{html}"
+        );
+        // The generic cause fact still folds independently of the upfront reason.
+        assert!(html.contains("<details data-fact=\"cause\">"), "{html}");
+    }
+
+    #[test]
+    fn failed_command_without_a_cause_shows_the_first_failed_dispatched_runs_cause() {
+        for cause in [Value::Null, json!(""), json!("  ")] {
+            let html = render_peek(json!({
+                "kind": "Pickup run", "state": "ended", "outcome": "failed", "cause": cause,
+                "dispatched": [
+                    {"outcome": "merged", "cause": "Successful Run"},
+                    {"outcome": "failed", "cause": ""},
+                    {"outcome": "failed", "cause": "First dispatch failed"},
+                    {"outcome": "failed", "cause": "Second dispatch failed"}
+                ]
+            }));
+            assert!(
+                html.split_once("</h2>")
+                    .unwrap()
+                    .1
+                    .trim_start()
+                    .starts_with("<p class=\"peek-failure\">Failed: First dispatch failed</p>"),
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsuccessful_command_outcomes_show_the_reason() {
+        for outcome in [
+            "failed",
+            "review failed",
+            "audit failed",
+            "interrupted",
+            "review required",
+            "fail",
+            "inconclusive",
+            "waiting_on_rechecks",
+        ] {
+            let html = render_peek(json!({
+                "state": "ended", "outcome": outcome, "cause": "Command could not finish"
+            }));
+            assert!(
+                html.contains("<p class=\"peek-failure\">Failed: Command could not finish</p>"),
+                "{outcome}: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn successful_and_live_commands_show_no_failure_reason_even_with_a_cause() {
+        for outcome in [
+            "merged",
+            "ready for review",
+            "succeeded",
+            "pass",
+            "plan published",
+            "idea filed",
+            "idea already filed",
+            "findings recorded",
+            "sampled",
+            "skipped",
+        ] {
+            let html = render_peek(json!({
+                "state": "ended", "outcome": outcome, "cause": "Not a failure reason",
+                "dispatched": [{"outcome": "failed", "cause": "Earlier dispatch failure"}]
+            }));
+            assert!(
+                !html.contains("class=\"peek-failure\""),
+                "{outcome}: {html}"
+            );
+        }
+        let html = render_peek(json!({
+            "state": "live", "outcome": "failed", "cause": "Still live",
+            "dispatched": [{"outcome": "failed", "cause": "Earlier dispatch failure"}]
+        }));
+        assert!(!html.contains("class=\"peek-failure\""), "{html}");
+    }
+
+    #[test]
+    fn commands_without_a_cause_anywhere_show_no_failure_reason() {
+        for cause in [Value::Null, json!(""), json!("  ")] {
+            let html = render_peek(json!({
+                "state": "ended", "outcome": "failed", "cause": cause,
+                "dispatched": [{"outcome": "failed", "cause": cause}]
+            }));
+            assert!(!html.contains("class=\"peek-failure\""), "{html}");
+        }
+    }
+
+    #[test]
+    fn command_failure_reason_prefers_its_own_cause_and_links_and_escapes_it() {
+        let html = render_peek(json!({
+            "state": "ended", "outcome": "failed",
+            "cause": "See https://example.test/status <script>alert(1)</script>",
+            "dispatched": [{"outcome": "failed", "cause": "Dispatch failure"}]
+        }));
+        assert!(
+            html.split_once("</h2>").unwrap().1.trim_start().starts_with(
+                "<p class=\"peek-failure\">Failed: See <a href=\"https://example.test/status\">https://example.test/status</a> &#60;script&#62;alert(1)&#60;/script&#62;</p>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("<script>"), "{html}");
     }
 
     #[test]

@@ -152,7 +152,8 @@ The gate is one `macos-26` job: `cargo clippy --all-targets -- -D warnings`,
 then `cargo nextest run --profile macos-gate`. That profile's `default-filter`
 in `.config/nextest.toml` selects the tests of the macOS-specific code: the
 `#[cfg(target_os = "macos")]` process identity, the non-Linux skills directory
-handle, and the platform branches in child Ticket run handling. New macOS-specific
+handle, the platform branches in child Ticket run handling, the Console's
+macOS change watching and Setup's non-Linux sandbox guidance. New macOS-specific
 code adds its tests there.
 
 Adding `test:macos` to an open PR into `main` starts the full suite on its

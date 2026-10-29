@@ -77,7 +77,8 @@ fn assessment_returns_verdict_and_ordered_pending_without_changing_inputs() {
         json!([{
             "id": results[0].key(), "suite": "code-review", "task": "gain",
             "arm": "candidate", "trial": 0, "borderline": false, "decisive": true,
-            "decisive_flips": ["passed", "wrong_finding"]
+            "decisive_flips": ["passed", "wrong_finding"],
+            "decisive_verdicts": {"passed": "fail", "wrong_finding": "fail"}
         }])
     );
 }
@@ -112,13 +113,13 @@ fn decisive_flips_must_change_the_whole_experiment_across_suites() {
         json!([
             {"id": results[1].key(), "suite": "spec-review", "task": "loss",
              "arm": "candidate", "trial": 0, "borderline": false, "decisive": true,
-             "decisive_flips": ["passed"]},
+             "decisive_flips": ["passed"], "decisive_verdicts": {"passed": "pass"}},
             {"id": results[2].key(), "suite": "spec-review", "task": "loss",
              "arm": "baseline", "trial": 0, "borderline": false, "decisive": true,
-             "decisive_flips": ["passed"]},
+             "decisive_flips": ["passed"], "decisive_verdicts": {"passed": "pass"}},
             {"id": results[3].key(), "suite": "code-review", "task": "gain",
              "arm": "baseline", "trial": 0, "borderline": true, "decisive": false,
-             "decisive_flips": []}
+             "decisive_flips": [], "decisive_verdicts": {}}
         ])
     );
 }
@@ -190,7 +191,8 @@ fn effective_human_scores_stay_projected_during_individual_wrong_finding_flips()
         json!([{
             "id": results[0].key(), "suite": "code-review", "task": "gain",
             "arm": "candidate", "trial": 0, "borderline": true, "decisive": true,
-            "decisive_flips": ["wrong_finding"]
+            "decisive_flips": ["wrong_finding"],
+            "decisive_verdicts": {"wrong_finding": "fail"}
         }])
     );
 }
@@ -312,4 +314,11 @@ fn rejected_assessments_repeat_and_leave_all_inputs_unchanged_including_void_pai
             }
         }
     }
+}
+
+#[test]
+fn legacy_verdict_preserves_an_explicit_null_provisional_verdict() {
+    let saved = json!({"verdict":"inconclusive","provisional_verdict":null,"suites":{},"borderline_trials":0});
+    let decoded: Verdict = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), saved);
 }
