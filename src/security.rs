@@ -12,7 +12,7 @@ use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
 use crate::harness::Choice;
 use crate::issue::Repo;
-use crate::launch::{self, AlreadyRunning, Launch, Start};
+use crate::launch::{self, AlreadyRunning, Launch, Sharing, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
@@ -148,10 +148,10 @@ pub fn run(
         directory,
         repo,
         base,
-    } = match launch::start(base) {
+    } = match launch::start(base, config.command_limit, Sharing::Alone("a Security run")) {
         Ok(Start::Clear(launch)) => launch,
         Ok(Start::AlreadyRunning(running)) => {
-            logs::skipped(Pass::Security, &running.0, &running);
+            logs::skipped(Pass::Security, &running.repo, &running);
             return Outcome::Skipped(Skipped::AlreadyRunning(running));
         }
         Err(error) => return Outcome::Audited(error.into()),

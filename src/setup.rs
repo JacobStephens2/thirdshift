@@ -1232,6 +1232,9 @@ parallel = 5
 min_available_memory_mb = 0
 max_load_per_cpu_percent = 0
 
+[pass]
+command_limit = 2
+
 [pickup]
 failure_limit = 5
 wait_minutes = 60
