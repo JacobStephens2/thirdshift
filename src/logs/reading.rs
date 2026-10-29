@@ -78,7 +78,7 @@ impl Snapshot {
         snapshot.unavailable_accounts = sources.unavailable;
         for source in sources.logs.into_iter().skip(1) {
             let Ok(mut other) = Self::capture_records(
-                Arc::new(inventory::Native),
+                files_for(&source),
                 &source.root,
                 now,
                 config.silent_interval,
@@ -126,6 +126,14 @@ impl Snapshot {
 
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
         Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
+    }
+
+    fn load_using(
+        files: Arc<dyn inventory::Files>,
+        root: &Path,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        Self::capture(files, root, now, std::time::Duration::from_secs(10 * 60))
     }
 
     pub(super) fn load_with_silence(
@@ -240,6 +248,15 @@ impl Snapshot {
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
+    }
+}
+
+/// Other accounts stay inside the canonical directory discovery accepted.
+fn files_for(source: &super::accounts::Source) -> Arc<dyn inventory::Files> {
+    if source.account.is_some() {
+        Arc::new(inventory::Confined::new(source.root.clone()))
+    } else {
+        Arc::new(inventory::Native)
     }
 }
 
