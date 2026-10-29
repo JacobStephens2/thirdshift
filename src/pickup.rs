@@ -175,13 +175,13 @@ pub fn run(
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
-    // Only Pickup files this ordinary Ticket. A CI or publication failure
+    // Only Pickup handles Base branch CI reporting. A CI or publication failure
     // must never prevent the usual Ready search or dispatch.
-    if let Err(error) = file_ci_red_ticket(directory.git(), &repo, base.name()) {
+    if let Err(error) = handle_base_ci(directory.git(), &repo, base.name()) {
         crate::progress::warn(&error, format_args!("could not file CI-red Ticket"));
     }
     let mut outside = LaunchAndGitHub {
-        launch: &directory,
+        launch: directory.git(),
         base: &base,
         repo: &repo,
         harness,
@@ -207,16 +207,25 @@ pub fn run(
     )
 }
 
-fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<()> {
+fn handle_base_ci(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<()> {
     let github = GitHub::new();
-    let Some(failure) = github.base_ci_failure(repo, base)? else {
-        return Ok(());
-    };
     let Some(_reservation) = Reservation::ci_red(git)? else {
         return Ok(());
     };
-    if let Some(issue) = github.file_ci_red_ticket(repo, failure)? {
-        crate::progress::step(format!("filed CI-red Ticket {}", issue.url));
+    let Some(failure) = github.base_ci_evidence(repo, base)? else {
+        return Ok(());
+    };
+    match github.handle_base_ci(repo, failure)? {
+        crate::github::BaseCiAction::Nothing | crate::github::BaseCiAction::RerunRequested => {}
+        crate::github::BaseCiAction::CiRedFiled(issue) => {
+            crate::progress::step(format!("filed CI-red Ticket {}", issue.url));
+        }
+        crate::github::BaseCiAction::FlakyFiled(issue) => {
+            crate::progress::step(format!("filed Flaky-test Ticket {}", issue.url));
+        }
+        crate::github::BaseCiAction::Commented(issue) => {
+            crate::progress::step(format!("commented new CI failure on {}", issue.url));
+        }
     }
     Ok(())
 }

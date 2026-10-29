@@ -114,8 +114,15 @@ pub struct Worktree {
     /// Per-instance identity: a later worktree at the same path must not
     /// consume this one's observations. No lock is held by an observation.
     synchronization_owner: Arc<()>,
-    /// Leave the worktree and local Issue branch in place when dropped.
-    kept: bool,
+    /// How Drop disposes of the acquired checkout and local Issue branch.
+    cleanup: Cleanup,
+}
+
+#[derive(Clone, Copy)]
+enum Cleanup {
+    Remove,
+    Retain,
+    KeepUnpublished,
 }
 
 impl Worktree {
@@ -160,7 +167,7 @@ impl Worktree {
             launch: Git::new(root),
             branch: branch.to_string(),
             synchronization_owner: Arc::new(()),
-            kept: false,
+            cleanup: Cleanup::Remove,
         })
     }
 
@@ -208,18 +215,26 @@ impl Worktree {
         reason: &str,
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Preserved> {
-        self.kept = true;
+        self.cleanup = Cleanup::Retain;
         let pushed = self
             .checkout
             .preserve_failed_run(&self.launch, base, reason, actionable)?;
-        self.kept = false;
+        self.cleanup = Cleanup::Remove;
         Ok(pushed)
     }
 
     /// Keep the acquired checkout and local branch without publishing obsolete
     /// work after the PR became terminal or its lifecycle could not be read.
     pub fn retain_local(&mut self) {
-        self.kept = true;
+        self.cleanup = Cleanup::Retain;
+    }
+
+    /// A Process without Delivery must prove its work is published before
+    /// removing the checkout and local branch.
+    pub fn keep_unpublished_on_cleanup(&mut self) {
+        if matches!(self.cleanup, Cleanup::Remove) {
+            self.cleanup = Cleanup::KeepUnpublished;
+        }
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -443,7 +458,11 @@ pub(crate) fn check_local_branch(
 impl Drop for Worktree {
     fn drop(&mut self) {
         crate::logs::stage(crate::logs::Stage::Cleanup);
-        self.checkout.cleanup(&self.launch, self.kept);
+        match self.cleanup {
+            Cleanup::Remove => self.checkout.cleanup(&self.launch, false),
+            Cleanup::Retain => self.checkout.cleanup(&self.launch, true),
+            Cleanup::KeepUnpublished => self.checkout.cleanup_preserving_work(&self.launch),
+        }
     }
 }
 

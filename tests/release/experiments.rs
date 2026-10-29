@@ -47,8 +47,9 @@ fn calls(release: &Release) -> Vec<Value> {
 }
 
 #[test]
-fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
+fn a_resumed_release_tags_its_candidate_when_main_gains_other_content() {
     let release = Release::new();
+    let candidate = release.origin(&["rev-parse", "main"]);
     cargo_reports(&release, &[json!(1)]);
     let interrupted = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
     assert!(!interrupted.status.success());
@@ -61,18 +62,18 @@ fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
     release.ci_reports(GREEN);
     cargo_reports(&release, &[verdict("pass")]);
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed).contains("main contains content absent from the measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_eq!(
+        release.origin(&["rev-parse", &format!("{head}^")]),
+        candidate
     );
-    assert!(!release.origin_branch("release-0.2.0"));
-    assert!(release.origin_tag("v0.2.0").is_none());
+    assert_eq!(calls(&release)[1]["args"][2], candidate);
 }
 
 #[test]
-fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
+fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -82,14 +83,12 @@ fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
 
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
 
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed)
-            .contains("release merge contains content absent from its measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_ne!(
+        release.origin(&["rev-parse", "main^{tree}"]),
+        release.origin(&["rev-parse", &format!("{head}^{{tree}}")])
     );
-    assert!(release.origin_tag("v0.2.0").is_none());
 }
 
 #[test]
@@ -145,6 +144,52 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
             "resume must use the same content commit"
         );
     }
+}
+
+#[test]
+fn advisory_suites_are_listed_and_all_advisory_requires_the_release_question() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(true);
+    view["verdict"]["suites"]["code-review"]["verdict"] = json!("pass");
+    let mut spec = view["verdict"]["suites"]["code-review"].clone();
+    spec["verdict"] = json!("fail");
+    view["verdict"]["suites"]["spec-review"] = spec;
+    let before = release.origin_refs();
+    for answer in ["n\n", "yes\n"] {
+        cargo_reports(&release, &[view.clone()]);
+        let output = release.run_script_with(&["--with-experiment", "0.2.0"], answer, &[]);
+        let err = unstamped(&output);
+        assert!(err.contains("code-review: Advisory suite (pass)"), "{err}");
+        assert!(err.contains("spec-review: Advisory suite (fail)"), "{err}");
+        assert!(err.contains("release anyway?"), "{err}");
+        if answer == "yes\n" {
+            assert!(output.status.success(), "{err}");
+            assert!(release.origin_tag("v0.2.0").is_some());
+        } else {
+            assert!(!output.status.success(), "{err}");
+            assert_eq!(release.origin_refs(), before);
+        }
+    }
+}
+
+#[test]
+fn an_advisory_fail_is_listed_without_prompting_when_the_experiment_passes() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("pass");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(false);
+    let mut small = view["verdict"]["suites"]["code-review"].clone();
+    small["advisory"] = json!(true);
+    small["verdict"] = json!("fail");
+    view["verdict"]["suites"]["small"] = small;
+    cargo_reports(&release, &[view]);
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+    let err = unstamped(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("small: Advisory suite (fail)"), "{err}");
+    assert!(!err.contains("release anyway?"), "{err}");
 }
 
 #[test]

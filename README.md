@@ -6,7 +6,7 @@ Use **Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode**, 
 
 Each Ticket run implements the issue, reviews the change against the issue and your repository's standards, and keeps the pull request mergeable and passing CI. It leaves the pull request for your review, or merges it when asked. If a run fails, it reports what work was preserved and how to continue.
 
-Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/).
+Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/). Coding agents can start from [thirdshift.app/llms.txt](https://thirdshift.app/llms.txt), a Markdown index of the manual, the site and the source.
 
 ## Install
 
@@ -55,9 +55,17 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
 | Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores, calibration and proposals by week; `thirdshift scores <pull request> --mine` records yours before revealing the model's. |
 | One skill | `thirdshift skill <skill> [issue <issue>]` | A [standalone skill](docs/guide.md#standalone-skills) runs headlessly and prints its final message. |
-| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and no Issue-branch worktree, it is a Pass and skips while the repository is at its Command limit. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
+| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and neither an Issue-branch nor a Spec-branch worktree, it is a Pass and skips while the repository is at its Command limit. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
 
 A Custom process can use `implement` → `delivery` on an Issue-branch worktree for the Ticket run's implementation and bug diagnosis. An unreproduced bug ends successfully with `needs-info`, skipping later Steps and cleaning up the Claim and worktree.
+
+A Custom process can instead declare a `spec-branch` worktree and use
+`land-tickets` to gather a Spec's Tickets into a draft Spec PR and its checklist,
+in dependency order up to `spec.parallel` at once. The Step's `process` setting
+selects every child Ticket's Process, defaulting to `ticket-run`. A file declares
+one Issue-branch or one Spec-branch worktree, never both; both require an issue,
+and the issue must match the worktree kind. The Claim precedes the worktree and
+stays while the draft Spec PR waits.
 
 Each Architect, Pickup or Security run makes one pass. Use cron or another operating system scheduler to repeat it. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 
@@ -80,6 +88,16 @@ thirdshift console --no-sign-in
 ```
 
 Open the localhost address it prints. The Console never starts work. Use [`thirdshift stop <command>`](docs/guide.md#stopping-a-command) to stop a live Command and wait for cleanup; add `--requeue` to return its issue to Pickup. A signed-in Console account can do the same.
+
+These screenshots show the Console's Focus light Theme with sample Commands. Open either image for the full-size view.
+
+[![Console Inbox: a failed Command in Needs you, two pull requests Ready for review, and the selected Command's details.](site/screenshots/inbox.png)](site/screenshots/inbox.png)
+
+The Inbox groups Commands by what needs you. Select a row to inspect its cause, CLI commands and logs alongside the list.
+
+[![Console Waterfall: a Command's stages and Session tool calls drawn on one time axis, with the slowest calls listed above.](site/screenshots/waterfall.png)](site/screenshots/waterfall.png)
+
+Waterfall expands a Command into stages, Sessions and individual calls, so you can see where the time went.
 
 ### Console on a server
 

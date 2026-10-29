@@ -1,0 +1,5 @@
+# Judge the recorded discriminating Eval tasks
+
+An Experiment fixes each suite's judged list in the Bar before the first Trial, using recorded Difficulty: at least six Trials and a reading between 0.15 and 0.95 inclusive. Choosing from the Experiment's own results would select on the outcomes being compared and bias the Verdict; tasks both Arms always fail can otherwise dilute a regression toward zero. Difficulty measured on another setup still qualifies, with its count reported so the Day shift can judge how current the evidence is.
+
+Only listed Eval tasks enter intervals, predictions, the Void dropout guard and required rechecks. Other approved Eval tasks still run and are graded, with their Trials shown per task as measurement. A suite with no judged tasks is inconclusive. The method is `paired-dirichlet-v4`; saved Experiments without a judged list retain their original Bar, method and stored Verdict, and resume under that method. Advisory suites and their minimum size belong to the next Ticket in #1477.

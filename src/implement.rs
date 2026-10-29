@@ -25,7 +25,8 @@ pub enum Completed {
 }
 
 /// Retain the implementation prompt and Base fix flow, diagnosing ordinary
-/// bug issues first. Security fixes and Base fixes keep their own flow.
+/// bug issues first. Flaky-test Tickets use recorded evidence; Security fixes
+/// and Base fixes keep their own flow.
 pub fn prepare(
     issue: &IssueUrl,
     base: &str,
@@ -33,7 +34,9 @@ pub fn prepare(
     mut opening: Opening,
     labels: Option<&Labels>,
 ) -> Result<Opening> {
-    if let Some(labels) = labels
+    if labels.is_some_and(|labels| labels.has(crate::labels::FLAKY_TEST)) {
+        opening.prompt.push_str("\nThis is a Flaky-test Ticket. The recorded CI failure is the evidence: the same commit passed on re-run. Implement a fix for the test's dependence on timing or scheduling, or the race it exposes. Do not require reproduction on demand or end with needs-info because the failure does not reproduce.\n");
+    } else if let Some(labels) = labels
         && labels.has(crate::labels::Label::new("bug", "A reported bug"))
         && !labels.has(crate::security::fixing::SECURITY_FIX)
     {

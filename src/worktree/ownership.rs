@@ -156,19 +156,19 @@ impl Checkout {
         self.cleanup_checked(launch, kept, &|| Ok(()));
     }
 
-    /// A standalone skill owns no automatic publication step. Retain local
+    /// A skill or Process may own no automatic publication step. Retain local
     /// work, rechecking under the disposal locks before every removal attempt.
-    pub(super) fn cleanup_skill(&self, launch: &Git) {
+    pub(super) fn cleanup_preserving_work(&self, launch: &Git) {
         self.cleanup_checked(launch, false, &|| {
             let git = Git::new(self.path()).completion();
             if super::uncommitted_changes(|args| git.run(args))? {
-                bail!("the skill worktree has uncommitted changes");
+                bail!("the worktree has uncommitted changes");
             }
             if !git
                 .run(&["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"])?
                 .is_empty()
             {
-                bail!("the skill worktree has unpushed commits");
+                bail!("the worktree has unpushed commits");
             }
             Ok(())
         });

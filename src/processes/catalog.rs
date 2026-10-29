@@ -11,6 +11,12 @@ use super::{parse, rule};
 
 static BUILT_IN: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/processes");
 
+pub(super) fn compiled(name: &str) -> Option<&'static [u8]> {
+    BUILT_IN
+        .get_file(format!("{name}.toml"))
+        .map(|file| file.contents())
+}
+
 const RESERVED: &[&str] = &[
     "check",
     "list",

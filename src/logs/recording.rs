@@ -37,6 +37,7 @@ pub(super) struct Record<O: Outside> {
     /// repository has them.
     config_warnings: Vec<String>,
     command_record: Option<(PathBuf, CommandTree)>,
+    custom_process: Option<crate::processes::Identity>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
@@ -97,6 +98,7 @@ impl<O: Outside> Record<O> {
             activity_warned: false,
             config_warnings: Vec::new(),
             command_record: None,
+            custom_process: None,
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
@@ -192,7 +194,10 @@ impl<O: Outside> Record<O> {
             CommandKind::Architect => Pass::Architect,
             CommandKind::Pickup => Pass::Pickup,
             CommandKind::Secure => Pass::Security,
-            _ => return,
+            CommandKind::Issue
+            | CommandKind::Scoring
+            | CommandKind::Experiment
+            | CommandKind::Process => return,
         };
         self.record_config_warnings(&self.root(repo));
         let path = super::pass_starts::path(&self.root(repo), pass);
@@ -221,11 +226,12 @@ impl<O: Outside> Record<O> {
                 && self.command != CommandKind::Issue
                 && matches!(work, Work::Run(_) | Work::SpecRun(_))
                 && let Some((_, tree)) = &mut self.command_record
-                && let Some(dispatched) = tree.dispatched.last_mut()
+                && let Some(dispatched) = tree.active_dispatch()
             {
                 // The launch checks have now established whether the issue is
                 // a Spec. The dispatch itself was kept before those checks.
                 dispatched.kind = work.kind().to_string();
+                dispatched.process = work.process();
                 if let Some(stage) = tree.command.stages.last_mut()
                     && StageName::is_dispatch(&stage.name)
                 {
@@ -258,7 +264,14 @@ impl<O: Outside> Record<O> {
             issue: work.issue(),
             process: match work {
                 Work::Process { name, .. } => Some((*name).to_string()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => None,
             },
         };
         let line = format!("{} started: {command_log}, on {harness}", started.subject());
@@ -280,9 +293,7 @@ impl<O: Outside> Record<O> {
         self.command_record
             .as_ref()?
             .1
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())?
+            .active_dispatch_ref()?
             .issue
             .as_ref()
             .map(|issue| issue.url.clone())
@@ -303,6 +314,11 @@ impl<O: Outside> Record<O> {
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if matches!(work, Work::Process { .. })
+            && let Some(identity) = &self.custom_process
+        {
+            facts.process = identity.clone();
+        }
         facts.hostname = self.outside.hostname();
         facts.process_start = self
             .outside
@@ -485,7 +501,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
-            && let Some(dispatched) = tree.dispatched.last_mut()
+            && let Some(dispatched) = tree.active_dispatch()
         {
             dispatched.finish(
                 account,
@@ -620,15 +636,25 @@ impl<O: Outside> Record<O> {
         })
     }
 
+    pub(super) fn process_loaded(&mut self, identity: crate::processes::Identity) {
+        self.custom_process = Some(identity);
+    }
+
+    pub(super) fn process_running(&mut self, identity: crate::processes::Identity) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().process = identity;
+            self.write_record();
+        }
+    }
+
+    pub(super) fn custom_process(&self) -> Option<crate::processes::Identity> {
+        self.custom_process.clone()
+    }
+
     pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
         let owner = self.owner.as_ref()?;
         let (_, tree) = self.command_record.as_ref()?;
-        let active = tree
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())
-            .unwrap_or(&tree.command);
-        Some(super::trace::Context::from_record(owner, active))
+        Some(super::trace::Context::from_record(owner, tree.active_ref()))
     }
 
     /// Child Runs carry the owning CommandKind, so private Security and

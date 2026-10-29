@@ -77,6 +77,25 @@ pub fn check_node() -> Result<()> {
 }
 
 pub fn run(launch: &Git, repo: &Repo, base: &str, harness: &Choice) -> Attempt {
+    run_with_session(
+        launch,
+        repo,
+        base,
+        harness,
+        super::findings::Session {
+            logs: &Logs::of_security_run(repo),
+            before_each: &|_| Ok(()),
+        },
+    )
+}
+
+pub(crate) fn run_with_session(
+    launch: &Git,
+    repo: &Repo,
+    base: &str,
+    harness: &Choice,
+    session: super::findings::Session<'_>,
+) -> Attempt {
     let prepared = (|| -> Result<_> {
         let worktree = ReviewWorktree::create(launch, &repo.name, base, PassKind::Security)?;
         let commit = Git::new(worktree.path()).run(&["rev-parse", "HEAD"])?;
@@ -116,79 +135,87 @@ pub fn run(launch: &Git, repo: &Repo, base: &str, harness: &Choice) -> Attempt {
             };
         }
     };
-    let logs = Logs::of_security_run(repo);
     let mut started = false;
-    let (audited, log) = Sessions::within(&logs, worktree.path(), harness, |sessions| {
-        progress::step(format!("starting the Security audit of {base}"));
-        started = true;
-        let message =
-            sessions.run_to_final_message(Purpose::Security, Kind::SecurityAudit, &prompt)?;
-        let line = message.as_deref().and_then(|message| {
-            message
-                .lines()
-                .map(str::trim)
-                .rfind(|line| !line.is_empty())
-        });
-        match line {
-            Some(prompt::AUDIT_COMPLETE_LINE) => {}
-            Some(prompt::AUDIT_INCOMPLETE_LINE) => bail!(
-                "the Security audit ended incomplete; artifacts: {}",
-                output.display()
-            ),
-            _ => bail!("the Security audit ended without the final line its prompt asks for"),
-        }
-        let metadata: Value = serde_json::from_slice(
-            &fs::read(output.join("run-metadata.json"))
-                .context("could not read the Security audit's run-metadata.json")?,
-        )
-        .context("the Security audit's run-metadata.json is invalid JSON")?;
-        if metadata["run_status"] != "complete" {
-            bail!(
-                "the Security audit's run-metadata.json does not mark the audit complete; artifacts: {}",
-                output.display()
-            );
-        }
-        let skill = skills::written_out()?.join("thirdshift-security-audit");
-        for (validator, report) in [
-            ("validate-findings.cjs", "findings.json"),
-            ("validate-coverage-ledger.cjs", "coverage-ledger.json"),
-        ] {
-            node(&[
-                skill
-                    .join(validator)
-                    .to_str()
-                    .context("non-UTF-8 skill path")?,
-                output
-                    .join(report)
-                    .to_str()
-                    .context("non-UTF-8 report path")?,
-            ])
-            .with_context(|| {
-                format!("the Security audit report failed the skill's validator {validator}")
-            })?;
-        }
-        let findings: Vec<Value> =
-            serde_json::from_slice(&fs::read(output.join("findings.json"))?)?;
-        let package = package_in(worktree.path());
-        let findings = findings
-            .into_iter()
-            .filter(|finding| finding["verdict"] != "rejected")
-            .map(|finding| {
-                Ok(DraftAdvisory::new(FindingDraft {
-                    fingerprint: finding["fingerprint"]
-                        .as_str()
-                        .context("finding has no fingerprint")?,
-                    summary: finding["title"].as_str().context("finding has no title")?,
-                    audited_commit: &commit,
-                    provenance: FindingProvenance::Audit,
-                    original_description: finding["description"].as_str().unwrap_or_default(),
-                    evidence: &serde_json::to_string_pretty(&finding)?,
-                    package: package.clone(),
-                }))
-            })
-            .collect::<Result<_>>()?;
-        Ok(Audited { findings })
-    });
+    let before_each = || (session.before_each)(worktree.path());
+    let (audited, log) = Sessions::checked_within(
+        session.logs,
+        worktree.path(),
+        harness,
+        None,
+        None,
+        &before_each,
+        |sessions| {
+            progress::step(format!("starting the Security audit of {base}"));
+            started = true;
+            let message =
+                sessions.run_to_final_message(Purpose::Security, Kind::SecurityAudit, &prompt)?;
+            let line = message.as_deref().and_then(|message| {
+                message
+                    .lines()
+                    .map(str::trim)
+                    .rfind(|line| !line.is_empty())
+            });
+            match line {
+                Some(prompt::AUDIT_COMPLETE_LINE) => {}
+                Some(prompt::AUDIT_INCOMPLETE_LINE) => bail!(
+                    "the Security audit ended incomplete; artifacts: {}",
+                    output.display()
+                ),
+                _ => bail!("the Security audit ended without the final line its prompt asks for"),
+            }
+            let metadata: Value = serde_json::from_slice(
+                &fs::read(output.join("run-metadata.json"))
+                    .context("could not read the Security audit's run-metadata.json")?,
+            )
+            .context("the Security audit's run-metadata.json is invalid JSON")?;
+            if metadata["run_status"] != "complete" {
+                bail!(
+                    "the Security audit's run-metadata.json does not mark the audit complete; artifacts: {}",
+                    output.display()
+                );
+            }
+            let skill = skills::written_out()?.join("thirdshift-security-audit");
+            for (validator, report) in [
+                ("validate-findings.cjs", "findings.json"),
+                ("validate-coverage-ledger.cjs", "coverage-ledger.json"),
+            ] {
+                node(&[
+                    skill
+                        .join(validator)
+                        .to_str()
+                        .context("non-UTF-8 skill path")?,
+                    output
+                        .join(report)
+                        .to_str()
+                        .context("non-UTF-8 report path")?,
+                ])
+                .with_context(|| {
+                    format!("the Security audit report failed the skill's validator {validator}")
+                })?;
+            }
+            let findings: Vec<Value> =
+                serde_json::from_slice(&fs::read(output.join("findings.json"))?)?;
+            let package = package_in(worktree.path());
+            let findings = findings
+                .into_iter()
+                .filter(|finding| finding["verdict"] != "rejected")
+                .map(|finding| {
+                    Ok(DraftAdvisory::new(FindingDraft {
+                        fingerprint: finding["fingerprint"]
+                            .as_str()
+                            .context("finding has no fingerprint")?,
+                        summary: finding["title"].as_str().context("finding has no title")?,
+                        audited_commit: &commit,
+                        provenance: FindingProvenance::Audit,
+                        original_description: finding["description"].as_str().unwrap_or_default(),
+                        evidence: &serde_json::to_string_pretty(&finding)?,
+                        package: package.clone(),
+                    }))
+                })
+                .collect::<Result<_>>()?;
+            Ok(Audited { findings })
+        },
+    );
     // The session may claim completion before a validator or its final line
     // fails. Keep that attempt incomplete in the same skill record. The source
     // ref comes from the acquired checkout, even if the session wrote it wrong.

@@ -46,7 +46,7 @@ json.dump({{'scores': [dict(label=t['label'], passed=True, reason='Isolated pack
 PY
 echo '{{"type":"result","subtype":"success","result":"graded"}}'
 "##, directory = directory.display(), host = fixture.scenario.launch_dir().display())).unwrap();
-    let resumed = fixture.scenario.run(&["experiment", "candidate", "--json"]);
+    let resumed = fixture.scenario.run(&Fixture::experiment_args(&[]));
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
     let completed = fixture.experiment();
     assert_eq!(completed["state"], "completed");

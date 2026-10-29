@@ -48,6 +48,9 @@ pub enum Ending {
     /// A bug Ticket run could not reproduce the bug, and handed it back to
     /// the reporter.
     NotReproduced,
+    /// A Custom process ended successfully before Delivery. Release its
+    /// Claim only if nothing is on origin, without labelling a failure.
+    BeforeDelivery,
     /// It failed with its pull request left ready for review: a policy,
     /// security or merge hold held its Self-merge.
     Held,
@@ -106,6 +109,8 @@ impl Claim<'_> {
     /// - Failed: the Claim is released if nothing of the run is on origin to
     ///   take over, except a Security fix, whose Claim stays. A Claim that
     ///   stays labels the issue `agent-failed` too.
+    /// - Before Delivery: a successful Custom process releases its Claim if
+    ///   nothing is on origin, except a Security fix, and adds no failure label.
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
     ///   remains on origin, or is released even with work when asked to requeue.
     ///
@@ -342,6 +347,10 @@ impl<'a> Claimed<'a> {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
             // A NotReproduced ending was dealt with above.
             Ending::Reached(Goal::ReadyForReview) | Ending::Held | Ending::NotReproduced => {}
+            Ending::BeforeDelivery if self.security_fix => {}
+            Ending::BeforeDelivery => {
+                self.release_if_nothing_on_origin(outside);
+            }
             Ending::Failed if self.security_fix => self.label_failed(outside),
             Ending::Failed => {
                 let claim_stays = self.release_if_nothing_on_origin(outside);

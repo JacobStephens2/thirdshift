@@ -56,26 +56,29 @@ impl Goal {
     }
 }
 
-/// A successful Ticket run ending: a PR, or a bug handed back for information.
+/// A successful Ticket run ending: a PR, a bug handed back for information,
+/// or a Custom process's Architecture review ending before Delivery.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
     PullRequest { url: String, goal: Goal },
     NotReproduced { comment_url: String },
+    ArchitectureReview { url: String, reason: String },
 }
 
 impl Resolution {
     pub fn goal(&self) -> Option<Goal> {
         match self {
             Self::PullRequest { goal, .. } => Some(*goal),
-            Self::NotReproduced { .. } => None,
+            Self::NotReproduced { .. } | Self::ArchitectureReview { .. } => None,
         }
     }
 
-    /// The PR or triage comment the ending points to.
+    /// The PR, triage comment or Architecture review issue the ending points to.
     pub fn url(&self) -> &str {
         match self {
             Self::PullRequest { url, .. } => url,
             Self::NotReproduced { comment_url } => comment_url,
+            Self::ArchitectureReview { url, .. } => url,
         }
     }
 }
@@ -151,8 +154,18 @@ impl<'a> StartedBy<'a> {
 /// Harness's names for them once checked. Its Run notification, if `asks`
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
+    run_process_to_end(issue, asks, started_by, "ticket-run")
+}
+
+/// Dispatch still chooses Spec or Ticket; only a Ticket runs `process`.
+pub(crate) fn run_process_to_end(
+    issue: &IssueUrl,
+    asks: &mut Asks,
+    started_by: StartedBy,
+    process: &str,
+) -> Ended {
     let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
-    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut outcome = run(issue, asks, started_by, &mut base_fix, process);
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
@@ -192,6 +205,7 @@ fn run(
     asks: &mut Asks,
     started_by: StartedBy,
     base_fix: &mut BaseFix,
+    process: &str,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
@@ -226,6 +240,7 @@ fn run(
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
+        process,
     };
     let outcome = start(
         &mut outside,
@@ -344,9 +359,10 @@ fn start<O: Outside>(
 /// How `outcome`, a Run's or a Spec run's, ends its Claim.
 fn claim_ending(outcome: &Result<Reached, FailedRun>) -> claim::Ending {
     match outcome {
-        Ok(reached) => match reached.resolution.goal() {
-            Some(goal) => claim::Ending::Reached(goal),
-            None => claim::Ending::NotReproduced,
+        Ok(reached) => match &reached.resolution {
+            Resolution::PullRequest { goal, .. } => claim::Ending::Reached(*goal),
+            Resolution::NotReproduced { .. } => claim::Ending::NotReproduced,
+            Resolution::ArchitectureReview { .. } => claim::Ending::BeforeDelivery,
         },
         Err(failed) if failed.held() => claim::Ending::Held,
         Err(_) => claim::Ending::Failed,
@@ -378,7 +394,7 @@ fn start_in_worktree<O: Outside>(
         session: OpeningSession::Implementation,
         prompt,
     };
-    outside.deliver(worktree, base, opening)
+    outside.deliver(worktree, base, opening, selection)
 }
 
 /// How a Run's worktree comes by its Issue branch: started fresh from the
@@ -435,6 +451,7 @@ trait Outside {
         worktree: Self::Worktree,
         base: &str,
         opening: Opening,
+        selection: &Selection,
     ) -> Result<Reached, FailedRun>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
@@ -464,6 +481,8 @@ struct LaunchAndGitHub<'a> {
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
+    /// The Process for this Ticket, after Spec dispatch has been decided.
+    process: &'a str,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -591,7 +610,19 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         worktree: Worktree,
         base: &str,
         opening: Opening,
+        selection: &Selection,
     ) -> Result<Reached, FailedRun> {
+        if self.process != "ticket-run" {
+            let process = self.process;
+            let spec_pr = self.spec_pr.clone();
+            return crate::processes::ticket::run_custom(
+                process,
+                self.delivery(base),
+                worktree,
+                selection,
+                spec_pr,
+            );
+        }
         let labels = self
             .diagnose_bugs
             .then(|| GitHub::new().issue_labels(self.issue))
@@ -821,6 +852,7 @@ mod tests {
             worktree: Checkout,
             base: &str,
             opening: Opening,
+            _selection: &Selection,
         ) -> Result<Reached, FailedRun> {
             assert_eq!(opening.session, OpeningSession::Implementation);
             self.calls
@@ -883,6 +915,7 @@ mod tests {
             security_review_harness: None,
             security_review_default: None,
             security_fix: false,
+            security_close: false,
             security_review: false,
             goal: Goal::ReadyForReview,
             notification: NotificationAsk::Skip,

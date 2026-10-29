@@ -436,11 +436,29 @@ fn an_exhausted_prediction_budget_is_explicit() {
 }
 
 #[test]
+fn an_empty_judged_suite_keeps_finite_prior_intervals_with_a_small_prior() {
+    for trials_per_task in [1, 3] {
+        let bar = Bar {
+            prior: 0.01,
+            trials_per_task,
+            ..Bar::default()
+        };
+        let verdict = judge(&[], &bar).unwrap();
+        assert_eq!(verdict.verdict, Decision::Inconclusive);
+        for metric in [verdict.accuracy, verdict.wrong_findings] {
+            assert!(metric.intervals.pass().lower.is_finite());
+            assert!(metric.intervals.fail().upper.is_finite());
+            assert!(metric.more_tasks.is_none());
+        }
+    }
+}
+
+#[test]
 fn invalid_bars_and_incomplete_retained_pairs_are_rejected() {
     let mut bar = Bar::default();
     bar.prediction.max_additional_tasks = 1;
     assert!(judge(&[task(1, 1, 1)], &bar).is_err());
-    assert!(judge(&[], &bar).is_err());
+    assert_eq!(judge(&[], &bar).unwrap().verdict, Decision::Inconclusive);
     let scores = [task(3, 3, 3)];
     for invalid in [0, 2, 4] {
         assert!(

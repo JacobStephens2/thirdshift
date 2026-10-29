@@ -48,6 +48,7 @@ impl Fixture {
                 stage: logs::trace::id(&[b"trials"]),
                 identity: "trial-fixture".into(),
                 repository: "acme/widgets".into(),
+                process: Default::default(),
             },
             signal: root.path().join("plan-limit"),
             root,

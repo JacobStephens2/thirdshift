@@ -15,6 +15,26 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+## Documentation screenshots
+
+The README and public site's Console section share the PNGs in
+[`site/screenshots/`](../site/screenshots/). After the build and browser setup
+above, refresh both from the repository root:
+
+```sh
+node console/screenshots.cjs
+```
+
+The capture needs Python 3 for its fake `gh`. It opens the real Console in
+Chromium at 1440 × 1200, using the Focus light Theme, and captures the full page
+below the machine header. It creates sample Commands and Session spans in a temporary home,
+answers GitHub reads with a local fake `gh`, and closes its browser and server
+before removing that home. It reads no personal logs or GitHub data. Inspect
+both images before committing them; the Console layout can change. The images
+show Inbox with Command details and Waterfall with every call expanded.
+
+## Development and behavior
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
@@ -160,16 +180,18 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-The Inbox reads like a mailbox. Its sections, Needs you through Resolved, are
-folders on the left with their counts, and one section's rows show at a time,
-on one line each: state, subject, title, gist and age. On a desktop, issue
+The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
+show together, each under its heading and count, including empty groups.
+The folders on the left can filter to one section, including Done and Resolved.
+Rows show on one line each: state, subject, title, gist and age. On a desktop, issue
 numbers stay visible as long repository or Process subjects shrink; hover
 the subject for its full text. The gist is where the
 Command stands, such as `review failed`; a Pass without an issue adds the
 issue it dispatched, its first security finding or its cause. Hover an ended
 row's age for its finish time. The list never scrolls inside itself; the page does. The
 folder is in the URL, such as `/?section=done`, so it survives a reload and
-works without JavaScript; with none named, the first section with rows opens.
+works without JavaScript; with none named, Overview opens. Hidden sections stay
+hidden in Overview too.
 The page opens with nothing selected and Command details closed. Click a row,
 or select it and press `Space`, to open its details beside the list; they stay
 open for the selected row as you move with `j` / `k` or switch folders. On a
@@ -471,6 +493,8 @@ and `show`. Run `python3 console/reproductions/ready-dispatch.py` after a build
 to check both Inbox views.
 
 A live Command's Details offers Stop beside its equivalent CLI command.
+Like Dismiss and Show, the CLI stays on one line, with long commands cut off
+and a Copy CLI button that copies the full command. Hover for the full text.
 The confirmation page explains `needs-triage`, offers Requeue instead
 (`thirdshift stop --requeue`), and requires the current account's CSRF token.
 Both actions use the CLI's Stop, including its process identity checks and

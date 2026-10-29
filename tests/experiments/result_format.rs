@@ -22,6 +22,10 @@ pub(super) fn assert_documented(name: &str, value: &Value) {
 
 fn check(contract: &Value, shape: &Value, value: &Value, path: &str) -> Result<(), String> {
     let mismatch = || format!("{path}: expected {shape}, got {value}");
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a contract shape that is no object, array or type name must equal the value"
+    )]
     match shape {
         Value::Object(fields) => {
             let object = value.as_object().ok_or_else(mismatch)?;
@@ -86,6 +90,7 @@ fn documented_format_matches_real_experiment_results() {
     let run = fixture.run(&["--prior", "0.01"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
+    assert_eq!(experiment["format"], 4, "format 4 adds Advisory suites");
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(
         !experiment["pending_rechecks"]

@@ -60,6 +60,8 @@ pub(crate) struct Context {
     pub stage: SpanId,
     pub identity: String,
     pub repository: String,
+    #[serde(default)]
+    pub process: crate::processes::Identity,
 }
 
 impl Context {
@@ -70,6 +72,7 @@ impl Context {
     fn for_record(&self, record: &CommandRecord) -> Self {
         let mut context = self.clone();
         context.repository = record.repository.clone();
+        context.process = record.process.clone();
         context.run = id(&[
             &context.command.0,
             b"run",
@@ -125,6 +128,7 @@ impl Context {
             stage: command,
             identity,
             repository: String::new(),
+            process: Default::default(),
         }
     }
 }

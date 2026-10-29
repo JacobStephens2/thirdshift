@@ -133,7 +133,7 @@ impl<'a> Watch<'a> {
                 Ci::Failed(failed) if !failed.own.is_empty() => {
                     unchanged = Some((head.to_string(), failed));
                 }
-                ci => return Ok(ci),
+                ci @ (Ci::Absent | Ci::Passed | Ci::Superseded | Ci::Failed(_)) => return Ok(ci),
             }
         }
         let ci = match unchanged {

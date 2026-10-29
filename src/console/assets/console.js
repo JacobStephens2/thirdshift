@@ -1,4 +1,4 @@
-import { activity, loadLook, motionAllowed } from './look.js';
+import { activity, loadLook, motionAllowed, showFolder } from './look.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
@@ -286,8 +286,8 @@ function showPeek(row) {
   if (peekCommand !== row.dataset.command) togglePeek(row);
 }
 
-// The Inbox is a mailbox: one section, a folder, shows at a time, and once
-// opened, Details stays beside it for the selected row.
+// Overview combines the current groups; a folder filters to one section.
+// Once opened, Details stays beside the selected row.
 const mailbox = document.body.classList.contains('mailbox');
 function currentFolder() {
   return document.querySelector('#inbox .folders a[aria-current="page"]');
@@ -297,13 +297,6 @@ function urlFolder() {
   const section = new URLSearchParams(location.search).get('section');
   return [...document.querySelectorAll('#inbox .folders a[data-group]')]
     .find(link => new URL(link.href).searchParams.get('section') === section);
-}
-function showFolder(group) {
-  for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) {
-    if (link.dataset.group === group) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-  }
-  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) section.hidden = section.dataset.group !== group;
 }
 function openFolder(link, { push = true } = {}) {
   showFolder(link.dataset.group);
@@ -337,15 +330,20 @@ async function refreshPeek() {
 // A live refresh replaces the pane; keep each copy's status and its by-hand selection.
 function keepCopy() {
   const selection = getSelection();
-  const kept = [...content.querySelectorAll('.peek-cli')].map(line => ({
-    status: line.querySelector('[role="status"]').textContent,
-    selected: line.contains(selection.anchorNode) && selection.toString() === line.querySelector('code').textContent
+  const kept = new Map([...content.querySelectorAll('.peek-cli')].map(line => {
+    const code = line.querySelector('code');
+    return [code.textContent, {
+      status: line.querySelector('[role="status"]').textContent,
+      selected: line.contains(selection.anchorNode) && selection.toString() === code.textContent
+    }];
   }));
   return () => {
-    content.querySelectorAll('.peek-cli').forEach((fresh, index) => {
-      if (!kept[index]) return;
-      fresh.querySelector('[role="status"]').textContent = kept[index].status;
-      if (kept[index].selected) selection.selectAllChildren(fresh.querySelector('code'));
+    content.querySelectorAll('.peek-cli').forEach(fresh => {
+      const code = fresh.querySelector('code');
+      const previous = kept.get(code.textContent);
+      if (!previous) return;
+      fresh.querySelector('[role="status"]').textContent = previous.status;
+      if (previous.selected) selection.selectAllChildren(code);
     });
   };
 }
@@ -407,7 +405,7 @@ function items() {
     });
 }
 
-const sectionLetters = { 'needs you': 'n', 'ready for review': 'r', landing: 'l', working: 'w', done: 'd', resolved: 'v' };
+const sectionLetters = { overview: 'u', 'needs you': 'n', 'ready for review': 'r', landing: 'l', working: 'w', done: 'd', resolved: 'v' };
 const targets = new Map();
 for (const link of document.querySelectorAll('nav[aria-label="Pages"] a')) {
   targets.set(link.dataset.jump, { label: link.textContent.replace(/^\d+ /, ''), go: () => link.click() });

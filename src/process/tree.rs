@@ -1,6 +1,7 @@
 //! The shared CLI stop path, including escaped process groups.
 
 use std::collections::{BTreeSet, HashMap};
+use std::io;
 use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +12,33 @@ use crate::progress;
 
 const POLL: Duration = Duration::from_millis(100);
 const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// Probe with signal 0; only ESRCH means gone. Permission denied counts as alive.
+pub(crate) fn is_alive(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 sends nothing and has no memory-safety preconditions.
+    let alive = unsafe { libc::kill(pid, 0) == 0 };
+    alive || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// Send one signal to one PID, never to a process group.
+/// Use this instead of [`stop`] when the child must finish its own cleanup:
+/// a Ticket run shares its process group and must finish its Failed run path.
+/// Nonpositive PIDs are rejected with `InvalidInput`; OS errors are preserved.
+pub(crate) fn signal(pid: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
+    if pid <= 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "signal requires a positive PID",
+        ));
+    }
+    // SAFETY: kill has no memory-safety preconditions; a positive PID names
+    // only one process, never a process group.
+    if unsafe { libc::kill(pid, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
 
 /// Give each of the Harness's stop signals the existing grace period. Once
 /// the CLI exits, skip the remaining grace periods but still kill its work.

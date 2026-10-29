@@ -542,20 +542,25 @@ impl InboxPage {
             .any(|section| section == &slug(group))
     }
 
-    /// The one section the Inbox shows, like a mail folder: the one the URL
-    /// names if it is visible, otherwise the first visible one with rows.
+    /// An explicit visible section filters the Inbox; otherwise show Overview.
     fn folder(&self) -> &'static str {
-        let visible = || {
-            self.inbox
-                .sections
-                .iter()
-                .filter(|section| !self.hidden(section.group))
-        };
-        visible()
-            .find(|section| slug(section.group) == self.section)
-            .or_else(|| visible().find(|section| !section.rows.is_empty()))
-            .or_else(|| visible().next())
-            .map_or("", |section| section.group)
+        self.inbox
+            .sections
+            .iter()
+            .find(|section| !self.hidden(section.group) && slug(section.group) == self.section)
+            .map_or("overview", |section| section.group)
+    }
+
+    fn in_overview(&self, group: &str) -> bool {
+        matches!(
+            group,
+            "needs you" | "ready for review" | "landing" | "working"
+        )
+    }
+
+    fn shown(&self, group: &str) -> bool {
+        !self.hidden(group)
+            && (self.folder() == group || (self.folder() == "overview" && self.in_overview(group)))
     }
 
     fn slug(&self, group: &str) -> String {

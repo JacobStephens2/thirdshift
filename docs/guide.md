@@ -117,7 +117,7 @@ thirdshift console other-accounts --json # show the saved setting
 thirdshift console other-accounts none
 ```
 
-Setup also asks for this setting when configuring the Console. Discovery uses the passwd database's home directory and the account's readable User config `logs.dir` override, expanding `~` against that account's home. The machine owner grants directory traversal and log read access using filesystem permissions or ACLs; thirdshift never grants access or asks for privilege. Grant access only to the logs you intend to expose, since they can contain sensitive work. Unreadable accounts are silently skipped in `readable` mode. For a named list, `status` reports each unavailable account once on stderr; the page stays quiet.
+Setup also asks for this setting when configuring the Console. Discovery uses the passwd database's home directory and the account's readable User config `logs.dir` override, expanding `~` against that account's home. That directory is used only when its canonical path stays inside the account's home, and a file is read only when its canonical path stays under the directory. The machine owner grants directory traversal and log read access using filesystem permissions or ACLs; thirdshift never grants access or asks for privilege. Grant access only to the logs you intend to expose, since they can contain sensitive work. Unreadable accounts are silently skipped in `readable` mode. For a named list, `status` reports each unavailable account once on stderr; the page stays quiet.
 
 Other-account Commands carry their OS account name in every Inbox section (including Needs you), Lanes, Stages, History, Security, logs, Waterfall and Command details. JSON adds `account` only to other-account observations. Their Needs you rows count in the tab title. Stop, Requeue, Dismiss and Undo are unavailable for them, and the corresponding CLI requests refuse with the owning account's name. Reading never changes another account's logs, Activity log or repositories. The serving account's own Commands keep their existing controls.
 
@@ -345,7 +345,7 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Like a mailbox, its sections are folders beside a list of one-line rows, and a clicked row's Command details open alongside on a wide screen; `/?section=done` opens Done. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
 
 #### Console on a server
 
@@ -546,6 +546,7 @@ thirdshift experiment --release <commit> [--json] [--yes]  # use the last releas
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift experiments <id> --name <text> [--json]  # rename an Experiment; --name '' brings back its default name
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
+thirdshift experiments <id> --record-difficulty [--json]  # replace each Eval task's Difficulty from a completed A/A
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift recheck <id> --pending [--json]  # review pending Scores and their fingerprint
 thirdshift recheck <id> --batch <fingerprint> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
@@ -615,6 +616,45 @@ Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
 identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
 The ordinary resume rules below still apply.
 
+After it completes, `thirdshift experiments <id> --record-difficulty` pools
+both Arms' retained, non-void Trials for each Eval task and replaces its
+optional `[difficulty]` table. It records passes, Trials, the Experiment ID,
+commit, Harness, Model and Effort, using the latest rechecked Scores. An
+unfinished Experiment, or Arms differing in any of those setup choices, is
+refused before writing. Each manifest is written atomically under the suite
+lock shared with approval; comments and Trial inputs are preserved. The saved
+Experiment and its Verdict stay unchanged.
+
+The command prints each Eval task's Difficulty as passes / Trials and whether
+it is **discriminating**: at least 6 Trials, with Difficulty between 0.15 and
+0.95 inclusive. Fewer than 6 Trials counts as **unmeasured**, as does a missing
+table. The band is fixed by the method, not a Bar flag. Add `--json` for the
+readings and their `measured` and `discriminating` flags. `thirdshift evals`
+(or `evals list`, optionally `--json`) lists every Eval task's table or `null`,
+with the same flags. See [the manifest format](eval-tasks.md).
+
+Before the first Trial, the Bar saves each selected suite's list of
+discriminating Eval tasks from recorded Difficulty. Only that list is judged.
+Other approved Eval tasks still run and are graded; each suite reports their
+Trials per Eval task under `measurement`. These Trials change no interval,
+required recheck or prediction of how many more Eval tasks are needed.
+`experiments <id>` and `--json` show each suite's counts: judged,
+measurement-only, void-dropped and judged tasks measured on another setup
+(commit, Harness, Model or Effort) than the Baseline's. The first three counts
+partition the suite: a task with an exhausted Void Trial counts as void-dropped,
+including when it was only measurement. Difficulty from another setup still
+qualifies. A suite with no discriminating Eval tasks is inconclusive.
+
+The Bar also fixes `min_discriminating_tasks`, defaulting to 20. Set it for one
+Experiment with `--min-discriminating-tasks <count>`; changing it after the first
+Trial refuses resume. A suite whose saved discriminating list is shorter is an
+**Advisory suite**. Its Verdict and intervals are still shown, with `advisory: true`
+in JSON and an Advisory mark in the text view and Console. The Console also shows
+the judged and measurement counts. Advisory suites cannot pass or block a release:
+only the other suites decide the overall Verdict. When every suite is advisory,
+the overall Verdict is inconclusive. The minimum uses the fixed list's size,
+before Void dropouts, rather than the retained judged count.
+
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar's timeout, in session-minutes; and, for each suite and Harness that has
@@ -662,9 +702,10 @@ inside the sandbox and only their reports are graded.
 
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
-`1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
+timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
-`--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+`--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 
@@ -767,7 +808,8 @@ grading without rerunning finished Trials,
 and reuses already validated Scores.
 
 The Verdict stays `waiting_on_rechecks` until you have rechecked every borderline
-Score and every decisive Score. A Score is decisive when flipping its pass/fail
+Score and every decisive Score on the Bar's judged list in suites that are not
+advisory. A Score is decisive when flipping its pass/fail
 or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 `thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
@@ -825,23 +867,31 @@ and in the Console. It doesn't change the decision.
 One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
-Any failed suite fails the Experiment; otherwise any inconclusive
-suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
-also makes it inconclusive. Results include the suite intervals, the Bar and
+Among suites that are not advisory, any failed suite fails the Experiment;
+otherwise any inconclusive suite makes it inconclusive. More than a tenth of their
+judged Eval tasks dropped as void also makes it inconclusive. When every suite is
+advisory, the Experiment is inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
 The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
 `pass_cubed`: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
-`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v3`, and
-their Bar records `"pass_rule": "margin"`. Saved Experiments under
+`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v4`, and
+their Bar records `"pass_rule": "margin"` and `discriminating_tasks` per suite.
+Saved Experiments without `min_discriminating_tasks`, including earlier v4
+Experiments, keep their original Bar, Verdict and aggregation policy when read
+or resumed; their suites omit `advisory`.
+Saved Experiments under `paired-dirichlet-v3` keep judging all their retained
+Eval tasks, with their stored Bar and Verdict. Saved Experiments under
 `paired-dirichlet-v2`, whose pass also needed the pass-level upper bound to
 reach zero, keep that rule and their stored Bar and Verdict when read, and
 when resumed with the same levels. Saved Experiments under `paired-dirichlet-v1`
 remain readable with their stored single-level Bar and Verdict unchanged. See
 [ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md) and
 [ADR-0025](adr/0025-a-pass-needs-only-the-margin.md).
+The judged-list decision is recorded in
+[ADR-0026](adr/0026-judge-the-recorded-discriminating-tasks.md).
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed `--credible-level`
 flag. Reading that command does not rewrite its stored Bar or Verdict.
@@ -858,9 +908,11 @@ resuming exhausted history finishes without replaying its old pause.
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
+That includes a changed discriminating list or any changed Difficulty reading
+for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 2`.
+[Experiment results format](experiment-results.md), identified by `format: 4`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1011,7 +1063,7 @@ folder and are compiled into the binary, like Factory skills (ADR-0001).
 They use the same format and validation as Custom processes. The built-in
 `ticket-run` runs `implement` → `security-review` → `delivery` → `self-merge`,
 inheriting the Command's Harness, Model and Effort, Child asks and Limits.
-Every Ticket run executes it, including those started by Spec, Architect
+Ticket runs execute it by default, including those started by Spec, Architect
 and Security runs. The command and User
 config still decide whether the Security review and Self-merge run. The
 Command keeps its Ticket run identity, sessions and progress lines.
@@ -1019,6 +1071,41 @@ Inspect it with `thirdshift process show ticket-run`, or validate it with
 `thirdshift process check ticket-run issue <issue>`. Save the printed file
 under a new name to run it as a Custom process.
 A Custom process cannot take a reserved Built-in process name.
+
+The Built-in `spec-run` owns `land-tickets` → `spec-review` → `security-review`
+→ `delivery` → `self-merge` on a `spec-branch` worktree, inheriting the Command's
+Harness, Model and Effort, Child asks and Limits. Every starter of a Spec run
+uses it: an Issue URL, Pickup, Architect and Security runs, and
+`run-published-issue`. Spec-or-Ticket dispatch and the Claim stay before the
+file; the Command keeps its Spec run name, sessions and progress lines.
+Inspect it with `thirdshift process show spec-run`, or validate it with
+`thirdshift process check spec-run issue <spec>`. Save the printed file under
+a new name to run a Custom process on a Spec.
+
+The built-in `architect-run` runs `architecture-review` → `run-published-issue`.
+Architect runs execute it after their Command limit, the lock of their kind
+and skip gates. The first Step owns the review session and the plan-or-idea
+conclusion and labels; it ends
+successfully on an idea or with `--plan-only`. Otherwise the second Step runs
+the published plan. Inspect it with `thirdshift process show architect-run`
+and validate it with `thirdshift process check architect-run`. A copy saved
+under a new name runs as a Custom process, following the Command limit without
+a lock of a kind or the Architect run's open-plan, waiting-idea or Ready-issue gates.
+
+The Built-in `security-run` owns `security-audit` → `reproduce-findings` →
+`fix-findings` → `close-findings`, inheriting the Command's Harness, Model and
+Effort and limits. Its Command limit, the lock of its kind and Ready-issue,
+failed-fix and unchanged-Base skip gates stay before the file. The first two
+Steps skip when an earlier
+reproduced finding awaits an allowed fix; fixing and closing retain their
+permission gates. The Security run fixes at most one finding per invocation,
+and closes only that finding after its fix merges and its proof passes.
+Inspect it with `thirdshift process show security-run` or validate it with
+`thirdshift process check security-run`. A copy under a new Custom process
+name follows the Command limit without a lock of a kind and can fix several findings.
+
+Pickup has no Process file: it selects and reserves a Ready issue, then
+dispatches `ticket-run` or `spec-run`.
 
 Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
@@ -1124,7 +1211,7 @@ thirdshift process ship issue 7
 thirdshift process ship issue 7 merge
 ```
 
-A declared worktree's `kind` is `throwaway` or `issue-branch`. A throwaway
+A declared worktree's `kind` is `throwaway`, `issue-branch` or `spec-branch`. A throwaway
 worktree is detached at the Base branch. An Issue-branch worktree is the
 Issue branch a Ticket run would use for the issue the command names:
 `issue-<n>`, then `issue-<n>-branch-<k>` for k ≥ 2. A Continuation reuses
@@ -1132,6 +1219,59 @@ the existing branch, and an open pull request's base is the Base branch.
 Session Steps in that checkout are told to build on its commits. A
 Process has at most one Issue-branch worktree. The Steps that name it run in
 that checkout. Any other declared worktree stays throwaway.
+
+A Spec-branch worktree uses the Spec's Issue branch and the same Continuation
+rules. A file can declare one Issue-branch or one Spec-branch worktree, never
+both. Both need an issue: a Spec-branch file requires sub-issues, and an
+Issue-branch file refuses an issue that has sub-issues, before any session.
+The Claim is made before acquiring either branch worktree.
+
+`catalogue = "land-tickets"` runs the Spec run's whole Ticket loop on a
+Spec-branch worktree: push the Spec branch, start Tickets in dependency order,
+re-read the graph after each ending, and open a draft Spec PR on the first
+landing, updating its Tickets checklist. `spec.parallel` in the User config
+sets how many Tickets can run at once. Closed Tickets, Tickets in another
+repository, Unready Tickets, Specs, blocked Tickets and Tickets that fail the
+Trusted-account checks cannot start. A failed Ticket stops only its dependents;
+any Ticket not done fails the Step. The optional `process = "<name>"` setting
+selects every child Ticket's Process, defaulting to `ticket-run`; the named
+Process must exist and declare an Issue-branch worktree. Child Tickets inherit
+the Step's Harness, Model and Effort and the Process's Repair cap and protected
+paths. The Step is required, outside a parallel group, and returns the draft
+Spec PR URL after updating the local worktree from the landed Spec branch.
+It leaves the Claim while the Spec waits for completion.
+Spec-branch cleanup keeps uncommitted work and commits absent
+from the remote-tracking branches in the local worktree and branch, and names
+the retained path. Inspect and publish that work before retrying.
+
+```toml
+version = 1
+description = "Gather a Spec's Tickets"
+
+[worktrees.spec]
+kind = "spec-branch"
+
+[[steps]]
+name = "land"
+catalogue = "land-tickets"
+worktree = "spec"
+process = "ticket-run"
+```
+
+Run it with `thirdshift process <name> issue <spec>`. This Step gathers the
+Tickets; it leaves the Spec PR draft for subsequent review and Delivery.
+
+Follow `land-tickets` with `catalogue = "spec-review"` on the same Spec-branch
+worktree to run the Spec review over the whole Spec against the Base branch.
+It uses the Spec run's prompt and report contract, and takes its own Harness,
+Model and Effort. The Step must be required, outside parallel groups, and
+after `land-tickets`. Then `security-review` → `delivery` → `self-merge` on
+that worktree deliver the Spec PR with the same flag and User config gates
+as a Spec run. Delivery restores the Tickets checklist after the review
+rewrites the PR body, runs the Repair loop and marks the PR ready. A failure
+preserves the work and leaves an open PR draft; a Security hold leaves it
+ready for review. A delivered Spec PR removes the Claim. The Built-in Spec
+run reads this sequence from `spec-run.toml`.
 
 `catalogue = "implement"` runs the same implementation session as a Ticket
 run, using its fresh or Continuation prompt. It must name the Issue-branch
@@ -1145,7 +1285,7 @@ the progress line and Ending say the bug was not reproduced. Only
 `implement` can end a Process early; there is no file setting for this.
 
 `catalogue = "security-review"` runs the same Security review as a Ticket run.
-Place it on the Issue-branch worktree after its editing Steps and before
+Place it on the Issue-branch or Spec-branch worktree after its editing Steps and before
 `delivery`, outside any parallel group. The Step runs when `security-review`
 (or `--security-review`) on the command or `[security] review = true` asks;
 `no-security-review` overrides the config. Otherwise it prints that the review
@@ -1158,13 +1298,13 @@ holds a following Self-merge while Delivery still leaves the PR ready and
 repairs conflicts and CI. The public review outcome is written to the PR;
 pre-existing findings stay private as in a Ticket run.
 
-`catalogue = "delivery"` publishes that Issue branch after the earlier Steps'
+`catalogue = "delivery"` publishes that Issue branch or Spec branch after the earlier Steps'
 editing sessions and any Security review. It pushes, opens a draft pull request
 when the branch has none, writes the Built-with line, marks the pull request ready
 for review, and keeps it mergeable with green or absent CI through the Repair
 loop. When thirdshift opens the pull request, its title is the issue's and its body
-starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
-A Process has at most one delivery Step. It names the Issue-branch worktree,
+starts `Closes #<n>`. Repairs run on the Delivery Step's Harness, Model and Effort.
+A Process has at most one delivery Step. It names the Issue-branch or Spec-branch worktree,
 it is not optional, and it is not in a parallel group. It comes after the
 last Step that uses that worktree. A `self-merge` Step is not one of those
 editing Steps.
@@ -1177,7 +1317,7 @@ was watched, then the same close comment, and the Issue branch deleted. The
 pull request URL is the Step's result. Without that ask, and with `no-merge`
 even when `merge.always` is set, the pull request stays ready for review and
 the Process succeeds. `merge` on a Process with no `self-merge` Step does not
-merge. The Step names the Issue-branch worktree, it is not optional, it is
+merge. The Step names the Issue-branch or Spec-branch worktree, it is not optional, it is
 not in a parallel group, and a Process has at most one. One anywhere else is
 refused. `merge` and `no-merge` are not accepted by `check`.
 
@@ -1203,12 +1343,12 @@ self_merge = false
 protected_paths = ["secrets/**", "**/*.pem"]
 ```
 
-An Issue-branch worktree needs an issue. `thirdshift process <name>` and
+An Issue-branch or Spec-branch worktree needs an issue. `thirdshift process <name>` and
 `thirdshift process check <name>` refuse the file before any session, any
 Claim and any branch, naming the `issue` rule and the file line. With an
 issue, the run makes the Claim when it starts, labelling the issue
-`in-progress` in place of `ready-for-agent`, and holds it until the end. A
-pull request left ready for review removes the Claim and does not put
+`in-progress` in place of `ready-for-agent`, and holds it until the end. On an
+Issue-branch worktree, a pull request left ready for review removes the Claim and does not put
 `ready-for-agent` back, so Pickup does not take an issue that already has an
 open pull request. A Step that fails before Delivery keeps the Issue-branch
 work as a Failed ticket run does, and the failure says where it stopped, what
@@ -1233,10 +1373,72 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
-built-in Step: `implement`, `security-review`, `delivery` or `self-merge`, described above, or `run-published-issue`.
+built-in Step: `implement`, `spec-review`, `security-review`, `delivery`, `self-merge` or
+`land-tickets`, described above, or `architecture-review`, `run-published-issue`,
+`security-audit`, `reproduce-findings`, `fix-findings` or `close-findings`.
+
+`security-audit` audits origin's Base branch in its own throwaway worktree,
+validates the report and creates or reuses each finding's private record.
+Follow it with `reproduce-findings` to run one reproduction session per pending
+finding at its audited commit, score the reproduced findings and keep their tests
+in those private records. Completed reproductions and the Day shift's grades are
+kept when an audit finds the same finding again. Both Steps must be required,
+outside parallel groups, and cannot use an Issue-branch or Spec-branch worktree.
+Each takes its own Harness, Model and Effort. Their session traces stay local,
+including when OTLP export is configured.
+
+With `security-fix` (or `--security-fix`) on the command, or `[security] fix = true`,
+each Step skips itself when a recorded finding awaits an allowed fix;
+`no-security-fix` overrides the config. Before the Process name use the dashed
+flags. These Steps publish no fix or finding, and a file cannot loosen their
+privacy rules. Security runs execute the Built-in `security-run` sequence
+after their existing skip gates.
+
+```toml
+version = 1
+description = "Audit and reproduce findings privately"
+[[steps]]
+name = "audit"
+catalogue = "security-audit"
+[[steps]]
+name = "reproduce"
+catalogue = "reproduce-findings"
+```
+
+`architecture-review` runs the Architecture review in its own throwaway worktree
+at the Base branch on origin, checks the final line and any plan, and applies
+`architect-plan` or `architect-idea` labels using the Architect run's rules.
+It takes its own Harness, Model and Effort like any Step, and runs outside
+parallel groups. It cannot use an Issue-branch worktree. Follow it with
+`run-published-issue` to start a Ticket run or Spec run on a Strong plan.
+It must precede Issue-branch editing Steps or follow their Delivery, so an
+early end cannot discard unpublished work.
+An idea, including an open issue that already covers the recommendation, ends
+the Process successfully with that issue's URL and no child run. So does a plan
+when the command asks for `thirdshift process <name> --plan-only`. Later Steps
+are skipped, and the progress lines and Ending say why. This early end belongs
+to the Step; there is no file setting for it. Issue-less Custom processes follow
+the Command limit without a lock of a kind or the Architect run's skip gates.
+
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
-Tickets, on the issue the session Step before it published. That session's final
-message ends with the issue's URL on its last non-blank line. Before it starts a
+Tickets, on the issue the session Step before it published. Its optional
+`process = "<name>"` setting selects the Process for a child Ticket run,
+defaulting to `ticket-run`. The named Process must exist and declare an
+Issue-branch worktree; `process check` refuses either problem before any
+session. An issue with Tickets still starts a Spec run through normal dispatch,
+regardless of this setting. For example, to use a Custom process named
+`contractor-ticket` after a publishing session:
+
+```toml
+[[steps]]
+name = "run"
+catalogue = "run-published-issue"
+process = "contractor-ticket"
+```
+
+The publishing session's final
+message ends with the issue's URL on its last non-blank line; an
+`architecture-review` Step supplies its checked plan instead. Before it starts a
 run, thirdshift checks that the issue is in this repository, which it checks
 before viewing the issue, that the issue is open, that a Trusted account
 published it, and that it was created since that session Step began. A final
@@ -1276,8 +1478,8 @@ A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a `together:` line for each group
 of Steps that run at the same time. A throwaway worktree is described as
-throwaway at the Base branch. An Issue-branch worktree is described as an
-Issue branch. When a limit tightens a built-in rule, `check` prints it: the
+throwaway at the Base branch. A branch worktree is described as an
+Issue branch or Spec branch. When a limit tightens a built-in rule, `check` prints it: the
 repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
@@ -1286,7 +1488,7 @@ optional Step is marked `(optional)`. `check` performs the same Harness
 preflight as running, including a minimal Model test when the Harness needs
 one, and runs no Step. `check <name> issue <issue>` resolves the issue and
 still creates no Issue branch and makes
-no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
+no Claim. Without an issue, either branch worktree is the refusal above, not
 a plan.
 
 Running the Process starts the Steps in its throwaway worktrees, detached at
@@ -1345,7 +1547,7 @@ that Step instead of starting the session. The Command log names the cause.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
-a catalogue value other than `implement`, `delivery`, `run-published-issue`, `security-review` or `self-merge`, an
+a catalogue value outside the documented Step catalogue, an
 `implement` Step outside an Issue-branch worktree, a
 `self-merge` Step that is not directly after `delivery`, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a
@@ -1375,6 +1577,55 @@ Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
 and `[resources]` is checked before each Step and each session's Resume.
 Every skill Step keeps a Session trace and Model evidence. Its prompt names
 the worktree kind, and it gets the usual one Resume with or without an issue.
+
+### Fixing and closing Security findings
+
+`fix-findings` reads the repository's private finding records and, when
+`security-fix` or `fix = true` under `[security]` allows it, fixes each
+reproduced finding still awaiting a fix, in severity order. `no-security-fix`
+overrides the setting. Unreproduced findings and findings with an existing
+fix are skipped. The Step uses the Security run's private publication checks:
+a public fix issue contains only the proposed change and a private-record
+link. It links the fix, starts a Ticket run or Spec run, and records its
+ending privately. A failed fix stops the Step and stays with the Day shift.
+If a merged fix auto-closes a private finding issue, the Step reopens it until
+`close-findings` verifies the proof, even when closing is disabled or omitted.
+The optional `process = "<name>"` setting selects a child Ticket Process,
+defaulting to `ticket-run`, with the same validation and Spec dispatch as
+`run-published-issue`. Children inherit the Step's Harness, Model and Effort,
+the Command's merge choice and the file's tighter limits.
+
+`close-findings` reads successful fixes from the private records and checks
+which merged into this Base branch, including fixes from an earlier Process
+that failed or stopped before closing. Each proof-of-concept test runs against
+the current merged Base branch on origin. Only a passing check closes the
+private record; a failing check or error leaves a private note for the Day
+shift and reopens a private finding issue that its fix PR closed.
+Unmerged fixes are left open. Closing defaults to allowed when fixing
+is allowed; `no-security-close` or `close = false` under `[security]`
+disables it, and `security-close` overrides that setting. Both Steps run
+outside parallel groups and use throwaway worktrees; their sessions acquire
+fresh worktrees for publication and merged-Base checks. Their sessions and the
+Ticket runs they start stay off any configured OTLP endpoint, as a Security
+run's do. The existing Security run still fixes at most one finding per
+invocation.
+
+```toml
+version = 1
+description = "Fix reproduced findings"
+[[steps]]
+name = "fix"
+catalogue = "fix-findings"
+# process = "contractor-ticket"
+[[steps]]
+name = "close"
+catalogue = "close-findings"
+```
+
+```sh
+thirdshift process fix-records security-fix merge
+thirdshift process fix-records no-security-fix
+```
 
 `thirdshift status` and `status --json` list a running or finished Process as
 Process `<name>`, with the ending succeeded, failed, skipped or interrupted.
@@ -1453,7 +1704,7 @@ model = "gemini-3.8-flash"
 effort = "medium"
 ```
 
-`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.
+`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. `fix-findings` and `close-findings` likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
@@ -1552,7 +1803,16 @@ Every key holds its real value, so a Ticket run reading it does exactly what it 
 
 For Claude's Model, Setup suggests `default`, `best`, `fable`, `opus`, `sonnet`, `haiku`, `opusplan`, `sonnet[1m]` and `opus[1m]` from [Claude Code's documented model settings](https://code.claude.com/docs/en/model-config#model-aliases). These are suggestions: you can type any Model ID. Enter keeps the current value, or Claude's own default when none is set. The suggestions are maintained with thirdshift against that documentation; Setup does not fetch a live catalog or pin the Model versions the aliases resolve to.
 
-When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. On macOS the probe reports that it is unavailable. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
+When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
+
+On non-Linux systems, the report starts `Security sandbox probe: unavailable on <os>` (`macos` on macOS) and says Setup did not check isolation on this OS. Before running target code, each Security session must enforce:
+
+- no external network;
+- an empty environment populated from an explicit allowlist with safe values, with scratch-local `HOME`, temporary directories and caches;
+- a read-only target and toolchain, with writes only inside scratch; and
+- explicit low CPU, memory, process, file-size, disk and wall-clock limits.
+
+If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them. On macOS, `sandbox-exec` (Seatbelt) is the usual route, but Setup has not verified that it meets every control. Setup only prints this guidance and runs nothing. The User config is already saved by then, and the probe result does not stop Setup.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.failure_limit`, `pickup.wait_minutes`, `pickup.order` and `security.harness` are not asked about. Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, the Resend key is not asked about and stays as it was, so `--email` on a single Ticket run still works. The Claude setup token is offered independently. Credentials a Ticket run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Ticket run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
@@ -1810,6 +2070,20 @@ The folder already names the repository, so no file name repeats it. `audits/` a
 
 Session traces share the owning command's folder, stamp and owner token: a Pickup run's dispatched Ticket run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and nested Base fixes inherit that same ownership too.
 
+Each Command record and child run records its Process in `process_name`,
+`process_kind` (`built-in` or `custom`) and `process_hash` (the lowercase SHA-256
+of the file's exact bytes). Session traces carry the same facts as
+`thirdshift.process.name`, `thirdshift.process.kind` and `thirdshift.process.hash`
+attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
+the compiled-in file's hash by default. A `run-published-issue` Step that selects
+a Custom process records that name, Custom kind and loaded file's hash on its
+child instead. Custom processes record the file loaded for that
+run, so editing it changes the next run's hash. Spec runs record `spec-run`,
+Architect runs record `architect-run`, and Security runs record `security-run`,
+each with its compiled-in file's hash. A run with no Process file has no hash.
+Older records can omit these fields. Status, the Console,
+the Activity log and Run notifications keep their existing run-type names.
+
 When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Ticket runs, Ticket runs inside a Spec run and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.logs.jsonl`.
@@ -1989,6 +2263,12 @@ thirdshift architect --email you@example.com      # email how the Architect run 
 ```
 
 The focus is optional free text, given as one argument, anywhere among the flags; it goes into the Session prompt. `architect` is a command only as the first argument.
+
+After its Command limit, the lock of its kind and skip gates, the Architect run
+carries out the Built-in process in `processes/architect-run.toml`: `architecture-review` →
+`run-published-issue`. The file owns that sequence; the Architect run keeps its
+name, progress lines, logs, endings, Run notification, Console view and Recovery.
+Use `thirdshift process show architect-run` to read or copy the file.
 
 `merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>` (or the same with dashes) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. The [Harness, Model and Effort](#harness-model-and-effort) are the Architecture review's too. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email` or `email-unless-merged`, optionally followed by an address, and `no-email` (or the same with dashes) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` or `email-unless-merged` is the address only if it contains `@`, so a focus without one is never taken for it.
 
@@ -2212,6 +2492,13 @@ thirdshift secure base main harness claude
 thirdshift secure base main harness codex model gpt-6.1-sol effort high
 ```
 
+After its Command limit, the lock of its kind and skip gates, the Security run
+executes the Built-in `security-run` file: `security-audit` → `reproduce-findings` → `fix-findings` →
+`close-findings`. Read it with `thirdshift process show security-run` and
+validate it with `thirdshift process check security-run`. The file owns the
+sequence; sessions, progress, logs, Run notifications and the Security run name
+stay the same.
+
 The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `email-unless-merged`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
@@ -2281,6 +2568,9 @@ thirdshift pickup base main no-merge   # run it on main, whatever branch the clo
 thirdshift pickup highest-first        # take the highest-numbered Ready issue instead, for that one pass
 ```
 
+Pickup has no Built-in process file. It selects and reserves the Ready issue,
+then starts `ticket-run` or `spec-run` as a command on that Issue URL would.
+
 Which end of the issue numbers the pass takes is its order: `lowest-first` by default, `highest-first` with `pickup.order = "highest-first"` in the [User config](#user-config), or for one pass with `lowest-first` or `highest-first` on the command, which wins over the User config. Two schedules working through the same queue from opposite ends, one with each order, collide less often; the reservation below still protects either choice.
 
 A Ready issue is an open issue that:
@@ -2320,11 +2610,15 @@ A pass is **skipped** when the repository is at its [Command limit](#the-command
 
 ### When the Base branch stays red
 
-After taking its slot, Pickup reads the latest push workflow run for its Base branch in the repository named by `origin`. If that run failed and finished more than 30 minutes ago, it opens a Ticket titled `CI red on <base>: <failed jobs>`, labelled `bug` and `ready-for-agent`. The body names the failing commit and jobs, includes recognizable failing test lines from the job logs, and links to the run. A green or unfinished latest run, or a failure still within the grace period, files nothing. If any CI-red Ticket is already open in the repository, no second one is filed, even for a different Base branch.
+After taking a Command slot, Pickup reads the latest push workflow run for its Base branch in the repository named by `origin`. A failed first attempt immediately requests one re-run of its failed jobs, names the run and jobs on stderr, and files nothing on that pass. Later attempts are never re-run by Pickup. A refused or impossible re-run warns and proceeds directly to ordinary filing.
+
+If the re-run also fails, Pickup waits 30 minutes from that attempt's completion, then opens a Ticket titled `CI red on <base>: <failed jobs>`, labelled `bug` and `ready-for-agent`. Its body names the failing commit, links both attempts, and includes recognizable failing test lines and job names. An open CI-red Ticket in `needs-info` does not block a new report. Another open CI-red Ticket suppresses a second Ticket, even across Base branches, but receives the new evidence as a comment when the failing commit differs, at most once per commit.
+
+If the same commit passes after a failed attempt, Pickup immediately files a **Flaky-test Ticket** titled `Flaky CI on <base>: <failed jobs>`, labelled `flaky-test`, `bug` and `ready-for-agent`. It records both attempt URLs and the failed attempt's jobs and test lines. Only one report is filed per failed attempt, including after the report closes, and an open Flaky-test Ticket naming the same test suppresses another. Its Ticket run uses the recorded failure as evidence and goes straight to implementation, removing dependence on timing or scheduling, or the race exposed by the test, without requiring reproduction on demand or ending with `needs-info` for lack of it. Other bug Tickets keep their ordinary diagnosis path. A green first attempt or an unfinished latest run files nothing.
 
 The Ticket follows the ordinary Ready issue rules, including settling and the Failure limit: this pass or a later one can take it. Filing does not hold Self-merges, and runs only in Pickup, never in a Ticket run, Spec run or Architect run. A failure to read CI or publish the Ticket is a warning; Pickup continues its ordinary search and dispatch.
 
-Concurrent hosts serialize filing with `refs/heads/thirdshift/pickup/ci-red` on `origin`, using the same empty-create and owner-token release leases as issue reservations. An occupied reservation skips only filing. After a crash, confirm its owner has stopped before releasing it with the exact observed SHA, as for the numbered reservation described above. CI evidence and issue deduplication must be readable before filing; unreadable job logs also leave filing for another pass.
+Concurrent hosts serialize evidence reads, re-running, filing and commenting with `refs/heads/thirdshift/pickup/ci-red` on `origin`, using the same empty-create and owner-token release leases as issue reservations. An occupied reservation skips only these CI actions. After a crash, confirm its owner has stopped before releasing it with the exact observed SHA, as for the numbered reservation described above. CI evidence and issue deduplication must be readable before filing; unreadable job logs also leave filing for another pass.
 
 ### The Failure limit
 
@@ -2669,18 +2963,23 @@ not change the Candidate on restart. The pin is removed after the branch push,
 when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
 intervals and asks `release anyway? [y/N]`, including without `--review`.
+The summary lists every Advisory suite and its own Verdict. All suites advisory
+gives inconclusive and asks the same question.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
 prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
-open or merged bump PR before merging or tagging. An already pushed tag only
-resumes the release workflow. Python 3 is needed to read the Experiment results.
+open or merged bump PR before tagging. An already pushed tag resumes merging
+an open PR and waiting for the release workflow, skipping the Experiment. Python 3 is needed to read the Experiment results.
 
-If `main` gains different content after the Candidate was selected, the script
-refuses to push or merge that release; choose a fresh release version for current
-`main`. It also checks the merged tree before tagging, so a concurrent merge
-cannot publish different content. These checks apply even without an Experiment.
+The release base is the newest commit on `main` whose latest push `CI` run
+succeeded, newer than the last release tag. The script uses it immediately even
+if the tip's CI is pending or failed. If none qualifies, it waits for a run to
+succeed, still considering older pending commits when `main` moves. The
+Experiment's Candidate is that release base. The tag names exactly that content
+plus the version bump, so merges to `main` during a release do not change what
+is measured or shipped.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
@@ -2688,11 +2987,11 @@ From a clone of this repo, signed in to `gh` and the User config's default Harne
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). It then merges the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the tag and release stand: it names the open PR for the Day shift to merge, then still waits for publication. The script waits for the release workflow on the bump commit, printing the run's URL so you can watch it. CI's run on `main` for the merge isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before tagging and leaves the pull request open and untagged. A failed merge after tagging still exits `0` once the release workflow succeeds. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
 
-Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, a `v<version>` tag that already exists locally or on origin, or a CI run on main's current tip that ended without success. It prints a progress line and waits for that tip's CI run to appear and finish, with no overall timeout. While waiting, it fetches `main` again: if the tip moves, it names the old and new commits and waits for the new tip's CI, checking that the requested version is still higher. Once CI succeeds, it bumps the version from that commit and starts the release automatically; if CI ends without success, it names the commit and conclusion and stops without pushing anything.
+Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. Once the tag is on the merge of the pull request, it says the release is already tagged and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
+If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, merges the PR, then waits for publication. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged, merges the PR if still open and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
 
 The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 

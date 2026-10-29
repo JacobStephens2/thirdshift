@@ -59,6 +59,54 @@ impl Files for Native {
     }
 }
 
+/// `root` is an accepted directory's canonical path. It is not resolved again.
+pub(super) fn stays_under(root: &Path, path: &Path) -> bool {
+    path.canonicalize()
+        .is_ok_and(|canonical| canonical.starts_with(root))
+}
+
+/// Other-account discovery. A `commands` alias may exist, but nothing it
+/// reaches outside the accepted directory is listed or read.
+pub(super) struct Confined {
+    root: PathBuf,
+}
+
+impl Confined {
+    pub(super) fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    fn outside() -> io::Error {
+        io::Error::new(io::ErrorKind::NotFound, "outside accepted log directory")
+    }
+}
+
+impl Files for Confined {
+    fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, EntryKind)>> {
+        if !stays_under(&self.root, path) {
+            return Err(Self::outside());
+        }
+        Ok(Files::list(&Native, path)?
+            .into_iter()
+            .filter(|(entry, _)| stays_under(&self.root, entry))
+            .collect())
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<std::fs::Metadata> {
+        if !stays_under(&self.root, path) {
+            return Err(Self::outside());
+        }
+        Files::metadata(&Native, path)
+    }
+
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        if !stays_under(&self.root, path) {
+            return Err(Self::outside());
+        }
+        Files::read(&Native, path)
+    }
+}
+
 pub(super) struct Inventory {
     files: Arc<dyn Files>,
     repositories: Vec<Repository>,

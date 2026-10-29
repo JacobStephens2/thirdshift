@@ -221,6 +221,10 @@ impl UserConfig {
                     | "security"
                     | "trial"
             );
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a section key's value is a table or, whatever else TOML parsed, an error"
+            )]
             let settings = match value {
                 Value::Table(settings) if known => settings,
                 Value::Table(_) => bail!("unknown section [{section}] in {file}"),

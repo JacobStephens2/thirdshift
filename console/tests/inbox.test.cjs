@@ -165,9 +165,11 @@ test('Command details times out a held request and can be opened again', async t
   await page.locator('#peek dt').first().waitFor();
 });
 
-// The Inbox shows one section, a folder, at a time; Details opens from a row.
+// Overview combines the current groups; folders can filter to one section.
 const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${group}"]`);
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
+const shownGroups = page => shownGroup(page).evaluateAll(groups => groups.map(group => group.dataset.group));
+const overviewGroups = ['needs you', 'ready for review', 'landing', 'working'];
 async function showDetails(page, row) {
   const group = await row.evaluate(node => node.closest('.group').dataset.group);
   if (await folder(page, group).getAttribute('aria-current') !== 'page') await folder(page, group).click();
@@ -639,8 +641,7 @@ test("Inbox folders load only their own resources and fit a 390 px phone", async
   const response = await page.goto(origin);
   assert.equal(response.status(), 200);
   await page.evaluate(() => document.fonts.ready);
-  assert.equal(await shownGroup(page).count(), 1);
-  assert.equal(await shownGroup(page).getAttribute("data-group"), "needs you");
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.locator('#peek').isVisible(), false, 'a phone opens Details only on a tap');
   assert.match(await page.locator(".plan").first().textContent(), /Ticket #98 · waiting on #97/);
   assert.equal(await page.locator('.command .state').first().textContent(), "Failed");
@@ -791,10 +792,12 @@ test("Run metrics show present and missing signals in details, including at 390 
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   await page.goto(origin);
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   await folder(page, 'working').click();
   await page.waitForURL('**/?section=working');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
+  await folder(page, 'overview').click();
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(247, 247, 245)");
   await page.emulateMedia({ colorScheme: "dark" });
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
@@ -911,7 +914,7 @@ test("push morphs keep the selected row, folder and scroll without a reload", as
   await row.locator('.issue-title').filter({ hasText: 'Advanced while you watched' }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
   assert.equal(await page.evaluate(() => window.visitMarker), "same document");
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.evaluate(() => scrollY), 120);
   assert.deepEqual(errors, []);
 });
@@ -1036,7 +1039,7 @@ for (const storage of ['blocked', 'malformed']) {
       fixture.issue.title = `Still live with ${storage} storage`;
       await replaceRecord(path, JSON.stringify(fixture));
       await page.getByText(fixture.issue.title, { exact: true }).waitFor();
-      assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+      assert.deepEqual(await shownGroups(page), overviewGroups);
       assert.deepEqual(errors, []);
     } finally { await replaceRecord(path, original); }
   });
@@ -1143,6 +1146,21 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   try {
     const page = await pageFor(t);
     await page.goto(origin);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await folder(page, 'done').click();
+      await folder(page, 'overview').click();
+      assert.deepEqual(await shownGroups(page), overviewGroups);
+      for (const [group, title, number] of [
+        ['needs you', 'Needs you', 1], ['ready for review', 'Ready for review', 212],
+        ['landing', 'Landing', 211], ['working', 'Working', 213]
+      ]) {
+        const section = page.getByRole('region', { name: title, exact: true });
+        assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
+        assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
     for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
     const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
@@ -1234,7 +1252,7 @@ test("selection survives a move into the Done folder and regains focus when it i
     await replaceRecord(path, JSON.stringify(fixture));
     await page.waitForFunction(id => document.getElementById(id)?.closest('.group').dataset.group === 'done', id);
     assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
-    assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+    assert.deepEqual(await shownGroups(page), overviewGroups);
     await folder(page, 'done').click();
     await page.waitForFunction(id => document.activeElement.id === id, id);
   } finally { await replaceRecord(path, original); }
@@ -1293,13 +1311,13 @@ test("folders switch in place and Back and Forward return to them, including a U
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(`${origin}/?page=inbox`);
   await page.evaluate(() => { window.sameDocument = true; });
-  await page.waitForURL('**/?section=needs-you');
+  await page.waitForURL('**/?section=overview');
   await folder(page, 'done').click();
   await page.waitForURL('**/?section=done');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
   await page.goBack();
-  await page.waitForURL('**/?section=needs-you');
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   await page.goForward();
   await page.waitForURL('**/?section=done');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
@@ -1309,11 +1327,11 @@ test("folders switch in place and Back and Forward return to them, including a U
   await folder(page, 'resolved').click();
   await page.goBack();
   // The reload names the default folder in the URL as soon as it loads.
-  await page.waitForURL('**/?section=needs-you');
-  await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'needs you');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
 });
 
-test("hiding the open folder with Sections opens the first folder left with rows", async t => {
+test("hiding the open folder with Sections returns to Overview", async t => {
   const config = join(home, '.thirdshift/config.toml');
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const merged = join(directory, '225-fixture.command.json');
@@ -1329,8 +1347,8 @@ test("hiding the open folder with Sections opens the first folder left with rows
     await page.getByLabel('Show Needs you', { exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save sections' }).click();
     await page.locator('#inbox .folders a[data-group="needs you"][hidden]').waitFor({ state: 'attached' });
-    // Ready for review comes first but is empty, so Done opens.
-    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'done');
+    await page.waitForURL('**/?section=overview');
+    assert.deepEqual(await shownGroups(page), ['ready for review', 'landing', 'working']);
   } finally {
     await writeFile(config, '[console]\nport = 0\n');
     await rm(merged, { force: true });
@@ -1397,6 +1415,10 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
     assert.equal(await folder(page, group).getAttribute('aria-current'), 'page');
   }
   assert.equal(await selected.getAttribute('id'), first, 'opening a folder selects its first row');
+  await page.keyboard.press('g');
+  await page.keyboard.press('u');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.deepEqual(await page.evaluate(() => window.listChanges), []);
   assert.equal(await page.evaluate(() => window.rowsBefore.every((row, i) => row === document.querySelectorAll('.command')[i])), true);
   await page.keyboard.press('Enter');
@@ -1677,11 +1699,12 @@ test('Command details keeps its fallback selection across a live refresh', { ski
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
     await row.locator('.state').click();
     await page.locator('#peek [data-live="true"]').waitFor();
-    await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+    const line = page.locator('#peek .peek-cli').filter({ hasText: 'thirdshift show' });
+    await line.getByRole('button', { name: 'Copy CLI', exact: true }).click();
     await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
     const cli = await page.evaluate(() => getSelection().toString());
     assert.match(cli, /^thirdshift show '.*' --json$/);
-    const before = await page.locator('#peek .peek-cli').elementHandle();
+    const before = await line.elementHandle();
     await appendFile(session, traceRecord(' growth'));
     await appendFile(join(dir, '203-fixture.log'), ' more');
     await page.waitForFunction(old => !old.isConnected, before, { timeout: 5000 });

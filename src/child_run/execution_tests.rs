@@ -162,12 +162,14 @@ impl Fixture {
             &self.0.path().join("run"),
             &IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}")).unwrap(),
             &Given {
+                process: None,
                 kind: Kind::Ticket {
                     spec_branch: "issue-237".to_string(),
                     spec_pr: None,
                 },
                 stamp: "20261003T120000-0400".to_string(),
                 command: logs::CommandKind::Issue,
+                suppress_otlp: false,
                 base_fix: BaseFixAsk::Forbid,
                 asks: super::ChildAsks::default(),
             },
@@ -195,12 +197,7 @@ impl Fixture {
 
     fn assert_stopped(&self) {
         let pid = self.read("pid").parse::<libc::pid_t>().unwrap();
-        // SAFETY: probe only the exact PID recorded by this finite fixture.
-        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child {pid} survived");
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
+        assert!(!crate::process::is_alive(pid), "child {pid} survived");
     }
 }
 
@@ -209,8 +206,7 @@ impl Drop for Fixture {
         if let Ok(pid) = fs::read_to_string(self.0.path().join("pid"))
             && let Ok(pid) = pid.parse::<libc::pid_t>()
         {
-            // SAFETY: assertion-failure cleanup uses this fixture's exact PID.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = crate::process::signal(pid, libc::SIGKILL);
         }
     }
 }
@@ -261,7 +257,12 @@ fn malformed_stderr_preserves_a_successful_ending_and_base_fix_account() {
                 Some("https://github.com/acme/widgets/issues/8 merged")
             );
         }
-        _ => panic!("the successful child lost its ending"),
+        Ended::NotReproduced { .. }
+        | Ended::ArchitectureReview { .. }
+        | Ended::Failed { .. }
+        | Ended::Interrupted { .. } => {
+            panic!("the successful child lost its ending")
+        }
     }
 }
 
