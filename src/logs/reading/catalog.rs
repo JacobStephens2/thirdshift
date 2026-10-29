@@ -78,8 +78,10 @@ pub(super) const UNLISTED: &str = "log is not in the current inventory";
 
 /// Check only the selected entries, as `load` sees them: the root and
 /// literal `commands` path may be aliases, but owner, repository, kind and
-/// file must be real entries rather than symlinks.
-pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
+/// file must be real entries rather than symlinks. Another account's file
+/// must also stay, once resolved, under the accepted directory. That path is
+/// the canonical directory discovery stored, so it is not resolved again.
+pub(super) fn still_listed(root: &Path, path: &Path, other_account: bool) -> bool {
     fn directory(path: &Path) -> bool {
         std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_dir())
     }
@@ -104,6 +106,12 @@ pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
         && directory(&repository.join(commands).join(kind))
         && std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file())
         && listed_name(path)
+        && (!other_account || stays_under_accepted(root, path))
+}
+
+fn stays_under_accepted(root: &Path, path: &Path) -> bool {
+    path.canonicalize()
+        .is_ok_and(|canonical| canonical.starts_with(root))
 }
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
@@ -224,7 +232,7 @@ pub(super) fn list(
                     account: source.account.clone(),
                     reader: reader
                         .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
-                        .within(root),
+                        .within(root, source.account.is_some()),
                     id: source.id(&path)?,
                     name: relative.to_string_lossy().into_owned(),
                     repository: repository.clone(),

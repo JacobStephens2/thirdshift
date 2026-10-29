@@ -41,8 +41,10 @@ pub(crate) struct Reader {
     path: PathBuf,
     writer: Option<Writer>,
     session: Option<SessionOwner>,
-    /// The lexical root of the inventory that selected this file, if any.
+    /// The root of the inventory that selected this file, if any.
+    /// For another account this is the canonical directory discovery accepted.
     inventory: Option<PathBuf>,
+    other_account: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -69,13 +71,15 @@ impl Reader {
                 started_at: command.record.started_at.clone(),
             }),
             inventory: None,
+            other_account: false,
         }
     }
 
     /// Require each read to find the file still listed beneath `root`.
-    pub(super) fn within(self, root: &Path) -> Self {
+    pub(super) fn within(self, root: &Path, other_account: bool) -> Self {
         Self {
             inventory: Some(root.to_owned()),
+            other_account,
             ..self
         }
     }
@@ -122,7 +126,10 @@ impl Reader {
     /// batch is done only at EOF.
     pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
         if let Some(root) = &self.inventory {
-            ensure!(catalog::still_listed(root, &self.path), catalog::UNLISTED);
+            ensure!(
+                catalog::still_listed(root, &self.path, self.other_account),
+                catalog::UNLISTED
+            );
         }
         let complete = !self.live()?;
         let mut file = BufReader::new(

@@ -1,9 +1,10 @@
 //! Readable local log sources. Discovery grants no access and never writes to
-//! another account. All consumers use the same passwd/config resolution.
+//! another account. A log directory whose canonical path leaves that account's
+//! home is not a source. All consumers use the same passwd/config resolution.
 use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::config::UserConfig;
@@ -112,16 +113,21 @@ pub(crate) fn discover(config: &UserConfig) -> Sources {
                     .and_then(|dir| crate::config::expand_home(dir, &account.home))
             })
             .unwrap_or_else(|| account.home.join(".thirdshift/logs"));
-        if std::fs::read_dir(&root).is_err() {
+        // Keep the canonical directory. Resolving it again on read would let a
+        // replaced directory choose a new bound.
+        let Some(canonical) = accepted_log_directory(&account.home, &root) else {
+            continue;
+        };
+        if std::fs::read_dir(&canonical).is_err() {
             continue;
         }
         result.unavailable.remove(&account.name);
-        if !roots.insert(root.canonicalize().unwrap_or_else(|_| root.clone())) {
+        if !roots.insert(canonical.clone()) {
             continue;
         }
         result.logs.push(Source {
             account: Some(account.name),
-            root,
+            root: canonical,
         });
     }
     if matches!(
@@ -131,4 +137,11 @@ pub(crate) fn discover(config: &UserConfig) -> Sources {
         result.unavailable.clear();
     }
     result
+}
+
+/// The log directory's canonical path when it stays inside this account's home.
+fn accepted_log_directory(home: &Path, root: &Path) -> Option<PathBuf> {
+    let root = root.canonicalize().ok()?;
+    let home = home.canonicalize().ok()?;
+    root.starts_with(home).then_some(root)
 }
