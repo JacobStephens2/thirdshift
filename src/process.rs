@@ -14,10 +14,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::interrupt;
 
 mod tree;
-pub(crate) use tree::stop;
+pub(crate) use tree::{is_alive, signal, stop};
 
 #[cfg(test)]
 mod faults;
+#[cfg(test)]
+pub(crate) mod testing;
 #[cfg(test)]
 mod tests;
 

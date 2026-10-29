@@ -960,9 +960,7 @@ fn owner_alive(lock: &Path) -> bool {
         .ok()
         .and_then(|pid| pid.trim().parse::<i32>().ok());
     let Some(pid) = pid else { return true };
-    // SAFETY: kill with signal 0 sends nothing; it only reports an error.
-    let alive = unsafe { libc::kill(pid, 0) == 0 };
-    alive || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    crate::process::is_alive(pid)
 }
 
 impl Drop for GrokGuard {
@@ -1416,9 +1414,10 @@ mod tests {
             .trim()
             .parse()
             .unwrap();
-        // SAFETY: kill with signal 0 sends nothing; it only reports an error.
-        let alive = unsafe { libc::kill(pid, 0) == 0 };
-        assert!(!alive, "orphaned sleep {pid} outlived its sandbox");
+        assert!(
+            !crate::process::is_alive(pid),
+            "orphaned sleep {pid} outlived its sandbox"
+        );
         fs::remove_file(layout.repo.join("orphan.pid")).unwrap();
     }
 
@@ -1974,15 +1973,13 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         let pid = pid.expect("sandboxed session never started its orphan");
-        // SAFETY: SIGINT asks the sandbox to end its session, as an
-        // interrupted Trial's Harness stop does.
-        let terminated = unsafe { libc::kill(child.id() as i32, libc::SIGINT) == 0 };
-        assert!(terminated);
+        crate::process::signal(child.id() as libc::pid_t, libc::SIGINT).unwrap();
         let status = child.wait().expect("sandboxed session did not end");
         assert!(!status.success());
-        // SAFETY: kill with signal 0 sends nothing; it only reports an error.
-        let alive = unsafe { libc::kill(pid, 0) == 0 };
-        assert!(!alive, "orphaned sleep {pid} outlived its sandbox");
+        assert!(
+            !crate::process::is_alive(pid),
+            "orphaned sleep {pid} outlived its sandbox"
+        );
         fs::remove_file(layout.repo.join("signal.pid")).unwrap();
     }
 
