@@ -106,18 +106,13 @@ pub(super) fn still_listed(root: &Path, path: &Path, other_account: bool) -> boo
         && directory(&repository.join(commands).join(kind))
         && std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file())
         && listed_name(path)
-        && (!other_account || stays_under_accepted(root, path))
-}
-
-fn stays_under_accepted(root: &Path, path: &Path) -> bool {
-    path.canonicalize()
-        .is_ok_and(|canonical| canonical.starts_with(root))
+        && (!other_account || super::inventory::stays_under(root, path))
 }
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
     let mut logs = Vec::new();
     for source in crate::logs::accounts::discover(config).logs {
-        let loaded = Snapshot::load(&source.root, Local::now())
+        let loaded = Snapshot::load_using(super::files_for(&source), &source.root, Local::now())
             .and_then(|snapshot| list(&snapshot, &source, None));
         let listed = match loaded {
             Ok(logs) => logs,

@@ -571,6 +571,51 @@ fn other_account_logs_stay_inside_that_accounts_home() {
     );
 }
 
+/// `logs --file` is not the only reader. A `commands` symlink outside the
+/// accepted directory must not supply a record or a Command log.
+#[cfg(target_os = "linux")]
+#[test]
+fn other_account_commands_alias_cannot_leave_the_accepted_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut command = record(&home, 7, Some("failed"), 0);
+    command["issue"]["title"] = json!("CANARY-OUTSIDE-RECORD");
+    let outside = machine.root.path().join("outside-commands/issue");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("7-fixture.command.json"),
+        serde_json::to_vec(&command).unwrap(),
+    )
+    .unwrap();
+    fs::write(outside.join("7-fixture.log"), "CANARY-OUTSIDE-LOG\n").unwrap();
+    let commands = home.join(".thirdshift/logs/acme/widgets/commands");
+    fs::remove_dir_all(&commands).unwrap();
+    std::os::unix::fs::symlink(outside.parent().unwrap(), &commands).unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    assert!(
+        !shown_text.contains("CANARY-OUTSIDE-RECORD"),
+        "command record outside the accepted directory was read:\n{shown_text}"
+    );
+
+    let streamed = machine.run(&["logs", "widgets#7"]);
+    let streamed_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&streamed.stdout),
+        String::from_utf8_lossy(&streamed.stderr)
+    );
+    assert!(
+        !streamed_text.contains("CANARY-OUTSIDE-LOG"),
+        "command log outside the accepted directory was read:\n{streamed_text}"
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
     let mut text = "[console]\nport = 0\n".to_string();
