@@ -345,6 +345,9 @@ impl Outside for ChildRunsAndGitHub<'_> {
                 Ended::NotReproduced { comment_url } => {
                     format!("#{number} bug not reproduced: {comment_url}")
                 }
+                Ended::ArchitectureReview { reason } => {
+                    format!("#{number} Architecture review ended: {reason}")
+                }
                 Ended::Reached { .. } => format!("#{number} landed"),
                 Ended::Interrupted { .. } => format!("#{number} interrupted"),
                 Ended::Failed { .. } => format!("#{number} failed"),

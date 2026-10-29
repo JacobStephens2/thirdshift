@@ -82,7 +82,8 @@ pub(crate) fn run_custom(
         child_asks: delivery.child_asks.clone(),
         failure: None,
     };
-    if let Err(error) = execute_issue_steps(name, &prepared, &mut issue_run) {
+    let result = execute_issue_steps(name, &prepared, &mut issue_run);
+    if let Err(error) = result {
         let mut failed = match issue_run.failure.take() {
             Some(mut failed) => {
                 failed.error = error;
@@ -97,7 +98,12 @@ pub(crate) fn run_custom(
     }
     let own_pr = issue_run.pull_request.info().map(|pr| pr.url.clone());
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
-    let resolution = if let Some(comment_url) = completed.unreproduced_bug {
+    let resolution = if let Some(reason) = completed.architecture_end.filter(|_| own_pr.is_none()) {
+        crate::run::Resolution::ArchitectureReview {
+            url: result.expect("the Process completed successfully"),
+            reason,
+        }
+    } else if let Some(comment_url) = completed.unreproduced_bug {
         crate::run::Resolution::NotReproduced { comment_url }
     } else {
         completed
