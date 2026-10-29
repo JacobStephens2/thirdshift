@@ -3,6 +3,82 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 
 #[test]
+fn claude_plan_limit_warning_below_85_percent_does_not_pause_evals() {
+    for raw in [
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.77}}"#,
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.77,"surpassedThreshold":0.75,"unifiedWindows":{"five_hour":{"utilization":0.05}}}}"#,
+    ] {
+        let mut interpretation = stream(Harness::Claude, "");
+        interpretation.decode(raw);
+        assert!(
+            !interpretation.plan_limit_reached(),
+            "a warning below 85% must not pause Evals: {raw}"
+        );
+        assert!(finish(interpretation).outcome.is_ok());
+    }
+}
+
+#[test]
+fn claude_plan_limits_check_all_windows_and_keep_the_unreadable_warning_fallback() {
+    for (info, expected) in [
+        (
+            r#"{"status":"allowed_warning","utilization":0.77,"unifiedWindows":{"five_hour":{"utilization":0.85}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.05},"seven_day":{"utilization":0.91}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.05},"seven_day":{"utilization":0.849}}}"#,
+            false,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":0.85,"unifiedWindows":{"five_hour":{"utilization":0.05}}}"#,
+            true,
+        ),
+        (r#"{"status":"allowed_warning","utilization":0.849}"#, false),
+        (r#"{"status":"allowed_warning","utilization":0.91}"#, true),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"future_window":{"utilization":0.85}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":"unknown","unifiedWindows":{"seven_day":{"utilization":0.77}}}"#,
+            false,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":0.77,"unifiedWindows":{"five_hour":{"utilization":"unknown"}}}"#,
+            false,
+        ),
+        (r#"{"status":"allowed_warning"}"#, true),
+        (
+            r#"{"status":"allowed_warning","utilization":null,"unifiedWindows":{}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":"0.77","unifiedWindows":{"seven_day":{"utilization":"0.77"}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":"unknown"}"#,
+            true,
+        ),
+        (r#"{"status":"rejected","utilization":0.05}"#, true),
+        (
+            r#"{"status":"allowed","utilization":0.91,"unifiedWindows":{"seven_day":{"utilization":0.91}}}"#,
+            false,
+        ),
+    ] {
+        let raw = format!(r#"{{"type":"rate_limit_event","rate_limit_info":{info}}}"#);
+        let mut interpretation = stream(Harness::Claude, "");
+        interpretation.decode(&raw);
+        assert_eq!(interpretation.plan_limit_reached(), expected, "{raw}");
+        assert!(finish(interpretation).outcome.is_ok(), "{raw}");
+    }
+}
+
+#[test]
 fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {
     for (harness, raw, expected) in [
         (
