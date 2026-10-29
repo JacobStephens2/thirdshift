@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn architect_run_is_a_readable_valid_builtin_whose_copy_can_run() {
+    let scenario = architecture_process();
+    let listed = scenario.run(&["process", "list"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert!(
+        listed.stdout.contains("architect-run (built-in):"),
+        "{}",
+        listed.stdout
+    );
+    let shown = scenario.run(&["process", "show", "architect-run"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let mut remaining = shown.stdout.as_str();
+    for step in ["architecture-review", "run-published-issue"] {
+        remaining = remaining
+            .split_once(&format!("catalogue = \"{step}\""))
+            .unwrap_or_else(|| panic!("missing or out-of-order Step {step}: {}", shown.stdout))
+            .1;
+    }
+    let checked = scenario.run(&["process", "check", "architect-run"]);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    assert!(scenario.claude_calls().is_empty());
+
+    write_process(&scenario, "my-architect", &shown.stdout);
+    scenario.agent_does_in_session(1, PUBLISH_PLAN);
+    let result = scenario.run(&["process", "my-architect", "--plan-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), scenario.issue_url(8));
+    assert_eq!(
+        scenario.issue_labels(8),
+        ["ready-for-agent", "architect-plan"]
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn an_architecture_review_cannot_skip_delivery_of_issue_branch_work() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);

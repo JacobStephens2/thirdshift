@@ -22,6 +22,18 @@ and declare an Issue-branch worktree. An issue with Tickets still starts a Spec
 run. The optional Security review and Self-merge keep
 their command and User config gates. Commands still appear as Ticket runs.
 
+`architect-run.toml` defines `architecture-review` → `run-published-issue`.
+Architect runs execute it after the Pass lock and the open-plan, waiting-idea
+and Ready-or-settling-issue gates. The review Step owns the session and the
+plan-or-idea conclusion and labels. It ends the Process successfully on an idea
+or when `--plan-only` was requested; otherwise the next Step runs the plan.
+The Command keeps its Architect run name, progress, logs and notification.
+Inspect it with `thirdshift process show architect-run` and validate it with
+`thirdshift process check architect-run`. Save a copy under a new name to run
+it as a Custom process, which takes only the shared Pass lock, without the
+Architect run's other skip gates. Pickup has no Process file: it selects work
+and dispatches to a Ticket run (defaulting to `ticket-run`) or a Spec run.
+
 A Custom process can declare a `spec-branch` worktree and use `land-tickets`
 to push the Spec branch, run its Tickets in dependency order up to
 `spec.parallel` at once, and gather their work into a draft Spec PR with its
