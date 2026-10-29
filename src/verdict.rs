@@ -176,6 +176,9 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
         let candidate_wrong = task.candidate.iter().filter(|s| s.wrong_finding).count();
         wrong_counts[baseline_wrong + trials - candidate_wrong] += 1;
     }
+    // With no retained observations, report prior uncertainty without trying
+    // to forecast additional tasks from prior-only draws.
+    let predictions = predictions && dropped_tasks < scores.len();
     let accuracy = assess(&counts, bar, bar.seed, predictions)?;
     let wrong_findings = assess(&wrong_counts, bar, bar.seed.wrapping_add(1), predictions)?;
     let decisions = [accuracy.verdict, wrong_findings.verdict];
