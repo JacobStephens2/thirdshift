@@ -82,15 +82,30 @@ export function activity() {
   root.dataset.live = String(!!document.querySelector('.command[data-live="true"], #log-content[data-live="true"], #span-tree[data-live="true"]'));
 }
 
+// Both navigation and changed section preferences use the server's Overview groups.
+export function showFolder(group) {
+  const links = [...document.querySelectorAll('#inbox .folders a[data-group]')];
+  const current = links.find(link => link.dataset.group === group && !link.hidden)
+    ?? links.find(link => link.dataset.group === 'overview');
+  for (const link of links) {
+    if (link === current) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) {
+    const hidden = links.find(link => link.dataset.group === section.dataset.group)?.hidden;
+    section.hidden = hidden || !(section.dataset.group === current?.dataset.group
+      || (current?.dataset.group === 'overview' && section.hasAttribute('data-overview')));
+  }
+}
+
 function apply(settings) {
   root.dataset.theme = settings.theme;
   const hide = group => settings.hidden_sections.includes(group.replaceAll(' ', '-'));
   for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) link.hidden = hide(link.dataset.group);
-  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) if (hide(section.dataset.group)) section.hidden = true;
-  // Hiding the open folder opens the first one left with rows, as the server would.
-  if (document.querySelector('#inbox .folders') && !document.querySelector('#inbox > .group:not([hidden])')) {
-    (document.querySelector('#inbox .folders a:not([hidden]):not([data-empty])') ?? document.querySelector('#inbox .folders a:not([hidden])'))?.click();
-  }
+  const current = document.querySelector('#inbox .folders a[aria-current="page"]');
+  // Hiding an explicit filter returns to Overview, as the server would.
+  if (current?.hidden) document.querySelector('#inbox .folders a[data-group="overview"]').click();
+  else if (current) showFolder(current.dataset.group);
   if (!sections.open) for (const checkbox of document.querySelectorAll('#section-options input')) checkbox.checked = !settings.hidden_sections.includes(checkbox.value);
   if (!themes.open) document.querySelector('#theme-name').value = settings.theme;
   activity();
