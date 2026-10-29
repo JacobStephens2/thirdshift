@@ -382,7 +382,14 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_)
+                | Work::Process { .. } => None,
             },
         });
         let name = match work {

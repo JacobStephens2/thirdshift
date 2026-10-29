@@ -328,7 +328,7 @@ impl Outside for LaunchAndGitHub<'_> {
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let security_fix_findings = match &dispatch {
             Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
-            _ => &[],
+            Dispatch::ArchitectPlan { .. } | Dispatch::ReadyIssue { .. } => &[],
         };
         let (issue, asks, base, is_spec) = match dispatch {
             Dispatch::SecurityFix {

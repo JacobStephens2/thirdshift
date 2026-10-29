@@ -51,6 +51,10 @@ opentelemetry-proto = { version = "0.33.0", default-features = false, features =
 stateright = "=0.31.0"
 tower-layer = "0.3.3"
 
+[lints.clippy]
+# List every variant of a match on Run state or an outcome; keep a wildcard only under an #[expect] whose reason says why.
+wildcard_enum_match_arm = "warn"
+
 # Line tables keep file and line in the crate's backtraces, and dependencies
 # get no debuginfo, so their frames show no file or line. Full debuginfo made
 # the debug binary 108MB and target/ 1.5GB per worktree.

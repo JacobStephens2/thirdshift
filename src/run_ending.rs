@@ -310,7 +310,8 @@ impl<'a> Account<'a> {
                     .map(|goal| goal.outcome())
                     .unwrap_or(match &reached.resolution {
                         crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
-                        _ => "succeeded",
+                        crate::run::Resolution::PullRequest { .. }
+                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
                     }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
@@ -336,7 +337,8 @@ impl<'a> Account<'a> {
                         line: reason.clone(),
                         dispatched: None,
                     }),
-                    _ => None,
+                    crate::run::Resolution::PullRequest { .. }
+                    | crate::run::Resolution::NotReproduced { .. } => None,
                 },
                 security_findings: None,
                 security_findings_waiting: false,

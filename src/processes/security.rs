@@ -126,7 +126,18 @@ pub(crate) fn run(outside: &mut impl Outside, run: SecurityRun<'_>) -> Outcome {
                 | DraftKind::ReproduceFindings { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => {}
-                _ => unreachable!("the compiled Security Steps were checked"),
+                DraftKind::Skill { .. }
+                | DraftKind::Command { .. }
+                | DraftKind::Implement { .. }
+                | DraftKind::ArchitectureReview { .. }
+                | DraftKind::SpecReview { .. }
+                | DraftKind::SecurityReview { .. }
+                | DraftKind::Delivery { .. }
+                | DraftKind::SelfMerge { .. }
+                | DraftKind::RunPublishedIssue { .. }
+                | DraftKind::LandTickets { .. } => {
+                    unreachable!("the compiled Security Steps were checked")
+                }
             }
         }
         Ok(())
@@ -161,7 +172,18 @@ fn steps() -> Result<Vec<DraftKind>> {
                 | DraftKind::ReproduceFindings { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => Ok(step.kind),
-                _ => bail!("unsupported security-run Step {}", step.name),
+                DraftKind::Skill { .. }
+                | DraftKind::Command { .. }
+                | DraftKind::Implement { .. }
+                | DraftKind::ArchitectureReview { .. }
+                | DraftKind::SpecReview { .. }
+                | DraftKind::SecurityReview { .. }
+                | DraftKind::Delivery { .. }
+                | DraftKind::SelfMerge { .. }
+                | DraftKind::RunPublishedIssue { .. }
+                | DraftKind::LandTickets { .. } => {
+                    bail!("unsupported security-run Step {}", step.name)
+                }
             }
         })
         .collect()

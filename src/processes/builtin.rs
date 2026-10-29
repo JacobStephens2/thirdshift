@@ -29,6 +29,16 @@ pub(super) fn delivery_step(step: StepDraft) -> Result<Step> {
         DraftKind::SecurityReview { .. } => Ok(Step::SecurityReview),
         DraftKind::Delivery { .. } => Ok(Step::Delivery),
         DraftKind::SelfMerge { .. } => Ok(Step::SelfMerge),
-        _ => bail!("unsupported Built-in delivery Step {}", step.name),
+        DraftKind::Skill { .. }
+        | DraftKind::Command { .. }
+        | DraftKind::RunPublishedIssue { .. }
+        | DraftKind::LandTickets { .. }
+        | DraftKind::ArchitectureReview { .. }
+        | DraftKind::SecurityAudit { .. }
+        | DraftKind::ReproduceFindings { .. }
+        | DraftKind::FixFindings { .. }
+        | DraftKind::CloseFindings { .. } => {
+            bail!("unsupported Built-in delivery Step {}", step.name)
+        }
     }
 }

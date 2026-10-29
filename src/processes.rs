@@ -801,7 +801,8 @@ fn notify(
                     .rev()
                     .find_map(|resolution| match resolution {
                         crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
-                        _ => None,
+                        crate::run::Resolution::NotReproduced { .. }
+                        | crate::run::Resolution::ArchitectureReview { .. } => None,
                     })
             }),
         advice: &[],
@@ -2998,7 +2999,17 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
             DraftKind::RunPublishedIssue { line } => (line, true),
             DraftKind::LandTickets { line } => (line, false),
             DraftKind::FixFindings { line } => (line, false),
-            _ => {
+            DraftKind::Skill { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::CloseFindings { .. } => {
                 if let Some((_, line)) = &step.process {
                     return Err(rule(
                         path,

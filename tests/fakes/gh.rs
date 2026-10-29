@@ -2505,6 +2505,10 @@ fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&s
         .into_iter()
         .filter(|edit| edit.at("kind").str() == kind)
         .map(|edit| {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake edit's author is null or, whatever else the fake stores, a login"
+            )]
             let actor = match edit.at("by") {
                 Null => Null,
                 login => object([("login", login.clone())]),
@@ -2536,6 +2540,10 @@ fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
     let comments: Vec<Json> = listed(state, "comments", n)
         .into_iter()
         .map(|comment| {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake comment is an object of fields or, any other value, its body alone"
+            )]
             let (body, by, association) = match &comment {
                 Json::Object(_) => (
                     comment.at("body").clone(),
@@ -2544,6 +2552,10 @@ fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
                 ),
                 _ => (comment.clone(), string(owner.clone()), string("OWNER")),
             };
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake comment's author is null or, whatever else the fake stores, a login"
+            )]
             let author = match by {
                 Null => Null,
                 login => object([("login", login)]),

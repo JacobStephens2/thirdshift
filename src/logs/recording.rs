@@ -147,7 +147,10 @@ impl<O: Outside> Record<O> {
             CommandKind::Architect => Pass::Architect,
             CommandKind::Pickup => Pass::Pickup,
             CommandKind::Secure => Pass::Security,
-            _ => return,
+            CommandKind::Issue
+            | CommandKind::Scoring
+            | CommandKind::Experiment
+            | CommandKind::Process => return,
         };
         let path = super::pass_starts::path(&self.root(repo), pass);
         let time = self.outside.now().to_rfc3339();
@@ -212,7 +215,14 @@ impl<O: Outside> Record<O> {
             issue: work.issue(),
             process: match work {
                 Work::Process { name, .. } => Some((*name).to_string()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => None,
             },
         };
         let line = format!("{} started: {command_log}, on {harness}", started.subject());

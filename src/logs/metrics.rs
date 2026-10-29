@@ -117,9 +117,17 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
 // Both renderers walk the same document, so text cannot silently drop a signal.
 fn print(value: &Value, depth: usize) {
     let indent = "  ".repeat(depth);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "objects and arrays nest; every other JSON value prints on its line as a scalar"
+    )]
     match value {
         Value::Object(fields) => {
             for (name, value) in fields {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "objects and arrays nest; every other JSON value prints on its line as a scalar"
+                )]
                 match value {
                     Value::Object(_) | Value::Array(_) => {
                         println!("{indent}{name}:");
@@ -140,6 +148,10 @@ fn print(value: &Value, depth: usize) {
 }
 
 fn scalar(value: &Value) -> String {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "JSON values without their own wording print as JSON shows them"
+    )]
     match value {
         Value::Null => "missing".into(),
         Value::String(value) => value.clone(),

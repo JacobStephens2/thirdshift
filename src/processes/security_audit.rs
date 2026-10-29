@@ -145,7 +145,18 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
         let (line, name) = match step.kind {
             DraftKind::SecurityAudit { line } => (line, "security-audit"),
             DraftKind::ReproduceFindings { line } => (line, "reproduce-findings"),
-            _ => continue,
+            DraftKind::Skill { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::RunPublishedIssue { .. }
+            | DraftKind::LandTickets { .. }
+            | DraftKind::FixFindings { .. }
+            | DraftKind::CloseFindings { .. } => continue,
         };
         let reason = if step.parallel.is_some() {
             Some(format!("{name} cannot be in a parallel group"))

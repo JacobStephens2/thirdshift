@@ -592,7 +592,7 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
 }
 
 #[test]
-fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() {
+fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     record(home.path(), 1, Some("failed"), 0);
@@ -615,7 +615,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
             .collect()
     };
 
-    // With no choice, the first section with rows opens, and every section is a folder.
+    // With no choice, all four current groups open together, even empty ones.
     let html = console.get("/").text().unwrap();
     let folders = html
         .split("aria-label=\"Inbox sections\"")
@@ -625,6 +625,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         .next()
         .unwrap();
     for (group, slug) in [
+        ("overview", "overview"),
         ("needs you", "needs-you"),
         ("ready for review", "ready-for-review"),
         ("landing", "landing"),
@@ -638,12 +639,26 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         );
     }
     assert!(
-        folders.contains(
-            "href=\"/?section=needs-you\" data-group=\"needs you\" aria-current=\"page\""
-        ),
+        folders
+            .contains("href=\"/?section=overview\" data-group=\"overview\" aria-current=\"page\""),
         "{folders}"
     );
-    assert_eq!(shown(&html), ["needs you"], "{html}");
+    assert_eq!(
+        shown(&html),
+        ["needs you", "ready for review", "landing", "working"],
+        "{html}"
+    );
+    for (group, title) in [
+        ("needs you", "Needs you"),
+        ("ready for review", "Ready for review"),
+        ("landing", "Landing"),
+        ("working", "Working"),
+    ] {
+        assert!(
+            section(&html, group).contains(&format!("<h3>{title} ")),
+            "{html}"
+        );
+    }
     // Both sections are still on the page, so a switch needs no request.
     assert!(html.contains("data-group=\"done\""), "{html}");
 
@@ -657,7 +672,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
     // An unknown section falls back to the default.
     assert_eq!(
         shown(&console.get("/?section=nonsense").text().unwrap()),
-        ["needs you"]
+        ["needs you", "ready for review", "landing", "working"]
     );
 
     // A section hidden with Sections keeps a hidden folder, for Sections to
@@ -672,7 +687,11 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         html.contains("href=\"/?section=needs-you\" data-group=\"needs you\" hidden>"),
         "{html}"
     );
-    assert_eq!(shown(&html), ["done"], "{html}");
+    assert_eq!(
+        shown(&html),
+        ["ready for review", "landing", "working"],
+        "{html}"
+    );
 }
 
 #[test]

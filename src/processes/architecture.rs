@@ -28,7 +28,8 @@ pub(super) fn run(run: &StepRun<'_>, step: &ResolvedStep) -> Result<String> {
                 Some(format!("{reviewed}; --plan-only requested"))
             }
             crate::architect::Reviewed::PlanReady(..) => None,
-            _ => Some(reviewed.to_string()),
+            crate::architect::Reviewed::IdeaFiled(..)
+            | crate::architect::Reviewed::AlreadyFiled(..) => Some(reviewed.to_string()),
         };
         if let Some(ending) = ending {
             run.completed

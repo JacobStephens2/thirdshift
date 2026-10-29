@@ -160,16 +160,18 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-The Inbox reads like a mailbox. Its sections, Needs you through Resolved, are
-folders on the left with their counts, and one section's rows show at a time,
-on one line each: state, subject, title, gist and age. On a desktop, issue
+The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
+show together, each under its heading and count, including empty groups.
+The folders on the left can filter to one section, including Done and Resolved.
+Rows show on one line each: state, subject, title, gist and age. On a desktop, issue
 numbers stay visible as long repository or Process subjects shrink; hover
 the subject for its full text. The gist is where the
 Command stands, such as `review failed`; a Pass without an issue adds the
 issue it dispatched, its first security finding or its cause. Hover an ended
 row's age for its finish time. The list never scrolls inside itself; the page does. The
 folder is in the URL, such as `/?section=done`, so it survives a reload and
-works without JavaScript; with none named, the first section with rows opens.
+works without JavaScript; with none named, Overview opens. Hidden sections stay
+hidden in Overview too.
 The page opens with nothing selected and Command details closed. Click a row,
 or select it and press `Space`, to open its details beside the list; they stay
 open for the selected row as you move with `j` / `k` or switch folders. On a

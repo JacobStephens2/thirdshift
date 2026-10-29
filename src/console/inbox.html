@@ -36,7 +36,7 @@
       <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
-    <nav class="folders" aria-label="Inbox sections">{% for section in inbox.sections %}<a href="/?section={{ self.slug(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
+    <nav class="folders" aria-label="Inbox sections"><a href="/?section=overview" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in inbox.sections %}<a href="/?section={{ self.slug(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     <p class="active-runs" role="status"><strong>{{ self.active_runs() }}</strong> <span>Each outer Command counts once, in any section: a Spec run's Tickets, and the run a Pass dispatched, are part of its run.</span></p>
@@ -60,7 +60,8 @@
     </section>
     {% endif %}
     {% for section in inbox.sections %}
-    <section id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.hidden(section.group) || self.folder() != section.group %} hidden{% endif %}>
+    <section id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.in_overview(section.group) %} data-overview{% endif %}{% if !self.shown(section.group) %} hidden{% endif %}>
+      <h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>

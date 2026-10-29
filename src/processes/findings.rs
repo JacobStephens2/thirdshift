@@ -179,7 +179,18 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
         let (line, name) = match step.kind {
             DraftKind::FixFindings { line } => (line, "fix-findings"),
             DraftKind::CloseFindings { line } => (line, "close-findings"),
-            _ => continue,
+            DraftKind::Skill { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::RunPublishedIssue { .. }
+            | DraftKind::LandTickets { .. } => continue,
         };
         if step.parallel.is_some() {
             return Err(rule(

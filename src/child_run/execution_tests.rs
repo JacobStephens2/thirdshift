@@ -257,7 +257,12 @@ fn malformed_stderr_preserves_a_successful_ending_and_base_fix_account() {
                 Some("https://github.com/acme/widgets/issues/8 merged")
             );
         }
-        _ => panic!("the successful child lost its ending"),
+        Ended::NotReproduced { .. }
+        | Ended::ArchitectureReview { .. }
+        | Ended::Failed { .. }
+        | Ended::Interrupted { .. } => {
+            panic!("the successful child lost its ending")
+        }
     }
 }
 

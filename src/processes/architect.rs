@@ -77,7 +77,20 @@ fn run_steps(outside: &mut impl Outside, run: &ArchitectRun<'_>) -> Result<Outco
                     base: run.base,
                 }));
             }
-            _ => unreachable!("the compiled Architect Steps were checked"),
+            DraftKind::Skill { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::LandTickets { .. }
+            | DraftKind::FixFindings { .. }
+            | DraftKind::CloseFindings { .. } => {
+                unreachable!("the compiled Architect Steps were checked")
+            }
         }
     }
     Ok(Outcome::Ran {
@@ -124,7 +137,20 @@ fn steps() -> Result<Vec<DraftKind>> {
                 DraftKind::ArchitectureReview { .. } | DraftKind::RunPublishedIssue { .. } => {
                     Ok(step.kind)
                 }
-                _ => bail!("unsupported architect-run Step {}", step.name),
+                DraftKind::Skill { .. }
+                | DraftKind::Command { .. }
+                | DraftKind::Implement { .. }
+                | DraftKind::SpecReview { .. }
+                | DraftKind::SecurityReview { .. }
+                | DraftKind::SecurityAudit { .. }
+                | DraftKind::ReproduceFindings { .. }
+                | DraftKind::Delivery { .. }
+                | DraftKind::SelfMerge { .. }
+                | DraftKind::LandTickets { .. }
+                | DraftKind::FixFindings { .. }
+                | DraftKind::CloseFindings { .. } => {
+                    bail!("unsupported architect-run Step {}", step.name)
+                }
             }
         })
         .collect()

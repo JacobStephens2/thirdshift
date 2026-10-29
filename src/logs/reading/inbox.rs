@@ -78,7 +78,7 @@ impl NeedsYouKind {
         match self {
             Self::Silent => 0,
             Self::Slow => 1,
-            _ => 2,
+            Self::Died | Self::Failed | Self::Triage | Self::Finding => 2,
         }
     }
 }
@@ -172,7 +172,9 @@ impl InboxItem<'_> {
         match self.group {
             Group::ReadyForReview => "Ready",
             Group::Landing => "Landing",
-            _ => self.command.facts().state,
+            Group::NeedsYou | Group::Working | Group::Done | Group::Resolved | Group::History => {
+                self.command.facts().state
+            }
         }
     }
 }
