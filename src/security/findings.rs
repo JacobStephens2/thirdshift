@@ -81,6 +81,11 @@ pub(crate) struct Findings {
 }
 
 impl Findings {
+    /// Whether this audit still has a record no reproduction has scored.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub fn record(
         &mut self,
         outside: &mut impl Outside,

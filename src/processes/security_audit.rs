@@ -8,7 +8,19 @@ use crate::security::{audit, findings, reproduction};
 pub(super) fn run(prepared: &Prepared, step: &ResolvedStep, index: usize) -> Result<String> {
     let repo = launch::repo()?;
     let github = GitHub::new();
-    if prepared.security_fix && github.security_records(&repo.slug())?.next_fix()?.is_some() {
+    // A new write-up can quote an outcome no reproduction wrote.
+    // reproduce-findings still scores a record this audit just created.
+    let owes_reproduction = matches!(step.kind, StepKind::ReproduceFindings)
+        && prepared
+            .security_findings
+            .lock()
+            .expect("Security findings")
+            .as_ref()
+            .is_some_and(findings::Findings::has_pending);
+    if !owes_reproduction
+        && prepared.security_fix
+        && github.security_records(&repo.slug())?.next_fix()?.is_some()
+    {
         let message = format!(
             "{} skipped: a recorded Security finding awaits an allowed fix",
             step.name
