@@ -119,6 +119,10 @@ fn text(attrs: &[KeyValue], key: &str) -> Option<String> {
 
 /// Read normalized facts, including retained amendments. Raw Harness bodies are
 /// never reparsed. A missing or unreadable trace is missing evidence to callers.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only tool calls carry a command to check; other Session events give no signal here"
+)]
 pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     let path = super::session::path(log);
     // A failed recorder can leave a FIFO or device behind. Reading it while
@@ -248,6 +252,10 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
 /// WorkEnded can name a task ID rather than that agent's call ID. The normalized
 /// facts share one record even in converted traces, so retain that association
 /// before flattening records or counting retained amendments.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "each search picks one kind of ending out of the Session's events and skips the rest"
+)]
 fn ended_work_alias(events: &[Event]) -> Option<(String, String)> {
     let ended: HashSet<_> = events
         .iter()

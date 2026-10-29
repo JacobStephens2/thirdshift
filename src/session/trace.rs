@@ -283,6 +283,10 @@ impl Trace {
                     set(&mut self.session.attributes, attr);
                 }
             }
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "only messages and errors name a call or parent to place them under"
+            )]
             let (call, parent) = match event {
                 Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
                 Error { parent_id, .. } => (None, parent_id.as_deref()),

@@ -1109,6 +1109,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out advisories and reproductions among the calls it asserts on"
+    )]
     fn repeated_fingerprints_preserve_counts_metadata_order_and_reproduce_once() {
         use crate::github::{DraftAdvisory, Package};
         use serde_json::json;

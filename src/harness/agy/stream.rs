@@ -154,6 +154,10 @@ impl AgyProgress {
 mod tests {
 
     #[test]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     fn review_agy_terminal_result_does_not_repeat_streamed_text() {
         use crate::harness::interpretation::event::Event;
         let mut interpretation = stream(Harness::Agy, "");
@@ -218,6 +222,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     fn normalized_agy_done_only_model_steps_include_checkpoint_usage_without_counting_totals_twice()
     {
         use crate::harness::interpretation::event::{Event, Outcome, Usage};

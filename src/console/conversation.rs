@@ -37,7 +37,7 @@ fn render_parts(parts: impl IntoIterator<Item = Part>) -> String {
         let snapshots = match &part {
             Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
             Part::CodexEdit(id, _) => Some((&mut edits, id)),
-            _ => None,
+            Part::Message(_, _, None) | Part::Thinking(_) | Part::Tool(..) | Part::Plain(_) => None,
         };
         if let Some((snapshots, id)) = snapshots {
             if let Some(index) = snapshots.get(id) {
@@ -203,6 +203,10 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "message content that is neither text nor blocks shows as the raw log line"
+)]
 fn parts(line: &str) -> Vec<Part> {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return vec![Part::Plain(line.into())];

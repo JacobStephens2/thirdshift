@@ -825,6 +825,10 @@ mod tests {
     }
 
     /// The progress lines among `did`.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test helper that picks the progress lines out of what the loop did"
+    )]
     fn lines(did: &[Did]) -> Vec<&str> {
         did.iter()
             .filter_map(|did| match did {
@@ -1697,6 +1701,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the merges among what the loop did"
+    )]
     fn a_sixth_foreign_batch_is_refused_before_its_merge() {
         let (delivered, did) = deliver(
             Goal::Merged,

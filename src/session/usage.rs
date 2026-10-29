@@ -71,6 +71,10 @@ impl Summary {
 
 /// The cache convention is observed Harness metadata, never requested Model setup.
 /// Calls owns scoped identity, repeated completions and present-field amendments.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only usage events measure a Model or the Session; calls take the other events above"
+)]
 pub(crate) fn from_events(events: &[Event], input_excludes_cache: bool) -> Summary {
     let mut calls = Calls::new(Id([0; 8]), input_excludes_cache, []);
     let mut evidence = Evidence::default();
@@ -189,7 +193,13 @@ impl Evidence {
                     .include(measurement);
             }
             SpanKind::Turn => self.turns.include(measurement),
-            _ => {}
+            SpanKind::Cmd
+            | SpanKind::Run
+            | SpanKind::Stage
+            | SpanKind::Sess
+            | SpanKind::Model
+            | SpanKind::Tool
+            | SpanKind::Agent => {}
         }
     }
 
@@ -331,6 +341,10 @@ fn value<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a AnyValue> {
     attrs.iter().find(|attr| attr.key == key)?.value.as_ref()
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "an OTLP attribute that isn't a string has no text"
+)]
 fn text<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a str> {
     match value(attrs, key)? {
         AnyValue::String(s) => Some(s),
@@ -338,6 +352,10 @@ fn text<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a str> {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "an OTLP attribute that is neither an integer nor a string has no count"
+)]
 fn count(attrs: &[KeyValue], key: &str) -> Option<u64> {
     match value(attrs, key)? {
         AnyValue::Int(n) => (*n).try_into().ok(),

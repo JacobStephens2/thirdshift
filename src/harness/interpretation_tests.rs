@@ -128,6 +128,10 @@ fn a_failed_harness_result_distinguishes_startup_errors_from_observed_work() {
 }
 
 #[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the test picks out the events it asserts on; the other events are not under test"
+)]
 fn review_completion_preserves_distinct_claude_child_messages() {
     use interpretation::event::Event;
     let mut interpretation = stream(Harness::Claude, "");
@@ -733,7 +737,9 @@ pub(crate) fn recording_interpretation(
     match retained_harness {
         Harness::Muse => muse::log::recording_interpretation(root, decoder),
         Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
-        _ => panic!("recording fixtures support only retained Harnesses"),
+        Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok => {
+            panic!("recording fixtures support only retained Harnesses")
+        }
     }
 }
 
@@ -1145,6 +1151,10 @@ fn progress_only_condense_preserves_agy_completion_without_buffering_normalized_
 }
 
 #[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the test picks out the events it asserts on; the other events are not under test"
+)]
 fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order() {
     with_opencode_export(
         "normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order",
@@ -1343,6 +1353,10 @@ fn retained_completion_reports_stream_fallback_then_authoritative_empty_models_a
 }
 
 #[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the test picks out the events it asserts on; the other events are not under test"
+)]
 fn review_opencode_preserves_all_live_text_parts_without_export() {
     use interpretation::event::Event;
     let mut interpretation = stream(Harness::OpenCode, "");

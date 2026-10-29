@@ -48,6 +48,10 @@ impl Serialize for AnyValue {
 }
 
 impl<'de> Deserialize<'de> for AnyValue {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a double other than a JSON string goes to serde_json, to read as a number or reject"
+    )]
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let fields = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
         let mut selected = None;

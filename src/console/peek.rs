@@ -223,6 +223,10 @@ impl Fact {
         } else {
             format!("{parent}/{label}")
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only objects and arrays have a preview; every scalar JSON value has none"
+        )]
         let preview = match &value {
             Value::Object(fields) => ["title", "name", "outcome", "state"]
                 .iter()
@@ -232,6 +236,10 @@ impl Fact {
             Value::Array(items) => count(items.len(), "item"),
             _ => String::new(),
         };
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the JSON scalars without their own wording show as JSON shows them"
+        )]
         let text = match &value {
             Value::Null if in_metrics => "Missing".into(),
             Value::Null => "None".into(),
@@ -253,6 +261,10 @@ impl Fact {
             children,
         }
     }
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only objects and arrays have children; every scalar JSON value has none"
+    )]
     fn children(value: Value, in_metrics: bool, parent: &str) -> Vec<Self> {
         match value {
             Value::Object(fields) => fields

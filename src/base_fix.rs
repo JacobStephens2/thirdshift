@@ -248,7 +248,7 @@ impl BaseFix {
                     ));
                     open
                 }
-                mark => {
+                mark @ (Mark::Running(_) | Mark::None) => {
                     drop(looking);
                     return self.wait_on(outside, open, mark.into_watch(), base);
                 }

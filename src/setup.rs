@@ -527,6 +527,10 @@ mod scripted {
         }
 
         /// Every prompt shown, plain or hidden, in order.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a test helper that picks the prompts out of the fake terminal's calls"
+        )]
         pub fn prompts(&self) -> Vec<&str> {
             self.calls
                 .iter()
@@ -538,6 +542,10 @@ mod scripted {
         }
 
         /// Every line said on the terminal, in order.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a test helper that picks the lines said out of the fake terminal's calls"
+        )]
         pub fn said(&self) -> Vec<&str> {
             self.calls
                 .iter()

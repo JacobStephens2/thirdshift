@@ -41,6 +41,10 @@ fn usage_attributes(
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "events without GenAI attributes keep only their thirdshift ones; JSON non-strings keep their text"
+)]
 pub(crate) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec<KeyValue> {
     use Event::*;
     let mut attrs = Vec::new();

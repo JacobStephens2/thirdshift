@@ -115,6 +115,10 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
 }
 
 // Both renderers walk the same document, so text cannot silently drop a signal.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "objects and arrays nest; every other JSON value prints on its line as a scalar"
+)]
 fn print(value: &Value, depth: usize) {
     let indent = "  ".repeat(depth);
     match value {
@@ -139,6 +143,10 @@ fn print(value: &Value, depth: usize) {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "JSON values without their own wording print as JSON shows them"
+)]
 fn scalar(value: &Value) -> String {
     match value {
         Value::Null => "missing".into(),

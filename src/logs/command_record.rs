@@ -361,7 +361,14 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_)
+                | Work::Process { .. } => None,
             },
         });
         let name = match work {
@@ -410,7 +417,14 @@ impl CommandRecord {
             experiment: None,
             process_name: match work {
                 Work::Process { name, .. } => Some(name.to_string()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => None,
             },
         }
     }

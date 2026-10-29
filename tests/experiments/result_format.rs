@@ -20,6 +20,10 @@ pub(super) fn assert_documented(name: &str, value: &Value) {
     }
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a contract shape that is no object, array or type name must equal the value"
+)]
 fn check(contract: &Value, shape: &Value, value: &Value, path: &str) -> Result<(), String> {
     let mismatch = || format!("{path}: expected {shape}, got {value}");
     match shape {

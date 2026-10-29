@@ -976,6 +976,10 @@ mod tests {
 
     /// What a child Run started with `args` reads back that it was given, as
     /// the argument parser takes each argument it doesn't recognise itself.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a test helper that reads back a Run; any other Command fails the test"
+    )]
     fn read(args: &[impl AsRef<str>]) -> Result<Option<Given>> {
         let args: Vec<String> = args.iter().map(|arg| arg.as_ref().to_string()).collect();
         match crate::args::parse(&args)? {
