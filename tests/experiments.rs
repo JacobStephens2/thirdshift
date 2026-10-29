@@ -1126,7 +1126,7 @@ harness = "claude"
         }
     }
 
-    fn run(&self, extra: &[&str]) -> support::RunResult {
+    fn experiment_args<'a>(extra: &[&'a str]) -> Vec<&'a str> {
         let mut args = vec!["experiment", "candidate", "--json"];
         // These tiny fixtures exercise deciding suites. Advisory tests invoke
         // the default minimum through the CLI explicitly.
@@ -1134,6 +1134,11 @@ harness = "claude"
             args.extend(["--min-discriminating-tasks", "1"]);
         }
         args.extend_from_slice(extra);
+        args
+    }
+
+    fn run(&self, extra: &[&str]) -> support::RunResult {
+        let args = Self::experiment_args(extra);
         // Trials run without their sandbox here: the Experiment suite's fake
         // Harnesses stay observable at fixed scenario paths, as with
         // THIRDSHIFT_TRIAL_NO_SANDBOX. The sandbox itself is covered by the
@@ -1148,11 +1153,7 @@ harness = "claude"
         extra: &[&str],
         keystrokes: &[support::Keystrokes],
     ) -> support::TerminalResult {
-        let mut args = vec!["experiment", "candidate", "--json"];
-        if !extra.contains(&"--min-discriminating-tasks") {
-            args.extend(["--min-discriminating-tasks", "1"]);
-        }
-        args.extend_from_slice(extra);
+        let args = Self::experiment_args(extra);
         self.scenario
             .run_on_terminal(&args, &NO_SANDBOX, keystrokes)
     }
