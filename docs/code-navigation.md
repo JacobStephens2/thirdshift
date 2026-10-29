@@ -15,6 +15,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Failed ticket run | `src/failed_run.rs` | `tests/failed_run.rs` |
 | Recovery | `src/recovery.rs` — `Recovery`, its add-a-fact methods and `lines` | Inline tests in `src/recovery.rs`; `tests/failed_run.rs`, `tests/spec_run.rs` |
 | CI watch, Check re-run, Abandoned job, Declined CI fix | `src/ci.rs` — `Watch`, `assess`, `after_repair`; Delivery constructs one watch in `src/delivery.rs` — `RunOutside`; `src/delivery/repair_loop.rs` requests assessments and reports completed CI-fix Repairs | Inline CI assessment and Repair loop tests; `src/github/execution_tests.rs`; `tests/ci.rs` |
+| CI-red Ticket, Flaky-test Ticket | `src/github/base_ci.rs` — latest push attempts, failed-jobs re-run, evidence and report deduplication; `src/pickup.rs` — CI reservation and reporting; `src/implement.rs` — recorded flaky evidence bypasses bug diagnosis; `src/labels.rs` — `FLAKY_TEST` | `tests/pickup_run/base_ci.rs`, `tests/bug_run.rs` |
 | Inherited failure, check-state reading, Base fix | `src/ci.rs` — `reading` of each `Conclusion` the GitHub adapter (`src/github.rs`, `checks_on`) reports; `src/base_fix.rs` | Inline tests; `src/github/execution_tests.rs`; `tests/ci.rs`, `tests/base_fix.rs` |
 | Run notification | `src/notification.rs` — `RunNotification`; `src/email.rs` | `tests/run_notification.rs`, `tests/email_test.rs` |
 | Harness, Model, Effort | `src/harness.rs` and `src/harness/` | `tests/harness_choice.rs`, `tests/harness.rs` |
