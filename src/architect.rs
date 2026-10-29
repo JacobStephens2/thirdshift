@@ -303,7 +303,7 @@ pub fn run(
         Err(error) => return failed(error.into()),
     };
     let mut outside = LaunchAndGitHub {
-        launch: &directory,
+        launch: directory.git(),
         base: &base,
         repo: &repo,
         harness,

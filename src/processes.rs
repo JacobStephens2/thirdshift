@@ -61,6 +61,7 @@ pub(crate) mod architect;
 mod architecture;
 pub(crate) mod builtin;
 mod catalog;
+mod findings;
 mod identity;
 pub(crate) mod spec;
 mod spec_review;
@@ -84,6 +85,7 @@ struct ProcessFile {
     /// this ready for review; `check` never merges.
     goal: Goal,
     security_review: bool,
+    security_flags: Flags,
     plan_only: bool,
 }
 
@@ -164,6 +166,8 @@ enum DraftKind {
     SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
     LandTickets { line: usize },
+    FixFindings { line: usize },
+    CloseFindings { line: usize },
 }
 
 struct DeclaredWorktree {
@@ -199,6 +203,8 @@ impl ResolvedStep {
             StepKind::SelfMerge => "self-merge",
             StepKind::RunPublishedIssue { .. } => "run-published-issue",
             StepKind::LandTickets { .. } => "land-tickets",
+            StepKind::FixFindings { .. } => "fix-findings",
+            StepKind::CloseFindings => "close-findings",
         };
         format!(
             "{kind}; worktree {}; {}",
@@ -376,6 +382,8 @@ enum StepKind {
     SelfMerge,
     RunPublishedIssue { process: String },
     LandTickets { process: String },
+    FixFindings { process: String },
+    CloseFindings,
 }
 
 struct OwnedWorktree {
@@ -405,6 +413,7 @@ struct Prepared {
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
     security_review: bool,
+    security_flags: Flags,
     plan_only: bool,
     completed: Mutex<CompletedRuns>,
     /// Killed work retained across session Steps, ordered by Step even when
@@ -423,6 +432,7 @@ struct CompletedRuns {
     unreproduced_bug: Option<String>,
     /// Why architecture-review ended successfully without a child run.
     architecture_end: Option<String>,
+    merged_fixes: Vec<findings::MergedFix>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -482,6 +492,7 @@ impl Drop for HeldClaim<'_> {
 struct StepRun<'a> {
     process: &'a str,
     plan_only: bool,
+    security_flags: &'a Flags,
     goal: Goal,
     limits: &'a Limits,
     completed: &'a Mutex<CompletedRuns>,
@@ -601,6 +612,12 @@ fn run(command: &ProcessRun) -> Result<String> {
         ..Flags::default()
     }
     .security_review(&config);
+    file.security_flags = Flags {
+        security_fix: command.security_fix,
+        security_close: command.security_close,
+        security_review: command.security_review,
+        ..Flags::default()
+    };
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way. An Issue-branch
     // worktree with no issue is refused before the Pass log. A failure here
@@ -1354,6 +1371,7 @@ fn run_parallel(
                 let run = StepRun {
                     process: &process,
                     plan_only: prepared.plan_only,
+                    security_flags: &prepared.security_flags,
                     goal,
                     limits,
                     completed,
@@ -1448,6 +1466,7 @@ fn run_step(
     let run = StepRun {
         process,
         plan_only: prepared.plan_only,
+        security_flags: &prepared.security_flags,
         goal: prepared.goal,
         limits: &prepared.limits,
         completed: &prepared.completed,
@@ -1805,6 +1824,8 @@ fn run_step_in(
         StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
         StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
         StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
+        StepKind::FixFindings { process } => findings::fix(run, process),
+        StepKind::CloseFindings => findings::close(run),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
                 "running step {} with {choice}",
@@ -2294,6 +2315,10 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
         StepKind::LandTickets { process } => {
             format!("{}: land-tickets (process {process})", step.name)
         }
+        StepKind::FixFindings { process } => {
+            format!("{}: fix-findings (process {process})", step.name)
+        }
+        StepKind::CloseFindings => format!("{}: close-findings", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
         let _ = write!(line, " (worktree {worktree})");
@@ -2318,6 +2343,7 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     refuse_worktrees(path, &file)?;
     refuse_implement(path, &file)?;
     architecture::validate(path, &file)?;
+    findings::validate(path, &file)?;
     refuse_self_merge(path, &file)?;
     refuse_issue_branch(path, &file)?;
     refuse_published(path, &file.steps)?;
@@ -2424,6 +2450,7 @@ fn prepare_from(
         limits: file.limits,
         goal: file.goal,
         security_review: file.security_review,
+        security_flags: file.security_flags,
         plan_only: file.plan_only,
         completed: Mutex::new(CompletedRuns::default()),
         killed_work: Mutex::default(),
@@ -2925,13 +2952,14 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
         let (line, published) = match step.kind {
             DraftKind::RunPublishedIssue { line } => (line, true),
             DraftKind::LandTickets { line } => (line, false),
+            DraftKind::FixFindings { line } => (line, false),
             _ => {
                 if let Some((_, line)) = &step.process {
                     return Err(rule(
                         path,
                         *line,
                         "process",
-                        "process is only for run-published-issue or land-tickets",
+                        "process is only for run-published-issue, land-tickets or fix-findings",
                     ));
                 }
                 continue;
@@ -3004,6 +3032,10 @@ fn resolve(
         DraftKind::LandTickets { line } => StepKind::LandTickets {
             process: step.child_process(*line).0.to_string(),
         },
+        DraftKind::FixFindings { line } => StepKind::FixFindings {
+            process: step.child_process(*line).0.to_string(),
+        },
+        DraftKind::CloseFindings { .. } => StepKind::CloseFindings,
     };
     let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
@@ -3080,6 +3112,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         goal: Goal::ReadyForReview,
         security_review: false,
         plan_only: false,
+        security_flags: Flags::default(),
     })
 }
 
@@ -3520,13 +3553,15 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         "security-review" => DraftKind::SecurityReview { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
         "land-tickets" => DraftKind::LandTickets { line },
+        "fix-findings" => DraftKind::FixFindings { line },
+        "close-findings" => DraftKind::CloseFindings { line },
         "self-merge" => DraftKind::SelfMerge { line },
         _ => {
             return Err(rule(
                 path,
                 line,
                 "catalogue",
-                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge or land-tickets",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, fix-findings or close-findings",
             ));
         }
     };

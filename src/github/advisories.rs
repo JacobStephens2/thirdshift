@@ -213,6 +213,16 @@ impl SecurityRecords {
         .transpose()
     }
 
+    /// Select each pending fix once from this snapshot, preserving severity
+    /// order without reloading records while child runs change GitHub.
+    pub(crate) fn take_next_fix(&mut self) -> Result<Option<(SecurityRecord, RecordedFinding)>> {
+        let next = self.next_fix()?;
+        if let Some((record, _)) = &next {
+            self.values_mut().retain(|value| value != &record.value);
+        }
+        Ok(next)
+    }
+
     fn decode_state(&self, value: &Value) -> Result<RecordData> {
         Ok(match &self.storage {
             RecordStorage::Advisories(_) => RecordData::Advisory {

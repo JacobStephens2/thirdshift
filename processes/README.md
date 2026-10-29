@@ -56,6 +56,16 @@ removing its Claim, or merges it when asked. Each Step takes its own
 Harness, Model and Effort; Security review and Self-merge keep their flag
 and User config gates, and a refused or incomplete review holds the merge.
 
+`fix-findings` → `close-findings` lets a Custom process fix each pending
+reproduced Security finding, then recheck merged fixes against the merged
+Base branch before closing their private records. Both keep the Security run's
+permission and privacy rules (ADR-0015), run outside parallel groups and use
+throwaway worktrees. `fix-findings` takes the same optional `process` setting
+as `run-published-issue`, defaulting to `ticket-run`. A failed fix stays with
+the Day shift. `security-fix` and `security-close` (or their `no-` forms)
+override `[security]` settings. The existing Security run is unchanged and
+still fixes at most one finding per invocation.
+
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
 Ticket run records its selected Process independently of its parent, defaulting

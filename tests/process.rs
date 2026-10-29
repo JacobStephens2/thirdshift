@@ -2,6 +2,8 @@
 
 #[path = "process/architecture_review.rs"]
 mod architecture_review;
+#[path = "process/findings.rs"]
+mod findings;
 #[path = "process/implement.rs"]
 mod implement;
 #[path = "process/land_tickets.rs"]
@@ -934,7 +936,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge or land-tickets",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, fix-findings or close-findings",
             ),
             (
                 "review",

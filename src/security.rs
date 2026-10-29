@@ -158,7 +158,7 @@ pub fn run(
     };
     run_through(
         &mut LaunchAndGitHub {
-            launch: &directory,
+            launch: directory.git(),
             base: &base,
             repo: &repo,
             harness,
@@ -261,22 +261,54 @@ fn fix(
     audit: Option<Box<Ended>>,
     closing: bool,
 ) -> Outcome {
+    let (ended, issue) = fix_record(outside, repo, base, &record, &metadata, |outside, issue| {
+        outside.dispatch(crate::pass::Dispatch::SecurityFix {
+            issue,
+            is_spec: record.fix_size().expect("the published fix has a size")
+                == reproduction::FixSize::Spec,
+            base,
+            finding: &metadata,
+        })
+    });
+    let close = match (&ended.outcome, &issue) {
+        (Ok(reached), Some(issue))
+            if closing && reached.resolution.goal() == Some(crate::run::Goal::Merged) =>
+        {
+            close_after_merge(outside, base, &record, issue, reached.resolution.url())
+        }
+        _ => CloseOutcome::NotAttempted,
+    };
+    Outcome::Fixed {
+        ended,
+        finding: metadata,
+        audit,
+        close,
+    }
+}
+
+/// Publish, link, dispatch and record a reproduced fix through the same
+/// privacy rules for a Security run and a catalogue Step. The caller owns
+/// child Process selection and keeps the record for a later close Step.
+pub(crate) fn fix_record<O: Outside>(
+    outside: &mut O,
+    repo: &Repo,
+    base: &str,
+    record: &crate::github::SecurityRecord,
+    metadata: &RecordedFinding,
+    dispatch: impl FnOnce(&mut O, &crate::issue::IssueUrl) -> crate::run::Ended,
+) -> (crate::run::Ended, Option<crate::issue::IssueUrl>) {
     let mut log = None;
     let outcome = (|| -> Result<(crate::run::Ended, crate::issue::IssueUrl)> {
         outside.check_harness(true)?;
         outside.started(Work::SecurityRun(repo));
-        let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
+        let (published, session_log) = outside.publish_security_fix(base, record, &metadata.url);
         log = session_log;
         let issue = published?;
-        outside.link_security_fix(&record, &issue)?;
-        let mut ended = outside.dispatch(crate::pass::Dispatch::SecurityFix {
-            issue: &issue,
-            is_spec: record.fix_size()? == reproduction::FixSize::Spec,
-            base,
-            finding: &metadata,
-        });
+        record.fix_size()?;
+        outside.link_security_fix(record, &issue)?;
+        let mut ended = dispatch(outside, &issue);
         if let Err(error) =
-            outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
+            outside.record_security_fix_ending(record, &issue, ended.outcome.is_ok())
         {
             ended.outcome = Err(match ended.outcome {
                 Err(mut failed) => {
@@ -300,7 +332,7 @@ fn fix(
         }
         Ok((ended, issue))
     })();
-    let (ended, issue) = match outcome {
+    match outcome {
         Ok((ended, issue)) => (ended, Some(issue)),
         Err(error) => (
             crate::run::Ended {
@@ -313,20 +345,6 @@ fn fix(
             },
             None,
         ),
-    };
-    let close = match (&ended.outcome, &issue) {
-        (Ok(reached), Some(issue))
-            if closing && reached.resolution.goal() == Some(crate::run::Goal::Merged) =>
-        {
-            close_after_merge(outside, base, &record, issue, reached.resolution.url())
-        }
-        _ => CloseOutcome::NotAttempted,
-    };
-    Outcome::Fixed {
-        ended,
-        finding: metadata,
-        audit,
-        close,
     }
 }
 
@@ -334,7 +352,7 @@ fn fix(
 /// proof-of-concept test against the merged Base branch. A check that does
 /// not pass, or any step that fails, leaves the record open with a private
 /// note of what happened, and never changes the fix's outcome.
-fn close_after_merge(
+pub(crate) fn close_after_merge(
     outside: &mut impl Outside,
     base: &str,
     record: &crate::github::SecurityRecord,
