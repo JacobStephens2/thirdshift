@@ -42,7 +42,11 @@ defaulting to `ticket-run`, with the same validation as `run-published-issue`.
 The file cannot also declare an `issue-branch` worktree. A Spec-branch file
 requires an issue with sub-issues; an Issue-branch file refuses one with them.
 The Claim precedes the worktree, and remains while the draft Spec PR waits.
-The Built-in Spec run still uses its existing sequence.
+`spec-run.toml` owns the Built-in Spec run's sequence on that worktree:
+`land-tickets` → `spec-review` → `security-review` → `delivery` → `self-merge`.
+Every starter uses it: an Issue URL, Pickup, Architect and Security runs, and
+`run-published-issue`. Spec-or-Ticket dispatch, the Claim, Child asks and Limits
+stay in front of the file. Sessions, progress and run-type names stay the same.
 
 After `land-tickets`, a Custom process can run `spec-review` →
 `security-review` → `delivery` → `self-merge` on that Spec-branch worktree.
@@ -64,4 +68,6 @@ Inspect and check it with `thirdshift process show ticket-run` and
 shown file as `~/.thirdshift/processes/<new-name>.toml`, then use
 `thirdshift process <new-name> issue <issue>`. An issue with sub-issues still
 starts a Spec run before any Built-in process is selected; the Claim is
-made before the Issue-branch worktree is created.
+made before the Issue-branch worktree is created. Inspect the Spec run with
+`thirdshift process show spec-run` and check it with
+`thirdshift process check spec-run issue <spec>`. Its name is reserved too.

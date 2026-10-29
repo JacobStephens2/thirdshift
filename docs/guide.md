@@ -914,6 +914,16 @@ Inspect it with `thirdshift process show ticket-run`, or validate it with
 under a new name to run it as a Custom process.
 A Custom process cannot take a reserved Built-in process name.
 
+The Built-in `spec-run` owns `land-tickets` → `spec-review` → `security-review`
+→ `delivery` → `self-merge` on a `spec-branch` worktree, inheriting the Command's
+Harness, Model and Effort, Child asks and Limits. Every starter of a Spec run
+uses it: an Issue URL, Pickup, Architect and Security runs, and
+`run-published-issue`. Spec-or-Ticket dispatch and the Claim stay before the
+file; the Command keeps its Spec run name, sessions and progress lines.
+Inspect it with `thirdshift process show spec-run`, or validate it with
+`thirdshift process check spec-run issue <spec>`. Save the printed file under
+a new name to run a Custom process on a Spec.
+
 The built-in `architect-run` runs `architecture-review` → `run-published-issue`.
 Architect runs execute it after their Pass lock and skip gates. The first Step
 owns the review session and the plan-or-idea conclusion and labels; it ends
@@ -1087,7 +1097,7 @@ as a Spec run. Delivery restores the Tickets checklist after the review
 rewrites the PR body, runs the Repair loop and marks the PR ready. A failure
 preserves the work and leaves an open PR draft; a Security hold leaves it
 ready for review. A delivered Spec PR removes the Claim. The Built-in Spec
-run keeps its existing sequence.
+run reads this sequence from `spec-run.toml`.
 
 `catalogue = "implement"` runs the same implementation session as a Ticket
 run, using its fresh or Continuation prompt. It must name the Issue-branch
@@ -1799,8 +1809,8 @@ attributes. Ticket runs, including child Ticket runs, record `ticket-run` and
 the compiled-in file's hash by default. A `run-published-issue` Step that selects
 a Custom process records that name, Custom kind and loaded file's hash on its
 child instead. Custom processes record the file loaded for that
-run, so editing it changes the next run's hash. Architect runs record
-`architect-run` and its compiled-in file's hash. A Spec or Security
+run, so editing it changes the next run's hash. Spec runs record `spec-run`
+and Architect runs record `architect-run`, each with its compiled-in file's hash. A Security
 run records its run type until its Built-in file lands; a run with no Process
 file has no hash. Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.

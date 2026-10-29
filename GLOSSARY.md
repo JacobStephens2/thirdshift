@@ -100,7 +100,7 @@ One invocation of the factory on a single issue that is not a **Spec**, from lau
 _Avoid_: Run, Merge run (former names), auto-merge (GitHub's own feature)
 
 **Spec run**:
-One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Ticket run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows.
+One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Ticket run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows. Its **Built-in process** owns the sequence: land the Tickets, the **Spec review**, an optional **Security review**, **Delivery** and an optional **Self-merge**. Dispatch chooses Spec or Ticket and makes the **Claim** before the first Step; the Command's Child asks and Limits are inherited.
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
@@ -124,7 +124,7 @@ A named sequence of **Steps** that a **Command** carries out: a **Built-in proce
 _Avoid_: workflow, pipeline, recipe, run type
 
 **Built-in process**:
-A **Process** that ships inside thirdshift, such as those a **Ticket run** or an **Architect run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run or Architect run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, whether it holds a **Claim**, and whether a **Pass** is skipped are decided before its first Step.
+A **Process** that ships inside thirdshift, such as those a **Ticket run**, **Spec run** or **Architect run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run, Spec run or Architect run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, whether it holds a **Claim**, and whether a **Pass** is skipped are decided before its first Step.
 
 **Custom process**:
 A **Process** a person defines on their own machine and starts by name; it can't take a **Built-in process**'s name, a file can only tighten limits, and its `self-merge` catalogue Step directly after `delivery` is the **Self-merge**, only when the command or **User config** asks. Started with no issue and neither an Issue-branch nor a Spec-branch worktree, it is a **Pass**; either branch worktree needs an issue, an Issue-branch worktree needs one without **Tickets**, and a Spec-branch worktree needs a **Spec**, with a **Claim** made before either worktree; started with an issue, it is not a Pass.

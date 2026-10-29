@@ -1,5 +1,115 @@
 use super::*;
 
+fn write_architecture_ticket_process(scenario: &Scenario) {
+    write_process(
+        scenario,
+        "contractor",
+        r#"version = 1
+description = "Review architecture before editing the Ticket"
+[worktrees.ticket]
+kind = "issue-branch"
+[worktrees.notes]
+kind = "throwaway"
+[[steps]]
+name = "architecture"
+catalogue = "architecture-review"
+worktree = "notes"
+[[steps]]
+name = "edit"
+command = "exit 99"
+worktree = "ticket"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+}
+
+const PUBLISH_IDEA: &str = r#"url=$(gh issue create --title Idea --body 'Worth exploring' --label needs-triage)
+printf 'Recommendation strength: Worth exploring\nArchitecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#;
+
+#[test]
+fn a_selected_ticket_process_preserves_an_architecture_ideas_successful_early_end() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "architect-idea"]);
+    write_process(
+        &scenario,
+        "publish",
+        &format!("{PUBLISH_THEN_RUN}process = \"contractor\"\n"),
+    );
+    write_architecture_ticket_process(&scenario);
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(2, PUBLISH_IDEA);
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert!(
+        result.stderr.contains("step edit: 0s skipped"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), scenario.issue_url(9));
+    assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+    assert!(
+        !scenario
+            .issue_labels(8)
+            .contains(&"in-progress".to_string())
+    );
+    scenario.assert_cleaned_up("issue-8");
+}
+
+#[test]
+fn an_architecture_ending_in_a_spec_keeps_the_ticket_and_its_dependents_undelivered() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "architect-idea"]);
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[8])]);
+    write_architecture_ticket_process(&scenario);
+    write_process(
+        &scenario,
+        "gather",
+        r#"version = 1
+description = "Gather Tickets"
+[worktrees.spec]
+kind = "spec-branch"
+[[steps]]
+name = "land"
+catalogue = "land-tickets"
+process = "contractor"
+worktree = "spec"
+"#,
+    );
+    scenario.agent_does_in_session(1, PUBLISH_IDEA);
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("#8 Architecture review ended: no Strong candidate"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("#9 blocked by #8"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("#8 landed"), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+    assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
+    scenario.assert_cleaned_up("issue-8");
+}
+
 #[test]
 fn a_child_process_must_exist_and_have_an_issue_branch_before_any_session() {
     for (process, reason) in [
