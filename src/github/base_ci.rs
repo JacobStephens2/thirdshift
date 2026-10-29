@@ -86,6 +86,13 @@ fn failing_test_name(line: &str) -> Option<&str> {
         .map(|(_, name)| name.trim())
 }
 
+/// Outsiders can open an issue or comment with any text. Only a Trusted
+/// author's report is dedup evidence, and only that issue may receive the
+/// owner's CI comment.
+fn trusted_report(record: &serde_json::Value) -> bool {
+    crate::trust::trusted_association(record["author_association"].as_str().unwrap_or(""))
+}
+
 fn mentions_test(text: &str, test: &str) -> bool {
     fn continues_name(mut characters: impl Iterator<Item = char>) -> bool {
         let name_character =
@@ -359,6 +366,10 @@ impl GitHub {
             ),
             "",
         )?;
+        // A title match on an outsider's issue still blocks a second CI-red
+        // Ticket, as it did before evidence comments existed. It is not a
+        // place to post that comment, and it is not a Flaky-test report.
+        let mut untrusted_ci_red = false;
         for issue in issues {
             if issue.get("pull_request").is_some() {
                 continue;
@@ -372,6 +383,12 @@ impl GitHub {
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .collect();
+            if !trusted_report(&issue) {
+                if !failure.flaky() && title.starts_with(TITLE_PREFIX) && !labels.has(NEEDS_INFO) {
+                    untrusted_ci_red = true;
+                }
+                continue;
+            }
             if failure.flaky() {
                 let body = issue["body"].as_str().unwrap_or("");
                 let open = issue["state"]
@@ -400,10 +417,10 @@ impl GitHub {
                     ),
                     "",
                 )?;
-                if comments
-                    .iter()
-                    .any(|comment| comment["body"].as_str().unwrap_or("").contains(&commit))
-                {
+                if comments.iter().any(|comment| {
+                    trusted_report(comment)
+                        && comment["body"].as_str().unwrap_or("").contains(&commit)
+                }) {
                     return Ok(BaseCiAction::Nothing);
                 }
                 let issue =
@@ -411,6 +428,9 @@ impl GitHub {
                 self.comment_issue(&issue, &report.body)?;
                 return Ok(BaseCiAction::Commented(issue));
             }
+        }
+        if untrusted_ci_red {
+            return Ok(BaseCiAction::Nothing);
         }
         let mut labels = vec![Label::new("bug", "Something isn't working")];
         if failure.flaky() {

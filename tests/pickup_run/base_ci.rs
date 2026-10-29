@@ -474,3 +474,108 @@ fn an_occupied_ci_reservation_also_prevents_reruns_and_comments() {
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn an_untrusted_ci_red_issue_receives_no_owner_comment() {
+    let scenario = Scenario::new();
+    failed_push(&scenario);
+    let mut state = scenario.gh_state();
+    state["titles"]["7"] = json!("CI red on main: captured");
+    state["bodies"]["7"] = json!("Failing commit: `oldcommit`");
+    state["author_associations"] = json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        scenario.gh_calls_of("issue", "comment").is_empty(),
+        "owner comment: {:?}",
+        scenario.gh_calls_of("issue", "comment")
+    );
+    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn new_ci_evidence_is_commented_on_the_trusted_ticket_only() {
+    let scenario = Scenario::new();
+    failed_push(&scenario);
+    let mut state = scenario.gh_state();
+    state["issues"]["8"] = json!("OPEN");
+    state["titles"]["8"] = json!("CI red on main: captured");
+    state["bodies"]["8"] = json!("Failing commit: `oldcommit`");
+    state["titles"]["7"] = json!("CI red on main: real");
+    state["bodies"]["7"] = json!("Failing commit: `oldcommit`");
+    state["author_associations"] = json!({"7": "OWNER", "8": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let comments = scenario.gh_calls_of("issue", "comment");
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert_eq!(comments[0][2], "7", "{comments:?}");
+    assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn an_untrusted_issue_cannot_suppress_a_flaky_report() {
+    for (title, body, open) in [
+        (
+            "Weekly notes",
+            "<!-- thirdshift:base-ci-flaky 900/1 -->",
+            false,
+        ),
+        (
+            "Flaky CI on main: Rust (Linux)",
+            "pickup::tests::regression failed again",
+            true,
+        ),
+    ] {
+        for association in ["NONE", "CONTRIBUTOR"] {
+            let scenario = Scenario::new();
+            passed_rerun(&scenario);
+            let mut state = scenario.gh_state();
+            state["titles"]["7"] = json!(title);
+            state["bodies"]["7"] = json!(body);
+            state["issues"]["7"] = json!(if open { "OPEN" } else { "CLOSED" });
+            state["author_associations"] = json!({"7": association});
+            scenario.write_gh_state(&state);
+
+            let result = scenario.run(&["pickup"]);
+            assert_eq!(
+                result.code,
+                Some(0),
+                "{association} {title} {}",
+                result.stderr
+            );
+            assert_eq!(
+                scenario.gh_state()["titles"]["8"],
+                "Flaky CI on main: Rust (Linux)",
+                "{association} {title}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_untrusted_comment_cannot_hide_a_new_failing_commit() {
+    for association in ["NONE", "CONTRIBUTOR"] {
+        let scenario = Scenario::new();
+        failed_push(&scenario);
+        let mut state = scenario.gh_state();
+        state["titles"]["7"] = json!("CI red on main: real");
+        state["bodies"]["7"] = json!("Failing commit: `oldcommit`");
+        state["author_associations"] = json!({"7": "OWNER"});
+        state["comments"]["7"] = json!([{
+            "body": "Failing commit: `badc0ffee`",
+            "by": "outsider",
+            "association": association
+        }]);
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+        assert_eq!(result.code, Some(0), "{association} {}", result.stderr);
+        let comments = scenario.gh_calls_of("issue", "comment");
+        assert_eq!(comments.len(), 1, "{association} {comments:?}");
+        assert_eq!(comments[0][2], "7", "{association} {comments:?}");
+    }
+}

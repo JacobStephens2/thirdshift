@@ -1492,8 +1492,23 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         assert!(flags.contains_key("paginate"));
         assert_eq!(flag(flags, "jq"), Some(".[]"));
         for comment in listed(state, "comments", n) {
-            let body = comment.get("body").unwrap_or(&comment);
-            println!("{}", object([("body", body.clone())]));
+            // A bare body is a comment this repo's owner posted. An object
+            // carries the association the test stored, which the CI-red
+            // dedup reads the way GitHub's issue-comment API does.
+            let (body, association) = match comment.get("body") {
+                Some(body) => (
+                    body.clone(),
+                    comment
+                        .get("association")
+                        .cloned()
+                        .unwrap_or_else(|| string("OWNER")),
+                ),
+                None => (comment.clone(), string("OWNER")),
+            };
+            println!(
+                "{}",
+                object([("body", body), ("author_association", association),])
+            );
         }
         return;
     }
