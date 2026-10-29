@@ -49,7 +49,9 @@ pub(super) fn add(
             owner.armed = false;
             match std::mem::replace(&mut owner.checkout, CheckoutCapture::Unattempted) {
                 CheckoutCapture::Complete(checkout) => Ok(checkout),
-                _ => bail!("missing captured checkout"),
+                CheckoutCapture::Unattempted | CheckoutCapture::Incomplete => {
+                    bail!("missing captured checkout")
+                }
             }
         }
         Err(cause) => {
@@ -153,7 +155,9 @@ impl CheckoutCapture {
     fn captured(&self) -> Result<&Checkout> {
         match self {
             Self::Complete(checkout) => Ok(checkout),
-            _ => bail!("checkout ownership capture is incomplete; current head unknown"),
+            Self::Unattempted | Self::Incomplete => {
+                bail!("checkout ownership capture is incomplete; current head unknown")
+            }
         }
     }
 }

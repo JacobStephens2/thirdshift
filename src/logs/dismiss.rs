@@ -207,7 +207,7 @@ fn row_for(
                 .with_context(|| format!("cannot dismiss {input}: row has no Needs you kind"))?,
         ),
         Group::ReadyForReview => Some(READY_KIND.to_owned()),
-        _ => None,
+        Group::Landing | Group::Working | Group::Done | Group::Resolved | Group::History => None,
     };
     target.kind = match kind {
         Some(kind) => kind,

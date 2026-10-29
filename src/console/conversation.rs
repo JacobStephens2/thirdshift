@@ -37,7 +37,7 @@ fn render_parts(parts: impl IntoIterator<Item = Part>) -> String {
         let snapshots = match &part {
             Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
             Part::CodexEdit(id, _) => Some((&mut edits, id)),
-            _ => None,
+            Part::Message(_, _, None) | Part::Thinking(_) | Part::Tool(..) | Part::Plain(_) => None,
         };
         if let Some((snapshots, id)) = snapshots {
             if let Some(index) = snapshots.get(id) {
@@ -216,6 +216,10 @@ fn parts(line: &str) -> Vec<Part> {
         }
         Some("assistant" | "user") => {
             let role = text(&event, "type");
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "message content that is neither text nor blocks shows as the raw log line"
+            )]
             match &event["message"]["content"] {
                 Value::String(content) => vec![Part::Message(role.into(), content.clone(), None)],
                 Value::Array(blocks) if !blocks.is_empty() => blocks

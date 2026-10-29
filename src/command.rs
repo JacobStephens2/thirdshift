@@ -171,7 +171,10 @@ impl Started {
                 ..
             }
             | Ending::SecurityFix { .. } => self.started.map(|started| started.elapsed()),
-            _ => None,
+            Ending::Scoring(_)
+            | Ending::Architect { .. }
+            | Ending::Security(_)
+            | Ending::Skipped(_) => None,
         };
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {

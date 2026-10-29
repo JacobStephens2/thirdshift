@@ -48,7 +48,11 @@ pub(crate) fn steps() -> Result<Vec<Step>> {
                 DraftKind::SecurityReview { .. } => Ok(Step::SecurityReview),
                 DraftKind::Delivery { .. } => Ok(Step::Delivery),
                 DraftKind::SelfMerge { .. } => Ok(Step::SelfMerge),
-                _ => bail!("unsupported ticket-run Step {}", step.name),
+                DraftKind::Skill { .. }
+                | DraftKind::Command { .. }
+                | DraftKind::RunPublishedIssue { .. } => {
+                    bail!("unsupported ticket-run Step {}", step.name)
+                }
             }
         })
         .collect()

@@ -1053,7 +1053,7 @@ fn harness_into(
             binds.read_only(binary, &dest);
             dest
         }
-        _ => {
+        Harness::Claude | Harness::Agy | Harness::Grok | Harness::Muse | Harness::OpenCode => {
             binds.read_only(binary, &dest_dir);
             dest_dir
         }

@@ -139,7 +139,7 @@ impl TicketBoard {
                 Standing::Ended(
                     Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
                 ) => local_work.as_slice(),
-                _ => &[],
+                Standing::Running | Standing::Ended(_) => &[],
             })
             .cloned()
             .collect()

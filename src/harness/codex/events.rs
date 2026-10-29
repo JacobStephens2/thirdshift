@@ -94,7 +94,16 @@ impl Events {
                 output.push(error(item));
                 return;
             }
-            _ => {}
+            ItemKind::Command
+            | ItemKind::FileChange
+            | ItemKind::McpTool
+            | ItemKind::WebSearch
+            | ItemKind::CollabTool
+            | ItemKind::AgentMessage
+            | ItemKind::Reasoning
+            | ItemKind::TodoList
+            | ItemKind::Error
+            | ItemKind::Unknown => {}
         }
         let (tool, input, result) = match kind {
             ItemKind::Command => (
@@ -135,7 +144,9 @@ impl Events {
                 item["items"].clone(),
                 item["items"].clone(),
             ),
-            _ => return,
+            ItemKind::AgentMessage | ItemKind::Reasoning | ItemKind::Error | ItemKind::Unknown => {
+                return;
+            }
         };
         output.extend(self.tools.start(id, None, tool, input));
         if completed {

@@ -163,7 +163,7 @@ pub fn refresh(launch: &Git, selected: ReadyIssue, wait: TimeDelta) -> Result<Op
             is_spec,
             claim_generation,
         })),
-        _ => Ok(None),
+        Standing::Ready { .. } | Standing::PassedOver(_) => Ok(None),
     }
 }
 
