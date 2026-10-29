@@ -71,8 +71,9 @@ pub trait Outside {
     fn interrupted(&mut self) -> bool;
     /// The repository's Ready issue at `order`'s end of the issue numbers,
     /// if it has one, by the Ready issue search, with its lines on the
-    /// issues passed over.
-    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>>;
+    /// issues passed over. With `past`, an issue already tried, only the
+    /// issues after it in `order` are searched.
+    fn ready_issue(&mut self, order: PickupOrder, past: Option<u64>) -> Result<Option<ReadyIssue>>;
     /// The lowest-numbered issue that goes before an Architect run: Ready
     /// or meeting every Ready issue condition except settling.
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>>;
@@ -210,8 +211,14 @@ impl Outside for LaunchAndGitHub<'_> {
         interrupt::requested()
     }
 
-    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch.git(), self.repo, self.config.pickup_wait, order)
+    fn ready_issue(&mut self, order: PickupOrder, past: Option<u64>) -> Result<Option<ReadyIssue>> {
+        ready::first(
+            self.launch.git(),
+            self.repo,
+            self.config.pickup_wait,
+            order,
+            past,
+        )
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
@@ -489,6 +496,8 @@ mod in_memory {
         },
         /// They asked for the Ready issue.
         ReadySearch,
+        /// They asked for the Ready issue after this one, in their order.
+        ReadySearchPast(u64),
         /// They handed on this progress line.
         Step(String),
         /// It recorded that it was skipped, for this reason.
@@ -578,9 +587,9 @@ mod in_memory {
         closed_listing_fails: bool,
         /// The number of each issue an Edit to fails.
         failing_edits: Vec<u64>,
-        /// The Ready issue search's answer: the issue, and whether it is a
-        /// Spec.
-        ready: Option<(ListedIssue, bool)>,
+        /// The Ready issue search's answers: each issue, and whether it is
+        /// a Spec. A search takes the first in its order.
+        ready: Vec<(ListedIssue, bool)>,
         /// Whether the Harness check fails.
         harness_failing: bool,
         node_failing: bool,
@@ -617,7 +626,7 @@ mod in_memory {
                 interrupted: false,
                 closed_listing_fails: false,
                 failing_edits: Vec::new(),
-                ready: None,
+                ready: Vec::new(),
                 harness_failing: false,
                 node_failing: false,
                 audit_findings: Vec::new(),
@@ -691,9 +700,10 @@ mod in_memory {
             self
         }
 
-        /// Make the Ready issue search find issue `number`, a Spec or not.
+        /// Make issue `number`, a Spec or not, a Ready issue the search
+        /// finds.
         pub fn ready(mut self, number: u64, is_spec: bool) -> Self {
-            self.ready = Some((listed(number, &[]), is_spec));
+            self.ready.push((listed(number, &[]), is_spec));
             self
         }
 
@@ -842,18 +852,34 @@ mod in_memory {
             self.interrupted
         }
 
-        fn ready_issue(&mut self, _order: PickupOrder) -> Result<Option<ReadyIssue>> {
-            self.calls.push(Call::ReadySearch);
-            Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
-                listed,
-                is_spec,
-                claim_generation: 0,
-            }))
+        fn ready_issue(
+            &mut self,
+            order: PickupOrder,
+            past: Option<u64>,
+        ) -> Result<Option<ReadyIssue>> {
+            self.calls.push(match past {
+                None => Call::ReadySearch,
+                Some(past) => Call::ReadySearchPast(past),
+            });
+            let mut ready = self.ready.clone();
+            ready.sort_by_key(|(listed, _)| listed.issue.number);
+            if order == PickupOrder::HighestFirst {
+                ready.reverse();
+            }
+            let is_past = |number| past.is_none_or(|past| order.comes_after(number, past));
+            Ok(ready
+                .into_iter()
+                .find(|(listed, _)| is_past(listed.issue.number))
+                .map(|(listed, is_spec)| ReadyIssue {
+                    listed,
+                    is_spec,
+                    claim_generation: 0,
+                }))
         }
 
         fn before_architect(&mut self) -> Result<Option<super::PriorityIssue>> {
             Ok(self
-                .ready_issue(PickupOrder::LowestFirst)?
+                .ready_issue(PickupOrder::LowestFirst, None)?
                 .map(super::PriorityIssue::Ready))
         }
 
