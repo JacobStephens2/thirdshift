@@ -101,7 +101,7 @@ test('the architecture page identifies the current Verdict method', async () => 
 
 test('the workflow page identifies the current Experiment result contract', async () => {
   const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
-  assert.match(page, /contract with <code>format: 3<\/code>/);
+  assert.match(page, /contract with <code>format: 4<\/code>/);
 });
 
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {

@@ -645,6 +645,16 @@ partition the suite: a task with an exhausted Void Trial counts as void-dropped,
 including when it was only measurement. Difficulty from another setup still
 qualifies. A suite with no discriminating Eval tasks is inconclusive.
 
+The Bar also fixes `min_discriminating_tasks`, defaulting to 20. Set it for one
+Experiment with `--min-discriminating-tasks <count>`; changing it after the first
+Trial refuses resume. A suite whose saved discriminating list is shorter is an
+**Advisory suite**. Its Verdict and intervals are still shown, with `advisory: true`
+in JSON and an Advisory mark in the text view and Console. The Console also shows
+the judged and measurement counts. Advisory suites cannot pass or block a release:
+only the other suites decide the overall Verdict. When every suite is advisory,
+the overall Verdict is inconclusive. The minimum uses the fixed list's size,
+before Void dropouts, rather than the retained judged count.
+
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
 Bar's timeout, in session-minutes; and, for each suite and Harness that has
@@ -692,9 +702,10 @@ inside the sandbox and only their reports are graded.
 
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
-`1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
+timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
-`--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+`--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 
@@ -797,7 +808,8 @@ grading without rerunning finished Trials,
 and reuses already validated Scores.
 
 The Verdict stays `waiting_on_rechecks` until you have rechecked every borderline
-Score and every decisive Score on the Bar's judged list. A Score is decisive when flipping its pass/fail
+Score and every decisive Score on the Bar's judged list in suites that are not
+advisory. A Score is decisive when flipping its pass/fail
 or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 `thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
@@ -855,9 +867,10 @@ and in the Console. It doesn't change the decision.
 One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
-Any failed suite fails the Experiment; otherwise any inconclusive
-suite makes it inconclusive. More than a tenth of judged Eval tasks dropped as void
-also makes it inconclusive. Results include the suite intervals, the Bar and
+Among suites that are not advisory, any failed suite fails the Experiment;
+otherwise any inconclusive suite makes it inconclusive. More than a tenth of their
+judged Eval tasks dropped as void also makes it inconclusive. When every suite is
+advisory, the Experiment is inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
 The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
@@ -866,6 +879,9 @@ separately for each Arm.
 The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
 `pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v4`, and
 their Bar records `"pass_rule": "margin"` and `discriminating_tasks` per suite.
+Saved Experiments without `min_discriminating_tasks`, including earlier v4
+Experiments, keep their original Bar, Verdict and aggregation policy when read
+or resumed; their suites omit `advisory`.
 Saved Experiments under `paired-dirichlet-v3` keep judging all their retained
 Eval tasks, with their stored Bar and Verdict. Saved Experiments under
 `paired-dirichlet-v2`, whose pass also needed the pass-level upper bound to
@@ -896,7 +912,7 @@ That includes a changed discriminating list read from current Difficulty;
 a new reading inside the band that leaves the list unchanged can resume.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 3`.
+[Experiment results format](experiment-results.md), identified by `format: 4`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -2682,6 +2698,8 @@ not change the Candidate on restart. The pin is removed after the branch push,
 when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
 intervals and asks `release anyway? [y/N]`, including without `--review`.
+The summary lists every Advisory suite and its own Verdict. All suites advisory
+gives inconclusive and asks the same question.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag

@@ -62,6 +62,89 @@ fn setup() -> Setup {
 }
 
 #[test]
+fn advisory_suites_neither_pass_nor_block_the_overall_verdict() {
+    let tasks = [
+        task("code-review", "one"),
+        task("code-review", "two"),
+        task("spec-review", "small"),
+    ];
+    let mut settings = bar(&["code-review", "spec-review"]);
+    settings.discriminating_tasks = Some(BTreeMap::from([
+        ("code-review".into(), vec!["one".into(), "two".into()]),
+        ("spec-review".into(), vec!["small".into()]),
+    ]));
+    settings.min_discriminating_tasks = Some(2);
+    for main_passes in [true, false] {
+        let results: Vec<_> = tasks
+            .iter()
+            .flat_map(|task| {
+                [Arm::Baseline, Arm::Candidate].map(|arm| {
+                    let passes = if task.suite == "code-review" {
+                        main_passes
+                    } else {
+                        !main_passes
+                    };
+                    let mut result =
+                        result(task, arm, matches!(arm, Arm::Baseline) || passes, false);
+                    result.score.as_mut().unwrap().borderline = task.suite == "spec-review";
+                    result
+                })
+            })
+            .collect();
+        let assessed = observation(&tasks, &results, &settings);
+        assert_eq!(assessed[0]["suites"]["code-review"]["advisory"], false);
+        assert_eq!(assessed[0]["suites"]["spec-review"]["advisory"], true);
+        assert_eq!(
+            assessed[0]["suites"]["spec-review"]["verdict"],
+            if main_passes { "fail" } else { "pass" }
+        );
+        assert_eq!(
+            assessed[0]["provisional_verdict"],
+            if main_passes { "pass" } else { "fail" }
+        );
+        assert!(
+            assessed[1]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|pending| pending["suite"] == "code-review")
+        );
+        settings.min_discriminating_tasks = Some(3);
+        let advisory = observation(&tasks, &results, &settings);
+        assert_eq!(advisory[0]["verdict"], "inconclusive");
+        assert_eq!(advisory[1], json!([]));
+        settings.min_discriminating_tasks = Some(2);
+    }
+}
+
+#[test]
+fn advisory_voids_do_not_enter_the_overall_dropout_guard_or_change_the_fixed_size() {
+    let tasks = [
+        task("main", "one"),
+        task("main", "two"),
+        task("small", "one"),
+    ];
+    let mut settings = bar(&["main", "small"]);
+    settings.discriminating_tasks = Some(BTreeMap::from([
+        ("main".into(), vec!["one".into(), "two".into()]),
+        ("small".into(), vec!["one".into()]),
+    ]));
+    settings.min_discriminating_tasks = Some(2);
+    let mut results: Vec<_> = tasks
+        .iter()
+        .flat_map(|task| [Arm::Baseline, Arm::Candidate].map(|arm| result(task, arm, true, false)))
+        .collect();
+    results[5].outcome = Outcome::Void;
+    let assessed = observation(&tasks, &results, &settings);
+    assert_eq!(assessed[0]["provisional_verdict"], "pass");
+    assert_eq!(assessed[0]["suites"]["small"]["advisory"], true);
+    results[1].outcome = Outcome::Void;
+    let assessed = observation(&tasks, &results, &settings);
+    assert_eq!(assessed[0]["suites"]["main"]["advisory"], false);
+    assert_eq!(assessed[0]["provisional_verdict"], "inconclusive");
+}
+
+#[test]
 fn unlisted_failure_padding_changes_neither_intervals_predictions_nor_rechecks() {
     let mut tasks = vec![task("code-review", "judged")];
     let mut results = vec![

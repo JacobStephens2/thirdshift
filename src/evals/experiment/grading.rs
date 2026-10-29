@@ -108,6 +108,8 @@ pub(crate) struct SuiteVerdict {
     pub counts: Option<Counts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measurement: Option<Vec<Measurement>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisory: Option<bool>,
 }
 
 // Deserialize the statistical object directly: serde's flatten buffer turns
@@ -117,6 +119,11 @@ impl TryFrom<serde_json::Value> for SuiteVerdict {
 
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
         Ok(Self {
+            advisory: value
+                .get("advisory")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()?,
             counts: value
                 .get("counts")
                 .cloned()
@@ -202,6 +209,14 @@ impl Verdict {
     pub fn selection_report(&self) -> String {
         let mut report = String::new();
         for (suite, verdict) in &self.suites {
+            if verdict.advisory == Some(true) {
+                let decision = match verdict.statistics.verdict {
+                    Decision::Pass => "pass",
+                    Decision::Fail => "fail",
+                    Decision::Inconclusive => "inconclusive",
+                };
+                report.push_str(&format!("\n{suite}: Advisory suite ({decision})"));
+            }
             if let Some(counts) = &verdict.counts {
                 report.push_str(&format!(
                     "\n{suite}: {} judged, {} measurement-only, {} void-dropped, {} other-setup",
@@ -314,7 +329,10 @@ pub(super) fn assess(
     let mut pending = Vec::new();
     for (index, result) in results.iter().enumerate() {
         // A Void Trial drops the whole paired task, including the other Arm.
-        if !bar.judges(&result.suite, &result.task) || task_is_void(result, results) {
+        if bar.advisory(&result.suite) == Some(true)
+            || !bar.judges(&result.suite, &result.task)
+            || task_is_void(result, results)
+        {
             continue;
         }
         let score = result.score.as_ref().context("Trial has no Score")?;
@@ -365,6 +383,7 @@ fn evaluate(
     let mut total = 0;
     let mut dropped = 0;
     for (suite, &trials) in &bar.trials_per_task {
+        let advisory = bar.advisory(suite);
         let statistics = verdict::Bar {
             margin: bar.margin,
             levels: bar.levels,
@@ -443,8 +462,10 @@ fn evaluate(
                             || difficulty.effort != baseline.effort
                     }));
             }
-            dropped += usize::from(paired.dropped_as_void);
-            total += 1;
+            if advisory != Some(true) {
+                dropped += usize::from(paired.dropped_as_void);
+                total += 1;
+            }
             scores.push(paired);
         }
         // Counterfactuals need the seeded interval decision, never forecasts.
@@ -463,18 +484,23 @@ fn evaluate(
                 statistics: assessment,
                 counts: selected.then_some(counts),
                 measurement: selected.then_some(measurement),
+                advisory,
             },
         );
     }
-    let verdict = if dropped > total / 10 {
-        Decision::Inconclusive
-    } else if suites
+    let deciding: Vec<_> = suites
         .values()
+        .filter(|suite| suite.advisory != Some(true))
+        .collect();
+    let verdict = if deciding.is_empty() || dropped > total / 10 {
+        Decision::Inconclusive
+    } else if deciding
+        .iter()
         .any(|suite| suite.statistics.verdict == Decision::Fail)
     {
         Decision::Fail
-    } else if suites
-        .values()
+    } else if deciding
+        .iter()
         .any(|suite| suite.statistics.verdict == Decision::Inconclusive)
     {
         Decision::Inconclusive

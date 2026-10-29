@@ -14,6 +14,7 @@ fn a_pre_trial_resume_uses_the_difficulty_that_selected_its_judged_tasks() {
     assert_eq!(paused.code, Some(1), "{}", paused.stderr);
     let saved = fixture.experiment();
     assert_eq!(saved["state"], "paused");
+    assert_eq!(saved["bar"]["min_discriminating_tasks"], 1);
     assert_eq!(
         saved["bar"]["discriminating_tasks"],
         json!({"spec-review": []})
@@ -76,6 +77,10 @@ pub(super) fn pre_selection_experiment(saved: &mut Value) {
         .as_object_mut()
         .unwrap()
         .remove("discriminating_tasks");
+    saved["bar"]
+        .as_object_mut()
+        .unwrap()
+        .remove("min_discriminating_tasks");
     for suite in saved["verdict"]["suites"]
         .as_object_mut()
         .unwrap()
@@ -83,6 +88,7 @@ pub(super) fn pre_selection_experiment(saved: &mut Value) {
     {
         suite.as_object_mut().unwrap().remove("counts");
         suite.as_object_mut().unwrap().remove("measurement");
+        suite.as_object_mut().unwrap().remove("advisory");
         suite["method"] = json!(
             "paired-dirichlet-v3; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles"
         );

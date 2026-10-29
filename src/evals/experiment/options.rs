@@ -169,7 +169,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
         !release || (baseline.is_none() && suites.is_empty()),
         "release mode selects its Baseline and touched suites; --baseline and --suite do not apply"
     );
-    let mut bar = Bar::default();
+    let mut bar = Bar {
+        min_discriminating_tasks: Some(20),
+        ..Bar::default()
+    };
     macro_rules! number {
         ($flag:literal, $target:expr) => {
             if let Some(value) = flags.remove($flag) {
@@ -192,6 +195,9 @@ pub fn parse(args: &[String]) -> Result<Options> {
     number!("--prior", bar.prior);
     number!("--seed", bar.seed);
     number!("--draws", bar.draws);
+    let mut minimum = bar.min_discriminating_tasks.unwrap();
+    number!("--min-discriminating-tasks", minimum);
+    bar.min_discriminating_tasks = Some(minimum);
     number!("--timeout", bar.timeout_seconds);
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
