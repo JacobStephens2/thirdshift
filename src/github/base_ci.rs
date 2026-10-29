@@ -1,5 +1,5 @@
-//! Evidence and publication for Pickup's ordinary CI-red Ticket. This is
-//! independent of Base fixes and the head checks that authorize Self-merge.
+//! Pickup's Base branch CI re-runs, evidence and Ticket publication, independent
+//! of Base fixes and the head checks that authorize Self-merge.
 
 use super::*;
 use crate::labels::{FLAKY_TEST, Label, NEEDS_INFO, READY_FOR_AGENT};
@@ -8,7 +8,7 @@ const TITLE_PREFIX: &str = "CI red on ";
 const FLAKY_PREFIX: &str = "Flaky CI on ";
 const GRACE: chrono::Duration = chrono::Duration::minutes(30);
 
-pub(crate) struct BaseCiFailure {
+pub(crate) struct BaseCiEvidence {
     base: String,
     run: PushRun,
     failed: Vec<Job>,
@@ -23,7 +23,7 @@ pub(crate) enum BaseCiAction {
     Commented(IssueUrl),
 }
 
-impl BaseCiFailure {
+impl BaseCiEvidence {
     fn flaky(&self) -> bool {
         self.run.conclusion.as_deref() == Some("success")
     }
@@ -72,8 +72,11 @@ fn failing_test_name(line: &str) -> Option<&str> {
     {
         return test.split_whitespace().last();
     }
-    for marker in ["✕", "×"] {
+    for marker in ["✕", "×", "✖"] {
         if let Some((_, name)) = line.split_once(marker) {
+            if name.trim() == "failing tests:" {
+                return None;
+            }
             return Some(name.trim().split(" (").next().unwrap());
         }
     }
@@ -85,7 +88,7 @@ fn failing_test_name(line: &str) -> Option<&str> {
 
 fn mentions_test(text: &str, test: &str) -> bool {
     let name_character =
-        |character: char| character.is_alphanumeric() || "_:./-".contains(character);
+        |character: char| character.is_alphanumeric() || "_:/-".contains(character);
     text.match_indices(test).any(|(start, _)| {
         text[..start]
             .chars()
@@ -99,10 +102,14 @@ fn mentions_test(text: &str, test: &str) -> bool {
 }
 
 impl GitHub {
-    /// The latest push run, including pending runs so an older failure cannot
-    /// trigger filing while a newer run is underway. All evidence must be
-    /// readable before returning a draft; a failed read never publishes one.
-    pub(crate) fn base_ci_failure(&self, repo: &Repo, base: &str) -> Result<Option<BaseCiFailure>> {
+    /// Read the latest push attempt and its preceding outcome. A pending latest
+    /// run hides earlier failures; report construction reads logs before any
+    /// publication, so a failed evidence read never publishes a Ticket.
+    pub(crate) fn base_ci_evidence(
+        &self,
+        repo: &Repo,
+        base: &str,
+    ) -> Result<Option<BaseCiEvidence>> {
         let query =
             serde_urlencoded::to_string([("branch", base), ("event", "push"), ("per_page", "1")])?;
         let runs = self.gh_json(&[
@@ -154,7 +161,7 @@ impl GitHub {
                 &run
             },
         )?;
-        Ok(Some(BaseCiFailure {
+        Ok(Some(BaseCiEvidence {
             base: base.to_string(),
             run,
             failed,
@@ -187,8 +194,8 @@ impl GitHub {
             .collect())
     }
 
-    fn ci_red_body(&self, repo: &Repo, failure: &BaseCiFailure) -> Result<CiReport> {
-        let BaseCiFailure {
+    fn ci_report(&self, repo: &Repo, failure: &BaseCiEvidence) -> Result<CiReport> {
+        let BaseCiEvidence {
             base,
             run,
             failed,
@@ -275,6 +282,7 @@ impl GitHub {
                         || line.contains("FAIL ")
                         || line.contains("✕")
                         || line.contains("×")
+                        || line.contains("✖")
                         || line.contains("not ok ")
                 })
                 .take(50)
@@ -297,10 +305,10 @@ impl GitHub {
     /// Caller holds the repository-wide CI filing reservation. Use the REST
     /// issue list rather than the eventually indexed search API, and inspect
     /// every page irrespective of labels or Base branch.
-    pub(crate) fn file_ci_red_ticket(
+    pub(crate) fn handle_base_ci(
         &self,
         repo: &Repo,
-        failure: BaseCiFailure,
+        failure: BaseCiEvidence,
     ) -> Result<BaseCiAction> {
         if failure.run.run_attempt == 1 {
             if failure.failed.is_empty() {
@@ -339,7 +347,7 @@ impl GitHub {
                 }
             }
         }
-        let report = self.ci_red_body(repo, &failure)?;
+        let report = self.ci_report(repo, &failure)?;
         let state = if failure.flaky() { "all" } else { "open" };
         let issues = self.gh_api_items(
             &format!(

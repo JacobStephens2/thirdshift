@@ -214,6 +214,51 @@ fn a_renamed_flaky_ticket_still_covers_its_recorded_test() {
 }
 
 #[test]
+fn node_spec_flakes_keep_evidence_and_deduplicate_by_test() {
+    for existing in [false, true] {
+        let scenario = Scenario::new();
+        passed_rerun(&scenario);
+        let test = "Command details opens with the Inbox subject and full title above its actions";
+        let mut state = scenario.gh_state();
+        state["runs"][0]["previous_attempt"]["jobs"][0]["name"] = json!("console-test");
+        state["runs"][0]["jobs"][0]["name"] = json!("console-test");
+        state["job_logs"]["901"] = json!(format!("2026-10-29T10:00:00Z ✖ {test} (123.45ms)\n"));
+        if existing {
+            state["titles"]["7"] = json!("Flaky CI on main: console-test");
+            state["bodies"]["7"] = json!(format!("An earlier commit failed {test}."));
+        }
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let state = scenario.gh_state();
+        if existing {
+            assert_eq!(state["issues"].as_object().unwrap().len(), 1, "{state}");
+        } else {
+            let body = state["bodies"]["8"].as_str().unwrap();
+            assert!(body.contains(test), "{body}");
+        }
+    }
+}
+
+#[test]
+fn node_failure_summary_does_not_make_different_tests_duplicates() {
+    let scenario = Scenario::new();
+    passed_rerun(&scenario);
+    let mut state = scenario.gh_state();
+    state["job_logs"]["901"] = json!("✖ a different test (123.45ms)\n✖ failing tests:\n");
+    state["titles"]["7"] = json!("Flaky CI on main: console-test");
+    state["bodies"]["7"] = json!("✖ the original test (12.34ms)\n✖ failing tests:\n");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.gh_state()["titles"]["8"],
+        "Flaky CI on main: Rust (Linux)"
+    );
+}
+
+#[test]
 fn pickup_reads_origin_and_the_named_base_and_can_take_the_ticket_normally() {
     let scenario = Scenario::new();
     failed_push(&scenario);
