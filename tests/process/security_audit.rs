@@ -1,0 +1,325 @@
+use super::*;
+use serde_json::json;
+
+const AUDIT: &str = r#"
+version = 1
+description = "Audit and reproduce privately"
+[[steps]]
+name = "audit"
+catalogue = "security-audit"
+[[steps]]
+name = "reproduce"
+catalogue = "reproduce-findings"
+"#;
+
+fn audit_script() -> String {
+    let findings = json!([{
+        "verdict": "needs_validation", "fingerprint": "bounded-input",
+        "title": "Unchecked input size", "description": "Private candidate write-up.",
+        "claimed_root_cause": "Input reaches storage without a bound.",
+        "trace": [{"kind":"entrypoint", "file":"README.md", "line":1, "scope":"input", "description":"Private trace."}],
+        "evidence": [{"file":"README.md", "line":1, "description":"Private evidence."}],
+        "blockers": ["No sandbox available."],
+        "validation_plan": {"local":"Exercise a bounded fixture."}
+    }]);
+    format!(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+output=$(sed -n 's/^Output directory: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$output"
+printf '%s\n' '{findings}' > "$output/findings.json"
+printf '%s\n' '[]' > "$output/coverage-ledger.json"
+printf '%s\n' '{{"run_status":"complete"}}' > "$output/run-metadata.json"
+printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+const REPRODUCE: &str = r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" > prompt.txt
+test_file=$(sed -n 's/^Test file: `\(.*\)`\.$/\1/p' prompt.txt)
+test -n "$test_file"
+printf '%s\n' 'bounded_fixture();' > "$test_file"
+printf '%s\n' 'Private reproduction evidence and impact reasoning.' 'Security reproduction: reproduced high single' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#;
+
+#[test]
+fn catalogue_audits_and_reproduces_privately_and_keeps_completed_reproductions() {
+    for private in [false, true] {
+        let scenario = Scenario::new();
+        let mut state = scenario.gh_state();
+        state["private"] = json!(private);
+        scenario.write_gh_state(&state);
+        write_process(&scenario, "audit", AUDIT);
+        scenario.agent_does_in_session(1, &audit_script());
+        scenario.agent_does_in_session(2, REPRODUCE);
+        let first = scenario.run(&["process", "audit"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        assert_eq!(scenario.claude_calls().len(), 2);
+        let state = scenario.gh_state();
+        let description = if private {
+            assert_eq!(
+                state["labels"]["8"],
+                json!(["security-finding", "needs-triage"])
+            );
+            state["bodies"]["8"].as_str().unwrap()
+        } else {
+            assert!(scenario.gh_calls_of("issue", "create").is_empty());
+            assert_eq!(state["advisories"][0]["state"], "draft");
+            state["advisories"][0]["description"].as_str().unwrap()
+        };
+        assert!(
+            description.contains("Outcome: reproduced high single"),
+            "{description}"
+        );
+        assert!(description.contains("bounded_fixture();"), "{description}");
+        assert!(!first.stdout.contains("Private reproduction evidence"));
+        assert!(!first.stderr.contains("Private candidate write-up"));
+        assert_eq!(scenario.entries("work"), vec![support::REPO]);
+
+        scenario.origin_has_commit("main", "change.txt", "new work", "Move Base branch");
+        scenario.agent_does_in_session(3, &audit_script());
+        let second = scenario.run(&["process", "audit"]);
+        assert_eq!(second.code, Some(0), "{}", second.stderr);
+        assert_eq!(scenario.claude_calls().len(), 3);
+        assert!(
+            !second.stderr.contains("starting Security reproduction"),
+            "{}",
+            second.stderr
+        );
+        assert_eq!(scenario.gh_state()["advisories"], state["advisories"]);
+        assert_eq!(scenario.gh_state()["bodies"], state["bodies"]);
+    }
+}
+
+#[test]
+fn security_catalogue_sessions_stay_out_of_otlp() {
+    let receiver = ResendStandIn::replying(200, "{}");
+    let scenario = Scenario::new();
+    scenario.user_config_is(&format!(
+        "[otlp]\nendpoint = '{}/v1/traces'\n",
+        receiver.url()
+    ));
+    write_process(&scenario, "audit", AUDIT);
+    scenario.agent_does_in_session(1, &audit_script());
+    scenario.agent_does_in_session(2, REPRODUCE);
+    let result = scenario.run(&["process", "audit"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    assert!(
+        receiver.requests().is_empty(),
+        "{} private Security requests were exported",
+        receiver.requests().len()
+    );
+}
+
+#[test]
+fn catalogue_skips_both_steps_when_a_record_awaits_an_allowed_fix() {
+    for (config, flag, allowed) in [
+        ("", Some("security-fix"), true),
+        ("[security]\nfix = true\n", None, true),
+        ("[security]\nfix = false\n", Some("--security-fix"), true),
+        ("[security]\nfix = true\n", Some("no-security-fix"), false),
+        ("", None, false),
+    ] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "audit", AUDIT);
+        scenario.agent_does_in_session(1, &audit_script());
+        scenario.agent_does_in_session(2, REPRODUCE);
+        let first = scenario.run(&["process", "audit"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        let records = scenario.gh_state()["advisories"].clone();
+        scenario.user_config_is(config);
+        scenario.agent_does_in_session(3, &audit_script());
+        let mut args = vec!["process", "audit"];
+        args.extend(flag);
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            scenario.claude_calls().len(),
+            if allowed { 2 } else { 3 },
+            "{}",
+            result.stderr
+        );
+        assert_eq!(
+            result.stderr.matches("awaits an allowed fix").count(),
+            if allowed { 2 } else { 0 }
+        );
+        assert_eq!(scenario.gh_state()["advisories"], records);
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+    }
+}
+
+#[test]
+fn each_security_step_uses_its_own_harness_model_and_effort() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "audit", &AUDIT
+        .replace("catalogue = \"security-audit\"", "catalogue = \"security-audit\"\nharness = 'codex'\nmodel = 'gpt-6.1-sol'\neffort = 'high'")
+        .replace("catalogue = \"reproduce-findings\"", "catalogue = \"reproduce-findings\"\nharness = 'claude'\nmodel = 'sonnet'\neffort = 'medium'"));
+    scenario.agent_does(&format!(
+        r#"
+case "$FAKE_CLAUDE_PROMPT" in
+  *'Output directory:'*) {} ;;
+  *'Test file:'*) {} ;;
+  *) true ;;
+esac
+"#,
+        audit_script(),
+        REPRODUCE
+    ));
+    let result = scenario.run(&["process", "audit"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let codex = scenario.codex_calls();
+    let audit = codex
+        .iter()
+        .find(|call| {
+            call["prompt"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Output directory:")
+        })
+        .unwrap();
+    assert_flag(audit, "-m", "gpt-6.1-sol");
+    assert!(argv_of(audit).contains(&"model_reasoning_effort=\"high\"".to_string()));
+    let claude = scenario.claude_calls();
+    let reproduction = claude
+        .iter()
+        .find(|call| {
+            call["prompt"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Test file:")
+        })
+        .unwrap();
+    assert_flag(reproduction, "--model", "sonnet");
+    assert_flag(reproduction, "--effort", "medium");
+}
+
+#[test]
+fn audit_and_reproduction_failures_stop_later_steps_without_publication() {
+    for audit_fails in [true, false] {
+        let scenario = Scenario::new();
+        write_process(
+            &scenario,
+            "audit",
+            &format!(
+                "{AUDIT}\n[[steps]]\nname = 'after'\ncommand = 'touch \"$HOME/unsafe-after\"'\n"
+            ),
+        );
+        let audit = audit_script();
+        scenario.agent_does_in_session(
+            1,
+            if audit_fails {
+                "printf incomplete > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+            } else {
+                &audit
+            },
+        );
+        scenario.agent_does_in_session(2, "printf incomplete > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+        let result = scenario.run(&["process", "audit"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(
+            scenario.claude_calls().len(),
+            if audit_fails { 1 } else { 2 }
+        );
+        assert!(
+            result.stderr.contains("without the final line"),
+            "{}",
+            result.stderr
+        );
+        assert!(!scenario.path("home/unsafe-after").exists());
+        assert!(scenario.gh_calls_of("issue", "create").is_empty());
+        assert_eq!(scenario.entries("work"), vec![support::REPO]);
+    }
+}
+
+#[test]
+fn security_catalogue_refuses_invalid_placement_before_sessions() {
+    for (body, reason) in [
+        (AUDIT.replace("catalogue = \"security-audit\"", "catalogue = \"security-audit\"\nparallel = 'audit'"), "security-audit cannot be in a parallel group"),
+        (AUDIT.replace("catalogue = \"reproduce-findings\"", "catalogue = \"reproduce-findings\"\noptional = true"), "reproduce-findings must be required"),
+        (AUDIT.replace("catalogue = \"security-audit\"", "catalogue = \"security-audit\"\noptional = true"), "security-audit must be required"),
+        (AUDIT.replace("catalogue = \"reproduce-findings\"", "catalogue = \"reproduce-findings\"\nparallel = 'reproduce'"), "reproduce-findings cannot be in a parallel group"),
+        ("version = 1\ndescription = 'Reproduce'\n[[steps]]\nname = 'reproduce'\ncatalogue = 'reproduce-findings'\n".to_string(), "reproduce-findings must follow security-audit"),
+    ] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "audit", &body);
+        let result = scenario.run(&["process", "audit"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stderr.contains(reason), "{}", result.stderr);
+        assert!(scenario.claude_calls().is_empty());
+        assert!(!scenario.path("home/.thirdshift/logs/acme/widgets/audits").exists());
+    }
+}
+
+#[test]
+fn reproduction_uses_the_audited_commit_after_the_base_branch_moves() {
+    let scenario = Scenario::new();
+    let audited = scenario.origin_git(&["rev-parse", "main"]);
+    write_process(
+        &scenario,
+        "audit",
+        &AUDIT.replace(
+            "[[steps]]\nname = \"reproduce\"",
+            r#"
+[[steps]]
+name = "move-base"
+command = '''
+printf moved > later.txt
+git add later.txt
+git commit -q -m 'Move Base branch after audit'
+git push -q origin HEAD:main
+'''
+[[steps]]
+name = "reproduce""#,
+        ),
+    );
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "git rev-parse HEAD > \"$HOME/audit-head\"\n{}",
+            audit_script()
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!("git rev-parse HEAD > \"$HOME/reproduction-head\"\n{REPRODUCE}"),
+    );
+    let result = scenario.run(&["process", "audit"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_ne!(scenario.origin_git(&["rev-parse", "main"]), audited);
+    assert_eq!(
+        fs::read_to_string(scenario.path("home/audit-head")).unwrap(),
+        audited
+    );
+    assert_eq!(
+        fs::read_to_string(scenario.path("home/reproduction-head")).unwrap(),
+        audited
+    );
+}
+
+#[test]
+fn repeated_findings_keep_a_completed_unsuccessful_reproduction() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "audit", AUDIT);
+    scenario.agent_does_in_session(1, &audit_script());
+    scenario.agent_does_in_session(
+        2,
+        &REPRODUCE.replace("reproduced high single", "not reproduced"),
+    );
+    let first = scenario.run(&["process", "audit"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let record = scenario.gh_state()["advisories"].clone();
+    scenario.agent_does_in_session(3, &audit_script());
+    let second = scenario.run(&["process", "audit"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(scenario.claude_calls().len(), 3);
+    assert_eq!(scenario.gh_state()["advisories"], record);
+    assert!(
+        second
+            .stderr
+            .contains("keeping the completed Security reproduction"),
+        "{}",
+        second.stderr
+    );
+}

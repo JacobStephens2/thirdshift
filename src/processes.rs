@@ -61,6 +61,7 @@ pub(crate) mod architect;
 mod architecture;
 mod catalog;
 mod identity;
+mod security_audit;
 mod spec_review;
 pub(crate) use identity::Identity;
 pub(crate) mod ticket;
@@ -82,6 +83,7 @@ struct ProcessFile {
     /// this ready for review; `check` never merges.
     goal: Goal,
     security_review: bool,
+    security_fix: bool,
     plan_only: bool,
 }
 
@@ -158,6 +160,8 @@ enum DraftKind {
     ArchitectureReview { line: usize },
     SpecReview { line: usize },
     SecurityReview { line: usize },
+    SecurityAudit { line: usize },
+    ReproduceFindings { line: usize },
     Delivery { line: usize },
     SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
@@ -193,6 +197,8 @@ impl ResolvedStep {
             StepKind::ArchitectureReview => "architecture-review",
             StepKind::SpecReview => "spec-review",
             StepKind::SecurityReview => "security-review",
+            StepKind::SecurityAudit => "security-audit",
+            StepKind::ReproduceFindings => "reproduce-findings",
             StepKind::Delivery => "delivery",
             StepKind::SelfMerge => "self-merge",
             StepKind::RunPublishedIssue { .. } => "run-published-issue",
@@ -370,6 +376,8 @@ enum StepKind {
     ArchitectureReview,
     SpecReview,
     SecurityReview,
+    SecurityAudit,
+    ReproduceFindings,
     Delivery,
     SelfMerge,
     RunPublishedIssue { process: String },
@@ -403,6 +411,8 @@ struct Prepared {
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
     security_review: bool,
+    security_fix: bool,
+    security_findings: Mutex<Option<crate::security::findings::Findings>>,
     plan_only: bool,
     completed: Mutex<CompletedRuns>,
     /// Killed work retained across session Steps, ordered by Step even when
@@ -599,6 +609,11 @@ fn run(command: &ProcessRun) -> Result<String> {
         ..Flags::default()
     }
     .security_review(&config);
+    file.security_fix = Flags {
+        security_fix: command.security_fix,
+        ..Flags::default()
+    }
+    .security_fix_allowed(&config);
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way. An Issue-branch
     // worktree with no issue is refused before the Pass log. A failure here
@@ -1183,7 +1198,12 @@ fn execute_groups(
         let outcomes = if group.len() == 1 {
             let started = Instant::now();
             let began_at = Utc::now();
-            let outcome = if matches!(group[0].kind, StepKind::SpecReview) {
+            let outcome = if matches!(
+                group[0].kind,
+                StepKind::SecurityAudit | StepKind::ReproduceFindings
+            ) {
+                security_audit::run(prepared, &group[0], range.start)
+            } else if matches!(group[0].kind, StepKind::SpecReview) {
                 spec_review::run(
                     prepared,
                     &group[0],
@@ -1800,6 +1820,9 @@ fn run_step_in(
     match &step.kind {
         StepKind::Implement => run_implement(run, cwd, step),
         StepKind::ArchitectureReview => architecture::run(run, step),
+        StepKind::SecurityAudit | StepKind::ReproduceFindings => {
+            bail!("Security audit Steps cannot be in a parallel group")
+        }
         StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
         StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
         StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
@@ -2284,6 +2307,8 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
         StepKind::ArchitectureReview => format!("{}: architecture-review", step.name),
         StepKind::SpecReview => format!("{}: spec-review", step.name),
         StepKind::SecurityReview => format!("{}: security-review", step.name),
+        StepKind::SecurityAudit => format!("{}: security-audit", step.name),
+        StepKind::ReproduceFindings => format!("{}: reproduce-findings", step.name),
         StepKind::SelfMerge => format!("{}: self-merge", step.name),
         StepKind::RunPublishedIssue { process } if process != "ticket-run" => {
             format!("{}: run-published-issue (process {process})", step.name)
@@ -2316,6 +2341,7 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     refuse_worktrees(path, &file)?;
     refuse_implement(path, &file)?;
     architecture::validate(path, &file)?;
+    security_audit::validate(path, &file)?;
     refuse_self_merge(path, &file)?;
     refuse_issue_branch(path, &file)?;
     refuse_published(path, &file.steps)?;
@@ -2422,6 +2448,8 @@ fn prepare_from(
         limits: file.limits,
         goal: file.goal,
         security_review: file.security_review,
+        security_fix: file.security_fix,
+        security_findings: Mutex::default(),
         plan_only: file.plan_only,
         completed: Mutex::new(CompletedRuns::default()),
         killed_work: Mutex::default(),
@@ -2994,6 +3022,8 @@ fn resolve(
         DraftKind::ArchitectureReview { .. } => StepKind::ArchitectureReview,
         DraftKind::SpecReview { .. } => StepKind::SpecReview,
         DraftKind::SecurityReview { .. } => StepKind::SecurityReview,
+        DraftKind::SecurityAudit { .. } => StepKind::SecurityAudit,
+        DraftKind::ReproduceFindings { .. } => StepKind::ReproduceFindings,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
         DraftKind::RunPublishedIssue { line } => StepKind::RunPublishedIssue {
@@ -3077,6 +3107,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         limits,
         goal: Goal::ReadyForReview,
         security_review: false,
+        security_fix: false,
         plan_only: false,
     })
 }
@@ -3516,6 +3547,8 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         "spec-review" => DraftKind::SpecReview { line },
         "delivery" => DraftKind::Delivery { line },
         "security-review" => DraftKind::SecurityReview { line },
+        "security-audit" => DraftKind::SecurityAudit { line },
+        "reproduce-findings" => DraftKind::ReproduceFindings { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
         "land-tickets" => DraftKind::LandTickets { line },
         "self-merge" => DraftKind::SelfMerge { line },
@@ -3524,7 +3557,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
                 path,
                 line,
                 "catalogue",
-                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge or land-tickets",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit or reproduce-findings",
             ));
         }
     };
