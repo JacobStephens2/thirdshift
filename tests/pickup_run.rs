@@ -21,6 +21,7 @@ mod support;
 
 use std::fs;
 
+use support::concurrency::{release as release_issue, waits_on};
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{
     HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log, write_executable,
@@ -1898,27 +1899,6 @@ fn at_command_limit(running: usize, limit: usize) -> String {
     )
 }
 
-/// A script in which the agent for issue `issue` touches `started-<issue>`
-/// in the scenario root, waits there until the test touches
-/// `release-<issue>`, or until the scenario is gone, then opens its PR into
-/// `main`.
-fn agent_waits_on_its_own_then_opens_pr(issue: u32) -> String {
-    format!(
-        r#"
-root=$(dirname "$FAKE_CLAUDE_RECORD")
-touch "$root/started-{issue}"
-while [ -d "$root" ] && [ ! -e "$root/release-{issue}" ]; do sleep 0.05; done
-{}"#,
-        agent_opens_pr(issue, "main")
-    )
-}
-
-/// Let the agent for `issue`, held by
-/// [`agent_waits_on_its_own_then_opens_pr`], go on.
-fn release_issue(scenario: &Scenario, issue: u32) {
-    fs::write(scenario.path(&format!("release-{issue}")), "").unwrap();
-}
-
 fn activity_log(scenario: &Scenario) -> String {
     fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
         .unwrap_or_default()
@@ -1930,7 +1910,10 @@ fn at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_na
     scenario.user_config_is(COMMAND_LIMIT_2);
     for issue in [7, 9] {
         ready_issue(&scenario, issue, &[]);
-        scenario.agent_does_for(issue, &agent_waits_on_its_own_then_opens_pr(issue));
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
     }
     ready_issue(&scenario, 11, &[]);
     let first = scenario.run_until(&["pickup"], &[], "started-7");
@@ -1993,7 +1976,10 @@ fn a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_t
     }
     scenario.issue_is(5, "OPEN");
     for issue in [5, 7, 9] {
-        scenario.agent_does_for(issue, &agent_waits_on_its_own_then_opens_pr(issue));
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
     }
     release_issue(&scenario, 9);
     let pickup = scenario.run_until(&["pickup"], &[], "started-7");
@@ -2033,7 +2019,7 @@ fn at_the_default_command_limit_a_pass_beside_a_hand_started_ticket_run_names_th
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
     scenario.issue_is(5, "OPEN");
-    scenario.agent_does_for(5, &agent_waits_on_its_own_then_opens_pr(5));
+    scenario.agent_does_for(5, &format!("{}{}", waits_on(5), agent_opens_pr(5, "main")));
     let by_hand = scenario.run_until(&[&scenario.issue_url(5)], &[], "started-5");
 
     let skipped = scenario.run(&["pickup"]);
@@ -2053,7 +2039,10 @@ fn a_killed_pickup_run_or_ticket_run_frees_its_slot_for_the_next_pass() {
         scenario.issue_is(5, "OPEN");
         // The killed Command's agent waits; the next Pass's opens its PR.
         let (killed, taken) = if by_hand { (5, 7) } else { (7, 9) };
-        scenario.agent_does_for(killed, &agent_waits_on_its_own_then_opens_pr(killed));
+        scenario.agent_does_for(
+            killed,
+            &format!("{}{}", waits_on(killed), agent_opens_pr(killed, "main")),
+        );
         scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
         let started = format!("started-{killed}");
         let mut held = if by_hand {
@@ -2084,7 +2073,7 @@ fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_
     let old_pass = fs::File::create(&legacy).unwrap();
     old_pass.try_lock().unwrap();
     ready_issue(&scenario, 7, &[]);
-    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
 
     let skipped = scenario.run(&["pickup"]);
 
@@ -2108,8 +2097,62 @@ fn a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_
 }
 
 #[test]
-fn at_a_command_limit_of_2_a_pass_from_before_the_command_limit_and_a_pickup_run_fill_the_repository()
- {
+fn an_older_pass_stays_excluded_until_the_last_overlapping_new_pass_ends() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    for issue in [7, 9] {
+        ready_issue(&scenario, issue, &[]);
+        scenario.agent_does_for(
+            issue,
+            &format!("{}{}", waits_on(issue), agent_opens_pr(issue, "main")),
+        );
+    }
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run_until(&["pickup"], &[], "started-9");
+    release_issue(&scenario, 7);
+    assert_eq!(first.finish().code, Some(0));
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    let old_pass = fs::File::create(legacy).unwrap();
+    let lock_result = old_pass.try_lock();
+    release_issue(&scenario, 9);
+    second.finish();
+    assert!(
+        matches!(lock_result, Err(fs::TryLockError::WouldBlock)),
+        "an older Pass acquired the legacy lock while the second Pickup run was live: {lock_result:?}"
+    );
+}
+
+#[test]
+fn an_older_pass_cannot_restart_while_a_newer_pickup_is_live() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(COMMAND_LIMIT_2);
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
+    let skipped = scenario.run(&["pickup"]);
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: an older thirdshift's Pass is running on acme/widgets\n"
+    );
+    drop(old_pass);
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let restarted_old_pass = fs::File::create(&legacy).unwrap();
+    let lock_result = restarted_old_pass.try_lock();
+    release_issue(&scenario, 7);
+    pickup.finish();
+    assert!(
+        matches!(lock_result, Err(fs::TryLockError::WouldBlock)),
+        "an older Pass restarted while the newer Pickup run was live: {lock_result:?}"
+    );
+}
+
+#[test]
+fn at_a_command_limit_of_2_a_pickup_run_is_skipped_until_a_pass_from_before_the_command_limit_ends()
+{
     let scenario = Scenario::new();
     scenario.user_config_is(COMMAND_LIMIT_2);
     let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
@@ -2118,22 +2161,27 @@ fn at_a_command_limit_of_2_a_pass_from_before_the_command_limit_and_a_pickup_run
     old_pass.try_lock().unwrap();
     ready_issue(&scenario, 7, &[]);
     ready_issue(&scenario, 9, &[]);
-    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
     scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
-    let first = scenario.run_until(&["pickup"], &[], "started-7");
-
-    let second = scenario.run(&["pickup"]);
-
-    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
-    assert_eq!(after_start(&second.stderr), at_command_limit(2, 2));
+    let skipped = scenario.run(&["pickup"]);
+    assert_eq!(skipped.code, Some(0), "stderr: {}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: an older thirdshift's Pass is running on acme/widgets\n"
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT]);
+    assert!(scenario.claude_calls().is_empty());
+    drop(old_pass);
+    let first = scenario.run_until(&["pickup"], &[], "started-7");
+    let second = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&second, &pr_from(&scenario, "issue-9"), "ready for review");
     release_issue(&scenario, 7);
     assert_ended_with_pr(
         &first.finish(),
         &pr_from(&scenario, "issue-7"),
         "ready for review",
     );
-    drop(old_pass);
 }
 
 #[test]
@@ -2146,13 +2194,9 @@ fn at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_
     let old_pass = fs::File::create(&legacy).unwrap();
     old_pass.try_lock().unwrap();
 
-    for (args, starting, kind) in [
-        (
-            vec!["architect", "--plan-only"],
-            "Architect run starting",
-            "an Architect run",
-        ),
-        (vec!["secure"], "Security run starting", "a Security run"),
+    for (args, starting) in [
+        (vec!["architect", "--plan-only"], "Architect run starting"),
+        (vec!["secure"], "Security run starting"),
     ] {
         let skipped = scenario.run(&args);
 
@@ -2164,9 +2208,7 @@ fn at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_
         );
         assert_eq!(
             support::after_start(&skipped.stderr, starting),
-            format!(
-                "thirdshift: an older thirdshift's Pass is running on acme/widgets, and may be {kind}\n"
-            ),
+            "thirdshift: an older thirdshift's Pass is running on acme/widgets\n",
             "{args:?}"
         );
         assert_eq!(skipped.stdout, "");

@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 
 use serde_json::{Value, json};
+use support::concurrency::{release, reservations, waits_on};
 use support::resend::ResendStandIn;
 use support::{REPO, Scenario, write_executable};
 
@@ -5270,35 +5271,6 @@ fn an_audit_only_security_run_does_not_check_the_security_review_harness() {
 /// with no settling, so a Pickup run takes an issue as soon as it is Ready.
 fn command_limit(limit: usize) -> String {
     format!("[pass]\ncommand_limit = {limit}\n[pickup]\nwait_minutes = 0\n")
-}
-
-/// A script that touches `started-<name>` in the scenario root, then waits
-/// there until the test touches `release-<name>`, or until the scenario is
-/// gone.
-fn waits_on(name: &str) -> String {
-    format!(
-        r#"
-root=$(dirname "$FAKE_CLAUDE_RECORD")
-touch "$root/started-{name}"
-while [ -d "$root" ] && [ ! -e "$root/release-{name}" ]; do sleep 0.05; done
-"#
-    )
-}
-
-fn release(scenario: &Scenario, name: &str) {
-    fs::write(scenario.path(&format!("release-{name}")), "").unwrap();
-}
-
-/// The Pickup reservation refs on origin, one line each.
-fn reservations(scenario: &Scenario) -> String {
-    scenario
-        .origin_git(&[
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads/thirdshift/pickup",
-        ])
-        .trim_end()
-        .to_string()
 }
 
 /// `stderr` after the line saying the Security run is starting.

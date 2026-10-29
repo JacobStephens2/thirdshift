@@ -13,11 +13,11 @@
 //! one repository at once. A Pickup run or an issue-less Custom process
 //! takes no lock of a kind.
 //!
-//! A Pass also tries the lock a thirdshift from before the Command limit
-//! takes, and keeps it when it is free, so that the two still keep each
-//! other out: one held by such a thirdshift counts as a Command running. An
-//! Architect run or a Security run is skipped beside one, whose kind it
-//! can't tell.
+//! A Pass also tries a shared lock on the file a thirdshift from before the
+//! Command limit locks exclusively. Every overlapping newer Pass keeps its
+//! shared lock until it ends, so an older Pass cannot start until they all
+//! end. One held by an older thirdshift counts as a Command running and
+//! excludes every newer Pass, even above a Command limit of one.
 
 use std::fmt;
 use std::fs::{self, File, TryLockError};
@@ -80,9 +80,9 @@ enum Why {
     AtLimit { running: usize },
     /// Another Pass of this one's kind is running.
     SameKind(PassKind),
-    /// A thirdshift from before the Command limit is running a Pass, which
-    /// may be of this one's kind.
-    Older(PassKind),
+    /// A thirdshift from before the Command limit is running an exclusive
+    /// Pass, even though the Command limit would admit another.
+    Older,
 }
 
 impl fmt::Display for AlreadyRunning {
@@ -95,11 +95,7 @@ impl fmt::Display for AlreadyRunning {
                 commands_running(running)
             ),
             Why::SameKind(kind) => write!(f, "{} is already running on {repo}", kind.name()),
-            Why::Older(kind) => write!(
-                f,
-                "an older thirdshift's Pass is running on {repo}, and may be {}",
-                kind.name()
-            ),
+            Why::Older => write!(f, "an older thirdshift's Pass is running on {repo}"),
         }
     }
 }
@@ -158,37 +154,26 @@ pub fn hold_pass(
         },
     };
     let held = slots.count()?;
-    let legacy = try_lock(&legacy_path(repo)?)?;
-    let marker = try_lock(&slots.dir.join(LEGACY_HELD))?;
+    let legacy = try_lock(&legacy_path(repo)?, File::try_lock_shared)?;
     // A thirdshift from before the Command limit takes no slot, so the lock
-    // it takes, held while no Pass from after holds the marker, is one more
-    // Command running.
-    let older = legacy.is_none() && marker.is_some();
-    let running = held.held + usize::from(older);
+    // it holds exclusively is one more Command running. Newer Passes share
+    // that lock, so each keeps an older Pass out until its own process ends.
+    let running = held.held + usize::from(legacy.is_none());
     if running >= limit.get() {
         return skipped(Why::AtLimit { running });
     }
-    // An older thirdshift's Architect run and Security run share one review
-    // worktree, so neither kind runs beside a Pass of one.
-    if let Some((kind, _)) = kind
-        && older
-    {
-        return skipped(Why::Older(kind));
-    }
+    // An older Pass expects exclusive access. Starting beside it would also
+    // leave this Pass unable to keep another older Pass out after it ends.
+    let Some(legacy) = legacy else {
+        return skipped(Why::Older);
+    };
     slots.take(held.free)?;
     if let Some((_, lock)) = kind {
         hold(lock);
     }
-    if let (Some(legacy), Some(marker)) = (legacy, marker) {
-        hold(marker);
-        hold(legacy);
-    }
+    hold(legacy);
     Ok(None)
 }
-
-/// The lock file a Pass from after the Command limit holds while it holds
-/// the lock a thirdshift from before takes, so that the two are told apart.
-const LEGACY_HELD: &str = "legacy-held.lock";
 
 /// The slots of one repository: a directory under `~/.thirdshift` named for
 /// it, as GitHub compares names, whatever their case. Each slot is a file
@@ -238,7 +223,7 @@ impl Slots {
                 count.free = free.unwrap_or(n);
                 return Ok(count);
             }
-            match try_lock(&path)? {
+            match try_lock(&path, File::try_lock)? {
                 Some(_) => free = free.or(Some(n)),
                 None => count.held += 1,
             }
@@ -250,7 +235,7 @@ impl Slots {
     /// process exits.
     fn take(&self, n: usize) -> Result<()> {
         let path = self.slot(n);
-        let slot = try_lock(&path)?
+        let slot = try_lock(&path, File::try_lock)?
             .with_context(|| format!("{} was taken while counting", path.display()))?;
         hold(slot);
         Ok(())
@@ -263,7 +248,10 @@ impl Slots {
     /// The lock a Pass of `kind` holds while it runs, if no such Pass
     /// holds it now.
     fn try_kind(&self, kind: PassKind) -> Result<Option<File>> {
-        try_lock(&self.dir.join(format!("{}.lock", kind.slug())))
+        try_lock(
+            &self.dir.join(format!("{}.lock", kind.slug())),
+            File::try_lock,
+        )
     }
 }
 
@@ -290,11 +278,11 @@ fn open(path: &Path) -> Result<File> {
         .with_context(|| format!("can't open {}", path.display()))
 }
 
-/// Try, without waiting, to lock `path`: `None` while another process, or
-/// another of this process's files, holds it.
-fn try_lock(path: &Path) -> Result<Option<File>> {
+/// Try, without waiting, to lock `path` using the shared or exclusive
+/// `locking` operation: `None` while an incompatible lock is held.
+fn try_lock(path: &Path, locking: fn(&File) -> Result<(), TryLockError>) -> Result<Option<File>> {
     let file = open(path)?;
-    match file.try_lock() {
+    match locking(&file) {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(error)) => {

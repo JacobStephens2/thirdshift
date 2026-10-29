@@ -24,6 +24,7 @@ mod support;
 
 use std::fs;
 
+use support::concurrency::{release as release_issue, reservations, waits_on};
 use support::resend::ResendStandIn;
 use support::{REPO, RunResult, Scenario, TimelineEvent, before_command_log, leaves_running};
 
@@ -2973,39 +2974,6 @@ fn command_limit(limit: usize) -> String {
     format!("[pass]\ncommand_limit = {limit}\n")
 }
 
-/// A script in which the agent for issue `issue` touches `started-<issue>`
-/// in the scenario root, waits there until the test touches
-/// `release-<issue>`, or until the scenario is gone, then opens its PR into
-/// `main`.
-fn agent_waits_on_its_own_then_opens_pr(issue: u32) -> String {
-    format!(
-        r#"
-root=$(dirname "$FAKE_CLAUDE_RECORD")
-touch "$root/started-{issue}"
-while [ -d "$root" ] && [ ! -e "$root/release-{issue}" ]; do sleep 0.05; done
-{}"#,
-        agent_opens_pr(issue, "main")
-    )
-}
-
-/// Let the agent for `issue`, held by
-/// [`agent_waits_on_its_own_then_opens_pr`], go on.
-fn release_issue(scenario: &Scenario, issue: u32) {
-    fs::write(scenario.path(&format!("release-{issue}")), "").unwrap();
-}
-
-/// The Pickup reservation refs on origin, one line each.
-fn reservations(scenario: &Scenario) -> String {
-    scenario
-        .origin_git(&[
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads/thirdshift/pickup",
-        ])
-        .trim_end()
-        .to_string()
-}
-
 #[test]
 fn at_a_command_limit_of_3_an_architect_run_reserves_its_plan_beside_a_live_pickup_run_and_another_passes_it_over()
  {
@@ -3015,10 +2983,10 @@ fn at_a_command_limit_of_3_an_architect_run_reserves_its_plan_beside_a_live_pick
     scenario.user_config_is(&format!("{}[pickup]\nwait_minutes = 0\n", command_limit(3)));
     scenario.issue_is(7, "OPEN");
     scenario.issue_labelled(7, &["ready-for-agent"]);
-    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
+    scenario.agent_does_for(7, &format!("{}{}", waits_on(7), agent_opens_pr(7, "main")));
     let pickup = scenario.run_until(&["pickup"], &[], "started-7");
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
-    scenario.agent_does_for(8, &agent_waits_on_its_own_then_opens_pr(8));
+    scenario.agent_does_for(8, &format!("{}{}", waits_on(8), agent_opens_pr(8, "main")));
 
     scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
     // Once the plan, #8, is marked ready, and before the run it is
