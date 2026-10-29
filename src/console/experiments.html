@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" data-theme="{{ page.theme }}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><link rel="stylesheet" href="/assets/experiments.css"><script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script><script src="/assets/console.js" type="module"></script><script src="/assets/experiments.js" type="module"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }} · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><link rel="stylesheet" href="/assets/experiments.css"><script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script><script src="/assets/console.js" type="module"></script><script src="/assets/experiments.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 {# html is produced only by the escaping Experiment renderer. #}
 <main id="experiments">{{ html|safe }}

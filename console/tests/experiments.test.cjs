@@ -107,13 +107,14 @@ test('A CLI rename reaches an open Experiment page and its tab title', async t =
   page.setDefaultTimeout(10000);
   await page.goto(`${origin}/experiments/${fixture.id}`);
   await page.getByRole('heading', { level: 1, name: 'v1.0 → issue-1020', exact: true }).waitFor();
-  assert.equal(await page.title(), 'v1.0 → issue-1020 · thirdshift');
+  const host = await page.locator('header h1').textContent();
+  assert.equal(await page.title(), `v1.0 → issue-1020 · ${host} · thirdshift`);
   const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
   const rename = name => execFileSync(binary, ['experiments', fixture.id, '--name', name], { env: { ...process.env, HOME: home }, timeout: 10000 });
   rename('Prompt <b>tweak</b>');
   t.after(() => rename(''));
   await page.getByRole('heading', { level: 1, name: 'Prompt <b>tweak</b>', exact: true }).waitFor({ timeout: 15000 });
-  await page.waitForFunction(() => document.title === 'Prompt <b>tweak</b> · thirdshift');
+  await page.waitForFunction(host => document.title === `Prompt <b>tweak</b> · ${host} · thirdshift`, host);
 });
 test('Experiments update live through Trials, Verdict and rechecks and fit a 390 px phone', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['clipboard-read', 'clipboard-write'] });

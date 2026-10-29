@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en" data-theme="{{ page.theme }}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stop · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/stop.js" type="module"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stop · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/stop.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main id="stop-state" aria-live="polite">
   <h1>{{ details.command }}</h1>

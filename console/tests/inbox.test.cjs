@@ -998,10 +998,11 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
   } finally { await replaceRecord(path, original); }
 });
 
-test("tab title and favicon follow Needs you through pushes", async t => {
+test("tab title keeps the host while Needs you and favicon follow pushes", async t => {
   const page = await pageFor(t);
   await page.goto(origin);
-  assert.equal(await page.title(), '10 need you · thirdshift Console');
+  const host = await page.locator('header h1').textContent();
+  assert.equal(await page.title(), `10 need you · ${host} · thirdshift Console`);
   assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon-urgent.svg');
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const fixtures = [];
@@ -1014,9 +1015,33 @@ test("tab title and favicon follow Needs you through pushes", async t => {
       fixture.outcome = 'merged';
       await replaceRecord(path, JSON.stringify(fixture));
     }
-    await page.waitForFunction(() => document.title === '0 need you · thirdshift Console');
+    await page.waitForFunction(host => document.title === `0 need you · ${host} · thirdshift Console`, host);
     assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
   } finally { for (const [path, original] of fixtures) await replaceRecord(path, original); }
+});
+
+test('reader page titles identify the host without JavaScript', async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false });
+  await page.goto(origin);
+  const host = await page.locator('header h1').textContent();
+  for (const [path, title] of [
+    ['/?page=history', 'History'], ['/?page=security', 'Security'],
+    ['/lanes', 'Lanes'], ['/stages', 'Stages'], ['/?page=waterfall', 'Waterfall'],
+    ['/logs', 'Logs'], ['/cronjobs', 'Cron jobs'], ['/resources', 'Resources'],
+    ['/scores', 'Scores'], ['/bug-origins', 'Bug origins'], ['/experiments', 'Experiments']
+  ]) {
+    const response = await page.goto(`${origin}${path}`);
+    assert.equal(response.status(), 200, path);
+    assert.equal(await page.title(), `${title} · ${host} · thirdshift`, path);
+  }
+  await page.goto(`${origin}/logs`);
+  await page.locator('.log-list a').filter({ hasText: 'Command log' }).first().click();
+  assert.equal(await page.title(), `Command log · ${host} · thirdshift`);
+  await page.goto(origin);
+  const command = await page.locator('.command[data-command]').first().getAttribute('data-command');
+  const response = await page.goto(`${origin}/stop?${new URLSearchParams({ command })}`);
+  assert.equal(response.status(), 200);
+  assert.equal(await page.title(), `Stop · ${host} · thirdshift`);
 });
 
 test("new since the last visit survives browser storage and clears after looking", async t => {

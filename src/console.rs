@@ -46,6 +46,10 @@ use crate::logs::status::{self, Inbox, Row};
 
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 
+fn hostname() -> String {
+    crate::host::name().unwrap_or_else(|| "unknown".into())
+}
+
 /// The machine identity and look shared by the Console's reader pages.
 struct PageContext {
     hostname: String,
@@ -57,7 +61,7 @@ struct PageContext {
 impl PageContext {
     fn new(config: &UserConfig) -> Self {
         Self {
-            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+            hostname: hostname(),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),

@@ -106,6 +106,8 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 ## Machine status
 
+Every Console page's tab title names the serving host. The Inbox keeps its Needs you count beside the host, including through live updates.
+
 ### Other local accounts
 
 By default, the Console and `thirdshift status` show only the serving OS account's Commands. Set `other_accounts = "readable"` under `[console]` in the User config to include other local accounts whose logs can be read, or use `other_accounts = ["conductor", "operator"]` to consider only named accounts. `"none"` is the default.

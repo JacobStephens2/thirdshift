@@ -629,6 +629,13 @@ fn experiment_pages_and_the_cli_show_the_name_or_its_default() {
 
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let list = console.get("/experiments").text().unwrap();
+    let host = list
+        .split_once("<h1>")
+        .unwrap()
+        .1
+        .split_once("</h1>")
+        .unwrap()
+        .0;
     for (id, _, _, html) in expected {
         assert!(
             list.contains(&format!(
@@ -638,7 +645,7 @@ fn experiment_pages_and_the_cli_show_the_name_or_its_default() {
         );
         let detail = console.get(&format!("/experiments/{id}")).text().unwrap();
         assert!(
-            detail.contains(&format!("<title>{html} · thirdshift</title>")),
+            detail.contains(&format!("<title>{html} · {host} · thirdshift</title>")),
             "{detail}"
         );
         assert!(detail.contains(&format!("<h1>{html}</h1>")), "{detail}");

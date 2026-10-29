@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
   {% if title == "Inbox" %}
-  <title>{{ self.needs_you() }} need you · thirdshift Console</title>
+  <title>{{ self.needs_you() }} need you · {{ page.hostname }} · thirdshift Console</title>
   <link rel="icon" href="/assets/favicon{% if self.urgent() %}-urgent{% endif %}.svg">
   {% else %}
   <title>{{ title }} · {{ page.hostname }} · thirdshift</title>

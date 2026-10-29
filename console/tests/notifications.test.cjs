@@ -70,7 +70,8 @@ async function contextFor(t, mode = 'granted') {
 }
 
 async function count(page, value) {
-  await page.waitForFunction(value => document.title === `${value} need you · thirdshift Console`, value);
+  const host = await page.locator('header h1').textContent();
+  await page.waitForFunction(({ value, host }) => document.title === `${value} need you · ${host} · thirdshift Console`, { value, host });
 }
 
 test('notifications ask on click, survive reload and open the Inbox for a rise', async t => {
@@ -348,7 +349,7 @@ test('the Inbox keeps updating when an in-flight notification request is turned 
     await page.getByRole('button', { name: 'Turn notifications off', exact: true }).click();
     await page.getByRole('button', { name: 'Turn notifications on', exact: true }).waitFor();
     await item(16);
-    await page.waitForFunction(() => document.title === '3 need you · thirdshift Console', null, { timeout: 6000 });
+    await count(page, 3);
     assert.equal(await page.evaluate(() => notices.length), 0);
   } finally {
     release();
