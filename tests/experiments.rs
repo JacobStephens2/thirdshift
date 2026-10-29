@@ -183,6 +183,10 @@ fn legacy_resume_commands_keep_literal_model_arguments_and_the_recorded_levels()
             .as_object_mut()
             .unwrap()
             .remove("discriminating_tasks");
+        saved["bar"]
+            .as_object_mut()
+            .unwrap()
+            .remove("min_discriminating_tasks");
         saved["bar"]["credible_level"] = json!(0.8);
         saved["resume_command"] = json!(format!(
             "thirdshift 'experiment' 'candidate' '--candidate-model' '{}' '--credible-level' '0.8' '--json'",
