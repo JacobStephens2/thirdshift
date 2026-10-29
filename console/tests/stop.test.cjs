@@ -15,7 +15,7 @@ async function firstLine(child) {
   finally { lines.close(); }
 }
 before(async () => {
-  home = await mkdtemp(join(tmpdir(), 'thirdshift-console-stop-'));
+  home = await mkdtemp(join(tmpdir(), "thirdshift-console-stop's-"));
   folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   await mkdir(folder, { recursive: true });
   await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
@@ -57,6 +57,7 @@ for (const requeue of [false, true]) {
     await writeFile(join(folder, '7-fixture.log'), 'Waiting for Stop\n');
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: requeue ? 'reduce' : 'no-preference' });
     t.after(() => context.close());
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -78,6 +79,34 @@ for (const requeue of [false, true]) {
       } else if (route === '/') await page.locator('#inbox > .group:not([hidden]) .command .state').first().click();
       else await page.locator('.peek-link').first().click();
       await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+      if (route === '/') {
+        const action = page.locator('#peek form[action="/stop"]');
+        const selector = await action.locator('input[name="command"]').inputValue();
+        const expected = `thirdshift stop '${selector.replaceAll("'", "'\\''")}'`;
+        const copy = action.getByRole('button', { name: 'Copy CLI', exact: true });
+        await copy.waitFor();
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 844 });
+          const code = action.locator('code');
+          assert.equal(await code.textContent(), expected);
+          assert.equal(await code.getAttribute('title'), expected);
+          const [stopBox, codeBox, copyBox] = await Promise.all([
+            action.getByRole('button', { name: 'Stop', exact: true }).boundingBox(),
+            code.boundingBox(), copy.boundingBox()
+          ]);
+          assert.ok(codeBox.height < 36 && Math.abs(codeBox.y + codeBox.height / 2 - (copyBox.y + copyBox.height / 2)) < 8,
+            JSON.stringify({ width, codeBox, copyBox }));
+          assert.ok(codeBox.x >= stopBox.x + stopBox.width && copyBox.x > codeBox.x + codeBox.width);
+          assert.equal(await code.evaluate(node => node.scrollWidth > node.clientWidth), true);
+          assert.ok(copyBox.x + copyBox.width <= width);
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+          await copy.click();
+          await action.getByRole('status').filter({ hasText: 'CLI copied.' }).waitFor();
+          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
+          assert.equal(new URL(page.url()).pathname, '/');
+          assert.equal(await readFile(request, 'utf8').catch(() => null), null);
+        }
+      }
     }
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await page.getByRole('heading', { name: 'Stop this Command?' }).waitFor();
