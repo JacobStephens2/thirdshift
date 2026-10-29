@@ -260,6 +260,7 @@ impl Delivery<'_> {
         worktree: Worktree,
         pull_request: &mut PullRequest,
         reviews: &[SecurityOutcome],
+        checklist: Option<&str>,
     ) -> Result<String, FailedRun> {
         let tracker = Tracker::new(Stage::Push, CommandLog);
         let logs = self.logs;
@@ -302,6 +303,7 @@ impl Delivery<'_> {
                     },
                     goal,
                     reviews,
+                    checklist,
                 )
             },
         )
@@ -389,6 +391,7 @@ fn publish_steps(
     outside: &mut InWorktree<'_>,
     goal: Goal,
     reviews: &[SecurityOutcome],
+    checklist: Option<&str>,
 ) -> Result<String> {
     outside.tracker.enter(Stage::Push);
     outside.pull_request.ensure_actionable(false)?;
@@ -408,7 +411,7 @@ fn publish_steps(
         );
     }
     outside.tracker.enter(Stage::PullRequestReadiness);
-    let pr = outside.pull_request.mark_ready(None)?;
+    let pr = outside.pull_request.mark_ready(checklist)?;
     take_reviewed_to_goal(outside, &pr.url, goal, reviews)?;
     if goal == Goal::Merged {
         let branch = outside.worktree.branch().to_string();

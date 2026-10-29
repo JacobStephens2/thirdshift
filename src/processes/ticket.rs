@@ -78,6 +78,7 @@ pub(crate) fn run_custom(
             pull_request
         },
         reviews: Vec::new(),
+        spec_tickets: None,
         child_asks: delivery.child_asks.clone(),
         failure: None,
     };

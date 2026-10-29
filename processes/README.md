@@ -44,6 +44,14 @@ requires an issue with sub-issues; an Issue-branch file refuses one with them.
 The Claim precedes the worktree, and remains while the draft Spec PR waits.
 The Built-in Spec run still uses its existing sequence.
 
+After `land-tickets`, a Custom process can run `spec-review` →
+`security-review` → `delivery` → `self-merge` on that Spec-branch worktree.
+The Spec review uses the same prompt and report contract as a Spec run.
+Delivery restores the Tickets checklist and leaves the Spec PR ready,
+removing its Claim, or merges it when asked. Each Step takes its own
+Harness, Model and Effort; Security review and Self-merge keep their flag
+and User config gates, and a refused or incomplete review holds the merge.
+
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
 Ticket run records its selected Process independently of its parent, defaulting

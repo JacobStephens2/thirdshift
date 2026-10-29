@@ -1077,6 +1077,18 @@ process = "ticket-run"
 Run it with `thirdshift process <name> issue <spec>`. This Step gathers the
 Tickets; it leaves the Spec PR draft for subsequent review and Delivery.
 
+Follow `land-tickets` with `catalogue = "spec-review"` on the same Spec-branch
+worktree to run the Spec review over the whole Spec against the Base branch.
+It uses the Spec run's prompt and report contract, and takes its own Harness,
+Model and Effort. The Step must be required, outside parallel groups, and
+after `land-tickets`. Then `security-review` → `delivery` → `self-merge` on
+that worktree deliver the Spec PR with the same flag and User config gates
+as a Spec run. Delivery restores the Tickets checklist after the review
+rewrites the PR body, runs the Repair loop and marks the PR ready. A failure
+preserves the work and leaves an open PR draft; a Security hold leaves it
+ready for review. A delivered Spec PR removes the Claim. The Built-in Spec
+run keeps its existing sequence.
+
 `catalogue = "implement"` runs the same implementation session as a Ticket
 run, using its fresh or Continuation prompt. It must name the Issue-branch
 worktree, and takes its own Harness, Model and Effort like other Steps.
@@ -1089,7 +1101,7 @@ the progress line and Ending say the bug was not reproduced. Only
 `implement` can end a Process early; there is no file setting for this.
 
 `catalogue = "security-review"` runs the same Security review as a Ticket run.
-Place it on the Issue-branch worktree after its editing Steps and before
+Place it on the Issue-branch or Spec-branch worktree after its editing Steps and before
 `delivery`, outside any parallel group. The Step runs when `security-review`
 (or `--security-review`) on the command or `[security] review = true` asks;
 `no-security-review` overrides the config. Otherwise it prints that the review
@@ -1102,13 +1114,13 @@ holds a following Self-merge while Delivery still leaves the PR ready and
 repairs conflicts and CI. The public review outcome is written to the PR;
 pre-existing findings stay private as in a Ticket run.
 
-`catalogue = "delivery"` publishes that Issue branch after the earlier Steps'
+`catalogue = "delivery"` publishes that Issue branch or Spec branch after the earlier Steps'
 editing sessions and any Security review. It pushes, opens a draft pull request
 when the branch has none, writes the Built-with line, marks the pull request ready
 for review, and keeps it mergeable with green or absent CI through the Repair
 loop. When thirdshift opens the pull request, its title is the issue's and its body
-starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
-A Process has at most one delivery Step. It names the Issue-branch worktree,
+starts `Closes #<n>`. Repairs run on the Delivery Step's Harness, Model and Effort.
+A Process has at most one delivery Step. It names the Issue-branch or Spec-branch worktree,
 it is not optional, and it is not in a parallel group. It comes after the
 last Step that uses that worktree. A `self-merge` Step is not one of those
 editing Steps.
@@ -1121,7 +1133,7 @@ was watched, then the same close comment, and the Issue branch deleted. The
 pull request URL is the Step's result. Without that ask, and with `no-merge`
 even when `merge.always` is set, the pull request stays ready for review and
 the Process succeeds. `merge` on a Process with no `self-merge` Step does not
-merge. The Step names the Issue-branch worktree, it is not optional, it is
+merge. The Step names the Issue-branch or Spec-branch worktree, it is not optional, it is
 not in a parallel group, and a Process has at most one. One anywhere else is
 refused. `merge` and `no-merge` are not accepted by `check`.
 
@@ -1177,7 +1189,7 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
-built-in Step: `implement`, `security-review`, `delivery`, `self-merge` or
+built-in Step: `implement`, `spec-review`, `security-review`, `delivery`, `self-merge` or
 `land-tickets`, described above, or `architecture-review` or `run-published-issue`.
 
 `architecture-review` runs the Architecture review in its own throwaway worktree
