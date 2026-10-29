@@ -464,6 +464,45 @@ fn a_pass_worse_within_the_margin_is_annotated_in_the_console_and_text() {
 }
 
 #[test]
+fn experiment_page_marks_advisory_suites_and_shows_judged_and_measurement_counts() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "9".repeat(64);
+    let path = fixture(home.path(), &id, "2026-10-28T10:00:00Z").join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut statistics = saved["bar"].clone();
+    statistics["trials_per_task"] = json!(1);
+    statistics["prediction"] =
+        json!({"simulations": 200, "interval_draws": 512, "max_additional_tasks": 2000});
+    saved["bar"]["discriminating_tasks"] = json!({"code-review": ["one"]});
+    saved["bar"]["min_discriminating_tasks"] = json!(20);
+    saved["state"] = json!("completed");
+    let metric = json!({"difference_counts": [0, 1, 0], "verdict": "pass", "more_tasks": null,
+        "interval": {"lower": -0.01, "upper": 0.02}});
+    saved["verdict"] = json!({
+        "verdict": "inconclusive", "provisional_verdict": "inconclusive", "borderline_trials": 0,
+        "suites": {"code-review": {
+            "bar": statistics, "thirdshift_version": "fixture", "method": "paired-dirichlet-v4",
+            "accuracy": metric, "wrong_findings": metric, "verdict": "pass",
+            "retained_tasks": 1, "dropped_tasks": 0, "pass_cubed": null,
+            "advisory": true, "counts": {"judged": 1, "measurement_only": 2, "void_dropped": 0, "other_setup": 1}, "measurement": []
+        }}
+    });
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    for advisory in [true, false] {
+        saved["verdict"]["suites"]["code-review"]["advisory"] = json!(advisory);
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+        assert_eq!(html.contains("Advisory suite</span>"), advisory, "{html}");
+        assert!(
+            html.contains("1 judged · 2 measurement-only · 0 void-dropped · 1 other-setup"),
+            "{html}"
+        );
+    }
+}
+
+#[test]
 fn experiment_detail_says_plainly_what_the_experiment_tests() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

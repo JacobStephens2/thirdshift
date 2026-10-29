@@ -203,6 +203,10 @@ impl Stored {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
             let started = directory.join("started").exists();
+            if stored.description.bar.min_discriminating_tasks.is_none() {
+                // Saved Experiments keep their original aggregation policy.
+                description.bar.min_discriminating_tasks = None;
+            }
             if stored.description.bar.discriminating_tasks.is_none() {
                 // Pre-selection Experiments keep judging all retained tasks.
                 description.bar.discriminating_tasks = None;
@@ -322,8 +326,8 @@ impl Stored {
             .pending_rechecks
             .iter()
             .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
-        if self.description.bar.discriminating_tasks.is_none() && self.verdict.is_some() {
-            // A saved pre-selection Verdict is evidence, not an invitation to
+        if self.description.bar.min_discriminating_tasks.is_none() && self.verdict.is_some() {
+            // A saved pre-Advisory Verdict is evidence, not an invitation to
             // recalculate it under a newer runner's recheck policy.
             if self.state == State::Completed && missing_flip_verdicts {
                 let (_, pending) = super::grading::assess(

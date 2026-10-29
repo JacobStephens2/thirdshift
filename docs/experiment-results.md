@@ -1,4 +1,4 @@
-# Experiment results (format 3)
+# Experiment results (format 4)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 3` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 3.
+`format: 4` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 4.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -32,6 +32,10 @@ saved before the two-level Bar still show `credible_level` and `interval`.
 Format 2 shipped in v0.17.4. Format 3 adds `bar.discriminating_tasks` and each
 suite's `counts` and `measurement` fields for `paired-dirichlet-v4`, without
 rewriting the stored Bar or Verdict of older Experiments.
+Format 4 adds `bar.min_discriminating_tasks` and each suite's `advisory` flag.
+Only suites that are not advisory decide the overall Verdict and require
+rechecks; every suite advisory gives inconclusive. Saved Experiments without
+the minimum keep their original Bar, Verdict and aggregation policy.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
 
@@ -143,6 +147,14 @@ flag. Full original Scores, rechecks and attempt evidence remain in `results`.
 An empty judged list gives an inconclusive suite. Older Experiments omit the
 list, counts and measurement, keeping their stored method, Bar and Verdict.
 
+The Experiment Bar's `min_discriminating_tasks` defaults to 20 and is set by
+`--min-discriminating-tasks`. Each suite's `advisory` flag says whether its fixed
+discriminating list is shorter than that minimum, before Void dropouts.
+Advisory suites retain their own Verdict and intervals but are excluded from the
+overall decision, dropout guard and required rechecks. When every suite is
+advisory, the overall Verdict is inconclusive. Saved Experiments without the
+minimum omit `advisory` and retain their original aggregation policy.
+
 Each assessment has `difference_counts`, ordered from -1 to +1 in steps of
 1 / Trials per Eval task, its intervals (`lower`, `upper`), decision and
 nullable `more_tasks` forecast. A two-level Bar gives `pass_interval` and
@@ -165,8 +177,9 @@ records `credible_level` instead. `void_rules.retries` counts fresh retries afte
 first attempt (at most two). Suite Bars hold the corresponding scalar
 `trials_per_task` and the posterior prediction budget (`simulations`,
 `interval_draws`, `max_additional_tasks`), rather than the execution policy.
-Any failed suite fails the Experiment; otherwise an inconclusive suite or more
-than a tenth of tasks dropped as void makes it inconclusive. Required rechecks
+Among suites that are not advisory, any failed suite fails the Experiment;
+otherwise an inconclusive suite or more than a tenth of their judged tasks
+dropped as void makes it inconclusive. All suites advisory gives inconclusive. Required rechecks
 withhold the final decision as `waiting_on_rechecks`.
 
 ## Checked field contract
@@ -186,7 +199,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
 ```json
 {
   "Experiment": {
-    "format": 3,
+    "format": 4,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -228,6 +241,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
     "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
     "discriminating_tasks?": {"*": ["string"]},
+    "min_discriminating_tasks?": "integer",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
@@ -265,6 +279,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "Decision": "pass|fail|inconclusive",
   "SuiteVerdict": {
+    "advisory?": "boolean",
     "bar": "SuiteBar", "thirdshift_version": "string", "method": "string",
     "accuracy": "Assessment", "wrong_findings": "Assessment", "verdict": "Decision",
     "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?",

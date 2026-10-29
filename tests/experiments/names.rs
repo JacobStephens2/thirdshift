@@ -71,7 +71,13 @@ fn renaming_a_running_experiment_survives_its_later_writes() {
         fixture.scenario.path("started").display()
     ));
     let mut held = fixture.scenario.run_until(
-        &["experiment", "candidate", "--json"],
+        &[
+            "experiment",
+            "candidate",
+            "--json",
+            "--min-discriminating-tasks",
+            "1",
+        ],
         &NO_SANDBOX,
         "started",
     );

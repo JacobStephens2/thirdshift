@@ -11,6 +11,9 @@ use support::{Scenario, scope_available};
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
+#[path = "experiments/advisory.rs"]
+mod advisory;
+
 #[path = "experiments/code_graders.rs"]
 mod code_graders;
 
@@ -1121,6 +1124,11 @@ harness = "claude"
 
     fn run(&self, extra: &[&str]) -> support::RunResult {
         let mut args = vec!["experiment", "candidate", "--json"];
+        // These tiny fixtures exercise deciding suites. Advisory tests invoke
+        // the default minimum through the CLI explicitly.
+        if !extra.contains(&"--min-discriminating-tasks") {
+            args.extend(["--min-discriminating-tasks", "1"]);
+        }
         args.extend_from_slice(extra);
         // Trials run without their sandbox here: the Experiment suite's fake
         // Harnesses stay observable at fixed scenario paths, as with
@@ -1137,6 +1145,9 @@ harness = "claude"
         keystrokes: &[support::Keystrokes],
     ) -> support::TerminalResult {
         let mut args = vec!["experiment", "candidate", "--json"];
+        if !extra.contains(&"--min-discriminating-tasks") {
+            args.extend(["--min-discriminating-tasks", "1"]);
+        }
         args.extend_from_slice(extra);
         self.scenario
             .run_on_terminal(&args, &NO_SANDBOX, keystrokes)
@@ -2403,7 +2414,13 @@ fn review_code_graders_raise_their_own_oom_score() {
 fn review_an_unreachable_manager_cannot_dispatch_uncapped_trials() {
     let fixture = Fixture::new();
     let run = fixture.scenario.run_with_env(
-        &["experiment", "candidate", "--json"],
+        &[
+            "experiment",
+            "candidate",
+            "--json",
+            "--min-discriminating-tasks",
+            "1",
+        ],
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("XDG_RUNTIME_DIR", "/nonexistent-thirdshift-review-runtime"),
@@ -2480,7 +2497,13 @@ print(json.dumps(dict(version=1, outcome='succeeded', void_cause=None, cause=Non
     )
     .unwrap();
     let run = fixture.scenario.run_with_env(
-        &["experiment", "candidate", "--json"],
+        &[
+            "experiment",
+            "candidate",
+            "--json",
+            "--min-discriminating-tasks",
+            "1",
+        ],
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
@@ -2540,7 +2563,13 @@ fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
     )
     .unwrap();
     let run = fixture.scenario.run_with_env(
-        &["experiment", "candidate", "--json"],
+        &[
+            "experiment",
+            "candidate",
+            "--json",
+            "--min-discriminating-tasks",
+            "1",
+        ],
         &[
             ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
             ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
@@ -2800,7 +2829,13 @@ while true; do sleep 0.05; done
         root = fixture.scenario.path("").display()
     ));
     let mut held = fixture.scenario.run_until(
-        &["experiment", "candidate", "--json"],
+        &[
+            "experiment",
+            "candidate",
+            "--json",
+            "--min-discriminating-tasks",
+            "1",
+        ],
         &NO_SANDBOX,
         "started",
     );

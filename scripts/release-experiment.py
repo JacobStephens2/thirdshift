@@ -18,6 +18,8 @@ def main():
         raise ValueError(f"unexpected release Experiment Verdict: {outcome}")
     print(f"release: Experiment {experiment}: {outcome}", file=sys.stderr)
     for name, suite in view["verdict"]["suites"].items():
+        if suite.get("advisory", False):
+            print(f"release: {name}: Advisory suite ({suite['verdict']})", file=sys.stderr)
         for key, label in [("accuracy", "accuracy"), ("wrong_findings", "wrong findings")]:
             assessment = suite[key]
             if "interval" in assessment:

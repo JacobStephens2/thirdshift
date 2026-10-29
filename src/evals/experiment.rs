@@ -62,6 +62,9 @@ pub(crate) struct Bar {
     /// Absent in Experiments that judged every approved Eval task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discriminating_tasks: Option<BTreeMap<String, Vec<String>>>,
+    /// Absent in saved Experiments from before Advisory suites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_discriminating_tasks: Option<usize>,
     pub timeout_seconds: u64,
     pub void_rules: VoidRules,
 }
@@ -83,6 +86,7 @@ impl Default for Bar {
             draws: statistics.draws,
             trials_per_task: BTreeMap::new(),
             discriminating_tasks: None,
+            min_discriminating_tasks: None,
             timeout_seconds: 1800,
             void_rules: VoidRules {
                 retries: 2,
@@ -103,6 +107,16 @@ impl Default for Bar {
 }
 
 impl Bar {
+    fn advisory(&self, suite: &str) -> Option<bool> {
+        self.min_discriminating_tasks.map(|minimum| {
+            self.discriminating_tasks
+                .as_ref()
+                .and_then(|suites| suites.get(suite))
+                .map_or(0, Vec::len)
+                < minimum
+        })
+    }
+
     fn judges(&self, suite: &str, task: &str) -> bool {
         self.discriminating_tasks.as_ref().is_none_or(|suites| {
             suites
