@@ -3,10 +3,11 @@
 //! repository, saying why it passed over each issue labelled
 //! `ready-for-agent` before it, then that issue dispatched as a Spec run or
 //! a Run. One started while its repository is at its Command limit on this
-//! machine is skipped, before any search. One that runs first makes the Sweep, and is
-//! then skipped if it finds the repository at its Claim limit, or with no
-//! Ready issue it can reserve: one another Pickup run reserved, or whose
-//! selection went stale, is passed over for the next.
+//! machine is skipped, before any search. One that runs first makes the
+//! Sweep, and is then skipped if it finds the repository at its Claim limit,
+//! or with no Ready issue it can reserve: one another run reserved, a Pickup
+//! run, or an Architect run or Security run dispatching its own plan or fix,
+//! or whose selection went stale, is passed over for the next.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -140,8 +141,8 @@ fn unreservable(number: u64) -> String {
 /// Launch directory's checkout, nor on the issue taken: the run it is
 /// dispatched as makes the Claim. An auxiliary origin ref reserves the
 /// issue across hosts before dispatch; a stale Ready selection is rechecked
-/// while it is held. An issue another Pickup run reserved, or whose selection
-/// went stale, is passed over for the next Ready issue in `order`.
+/// while it is held. An issue another run reserved, or whose selection went
+/// stale, is passed over for the next Ready issue in `order`.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if its repository is at `config`'s Command limit on this machine.

@@ -68,8 +68,9 @@ pub enum Outcome {
 /// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
-    /// Another Pass on this repository is still
-    /// running on this machine, the Spec run or Run it dispatched included.
+    /// Its repository is at its Command limit on this machine, the Spec run
+    /// or Run each Pass dispatched counted, or another Architect run is
+    /// still running there.
     AlreadyRunning(AlreadyRunning),
     /// These Architect plans are still open on this repository: at least
     /// one.
@@ -343,7 +344,8 @@ struct ArchitectRun<'a> {
     plan_only: bool,
 }
 
-/// [`run`], once it holds its repository alone, through `outside`: its
+/// [`run`], once it holds its slot and the lock of its kind, through
+/// `outside`: its
 /// [`gates`], a skip recorded with its reason if one skips; then the check of
 /// its Harness, failing before any work if it can't run; then the record
 /// that it started work, which keeps its Command log with its repository's

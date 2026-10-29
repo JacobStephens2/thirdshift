@@ -1971,12 +1971,15 @@ fn a_dispatch_that_fails_its_launch_checks_still_has_a_record() {
     let scenario = scenario();
     scenario.agent_does_in_session(
         1,
-        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.name ''\n"),
+        // An empty email still makes the plan's reservation commit, but not
+        // the dispatched run's launch checks.
+        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.email ''\n"),
     );
     let ended = scenario.run(&["architect"]);
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert_eq!(reservations(&scenario), "");
     assert!(
-        ended.stderr.contains("git user.name is not set"),
+        ended.stderr.contains("git user.email is not set"),
         "{}",
         ended.stderr
     );

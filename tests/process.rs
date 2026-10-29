@@ -3208,8 +3208,7 @@ fn at_a_command_limit_of_2_a_process_with_no_issue_runs_beside_any_other_command
     assert_eq!(with_issue.code, Some(0), "{}", with_issue.stderr);
     fs::remove_file(scenario.path("started")).unwrap();
     fs::remove_file(scenario.path("release")).unwrap();
-    // It takes no lock of a kind, so a Pickup run runs beside it, and only
-    // the Command limit skips a third Command.
+    // It takes no lock of a kind, so a Pickup run runs beside it.
     let no_issue = scenario.run_until(&["process", "review"], &[], "started");
 
     let pickup = scenario.run(&["pickup"]);
@@ -3227,6 +3226,33 @@ fn at_a_command_limit_of_2_a_process_with_no_issue_runs_beside_any_other_command
     let no_issue = no_issue.finish();
     assert_eq!(no_issue.code, Some(0), "{}", no_issue.stderr);
     assert_eq!(no_issue.stdout, "held\n");
+}
+
+#[test]
+fn at_a_command_limit_of_2_an_architect_run_reviews_beside_a_process_with_no_issue() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.user_config_is("[pass]\ncommand_limit = 2\n");
+    waiting_process(&scenario, "review");
+    scenario.agent_does(
+        r#"
+url=$(gh issue create --title "Deepen the session module" --body "The plan" --label needs-triage)
+printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let process = scenario.run_until(&["process", "review"], &[], "started");
+
+    let architect = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(architect.code, Some(0), "{}", architect.stderr);
+    assert_eq!(
+        architect.stdout,
+        "https://github.com/acme/widgets/issues/8\n"
+    );
+    release(&scenario);
+    let process = process.finish();
+    assert_eq!(process.code, Some(0), "{}", process.stderr);
+    assert_eq!(process.stdout, "held\n");
 }
 
 #[test]

@@ -56,8 +56,8 @@ impl PassKind {
         }
     }
 
-    /// The word its lock file and its review worktree are named with.
-    pub fn word(self) -> &'static str {
+    /// The slug its lock file and its review worktree are named with.
+    pub fn slug(self) -> &'static str {
         match self {
             PassKind::Architect => "architect",
             PassKind::Security => "security",
@@ -268,7 +268,7 @@ impl Slots {
     /// The lock a Pass of `kind` holds while it runs, if no such Pass
     /// holds it now.
     fn try_kind(&self, kind: PassKind) -> Result<Option<File>> {
-        try_lock(&self.dir.join(format!("{}.lock", kind.word())))
+        try_lock(&self.dir.join(format!("{}.lock", kind.slug())))
     }
 }
 

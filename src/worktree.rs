@@ -484,7 +484,7 @@ impl ReviewWorktree {
     /// Pass's worktree is ever taken for such a leftover.
     pub fn create(launch: &Git, repo: &str, base: &str, kind: PassKind) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        let (root, path) = sibling(launch, &format!("{repo}-{}", kind.word()))?;
+        let (root, path) = sibling(launch, &format!("{repo}-{}", kind.slug()))?;
         ownership::recover_review(launch, &path)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
