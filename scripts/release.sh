@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Cuts a thirdshift release: opens a PR into main that bumps the version and
-# nothing else, waits for its checks, merges it with a merge commit, and tags
-# that merge commit v<version>. Pushing the tag starts the dist release
-# workflow, and the script waits for that workflow run to publish the GitHub
-# Release.
+# nothing else, waits for its checks, and tags that bump commit v<version>.
+# Pushing the tag starts the dist release workflow. It then merges the PR
+# with a merge commit and waits for the workflow to publish the GitHub Release.
 #
 # Usage: scripts/release.sh [--review] [--with-experiment] <version>
 #
@@ -20,10 +19,10 @@
 #
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
-# tag that already exists locally or on origin, or a CI run on main's tip that
-# didn't succeed. It waits for that tip's run to appear and finish, following
-# main if it moves and naming each move. The version bump starts from the tip
-# whose CI succeeded, with the requested version checked against that tip.
+# tag that already exists locally or on origin. The bump starts from the newest
+# main commit whose latest push CI run succeeded, newer than the last release
+# tag. If none qualifies, it waits for a run to succeed, still considering older
+# pending commits when main moves. It never waits just for the tip to go green.
 # With --with-experiment, an Experiment compares that content commit with its
 # last release tag, selecting touched suites. A pass carries on; pending Scores
 # are listed and waited for; fail/inconclusive Verdicts show intervals and
@@ -34,10 +33,10 @@
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
-# on and merges an open PR, or tags a merged one, without the refusals above,
-# which the first run passed. If v<version> is already on origin, on the merge
-# of the bump PR, it says so and waits on or reports the release workflow run
-# instead; a v<version> tag anywhere else on origin is refused. A bump PR
+# on an open PR, tags its bump commit, then merges it, without the refusals
+# above, which the first run passed. A merged PR is tagged at its bump head too.
+# If v<version> is already on origin at the bump head, it says so, merges an
+# open PR and waits for the release workflow; a tag anywhere else is refused. A bump PR
 # closed without merging is refused while release-<version> is on origin;
 # once that branch is deleted, the next run starts over.
 # A resumed PR must belong to origin and match its branch tip while open, or
@@ -45,11 +44,11 @@
 # must also be exactly the version bump in Cargo.toml and Cargo.lock from
 # its merge base, or it is refused before merging or tagging.
 # A pushed branch is checked against the same release Experiment before its
-# PR is opened. A release already tagged only resumes the release workflow.
+# PR is opened. A release already tagged skips checks and the Experiment.
 # Before the branch exists, a local Git ref pins the content commit so a
 # restart keeps the same Candidate even if main advances during interruption.
-# If main gains different content after that selection, the script refuses
-# to merge or tag it under the old Experiment; choose a fresh release version.
+# Main can gain content after selection: the tagged tree is still exactly the
+# Candidate plus the version bump, and merging later preserves it in history.
 #
 # Prints a progress line on stderr for each step, stamped with the local time
 # as HH:MM:SS, with the release workflow run's URL once it waits for that run,
@@ -59,7 +58,9 @@
 # exits 1 with nothing more pushed if it refuses or the review says no, exits
 # 1 leaving the PR open if the PR's checks fail, and exits 1 leaving the tag in
 # place if the release workflow run fails, naming its failed jobs and how to
-# rerun them. It waits with no overall timeout, so Ctrl-C and running it again
+# rerun them. A failed merge after tagging leaves the release standing, names
+# the PR for the Day shift and still exits 0 if the release workflow succeeds.
+# It waits with no overall timeout, so Ctrl-C and running it again
 # with the same version carries on waiting.
 set -euo pipefail
 # So a failure inside $(…) stops the script too.
@@ -96,46 +97,42 @@ main() {
 	case $pr_state in
 	OPEN | MERGED) validate_bump_pr ;;
 	esac
-	finish_if_tagged
+	find_existing_tag
 
 	case $pr_state in
 	"")
 		if [ -z "$head" ]; then
 			commit_bump
 			write_summary "nothing was pushed"
-			validate_main_content
 			git push --quiet origin "$head:refs/heads/$branch"
 			git update-ref -d "refs/thirdshift/release-candidates/$version"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
 			validate_bump_pr
-			wait_for_experiment "$(git rev-parse "$head^1")"
+			if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
 			write_summary "no PR was opened"
 		fi
 		open_pr
-		wait_and_merge
 		;;
 	OPEN)
 		progress "resuming: $url is open"
-		wait_for_experiment "$(git rev-parse "$head^1")"
-		wait_and_merge
+		if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
 		;;
 	MERGED)
 		progress "resuming: $url was merged as ${merge:0:7}"
-		wait_for_experiment "$(git rev-parse "$head^1")"
+		if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
 		;;
 	*)
 		refuse "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
 		;;
 	esac
 
-	# A merge can race the last main check, or have completed before a resume.
-	# Never publish a tree containing changes outside the measured Candidate.
-	if [ "$(git rev-parse "$merge^{tree}")" != "$(git rev-parse "$head^{tree}")" ]; then
-		refuse "the release merge contains content absent from its measured Candidate; no tag was pushed"
+	if [ -z "$tagged" ]; then
+		if [ "$pr_state" != MERGED ]; then wait_for_pr_checks; fi
+		git push --quiet origin "$head:refs/tags/$tag"
+		progress "tagged $tag on ${head:0:7} and pushed the tag"
 	fi
-	git push --quiet origin "$merge:refs/tags/$tag"
-	progress "tagged $tag on ${merge:0:7} and pushed the tag"
+	if [ "$pr_state" != MERGED ]; then merge_bump_pr; fi
 	wait_for_release
 }
 
@@ -206,13 +203,12 @@ bump_tree() (
 	git write-tree
 )
 
-# finish_if_tagged
-# After an earlier run, if $tag is on origin at the merge of the bump PR,
-# waits for its release workflow run and exits as wait_for_release does, and
-# refuses if $tag is on origin anywhere else. With no earlier run,
+# find_existing_tag
+# Recognises an earlier tag only at the bump head. The caller still merges
+# an open PR before waiting for the release workflow. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
-finish_if_tagged() {
-	local tagged
+find_existing_tag() {
+	tagged=
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return
 	fi
@@ -220,12 +216,11 @@ finish_if_tagged() {
 	if [ -z "$tagged" ]; then
 		return
 	fi
-	if [ "$tagged" = "$merge" ]; then
-		progress "$tag is already tagged on ${merge:0:7}, the merge of $url"
-		wait_for_release
-		exit 0
+	if [ "$tagged" = "$head" ]; then
+		progress "$tag is already tagged on ${head:0:7}, the head of $branch"
+		return
 	fi
-	refuse "$tag already exists on origin at ${tagged:0:7}, which is not the merge of a $branch PR"
+	refuse "$tag already exists on origin at ${tagged:0:7}, which is not the head of $branch"
 }
 
 # commit_bump
@@ -335,10 +330,9 @@ open_pr() {
 	progress "opened $url"
 }
 
-# wait_and_merge
-# Waits for CI on $head, then merges its PR and sets merge to the merge
-# commit, or leaves the PR open and exits 1 if CI failed.
-wait_and_merge() {
+# wait_for_pr_checks
+# Leaves the PR open and untagged and exits 1 if its checks failed.
+wait_for_pr_checks() {
 	local failed
 	progress "waiting for CI on $url"
 	failed=$(wait_for_workflow_runs "$head")
@@ -346,31 +340,26 @@ wait_and_merge() {
 		progress "CI failed on $url ($failed), so the PR is left open, unmerged and untagged"
 		exit 1
 	fi
-
-	validate_main_content
-	gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null
-	fetch_main
-	merge=$(merge_commit_of "$head")
-	progress "merged $url as ${merge:0:7}"
 }
 
-# validate_main_content
-# A version-only merge must retain exactly the measured Candidate's content.
-# Recheck after waiting too; main may move while the Experiment or CI runs.
-validate_main_content() {
-	fetch_main
-	if [ "$(bump_tree origin/main)" != "$(git rev-parse "$head^{tree}")" ]; then
-		refuse "main contains content absent from the measured Candidate; choose a fresh release version to measure current main"
+# merge_bump_pr
+# The tag is already public. A failed merge leaves the release standing and
+# names the PR for the Day shift; it never prevents waiting for publication.
+merge_bump_pr() {
+	if gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null; then
+		progress "merged $url"
+	else
+		progress "warning: $tag is left in place and the release still stands; the Day shift must merge $url"
 	fi
 }
 
 # wait_for_release
-# Waits for the release workflow run that pushing $tag started on $merge to
+# Waits for the release workflow run that pushing $tag started on $head to
 # be listed, then to complete, and prints the GitHub Release's URL if it
 # succeeded. If it failed, exits 1 naming the jobs that failed, leaving the
 # tag in place: it is public, so rerunning the failed jobs beats moving it.
 # The run's status is that of its current attempt, so after gh run rerun
-# --failed, the rerun's. CI's run on main for $merge is not waited for.
+# --failed, the rerun's. CI's run on main for the merge is not waited for.
 wait_for_release() {
 	local run id run_url status conclusion failed
 	run=$(release_run)
@@ -397,10 +386,10 @@ wait_for_release() {
 }
 
 # release_run
-# The newest release workflow run on $merge from a push, as
+# The newest release workflow run on $head from a push, as
 # "<id> <url> <status> <conclusion>", or nothing if it isn't listed yet.
 release_run() {
-	gh run list --workflow release.yml --event push --commit "$merge" --limit 1 \
+	gh run list --workflow release.yml --event push --commit "$head" --limit 1 \
 		--json databaseId,url,status,conclusion \
 		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)"'
 }
@@ -427,64 +416,37 @@ refuse() {
 
 # check_can_release <version> <tag>
 # Refuses unless <version> is plain X.Y.Z and higher than the version in the
-# manifest on main's tip, no <tag> exists on origin or locally, and the tip's
-# latest CI run succeeded. Follows main while waiting for missing or pending
-# CI, then prints the commit whose CI passed, for the bump's base.
+# manifest on main, and no <tag> exists on origin or locally. Prints the newest
+# main commit since the last release whose latest push CI succeeded. When none
+# is green yet, polls all candidates so moving main never restarts the wait.
 check_can_release() {
-	local current base short previous= latest sha status conclusion waiting=
+	local current base previous latest sha status conclusion waiting=
 	if ! is_plain_version "$1"; then
 		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
 	fi
 
+	fetch_main
+	current=$(git show origin/main:Cargo.toml | package_field version)
+	if ! is_higher "$1" "$current"; then refuse "it is not higher than $current on main"; fi
+	if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then refuse "$2 already exists on origin"; fi
+	if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then refuse "$2 already exists locally"; fi
+	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main 2>/dev/null || true)
 	while :; do
-		fetch_main
-		base=$(git rev-parse --verify 'origin/main^{commit}')
-		short=${base:0:7}
-		if [ "$base" != "$previous" ]; then
-			if [ -n "$previous" ]; then
-				progress "main moved from ${previous:0:7} to $short; waiting for CI on $short"
+		for base in $(git rev-list --first-parent origin/main ${previous:+^$previous}); do
+			latest=$(gh run list --branch main --workflow ci.yml --event push --commit "$base" --limit 1 \
+				--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+			read -r sha status conclusion <<<"$latest"
+			if [ "$sha" = "$base" ] && [ "$status" = completed ] && [ "$conclusion" = success ]; then
+				printf '%s\n' "$base"
+				return
 			fi
-			waiting=
-			previous=$base
-			current=$(git show "$base:Cargo.toml" | package_field version)
-			if ! is_higher "$1" "$current"; then
-				refuse "it is not higher than $current on main"
-			fi
-
-			# Origin first: fetching main brings in the tags on it, so a tag
-			# found locally may have come from origin.
-			if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then
-				refuse "$2 already exists on origin"
-			fi
-			if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then
-				refuse "$2 already exists locally"
-			fi
-		fi
-		latest=$(gh run list --branch main --workflow ci.yml --event push --commit "$base" --limit 1 \
-			--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
-		read -r sha status conclusion <<<"$latest"
-		# The listing can take long enough for another merge to land. Its
-		# result only decides the release if it still belongs to main's tip.
-		fetch_main
-		if [ "$(git rev-parse --verify 'origin/main^{commit}')" != "$base" ]; then
-			continue
-		fi
-		if [ "$sha" = "$base" ] && [ "$status" = completed ]; then
-			if [ "$conclusion" != success ]; then
-				refuse "CI on main at $short ended in $conclusion"
-			fi
-			printf '%s\n' "$base"
-			return
-		fi
+		done
 		if [ -z "$waiting" ]; then
-			if [ "$sha" != "$base" ]; then
-				progress "waiting for CI on main at $short to start"
-			else
-				progress "waiting for CI on main at $short"
-			fi
+			progress "waiting for CI on main: no successful push run newer than ${previous:-the first commit}"
 			waiting=1
 		fi
 		sleep "$poll_seconds"
+		fetch_main
 	done
 }
 
@@ -678,19 +640,6 @@ wait_for_workflow_runs() {
 	awk '$2 != "success" && $2 != "skipped" && $2 != "neutral" {
 		sub(/^[^ ]+ [^ ]+ /, ""); printf "%s%s", sep, $0; sep = ", "
 	}' <<<"$runs"
-}
-
-# merge_commit_of <sha>
-# The merge commit on origin/main whose second parent is <sha>.
-merge_commit_of() {
-	local merge
-	merge=$(git rev-list --merges --parents --ancestry-path "$1..origin/main" |
-		awk -v head="$1" '$3 == head { print $1 }')
-	if [ -z "$merge" ]; then
-		progress "no merge of ${1:0:7} on main after merging the PR"
-		exit 1
-	fi
-	echo "$merge"
 }
 
 # Only when run, so the tests can source the script and call its functions.
