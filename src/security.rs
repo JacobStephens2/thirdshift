@@ -261,15 +261,21 @@ fn fix(
     audit: Option<Box<Ended>>,
     closing: bool,
 ) -> Outcome {
-    let (ended, issue) = fix_record(outside, repo, base, &record, &metadata, |outside, issue| {
-        outside.dispatch(crate::pass::Dispatch::SecurityFix {
-            issue,
-            is_spec: record.fix_size().expect("the published fix has a size")
-                == reproduction::FixSize::Spec,
-            base,
-            finding: &metadata,
-        })
-    });
+    let (ended, issue) = fix_record(
+        outside,
+        repo,
+        base,
+        &record,
+        &metadata,
+        |outside, issue, size| {
+            outside.dispatch(crate::pass::Dispatch::SecurityFix {
+                issue,
+                is_spec: size == reproduction::FixSize::Spec,
+                base,
+                finding: &metadata,
+            })
+        },
+    );
     let close = match (&ended.outcome, &issue) {
         (Ok(reached), Some(issue))
             if closing && reached.resolution.goal() == Some(crate::run::Goal::Merged) =>
@@ -295,7 +301,7 @@ pub(crate) fn fix_record<O: Outside>(
     base: &str,
     record: &crate::github::SecurityRecord,
     metadata: &RecordedFinding,
-    dispatch: impl FnOnce(&mut O, &crate::issue::IssueUrl) -> crate::run::Ended,
+    dispatch: impl FnOnce(&mut O, &crate::issue::IssueUrl, reproduction::FixSize) -> crate::run::Ended,
 ) -> (crate::run::Ended, Option<crate::issue::IssueUrl>) {
     let mut log = None;
     let outcome = (|| -> Result<(crate::run::Ended, crate::issue::IssueUrl)> {
@@ -304,9 +310,9 @@ pub(crate) fn fix_record<O: Outside>(
         let (published, session_log) = outside.publish_security_fix(base, record, &metadata.url);
         log = session_log;
         let issue = published?;
-        record.fix_size()?;
+        let size = record.fix_size()?;
         outside.link_security_fix(record, &issue)?;
-        let mut ended = dispatch(outside, &issue);
+        let mut ended = dispatch(outside, &issue, size);
         if let Err(error) =
             outside.record_security_fix_ending(record, &issue, ended.outcome.is_ok())
         {

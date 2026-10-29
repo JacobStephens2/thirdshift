@@ -1386,16 +1386,20 @@ fix are skipped. The Step uses the Security run's private publication checks:
 a public fix issue contains only the proposed change and a private-record
 link. It links the fix, starts a Ticket run or Spec run, and records its
 ending privately. A failed fix stops the Step and stays with the Day shift.
+If a merged fix auto-closes a private finding issue, the Step reopens it until
+`close-findings` verifies the proof, even when closing is disabled or omitted.
 The optional `process = "<name>"` setting selects a child Ticket Process,
 defaulting to `ticket-run`, with the same validation and Spec dispatch as
 `run-published-issue`. Children inherit the Step's Harness, Model and Effort,
 the Command's merge choice and the file's tighter limits.
 
-A following `close-findings` rechecks fixes merged by earlier
-`fix-findings` Steps in this Process. Each proof-of-concept test runs against
+`close-findings` reads successful fixes from the private records and checks
+which merged into this Base branch, including fixes from an earlier Process
+that failed or stopped before closing. Each proof-of-concept test runs against
 the current merged Base branch on origin. Only a passing check closes the
 private record; a failing check or error leaves a private note for the Day
-shift. Unmerged fixes are left open. Closing defaults to allowed when fixing
+shift and reopens a private finding issue that its fix PR closed.
+Unmerged fixes are left open. Closing defaults to allowed when fixing
 is allowed; `no-security-close` or `close = false` under `[security]`
 disables it, and `security-close` overrides that setting. Both Steps run
 outside parallel groups and use throwaway worktrees; their sessions acquire

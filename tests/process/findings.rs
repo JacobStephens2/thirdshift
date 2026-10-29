@@ -110,8 +110,8 @@ fn closing_rechecks_each_merged_base_and_leaves_a_failing_finding_for_the_day_sh
     scenario.agent_does_for(8, &implement(8));
     scenario.agent_does_in_session(3, &stage_fix(2));
     scenario.agent_does_for(9, &implement(9));
-    for (session, outcome) in [(5, "passes"), (6, "fails: the fixture still fails")] {
-        scenario.agent_does_in_session(session, &format!(r#"
+    for (issue, outcome) in [(8, "passes"), (9, "fails: the fixture still fails")] {
+        scenario.agent_does_for_in_session(issue, 2, &format!(r#"
 test -f bounded-8.txt && test -f bounded-9.txt
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 printf '%s\n' 'Command: bounded-fixture; actual result recorded privately' 'Security close check: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
@@ -122,7 +122,11 @@ printf '%s\n' 'Command: bounded-fixture; actual result recorded privately' 'Secu
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
-    assert_eq!(state["advisories"][0]["state"], "closed");
+    assert_eq!(
+        state["advisories"][0]["state"], "closed",
+        "{}",
+        result.stderr
+    );
     assert_eq!(state["advisories"][2]["state"], "draft");
     let body = state["advisories"][2]["description"].as_str().unwrap();
     assert!(body.contains("the fixture still fails"), "{body}");
@@ -249,7 +253,8 @@ fn a_private_finding_is_reused_and_closed_only_after_a_merged_base_check() {
     let evidence = state["bodies"]["7"].as_str().unwrap().to_owned();
     scenario.write_gh_state(&state);
     scenario.agent_does_for(7, &implement(7));
-    scenario.agent_does_in_session(
+    scenario.agent_does_for_in_session(
+        7,
         2,
         r#"test -f bounded-7.txt
 printf 'Security close check: passes\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
@@ -263,7 +268,7 @@ printf 'Security close check: passes\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(state["issues"]["7"], "CLOSED");
     let body = state["bodies"]["7"].as_str().unwrap();
     assert!(body.starts_with(&evidence), "{body}");
-    assert!(body.contains("Closed by:"), "{body}");
+    assert!(body.contains("Closed by:"), "{body}\n{}", result.stderr);
     assert_eq!(state["issues"].as_object().unwrap().len(), 1);
     assert_eq!(scenario.claude_calls().len(), 2);
 }
@@ -348,4 +353,153 @@ fn finding_steps_reject_parallel_groups_and_invalid_child_processes_before_sessi
         assert_no_session(&scenario, &result);
         assert!(result.stderr.contains(reason), "{}", result.stderr);
     }
+}
+
+#[test]
+fn failed_fix_publication_does_not_email_private_background_work() {
+    let scenario = findings();
+    let secret = "Private exploit trace: POST /admin/debug with token";
+    scenario.agent_does(&support::leaves_running(secret));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &[
+            "process",
+            "findings",
+            "security-fix",
+            "email",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    assert!(result.stderr.contains(secret), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(
+        !requests[0].body.to_string().contains(secret),
+        "private Security publication evidence leaked to Resend: {}",
+        requests[0].body
+    );
+}
+
+#[test]
+fn merged_fix_is_rechecked_after_a_later_fix_fails() {
+    let scenario = findings();
+    scenario.agent_does_in_session(1, &stage_fix(0));
+    scenario.agent_does_for(8, &implement(8));
+    scenario.agent_does_in_session(3, &stage_fix(2));
+    scenario.agent_does_for(9, "exit 1");
+    scenario.agent_does_in_session(
+        5,
+        "printf 'Security close check: passes\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+    scenario.agent_does_for_in_session(
+        8,
+        2,
+        "printf 'Security close check: passes\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+    let failed = scenario.run(&["process", "findings", "security-fix", "merge"]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let retry = scenario.run(&["process", "findings", "security-fix", "merge"]);
+    assert_eq!(retry.code, Some(0), "{}", retry.stderr);
+    assert_eq!(
+        scenario.gh_state()["advisories"][0]["state"],
+        "closed",
+        "{}",
+        retry.stderr
+    );
+    assert_eq!(scenario.gh_state()["advisories"][2]["state"], "draft");
+}
+
+#[test]
+fn failed_close_check_keeps_a_private_finding_open() {
+    let scenario = findings();
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for(7, &implement(7));
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        r#"printf 'Security close check: fails: bounded fixture still fails\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["process", "findings", "security-fix", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["bodies"]["7"].as_str().unwrap();
+    assert!(body.contains("Security close left open:"), "{body}");
+    assert!(!body.contains("Closed by:"), "{body}");
+    assert_eq!(state["issues"]["7"], "OPEN", "{}", result.stderr);
+}
+
+#[test]
+fn close_accepts_a_fix_link_with_different_repository_case() {
+    let scenario = findings();
+    let mut state = scenario.gh_state();
+    state["advisories"].as_array_mut().unwrap().truncate(1);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_in_session(1, &stage_fix(0));
+    scenario.agent_does_for(8, &implement(8));
+    let first = scenario.run(&[
+        "process",
+        "findings",
+        "security-fix",
+        "merge",
+        "no-security-close",
+    ]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let mut state = scenario.gh_state();
+    let description = state["advisories"][0]["description"]
+        .as_str()
+        .unwrap()
+        .replace(
+            "https://github.com/acme/widgets/issues/8",
+            "https://github.com/ACME/widgets/issues/8",
+        );
+    state["advisories"][0]["description"] = json!(description);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for_in_session(
+        8,
+        2,
+        r#"printf 'Security close check: passes\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let closed = scenario.run(&["process", "findings", "security-fix"]);
+    assert_eq!(closed.code, Some(0), "{}", closed.stderr);
+    assert_eq!(scenario.gh_state()["advisories"][0]["state"], "closed");
+}
+
+#[test]
+fn disabling_close_keeps_a_private_finding_open() {
+    let scenario = findings();
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for(7, &implement(7));
+    let result = scenario.run(&[
+        "process",
+        "findings",
+        "security-fix",
+        "merge",
+        "no-security-close",
+    ]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    assert_eq!(
+        scenario.gh_state()["issues"]["7"],
+        "OPEN",
+        "{}",
+        result.stderr
+    );
 }

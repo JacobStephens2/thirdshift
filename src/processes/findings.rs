@@ -2,13 +2,13 @@
 //! publication and proof-of-concept gates. Only dispatch selects a Process.
 
 use super::*;
-use crate::github::SecurityRecord;
 use crate::pass::LaunchAndGitHub;
 
-pub(super) struct MergedFix {
-    record: SecurityRecord,
-    issue: IssueUrl,
-    pr_url: String,
+/// Keep diagnostics in the local Command log, including when an outer
+/// Process dispatches this one and would email its child's failure cause.
+pub(super) fn private_failure(error: anyhow::Error) -> anyhow::Error {
+    progress::step(format_args!("Security finding Step failed: {error:#}"));
+    anyhow!("Security finding Step failed; see the private Command log")
 }
 
 pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
@@ -16,6 +16,11 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     if !run.security_flags.security_fix_allowed(&config) {
         return Ok("Security fixing is not allowed".into());
     }
+    run.completed
+        .lock()
+        .expect("completed Runs")
+        .security_findings
+        .get_or_insert_default();
     let launch = Git::new(std::env::current_dir()?);
     let repo = launch::repo()?;
     let base = launch::checked_out_base()?;
@@ -37,17 +42,25 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
         config: &config,
         security_review_harness: None,
     };
-    let mut records = GitHub::new().security_records(&repo.slug())?;
+    let github = GitHub::new();
+    let mut records = github.security_records(&repo.slug())?;
     let mut urls = Vec::new();
     while let Some((record, finding)) = records.take_next_fix()? {
         interrupt::check()?;
-        let (ended, issue) = crate::security::fix_record(
+        run.completed
+            .lock()
+            .expect("completed Runs")
+            .security_findings
+            .as_mut()
+            .expect("Security Step")
+            .push(finding.clone());
+        let (ended, _) = crate::security::fix_record(
             &mut outside,
             &repo,
             run.base,
             &record,
             &finding,
-            |outside, issue| {
+            |outside, issue, size| {
                 let mut asks = Asks::of_run(issue, &flags, &config);
                 asks.notification = NotificationAsk::Skip;
                 asks.harness = outside.harness.clone();
@@ -57,9 +70,7 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
                     protected_paths: run.limits.protected_paths.clone(),
                 };
                 logs::dispatching(
-                    if record.fix_size().expect("a published fix has a size")
-                        == crate::security::reproduction::FixSize::Spec
-                    {
+                    if size == crate::security::reproduction::FixSize::Spec {
                         Work::SpecRun(issue)
                     } else {
                         Work::Run(issue)
@@ -81,12 +92,10 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
         match ended.outcome {
             Ok(reached) => {
                 let url = reached.resolution.url().to_string();
+                // A finding stays open until close-findings proves the fix,
+                // even if Delivery automatically closed its private issue.
                 if reached.resolution.goal() == Some(Goal::Merged) {
-                    completed.merged_fixes.push(MergedFix {
-                        record,
-                        issue: issue.expect("a dispatched fix has an issue"),
-                        pr_url: url.clone(),
-                    });
+                    github.reopen_security_finding(&repo.slug(), &record)?;
                 }
                 urls.push(url);
                 completed.resolutions.push(reached.resolution);
@@ -109,6 +118,11 @@ pub(super) fn close(run: &StepRun<'_>) -> Result<String> {
     if !run.security_flags.security_close_allowed(&config) {
         return Ok("Security closing is not allowed".into());
     }
+    run.completed
+        .lock()
+        .expect("completed Runs")
+        .security_findings
+        .get_or_insert_default();
     let launch = Git::new(std::env::current_dir()?);
     let repo = launch::repo()?;
     let base = launch::checked_out_base()?;
@@ -122,18 +136,38 @@ pub(super) fn close(run: &StepRun<'_>) -> Result<String> {
         config: &config,
         security_review_harness: None,
     };
-    let fixes = std::mem::take(&mut run.completed.lock().expect("completed Runs").merged_fixes);
-    for fix in &fixes {
+    let github = GitHub::new();
+    let fixes = github.security_records(&repo.slug())?.fixes_to_close()?;
+    let mut rechecked = 0;
+    for (record, issue) in fixes {
         interrupt::check()?;
-        crate::security::close_after_merge(
-            &mut outside,
-            run.base,
-            &fix.record,
-            &fix.issue,
-            &fix.pr_url,
-        );
+        let merged = github
+            .pull_requests_with_head_prefix(&issue, &format!("issue-{}", issue.number))?
+            .into_iter()
+            .filter(|pr| pr.state == crate::github::PrState::Merged && pr.base == run.base)
+            .filter(|pr| branch::branch_number(&issue, &pr.head).is_some())
+            .max_by_key(|pr| branch::branch_number(&issue, &pr.head));
+        let Some(pr) = merged else {
+            continue;
+        };
+        {
+            let mut completed = run.completed.lock().expect("completed Runs");
+            let findings = completed.security_findings.as_mut().expect("Security Step");
+            if !findings
+                .iter()
+                .any(|finding| finding.url == record.metadata().url)
+            {
+                findings.push(record.metadata().clone());
+            }
+        }
+        let outcome =
+            crate::security::close_after_merge(&mut outside, run.base, &record, &issue, &pr.url);
+        if matches!(outcome, crate::security::CloseOutcome::LeftOpen { .. }) {
+            github.reopen_security_finding(&repo.slug(), &record)?;
+        }
+        rechecked += 1;
     }
-    Ok(format!("Rechecked {} merged Security fix(es)", fixes.len()))
+    Ok(format!("Rechecked {rechecked} merged Security fix(es)"))
 }
 
 pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {

@@ -432,7 +432,8 @@ struct CompletedRuns {
     unreproduced_bug: Option<String>,
     /// Why architecture-review ended successfully without a child run.
     architecture_end: Option<String>,
-    merged_fixes: Vec<findings::MergedFix>,
+    /// Presence keeps private Security diagnostics out of Run notifications.
+    security_findings: Option<Vec<crate::security::RecordedFinding>>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -805,7 +806,7 @@ fn notify(
             }),
         failed_reproduction: None,
         pre_audit_failure: None,
-        security_findings: None,
+        security_findings: completed.security_findings.as_deref(),
         security_findings_waiting: false,
         security_fix: None,
         security_close: None,
@@ -1824,8 +1825,10 @@ fn run_step_in(
         StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
         StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
         StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
-        StepKind::FixFindings { process } => findings::fix(run, process),
-        StepKind::CloseFindings => findings::close(run),
+        StepKind::FixFindings { process } => {
+            findings::fix(run, process).map_err(findings::private_failure)
+        }
+        StepKind::CloseFindings => findings::close(run).map_err(findings::private_failure),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
                 "running step {} with {choice}",

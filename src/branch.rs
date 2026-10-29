@@ -234,7 +234,7 @@ fn used(reads: &impl Reads, issue: &IssueUrl) -> Result<Used> {
 }
 
 /// `issue-<n>` is branch 1, `issue-<n>-branch-<k>` is branch k for k ≥ 2.
-fn branch_number(issue: &IssueUrl, branch: &str) -> Option<u64> {
+pub(crate) fn branch_number(issue: &IssueUrl, branch: &str) -> Option<u64> {
     let rest = branch.strip_prefix(&branch_name(issue, 1))?;
     if rest.is_empty() {
         return Some(1);

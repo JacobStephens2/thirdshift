@@ -1342,10 +1342,16 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
     let body = parse_json(&input);
+    if let Some(body) = body.get("body") {
+        state.entry("bodies", object([])).set(n, body.clone());
+    }
+    if let Some(issue_state) = body.get("state") {
+        assert!(matches!(issue_state.str(), "open" | "closed"));
+        state
+            .entry("issues", object([]))
+            .set(n, string(issue_state.str().to_uppercase()));
+    }
     let issue_state = state.at("issues").at(n).clone();
-    state
-        .entry("bodies", object([]))
-        .set(n, body.at("body").clone());
     save(state);
     println!("{}", issue_fields(state, n, &issue_state));
 }

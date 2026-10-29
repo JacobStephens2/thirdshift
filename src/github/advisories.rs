@@ -223,6 +223,33 @@ impl SecurityRecords {
         Ok(next)
     }
 
+    /// Successful linked fixes still awaiting a proof-of-concept close check.
+    /// A private finding issue may already be closed by its merging fix PR.
+    pub(crate) fn fixes_to_close(&self) -> Result<Vec<(SecurityRecord, IssueUrl)>> {
+        let (records, field, state) = self.entries();
+        let mut fixes = Vec::new();
+        for value in records {
+            let description = Description(value[field].as_str().unwrap_or_default());
+            let closed_finding_issue = matches!(self.storage, RecordStorage::Issues(_))
+                && value["state"]
+                    .as_str()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("closed"));
+            if (!value["state"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case(state))
+                && !closed_finding_issue)
+                || description.closed_by().is_some()
+                || description.reproduced_outcome().is_none()
+            {
+                continue;
+            }
+            if let Some(issue) = description.succeeded_fix()? {
+                fixes.push((self.decode_created(value.clone())?, issue));
+            }
+        }
+        Ok(fixes)
+    }
+
     fn decode_state(&self, value: &Value) -> Result<RecordData> {
         Ok(match &self.storage {
             RecordStorage::Advisories(_) => RecordData::Advisory {
@@ -568,6 +595,31 @@ impl GitHub {
         if !output.status.success() {
             bail!(
                 "noting the private Security finding record failed ({})",
+                output.status
+            );
+        }
+        Ok(())
+    }
+
+    /// A private finding issue can be closed automatically by its fix PR.
+    /// A catalogue close Step that could not verify the proof keeps it open.
+    pub(crate) fn reopen_security_finding(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+    ) -> Result<()> {
+        let Some(number) = record.private_issue_number() else {
+            return Ok(());
+        };
+        let path = format!("repos/{repo}/issues/{number}");
+        let body = serde_json::to_vec(&json!({"state": "open"}))?;
+        let output = self.output_with_input(
+            &["api", "--method", "PATCH", &path, "--input", "-"],
+            Some(&body),
+        )?;
+        if !output.status.success() {
+            bail!(
+                "keeping the private Security finding open failed ({})",
                 output.status
             );
         }
