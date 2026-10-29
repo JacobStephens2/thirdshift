@@ -99,6 +99,11 @@ test('the architecture page identifies the current Verdict method', async () => 
   assert.match(page, /New Verdicts use <code>paired-dirichlet-v4<\/code>/);
 });
 
+test('the workflow page identifies the current Experiment result contract', async () => {
+  const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
+  assert.match(page, /contract with <code>format: 3<\/code>/);
+});
+
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   for (const path of ['/', '/how-it-works/', '/architecture/', '/docs/']) {
