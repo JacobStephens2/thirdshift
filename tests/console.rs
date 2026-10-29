@@ -1954,6 +1954,44 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
 }
 
 #[test]
+fn command_output_preview_handles_long_lines_empty_and_unavailable_logs() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("failed"), 0);
+    let log = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.log");
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let peek = || {
+        let response = console.get("/peek?command=acme/widgets%237");
+        assert_eq!(response.status(), 200);
+        response.text().unwrap()
+    };
+    assert!(peek().contains("Command output unavailable."));
+    fs::write(&log, "").unwrap();
+    assert!(peek().contains("No Command output yet."));
+    fs::write(&log, format!("{}latest progress\n", "x".repeat(8192))).unwrap();
+    let html = peek();
+    let output = html
+        .split_once("<pre>")
+        .expect("a long line still shows recent output")
+        .1
+        .split_once("</pre>")
+        .unwrap()
+        .0;
+    assert!(output.ends_with("latest progress"), "{output}");
+    assert!(output.len() <= 4096, "the preview stays bounded");
+    fs::write(&log, "Output without a final newline").unwrap();
+    assert!(peek().contains("<pre>Output without a final newline</pre>"));
+    fs::remove_file(&log).unwrap();
+    let html = peek();
+    assert!(html.contains("Command output unavailable."));
+    assert!(html.contains("Full Command log"));
+    assert!(html.contains("Widgets &#60;script&#62;alert(1)&#60;/script&#62;"));
+}
+
+#[test]
 fn stages_and_command_details_link_the_github_issue() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

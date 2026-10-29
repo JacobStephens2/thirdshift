@@ -27,6 +27,7 @@ pub(super) struct Peek {
     pub subject: String,
     pub title: String,
     pub failure_reason: Option<String>,
+    pub output: Option<String>,
 }
 
 pub(super) struct Log {
@@ -67,8 +68,16 @@ pub(super) struct Fact {
 }
 
 impl Peek {
-    pub fn new(command: String, inspection: crate::logs::stop::Inspection, csrf: String) -> Self {
+    pub fn new(
+        command: String,
+        inspection: crate::logs::stop::Inspection,
+        csrf: String,
+        config: &crate::config::UserConfig,
+    ) -> Self {
         let value = inspection.details;
+        let output = value["command_log"]
+            .as_str()
+            .and_then(|path| super::logs::preview(config, std::path::Path::new(path)).ok());
         let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
         let name = value["name"]
             .as_str()
@@ -111,6 +120,7 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            output,
             failure_reason: failure_reason(&value),
             account: value["account"].as_str().map(str::to_owned),
             dismissal: inspection.dismissal.map(|action| {
@@ -312,6 +322,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn config() -> crate::config::UserConfig {
+        crate::config::UserConfig::parse(
+            "",
+            std::path::Path::new("config.toml"),
+            std::path::Path::new("."),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn command_heading_precedes_stop_and_dismiss() {
         let inspection = crate::logs::stop::Inspection {
@@ -326,7 +345,7 @@ mod tests {
             branches: vec![],
             pull_requests: vec![],
         };
-        let html = Peek::new("widgets#7".into(), inspection, "csrf".into())
+        let html = Peek::new("widgets#7".into(), inspection, "csrf".into(), &config())
             .render()
             .unwrap();
         let heading = html
@@ -361,7 +380,7 @@ mod tests {
             branches: vec![],
             pull_requests: vec![],
         };
-        Peek::new("widgets#7".into(), inspection, "csrf".into())
+        Peek::new("widgets#7".into(), inspection, "csrf".into(), &config())
             .render()
             .unwrap()
     }

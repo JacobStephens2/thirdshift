@@ -1,7 +1,7 @@
 //! Log pages and their independent append-only HTML stream.
 use std::convert::Infallible;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use askama::Template;
 use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
@@ -64,6 +64,32 @@ struct ReaderPage {
     html: String,
     offset: u64,
     live: bool,
+}
+
+/// A small, plain-text tail through the same confined reader as Full Command log.
+pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<String> {
+    const BUDGET: usize = 4 * 1024;
+    let log = catalog::load(config, None)?
+        .into_iter()
+        .find(|log| log.path == path)
+        .context("Command log is unavailable")?;
+    let offset = std::fs::metadata(&log.path)?
+        .len()
+        .saturating_sub(BUDGET as u64);
+    let batch = log.reader.read(offset, Framing::Raw, BUDGET)?;
+    let text = String::from_utf8_lossy(&batch.bytes);
+    // Drop the cut first line when possible, retaining a tail even for a
+    // single line longer than the budget or output without a final newline.
+    let text = if offset > 0 {
+        text.split_once('\n')
+            .filter(|(_, tail)| !tail.is_empty())
+            .map_or(text.as_ref(), |(_, tail)| tail)
+    } else {
+        text.as_ref()
+    };
+    let mut lines: Vec<_> = text.lines().rev().take(5).collect();
+    lines.reverse();
+    Ok(lines.join("\n"))
 }
 
 pub(super) async fn index() -> Response {

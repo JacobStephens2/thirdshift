@@ -27,7 +27,7 @@ pub(super) async fn show(
         Ok(StopPage {
             page: super::PageContext::new(&config),
             csrf: viewer.csrf.clone(),
-            details: Peek::new(command, inspection, viewer.csrf),
+            details: Peek::new(command, inspection, viewer.csrf, &config),
         }
         .render()?)
     })

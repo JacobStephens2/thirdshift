@@ -194,6 +194,11 @@ Session traces fold into one count. Folds stay as you left them while live
 updates refresh the same Command. A file path shows on one line with its end
 kept and a copy icon that copies the whole path.
 
+Above **Full Command log**, Command details shows the last five lines of recent
+Command output, reading at most 4 KiB. It updates with the page's existing live
+connection, including while a Slow run keeps logging. Empty or unavailable logs
+say so without hiding the details; the full-log link stays available.
+
 Each Needs you row has a **Copy** button at the end of its line for sharing its
 problem with an agent. It copies the machine, Command selector, state, cause,
 issue title, Harness, Tickets and any findings, with absolute issue, pull

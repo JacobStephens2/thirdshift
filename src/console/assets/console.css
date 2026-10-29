@@ -21,6 +21,7 @@ a { color: var(--link); overflow-wrap: anywhere; }
 h2 { margin: 0; font-weight: var(--head-weight); }
 .peek-heading { white-space: normal; overflow-wrap: anywhere; }
 .peek-heading > span { display: block; }
+.peek-output pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 8em; padding: 8px; border: 1px solid var(--rule); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; }
 code, .now, .subject, .plan { font-family: var(--font-mono); font-size: 12px; }
 code { overflow-wrap: anywhere; }
 /* A CLI line stays one line, cut off at the edge; Copy CLI copies all of it. */

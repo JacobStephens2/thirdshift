@@ -707,7 +707,7 @@ async fn inspect(
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
+        Ok(peek::Peek::new(command, details, viewer.csrf, &config).render()?)
     })
     .await
     {
