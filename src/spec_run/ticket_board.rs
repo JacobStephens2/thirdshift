@@ -23,7 +23,7 @@ enum Standing {
 }
 
 /// A Spec run's Tickets, as last read, and where each one it started stands.
-pub(super) struct TicketBoard {
+pub(crate) struct TicketBoard {
     spec: IssueUrl,
     tickets: Vec<Ticket>,
     standings: BTreeMap<IssueIdentity, Standing>,

@@ -58,8 +58,10 @@ use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 mod architecture;
+pub(crate) mod builtin;
 mod catalog;
 mod identity;
+pub(crate) mod spec;
 mod spec_review;
 pub(crate) use identity::Identity;
 pub(crate) mod ticket;

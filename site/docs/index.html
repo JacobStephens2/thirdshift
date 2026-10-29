@@ -829,6 +829,15 @@ Inspect it with <code>thirdshift process show ticket-run</code>, or validate it 
 <code>thirdshift process check ticket-run issue &lt;issue&gt;</code>. Save the printed file
 under a new name to run it as a Custom process.
 A Custom process cannot take a reserved Built-in process name.</p>
+<p>The Built-in <code>spec-run</code> owns <code>land-tickets</code> → <code>spec-review</code> → <code>security-review</code>
+→ <code>delivery</code> → <code>self-merge</code> on a <code>spec-branch</code> worktree, inheriting the Command&#39;s
+Harness, Model and Effort, Child asks and Limits. Every starter of a Spec run
+uses it: an Issue URL, Pickup, Architect and Security runs, and
+<code>run-published-issue</code>. Spec-or-Ticket dispatch and the Claim stay before the
+file; the Command keeps its Spec run name, sessions and progress lines.
+Inspect it with <code>thirdshift process show spec-run</code>, or validate it with
+<code>thirdshift process check spec-run issue &lt;spec&gt;</code>. Save the printed file under
+a new name to run a Custom process on a Spec.</p>
 <p>Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
 rules as a Ticket run. If the Resume ends the same way, a progress line
@@ -976,7 +985,7 @@ as a Spec run. Delivery restores the Tickets checklist after the review
 rewrites the PR body, runs the Repair loop and marks the PR ready. A failure
 preserves the work and leaves an open PR draft; a Security hold leaves it
 ready for review. A delivered Spec PR removes the Claim. The Built-in Spec
-run keeps its existing sequence.</p>
+run reads this sequence from <code>spec-run.toml</code>.</p>
 <p><code>catalogue = &quot;implement&quot;</code> runs the same implementation session as a Ticket
 run, using its fresh or Continuation prompt. It must name the Issue-branch
 worktree, and takes its own Harness, Model and Effort like other Steps.
@@ -1589,7 +1598,8 @@ attributes. Ticket runs, including child Ticket runs, record <code>ticket-run</c
 the compiled-in file&#39;s hash by default. A <code>run-published-issue</code> Step that selects
 a Custom process records that name, Custom kind and loaded file&#39;s hash on its
 child instead. Custom processes record the file loaded for that
-run, so editing it changes the next run&#39;s hash. A Spec, Architect or Security
+run, so editing it changes the next run&#39;s hash. Spec runs record <code>spec-run</code>
+and its compiled-in file&#39;s hash. An Architect or Security
 run records its run type until its Built-in file lands; a run with no Process
 file has no hash. Older records can omit these fields. Status, the Console,
 the Activity log and Run notifications keep their existing run-type names.</p>

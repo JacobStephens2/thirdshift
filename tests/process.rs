@@ -12,6 +12,8 @@ mod published;
 mod security_review;
 #[path = "process/spec_review.rs"]
 mod spec_review;
+#[path = "process/spec_run.rs"]
+mod spec_run;
 mod support;
 #[path = "process/ticket_run.rs"]
 mod ticket_run;
@@ -830,9 +832,9 @@ bogus = \"echo hi\"
                 ":7: unknown harness: nope",
             ),
             (
-                "spec-run",
+                "pickup-run",
                 None,
-                "processes/spec-run.toml:1: reserved name: spec-run",
+                "processes/pickup-run.toml:1: reserved name: pickup-run",
             ),
             (
                 "review",
@@ -1052,7 +1054,7 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        let actions = if name == "ticket-run" {
+        let actions = if matches!(name, "ticket-run" | "spec-run") {
             vec![vec!["process", name]]
         } else {
             vec![
