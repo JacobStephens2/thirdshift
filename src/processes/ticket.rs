@@ -22,6 +22,7 @@ pub(crate) fn run_custom(
     let config = UserConfig::load()?;
     file.goal = delivery.goal;
     file.security_review = delivery.security_review;
+    file.security_fix = delivery.child_asks.security_fix;
     file.limits.repair_cap = file.limits.repair_cap.min(delivery.repair_cap);
     file.limits
         .protected_paths

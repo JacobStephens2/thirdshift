@@ -36,6 +36,7 @@ pub struct ProcessRun {
     pub goal: Option<Goal>,
     /// Whether this Process's Security review Step is requested.
     pub security_review: Option<crate::security::review::Ask>,
+    /// Whether Security finding Steps are allowed to fix findings.
     pub security_fix: Option<crate::security::FixAsk>,
     pub security_close: Option<crate::security::CloseAsk>,
     /// Stop architecture-review after publishing a plan, without dispatch.

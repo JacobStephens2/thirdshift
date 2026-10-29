@@ -1089,7 +1089,30 @@ group or a protected-path glob is refused before a step runs, so the plan
 <code>check</code> prints cannot hide the command. <code>catalogue</code> names a
 built-in Step: <code>implement</code>, <code>spec-review</code>, <code>security-review</code>, <code>delivery</code>, <code>self-merge</code> or
 <code>land-tickets</code>, described above, or <code>architecture-review</code>, <code>run-published-issue</code>,
-<code>fix-findings</code> or <code>close-findings</code>.</p>
+<code>security-audit</code>, <code>reproduce-findings</code>, <code>fix-findings</code> or <code>close-findings</code>.</p>
+<p><code>security-audit</code> audits origin&#39;s Base branch in its own throwaway worktree,
+validates the report and creates or reuses each finding&#39;s private record.
+Follow it with <code>reproduce-findings</code> to run one reproduction session per pending
+finding at its audited commit, score the reproduced findings and keep their tests
+in those private records. Completed reproductions and the Day shift&#39;s grades are
+kept when an audit finds the same finding again. Both Steps must be required,
+outside parallel groups, and cannot use an Issue-branch or Spec-branch worktree.
+Each takes its own Harness, Model and Effort. Their session traces stay local,
+including when OTLP export is configured.</p>
+<p>With <code>security-fix</code> (or <code>--security-fix</code>) on the command, or <code>[security] fix = true</code>,
+each Step skips itself when a recorded finding awaits an allowed fix;
+<code>no-security-fix</code> overrides the config. Before the Process name use the dashed
+flags. These Steps publish no fix or finding, and a file cannot loosen their
+privacy rules. Security runs keep their existing sequence and skip gates.</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Audit and reproduce findings privately&quot;
+[[steps]]
+name = &quot;audit&quot;
+catalogue = &quot;security-audit&quot;
+[[steps]]
+name = &quot;reproduce&quot;
+catalogue = &quot;reproduce-findings&quot;
+</code></pre>
 <p><code>architecture-review</code> runs the Architecture review in its own throwaway worktree
 at the Base branch on origin, checks the final line and any plan, and applies
 <code>architect-plan</code> or <code>architect-idea</code> labels using the Architect run&#39;s rules.

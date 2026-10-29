@@ -1201,7 +1201,34 @@ group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
 built-in Step: `implement`, `spec-review`, `security-review`, `delivery`, `self-merge` or
 `land-tickets`, described above, or `architecture-review`, `run-published-issue`,
-`fix-findings` or `close-findings`.
+`security-audit`, `reproduce-findings`, `fix-findings` or `close-findings`.
+
+`security-audit` audits origin's Base branch in its own throwaway worktree,
+validates the report and creates or reuses each finding's private record.
+Follow it with `reproduce-findings` to run one reproduction session per pending
+finding at its audited commit, score the reproduced findings and keep their tests
+in those private records. Completed reproductions and the Day shift's grades are
+kept when an audit finds the same finding again. Both Steps must be required,
+outside parallel groups, and cannot use an Issue-branch or Spec-branch worktree.
+Each takes its own Harness, Model and Effort. Their session traces stay local,
+including when OTLP export is configured.
+
+With `security-fix` (or `--security-fix`) on the command, or `[security] fix = true`,
+each Step skips itself when a recorded finding awaits an allowed fix;
+`no-security-fix` overrides the config. Before the Process name use the dashed
+flags. These Steps publish no fix or finding, and a file cannot loosen their
+privacy rules. Security runs keep their existing sequence and skip gates.
+
+```toml
+version = 1
+description = "Audit and reproduce findings privately"
+[[steps]]
+name = "audit"
+catalogue = "security-audit"
+[[steps]]
+name = "reproduce"
+catalogue = "reproduce-findings"
+```
 
 `architecture-review` runs the Architecture review in its own throwaway worktree
 at the Base branch on origin, checks the final line and any plan, and applies

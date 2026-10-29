@@ -56,6 +56,16 @@ removing its Claim, or merges it when asked. Each Step takes its own
 Harness, Model and Effort; Security review and Self-merge keep their flag
 and User config gates, and a refused or incomplete review holds the merge.
 
+A Custom process can run `security-audit` → `reproduce-findings` to audit the
+Base branch, record findings privately and reproduce each at its audited commit.
+Each Step takes its own Harness, Model and Effort, outside parallel groups and
+on throwaway worktrees. Completed reproductions and the Day shift's grades are
+kept on repeated findings. With `security-fix` or `[security] fix = true`, both
+skip themselves when a recorded finding awaits an allowed fix; `no-security-fix`
+overrides the config. Findings and their Session traces remain private even
+with OTLP export configured. The Security run's existing sequence and gates stay
+as they are; its Built-in process file is a later move.
+
 `fix-findings` → `close-findings` lets a Custom process fix each pending
 reproduced Security finding, then recheck merged fixes against the merged
 Base branch before closing their private records. Both keep the Security run's
