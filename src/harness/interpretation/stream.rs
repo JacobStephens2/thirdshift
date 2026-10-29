@@ -105,7 +105,7 @@ impl<'a> TaskState<'a> {
     fn status(&self) -> Option<&str> {
         match self {
             Self::Updated(status) | Self::Notified(status) => Some(status),
-            _ => None,
+            Self::Started | Self::Other => None,
         }
     }
 }
@@ -476,7 +476,7 @@ impl Claude {
                 false
             }
             TaskState::Updated("killed") | TaskState::Notified("stopped") => true,
-            _ => false,
+            TaskState::Updated(_) | TaskState::Notified(_) | TaskState::Other => false,
         };
         if killed && !self.killed.iter().any(|(killed_id, _)| killed_id == id) {
             let description = self

@@ -427,7 +427,7 @@ fn resolved(path: &Path) -> Result<PathBuf> {
                 resolved.pop();
             }
             Component::CurDir => {}
-            component => {
+            component @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
                 resolved.push(component);
                 if resolved.exists() {
                     resolved = resolved.canonicalize()?;

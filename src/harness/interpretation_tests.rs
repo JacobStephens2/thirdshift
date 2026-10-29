@@ -139,6 +139,10 @@ fn review_completion_preserves_distinct_claude_child_messages() {
         interpretation.decode(line);
     }
     let events = finish(interpretation).report.unwrap().events;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     let messages: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
@@ -733,7 +737,9 @@ pub(crate) fn recording_interpretation(
     match retained_harness {
         Harness::Muse => muse::log::recording_interpretation(root, decoder),
         Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
-        _ => panic!("recording fixtures support only retained Harnesses"),
+        Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok => {
+            panic!("recording fixtures support only retained Harnesses")
+        }
     }
 }
 
@@ -1165,6 +1171,10 @@ fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_
                 Some("last reply")
             );
             let events = completion.report.unwrap().events;
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the test picks out the events it asserts on; the other events are not under test"
+            )]
             let starts: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
@@ -1187,6 +1197,10 @@ fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_
                     .count(),
                 1
             );
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the test picks out the events it asserts on; the other events are not under test"
+            )]
             let ends: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
@@ -1355,6 +1369,10 @@ fn review_opencode_preserves_all_live_text_parts_without_export() {
         interpretation.decode(line);
     }
     let events = finish(interpretation).report.unwrap().events;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     let text: String = events
         .iter()
         .filter_map(|event| match event {

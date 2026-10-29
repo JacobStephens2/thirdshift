@@ -47,7 +47,7 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
         .iter()
         .filter_map(|node| match &node.fact {
             Fact::Session(attachment) => Some(attachment.original.clone()),
-            _ => None,
+            Fact::Command | Fact::Run | Fact::Stage(_) => None,
         })
         .collect();
     for node in &nodes {

@@ -446,6 +446,11 @@ fn work_started(event: &event::Event) -> bool {
         Event::Message { role, text, .. } => role == "assistant" && !text.trim().is_empty(),
         Event::TurnEnded { usage, outcome, .. } => *outcome == Outcome::Succeeded || tokens(usage),
         Event::ModelCallEnded { usage, .. } | Event::Usage { usage, .. } => tokens(usage),
-        _ => false,
+        Event::ModelCallStarted { .. }
+        | Event::TurnStarted { .. }
+        | Event::Error { .. }
+        | Event::WorkEnded { .. }
+        | Event::SubagentStarted { .. }
+        | Event::SubagentEnded { .. } => false,
     }
 }

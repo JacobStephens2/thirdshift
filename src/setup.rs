@@ -530,10 +530,16 @@ mod scripted {
         pub fn prompts(&self) -> Vec<&str> {
             self.calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::Ask(prompt) | Call::AskHidden(prompt) => Some(prompt.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "keeps only prompting calls; a new kind must be listed to count"
+                    )]
+                    |call| match call {
+                        Call::Ask(prompt) | Call::AskHidden(prompt) => Some(prompt.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect()
         }
 
@@ -541,10 +547,16 @@ mod scripted {
         pub fn said(&self) -> Vec<&str> {
             self.calls
                 .iter()
-                .filter_map(|call| match call {
-                    Call::Say(line) => Some(line.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "keeps only lines said; a new kind of call must be listed to count"
+                    )]
+                    |call| match call {
+                        Call::Say(line) => Some(line.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect()
         }
 
