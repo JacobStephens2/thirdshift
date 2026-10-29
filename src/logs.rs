@@ -38,6 +38,7 @@ mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
@@ -432,8 +433,38 @@ pub(crate) fn trace_context() -> Option<trace::Context> {
     record().trace_context()
 }
 
+/// Sessions started while this is held export nothing. `fix-findings` and
+/// `close-findings` hold it so a Process command does not send private
+/// Security records, or the Ticket runs those Steps start, to OTLP.
+static OTLP_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct SuppressOtlp;
+
+impl SuppressOtlp {
+    pub(crate) fn new() -> Self {
+        OTLP_SUPPRESSED.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for SuppressOtlp {
+    fn drop(&mut self) {
+        OTLP_SUPPRESSED.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn otlp_suppressed() -> bool {
+    OTLP_SUPPRESSED.load(Ordering::Acquire) > 0
+}
+
+/// The configured OTLP endpoint, or none for a Security or Scoring command
+/// and while a [`SuppressOtlp`] guard is held.
 pub(crate) fn otlp_endpoint() -> Option<String> {
-    record().otlp_endpoint()
+    if otlp_suppressed() {
+        None
+    } else {
+        record().otlp_endpoint()
+    }
 }
 
 /// Print `line` on stderr, and keep it in the Command log.

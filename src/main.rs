@@ -336,6 +336,12 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => *run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    // A finding Step's child Ticket run carries this so its sessions stay
+    // local even though the owning command is a Process, not a Security run.
+    let _suppress_otlp = given
+        .as_ref()
+        .filter(|given| given.suppress_otlp)
+        .map(|_| logs::SuppressOtlp::new());
     let issue = match launch::resolve_issue(issue) {
         Ok(issue) => issue,
         Err(error) => return failure(&error),

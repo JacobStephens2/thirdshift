@@ -16,6 +16,8 @@ pub(super) fn fix(run: &StepRun<'_>, process: &str) -> Result<String> {
     if !run.security_flags.security_fix_allowed(&config) {
         return Ok("Security fixing is not allowed".into());
     }
+    // Held for publication, the Ticket run and every child it starts.
+    let _suppress_otlp = logs::SuppressOtlp::new();
     run.completed
         .lock()
         .expect("completed Runs")
@@ -118,6 +120,8 @@ pub(super) fn close(run: &StepRun<'_>) -> Result<String> {
     if !run.security_flags.security_close_allowed(&config) {
         return Ok("Security closing is not allowed".into());
     }
+    // The close check's prompt contains the private record.
+    let _suppress_otlp = logs::SuppressOtlp::new();
     run.completed
         .lock()
         .expect("completed Runs")

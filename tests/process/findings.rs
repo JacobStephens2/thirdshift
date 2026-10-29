@@ -45,6 +45,78 @@ gh pr create --base main --head issue-{issue} --title Fix --body 'Closes #{issue
 }
 
 #[test]
+fn otlp_never_receives_private_finding_sessions_or_nested_ticket_runs() {
+    for spec in [false, true] {
+        let receiver = ResendStandIn::replying(200, "{}");
+        let scenario = findings();
+        let mut state = scenario.gh_state();
+        state["advisories"].as_array_mut().unwrap().truncate(1);
+        if spec {
+            state["advisories"][0]["description"] = json!(
+                state["advisories"][0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .replace("high single", "high spec")
+            );
+        }
+        scenario.write_gh_state(&state);
+        scenario.user_config_is(&format!(
+            "[otlp]\nendpoint = \"{}/v1/traces\"\n",
+            receiver.url()
+        ));
+        if spec {
+            scenario.agent_does_in_session(
+                1,
+                r#"printf 'Proposed public spec:\nTitle: Bound accepted input\nBody:\nBound input across storage and transport. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\nTicket: Bound storage input\nBody:\nBound storage input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\nBlocked by: none\nTicket: Bound transport input\nBody:\nBound transport input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\nBlocked by: 1\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+            );
+            for ticket in [9, 10] {
+                scenario.agent_does_for(
+                    ticket,
+                    &implement(ticket as usize).replace("--base main", "--base issue-8"),
+                );
+            }
+        } else {
+            scenario.agent_does_in_session(1, &stage_fix(0));
+            scenario.agent_does_for(8, &implement(8));
+            scenario.agent_does_for_in_session(
+                8,
+                2,
+                "printf 'Security close check: passes\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+            );
+        }
+
+        let args: &[&str] = if spec {
+            &["process", "findings", "security-fix", "no-security-close"]
+        } else {
+            &["process", "findings", "security-fix", "merge"]
+        };
+        let result = scenario.run(args);
+
+        assert_eq!(result.code, Some(0), "spec={spec}: {}", result.stderr);
+        let local_traces = scenario
+            .entries("home/.thirdshift/logs/acme/widgets/commands/process")
+            .into_iter()
+            .filter(|name| name.ends_with(".spans.jsonl"))
+            .count();
+        assert!(
+            local_traces >= 2,
+            "spec={spec}: private finding sessions were not exercised: {local_traces}"
+        );
+        let requests = receiver.requests();
+        let exported = requests
+            .iter()
+            .map(|request| request.body.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            requests.is_empty(),
+            "spec={spec}: private finding sessions were exported: {exported}"
+        );
+    }
+}
+
+#[test]
 fn fixing_dispatches_each_reproduced_finding_and_keeps_unreproduced_findings_private() {
     let scenario = findings();
     scenario.user_config_is("[security]\nfix = true\n");

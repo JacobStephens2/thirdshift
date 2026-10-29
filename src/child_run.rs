@@ -98,6 +98,9 @@ pub struct Given {
     pub stamp: String,
     /// The owning command, whose folder its Session traces inherit.
     pub command: logs::CommandKind,
+    /// When set, this child and the Runs it starts export no OTLP spans.
+    /// Finding Steps set it so private records stay off a Process command's endpoint.
+    pub suppress_otlp: bool,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
     /// What the Run that started it hands on to every child Run.
@@ -123,6 +126,11 @@ const STAMP: &str = "--stamp";
 
 /// The hidden argument followed by the owning command's log folder.
 const LOGS_COMMAND: &str = "--logs-command";
+
+/// The hidden argument that keeps a child Run's sessions off the OTLP
+/// endpoint. Finding Steps pass it; a Security run's children need no such
+/// argument because their command kind already exports nothing.
+const SUPPRESS_OTLP: &str = "--suppress-otlp";
 
 /// The hidden argument that asks a child Run [`BaseFixAsk::Allow`].
 const ALLOW_BASE_FIX: &str = "--allow-base-fix";
@@ -186,6 +194,9 @@ impl Given {
         }
         if self.asks.security_fix {
             args.push(ALLOW_SECURITY_FIX);
+        }
+        if self.suppress_otlp {
+            args.push(SUPPRESS_OTLP);
         }
         if self.asks.security_review {
             args.push(SECURITY_REVIEW);
@@ -310,6 +321,7 @@ pub struct Reader {
     base_fix: Option<BaseFixAsk>,
     security_review: bool,
     security_fix: bool,
+    suppress_otlp: bool,
     sessions: PendingChoice,
     review: PendingChoice,
     review_default: PendingChoice,
@@ -363,6 +375,12 @@ impl Reader {
                     bail!("repeated argument: {arg}");
                 }
                 self.security_fix = true;
+            }
+            SUPPRESS_OTLP => {
+                if self.suppress_otlp {
+                    bail!("repeated argument: {arg}");
+                }
+                self.suppress_otlp = true;
             }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 not_yet_given(&self.kind, arg)?;
@@ -449,6 +467,7 @@ impl Reader {
                 || self.base_fix.is_some()
                 || self.security_review
                 || self.security_fix
+                || self.suppress_otlp
                 || self.sessions.is_given()
                 || self.review.is_given()
                 || self.review_default.is_given()
@@ -458,7 +477,8 @@ impl Reader {
                      {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
                      {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
                      {SECURITY_REVIEW_EFFORT}, {SECURITY_REVIEW_DEFAULT}, \
-                     {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT} or {LOGS_COMMAND}"
+                     {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT}, {LOGS_COMMAND} or \
+                     {SUPPRESS_OTLP}"
                 );
             }
             return Ok(None);
@@ -479,6 +499,7 @@ impl Reader {
             command: self
                 .command
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
+            suppress_otlp: self.suppress_otlp,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             asks: ChildAsks {
                 delivery_limits: self.delivery_limits.unwrap_or_default(),
@@ -566,6 +587,7 @@ pub(super) fn start_process(
         kind,
         stamp: logs::stamp(),
         command: logs::command_kind(),
+        suppress_otlp: logs::otlp_suppressed(),
         base_fix,
         asks: asks.clone(),
     };
@@ -963,6 +985,7 @@ mod tests {
             kind: ticket(),
             stamp: STAMPED.to_string(),
             command: logs::CommandKind::Issue,
+            suppress_otlp: false,
             base_fix: BaseFixAsk::Forbid,
             asks: ChildAsks::default(),
         };
@@ -1066,6 +1089,7 @@ mod tests {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     command: logs::CommandKind::Issue,
+                    suppress_otlp: false,
                     base_fix,
                     asks: ChildAsks {
                         delivery_limits: crate::delivery::Limits::default(),
@@ -1105,8 +1129,8 @@ mod tests {
     const ONLY_A_CHILD_RUN: &str = "only a child Ticket run is given --stamp, --allow-base-fix, \
         --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
         --security-review-harness, --security-review-model, --security-review-effort, \
-        --security-review-default, --security-review-default-model, --security-review-default-effort or \
-        --logs-command";
+        --security-review-default, --security-review-default-model, --security-review-default-effort, \
+        --logs-command or --suppress-otlp";
 
     #[test]
     fn hidden_arguments_that_are_repeated_have_no_value_or_lack_a_kind_or_stamp_are_rejected() {

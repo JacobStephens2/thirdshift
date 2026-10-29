@@ -1403,8 +1403,10 @@ Unmerged fixes are left open. Closing defaults to allowed when fixing
 is allowed; `no-security-close` or `close = false` under `[security]`
 disables it, and `security-close` overrides that setting. Both Steps run
 outside parallel groups and use throwaway worktrees; their sessions acquire
-fresh worktrees for publication and merged-Base checks. The existing Security
-run still fixes at most one finding per invocation.
+fresh worktrees for publication and merged-Base checks. Their sessions and the
+Ticket runs they start stay off any configured OTLP endpoint, as a Security
+run's do. The existing Security run still fixes at most one finding per
+invocation.
 
 ```toml
 version = 1
@@ -1497,7 +1499,7 @@ model = "gemini-3.8-flash"
 effort = "medium"
 ```
 
-`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.
+`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. `fix-findings` and `close-findings` likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 

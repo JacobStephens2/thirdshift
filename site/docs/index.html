@@ -1276,8 +1276,10 @@ Unmerged fixes are left open. Closing defaults to allowed when fixing
 is allowed; <code>no-security-close</code> or <code>close = false</code> under <code>[security]</code>
 disables it, and <code>security-close</code> overrides that setting. Both Steps run
 outside parallel groups and use throwaway worktrees; their sessions acquire
-fresh worktrees for publication and merged-Base checks. The existing Security
-run still fixes at most one finding per invocation.</p>
+fresh worktrees for publication and merged-Base checks. Their sessions and the
+Ticket runs they start stay off any configured OTLP endpoint, as a Security
+run&#39;s do. The existing Security run still fixes at most one finding per
+invocation.</p>
 <pre><code class="language-toml">version = 1
 description = &quot;Fix reproduced findings&quot;
 [[steps]]
@@ -1361,7 +1363,7 @@ effort = &quot;&quot;
 model = &quot;gemini-3.8-flash&quot;
 effort = &quot;medium&quot;
 </code></pre>
-<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.</p>
+<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. <code>fix-findings</code> and <code>close-findings</code> likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
 <pre><code class="language-toml">[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false

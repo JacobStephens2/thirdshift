@@ -59,7 +59,8 @@ and User config gates, and a refused or incomplete review holds the merge.
 `fix-findings` → `close-findings` lets a Custom process fix each pending
 reproduced Security finding, then recheck merged fixes against the merged
 Base branch before closing their private records. Both keep the Security run's
-permission and privacy rules (ADR-0015), run outside parallel groups and use
+permission and privacy rules (ADR-0015), leave their sessions and child
+Ticket runs off any OTLP endpoint, run outside parallel groups and use
 throwaway worktrees. `fix-findings` takes the same optional `process` setting
 as `run-published-issue`, defaulting to `ticket-run`. A failed fix stays with
 the Day shift. `security-fix` and `security-close` (or their `no-` forms)
