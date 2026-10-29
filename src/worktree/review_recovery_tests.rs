@@ -16,7 +16,7 @@ struct StaleReview {
 impl StaleReview {
     fn create() -> Self {
         let (temp, launch) = super::tests::launch_directory();
-        let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+        let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
         let path = owner.path().to_path_buf();
         let git = Git::new(&path);
         let admin = PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"]).unwrap());
@@ -39,7 +39,7 @@ impl StaleReview {
             .run(&["worktree", "list", "--porcelain"])
             .unwrap();
         let refs = self.launch.run(&["show-ref"]).unwrap();
-        let error = ReviewWorktree::create(&self.launch, "work", "main")
+        let error = ReviewWorktree::create(&self.launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -230,10 +230,11 @@ fn replaced_directories_or_changed_registration_identity_do_not_inherit_disposal
             "missing-root" | "admin-link" | "damaged-registration" | "backlink"
         ) {
             let refs = fixture.launch.run(&["show-ref"]).unwrap();
-            let error = ReviewWorktree::create(&fixture.launch, "work", "main")
-                .err()
-                .unwrap()
-                .to_string();
+            let error =
+                ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
+                    .err()
+                    .unwrap()
+                    .to_string();
             assert!(
                 error.contains("retaining checkout")
                     && error.contains(fixture.path.to_str().unwrap()),
@@ -280,7 +281,7 @@ fn legacy_paths_and_dangling_links_are_retained_before_add() {
             _ => symlink(temp.path().join("absent"), &path).unwrap(),
         }
         let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -300,7 +301,7 @@ fn legacy_paths_and_dangling_links_are_retained_before_add() {
 fn live_review_cleanup_does_not_require_restart_evidence() {
     for missing in ["token", "record", "both"] {
         let (_temp, launch) = super::tests::launch_directory();
-        let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+        let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
         let path = owner.path().to_path_buf();
         let admin = PathBuf::from(
             Git::new(&path)
@@ -333,7 +334,8 @@ fn process_death_with_prepared_markers_does_not_authorize_a_review_retry() {
     use std::time::{Duration, Instant};
     const NAME: &str = "worktree::review_recovery_tests::process_death_with_prepared_markers_does_not_authorize_a_review_retry";
     if let Some(launch) = std::env::var_os("THIRDSHIFT_REVIEW_CRASH_LAUNCH") {
-        let _owner = ReviewWorktree::create(&Git::new(launch), "work", "main").unwrap();
+        let _owner =
+            ReviewWorktree::create(&Git::new(launch), "work", "main", PassKind::Architect).unwrap();
         panic!("fixture failed to stop acquisition before publication");
     }
     let (temp, launch) = super::tests::launch_directory();
@@ -395,7 +397,7 @@ exec "$THIRDSHIFT_REAL_GIT" "$@"
     let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
 
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -425,10 +427,11 @@ fn recorded_interruption_leaves_an_eligible_stale_review_untouched() {
                 .run(&["worktree", "list", "--porcelain"])
                 .unwrap();
             signal_hook::low_level::raise(signal).unwrap();
-            let error = ReviewWorktree::create(&fixture.launch, "work", "main")
-                .err()
-                .unwrap()
-                .to_string();
+            let error =
+                ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
+                    .err()
+                    .unwrap()
+                    .to_string();
             assert_eq!(error, "interrupted");
             assert_eq!(
                 fs::read_to_string(fixture.path.join("retained.txt")).unwrap(),
@@ -477,7 +480,7 @@ fn token_creation_never_overwrites_existing_files_links_or_tracked_tokens() {
                 &format!("#!/bin/sh\nset -e\n{create}\nprintf 'hook scratch\\n' > retained.txt\n"),
             );
         }
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -526,8 +529,9 @@ fn stale_recovery_and_new_acquisition_wait_for_the_repository_worktree_lock() {
     let held = lock_launch(&fixture.launch).unwrap();
     let original_token = fs::read(fixture.path.join(".thirdshift-review-token")).unwrap();
     let launch = Git::new(fixture.launch.dir());
-    let acquiring =
-        std::thread::spawn(move || ReviewWorktree::create(&launch, "work", "main").unwrap());
+    let acquiring = std::thread::spawn(move || {
+        ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap()
+    });
     std::thread::sleep(Duration::from_millis(300));
     let retained_while_locked = fs::read_to_string(fixture.path.join("retained.txt")).ok();
     let token_while_locked = fs::read(fixture.path.join(".thirdshift-review-token")).ok();
@@ -549,7 +553,7 @@ fn a_missing_registered_review_reports_its_available_head_and_retains_registrati
         .launch
         .run(&["worktree", "list", "--porcelain"])
         .unwrap();
-    let error = ReviewWorktree::create(&fixture.launch, "work", "main")
+    let error = ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -583,7 +587,7 @@ fn a_repository_negating_the_token_exclusion_refuses_review_acquisition() {
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
     let refs = launch.run(&["show-ref"]).unwrap();
 
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();

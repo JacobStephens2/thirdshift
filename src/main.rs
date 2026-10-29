@@ -42,6 +42,7 @@ mod pull_request;
 mod ready;
 mod recovery;
 mod resend_key;
+mod reservation;
 mod resources;
 mod run;
 mod run_ending;

@@ -3190,40 +3190,43 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
 }
 
 #[test]
-fn at_a_command_limit_of_2_a_process_with_no_issue_runs_alone_and_one_with_an_issue_fills_a_slot() {
+fn at_a_command_limit_of_2_a_process_with_no_issue_runs_beside_any_other_command_up_to_the_limit() {
     let scenario = Scenario::new();
     scenario.user_config_is("[pass]\ncommand_limit = 2\n");
     waiting_process(&scenario, "review");
+    command_process(&scenario, "notes", "printf ran");
     ready_issue(&scenario, 7);
     scenario.agent_does(&agent_opens_pr(7));
     let with_issue = scenario.run_until(&["process", "review", "issue", "7"], &[], "started");
 
-    let skipped = scenario.run(&["process", "review"]);
+    let beside = scenario.run(&["process", "notes"]);
 
-    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
-    assert_eq!(
-        after_start(&skipped.stderr, "Process review starting"),
-        "thirdshift: 1 Command is running on acme/widgets, and this Pass runs only alone there\n"
-    );
+    assert_eq!(beside.code, Some(0), "{}", beside.stderr);
+    assert_eq!(beside.stdout, "ran\n");
     release(&scenario);
     let with_issue = with_issue.finish();
     assert_eq!(with_issue.code, Some(0), "{}", with_issue.stderr);
     fs::remove_file(scenario.path("started")).unwrap();
     fs::remove_file(scenario.path("release")).unwrap();
-    let alone = scenario.run_until(&["process", "review"], &[], "started");
+    // It takes no lock of a kind, so a Pickup run runs beside it, and only
+    // the Command limit skips a third Command.
+    let no_issue = scenario.run_until(&["process", "review"], &[], "started");
 
-    let skipped = scenario.run(&["pickup"]);
+    let pickup = scenario.run(&["pickup"]);
 
-    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
-    assert_eq!(
-        after_start(&skipped.stderr, "Pickup run starting"),
-        "thirdshift: a Custom process is running alone on acme/widgets\n"
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert!(
+        pickup
+            .stdout
+            .contains("https://github.com/acme/widgets/pull/"),
+        "{}",
+        pickup.stdout
     );
-    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert_ne!(scenario.issue_labels(7), ["ready-for-agent"]);
     release(&scenario);
-    let alone = alone.finish();
-    assert_eq!(alone.code, Some(0), "{}", alone.stderr);
-    assert_eq!(alone.stdout, "held\n");
+    let no_issue = no_issue.finish();
+    assert_eq!(no_issue.code, Some(0), "{}", no_issue.stderr);
+    assert_eq!(no_issue.stdout, "held\n");
 }
 
 #[test]

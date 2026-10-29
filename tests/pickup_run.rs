@@ -629,7 +629,7 @@ fn reserved_by_another_host(scenario: &Scenario, number: u32) {
 /// reserve.
 fn unreservable(number: u32) -> String {
     format!(
-        "thirdshift: #{number} is reserved by another Pickup run or is no longer Ready; \
+        "thirdshift: #{number} is reserved by another run or is no longer Ready; \
          check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved\n"
     )
 }
@@ -869,7 +869,7 @@ fn a_legacy_reservation_without_a_host_is_not_stolen() {
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(
-        result.stderr.contains("reserved by another Pickup run"),
+        result.stderr.contains("reserved by another run"),
         "{}",
         result.stderr
     );
@@ -961,7 +961,7 @@ exec "{git}" "$@"
         failed.stderr
     );
     assert_eq!(retried.code, Some(0), "{}", retried.stderr);
-    assert!(retried.stderr.contains("reserved by another Pickup run"));
+    assert!(retried.stderr.contains("reserved by another run"));
     assert!(scenario.claude_calls().is_empty());
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     assert_eq!(
@@ -2113,17 +2113,22 @@ fn at_a_command_limit_of_2_a_pass_from_before_the_command_limit_and_a_pickup_run
 }
 
 #[test]
-fn at_a_command_limit_of_2_a_pass_that_runs_alone_is_skipped_beside_a_pickup_run_and_skips_every_pass_itself()
+fn at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_a_pass_from_before_the_command_limit()
  {
     let scenario = Scenario::new();
     scenario.user_config_is(COMMAND_LIMIT_2);
-    ready_issue(&scenario, 7, &[]);
-    scenario.agent_does_for(7, &agent_waits_on_its_own_then_opens_pr(7));
-    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let legacy = scenario.path("home/.thirdshift/architect-locks/acme/widgets.lock");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let old_pass = fs::File::create(&legacy).unwrap();
+    old_pass.try_lock().unwrap();
 
-    for (args, starting) in [
-        (vec!["architect", "--plan-only"], "Architect run starting"),
-        (vec!["secure"], "Security run starting"),
+    for (args, starting, kind) in [
+        (
+            vec!["architect", "--plan-only"],
+            "Architect run starting",
+            "an Architect run",
+        ),
+        (vec!["secure"], "Security run starting", "a Security run"),
     ] {
         let skipped = scenario.run(&args);
 
@@ -2135,41 +2140,15 @@ fn at_a_command_limit_of_2_a_pass_that_runs_alone_is_skipped_beside_a_pickup_run
         );
         assert_eq!(
             support::after_start(&skipped.stderr, starting),
-            "thirdshift: 1 Command is running on acme/widgets, and this Pass runs only alone there\n",
+            format!(
+                "thirdshift: an older thirdshift's Pass is running on acme/widgets, and may be {kind}\n"
+            ),
             "{args:?}"
         );
+        assert_eq!(skipped.stdout, "");
     }
-    release_issue(&scenario, 7);
-    assert_ended_with_pr(
-        &pickup.finish(),
-        &pr_from(&scenario, "issue-7"),
-        "ready for review",
-    );
-
-    // No Ready issue is left, so only the Command limit can skip a Pass.
-    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
-    let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started");
-    ready_issue(&scenario, 9, &[]);
-    for (args, starting) in [
-        (vec!["pickup"], "Pickup run starting"),
-        (vec!["architect", "--plan-only"], "Architect run starting"),
-    ] {
-        let skipped = scenario.run(&args);
-
-        assert_eq!(
-            skipped.code,
-            Some(0),
-            "{args:?}: stderr: {}",
-            skipped.stderr
-        );
-        assert_eq!(
-            support::after_start(&skipped.stderr, starting),
-            "thirdshift: an Architect run is running alone on acme/widgets\n",
-            "{args:?}"
-        );
-    }
-    release(&scenario);
-    architect.finish();
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    drop(old_pass);
 }
 
 const KEY: &str = "re_test_123";

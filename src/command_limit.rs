@@ -7,16 +7,20 @@
 //! can't both take the last. The Spec run or Ticket run a Pass dispatches
 //! runs inside its process, and so in its slot.
 //!
+//! Passes of different kinds share the repository up to the limit, but an
+//! Architect run and a Security run each hold a lock of their kind too, and
+//! are skipped while another of their kind holds it: never two of a kind on
+//! one repository at once. A Pickup run or an issue-less Custom process
+//! takes no lock of a kind.
+//!
 //! A Pass also tries the lock a thirdshift from before the Command limit
 //! takes, and keeps it when it is free, so that the two still keep each
-//! other out: one held by such a thirdshift counts as a Command running. An Architect run, a
-//! Security run or an issue-less Custom process keeps the repository to
-//! itself: it is skipped while any other Command runs there, and holds a
-//! lock of its own that skips every Pass while it runs.
+//! other out: one held by such a thirdshift counts as a Command running. An
+//! Architect run or a Security run is skipped beside one, whose kind it
+//! can't tell.
 
 use std::fmt;
 use std::fs::{self, File, TryLockError};
-use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -28,12 +32,37 @@ use crate::issue::Repo;
 /// How a Pass shares its repository with the other Commands there.
 #[derive(Debug, Clone, Copy)]
 pub enum Sharing {
-    /// A Pickup run, which runs beside other Commands up to the Command
-    /// limit.
+    /// A Pickup run, or a Custom process started with no issue, which runs
+    /// beside other Commands up to the Command limit.
     UpToTheLimit,
-    /// A Pass that keeps the repository to itself, named as its skip line
-    /// names it to another Pass, such as "an Architect run".
-    Alone(&'static str),
+    /// A Pass that runs beside other Commands up to the Command limit, but
+    /// never beside another of its kind.
+    OneOfAKind(PassKind),
+}
+
+/// A kind of Pass of which only one runs on a repository at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassKind {
+    Architect,
+    Security,
+}
+
+impl PassKind {
+    /// What it is named as in a skip's reason, such as "an Architect run".
+    fn name(self) -> &'static str {
+        match self {
+            PassKind::Architect => "an Architect run",
+            PassKind::Security => "a Security run",
+        }
+    }
+
+    /// The word its lock file and its review worktree are named with.
+    pub fn word(self) -> &'static str {
+        match self {
+            PassKind::Architect => "architect",
+            PassKind::Security => "security",
+        }
+    }
 }
 
 /// Why a Pass is skipped at its start, on `repo`, at the Command `limit`.
@@ -49,11 +78,11 @@ pub struct AlreadyRunning {
 enum Why {
     /// `running` Commands are running, at or over the limit.
     AtLimit { running: usize },
-    /// This Pass keeps the repository to itself, and `running` other
-    /// Commands are running there.
-    NotAlone { running: usize },
-    /// A Pass that keeps the repository to itself, named, is running.
-    HeldAlone(String),
+    /// Another Pass of this one's kind is running.
+    SameKind(PassKind),
+    /// A thirdshift from before the Command limit is running a Pass, which
+    /// may be of this one's kind.
+    Older(PassKind),
 }
 
 impl fmt::Display for AlreadyRunning {
@@ -64,18 +93,18 @@ impl fmt::Display for AlreadyRunning {
         if limit.get() == 1 {
             return write!(f, "another Pass is already running on {repo}");
         }
-        match &self.why {
+        match self.why {
             Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
-                commands_running(*running)
+                commands_running(running)
             ),
-            Why::NotAlone { running } => write!(
+            Why::SameKind(kind) => write!(f, "{} is already running on {repo}", kind.name()),
+            Why::Older(kind) => write!(
                 f,
-                "{} on {repo}, and this Pass runs only alone there",
-                commands_running(*running)
+                "an older thirdshift's Pass is running on {repo}, and may be {}",
+                kind.name()
             ),
-            Why::HeldAlone(kind) => write!(f, "{kind} is running alone on {repo}"),
         }
     }
 }
@@ -108,9 +137,10 @@ pub fn hold_slot(repo: &Repo) {
 }
 
 /// Take a slot on `repo` for this process, a Pass that shares it as
-/// `sharing` says, unless `limit` Commands already run there: `Some` says
-/// why it is skipped, and then this call took nothing. Otherwise this
-/// process holds the slot until it exits, through whatever it dispatches.
+/// `sharing` says, unless `limit` Commands already run there, or another of
+/// its kind: `Some` says why it is skipped, and then this call took
+/// nothing. Otherwise this process holds the slot, and the lock of its kind
+/// if it has one, until it exits, through whatever it dispatches.
 pub fn hold_pass(
     repo: &Repo,
     limit: NonZeroUsize,
@@ -125,8 +155,12 @@ pub fn hold_pass(
             why,
         }))
     };
-    let Some(alone) = slots.try_alone()? else {
-        return skipped(Why::HeldAlone(slots.alone_kind()));
+    let kind = match sharing {
+        Sharing::UpToTheLimit => None,
+        Sharing::OneOfAKind(kind) => match slots.try_kind(kind)? {
+            Some(lock) => Some((kind, lock)),
+            None => return skipped(Why::SameKind(kind)),
+        },
     };
     let held = slots.count()?;
     let legacy = try_lock(&legacy_path(repo)?)?;
@@ -134,24 +168,22 @@ pub fn hold_pass(
     // A thirdshift from before the Command limit takes no slot, so the lock
     // it takes, held while no Pass from after holds the marker, is one more
     // Command running.
-    let running = held.held + usize::from(legacy.is_none() && marker.is_some());
-    match sharing {
-        Sharing::UpToTheLimit if running >= limit.get() => {
-            return skipped(Why::AtLimit { running });
-        }
-        Sharing::Alone(_) if running >= 1 => return skipped(Why::NotAlone { running }),
-        Sharing::UpToTheLimit => drop(alone),
-        Sharing::Alone(kind) => {
-            let mut alone = alone;
-            // What a Pass skipped while this one runs names it as.
-            alone
-                .set_len(0)
-                .and_then(|()| alone.write_all(kind.as_bytes()))
-                .with_context(|| format!("can't write {}", slots.dir.join(ALONE).display()))?;
-            hold(alone);
-        }
+    let older = legacy.is_none() && marker.is_some();
+    let running = held.held + usize::from(older);
+    if running >= limit.get() {
+        return skipped(Why::AtLimit { running });
+    }
+    // An older thirdshift's Architect run and Security run share one review
+    // worktree, so neither kind runs beside a Pass of one.
+    if let Some((kind, _)) = kind
+        && older
+    {
+        return skipped(Why::Older(kind));
     }
     slots.take(held.free)?;
+    if let Some((_, lock)) = kind {
+        hold(lock);
+    }
     if let (Some(legacy), Some(marker)) = (legacy, marker) {
         hold(marker);
         hold(legacy);
@@ -162,9 +194,6 @@ pub fn hold_pass(
 /// The lock file a Pass from after the Command limit holds while it holds
 /// the lock a thirdshift from before takes, so that the two are told apart.
 const LEGACY_HELD: &str = "legacy-held.lock";
-
-/// The lock file that a Pass keeping the repository to itself holds.
-const ALONE: &str = "alone.lock";
 
 /// The slots of one repository: a directory under `~/.thirdshift` named for
 /// it, as GitHub compares names, whatever their case. Each slot is a file
@@ -236,19 +265,10 @@ impl Slots {
         self.dir.join(format!("{n}.slot"))
     }
 
-    /// The lock that a Pass keeping the repository to itself holds, if no
-    /// such Pass holds it now.
-    fn try_alone(&self) -> Result<Option<File>> {
-        try_lock(&self.dir.join(ALONE))
-    }
-
-    /// The name the running Pass that keeps the repository to itself wrote
-    /// in its lock, or a general one if it can't be read.
-    fn alone_kind(&self) -> String {
-        fs::read_to_string(self.dir.join(ALONE))
-            .ok()
-            .filter(|kind| !kind.is_empty())
-            .unwrap_or_else(|| "a Pass".to_string())
+    /// The lock a Pass of `kind` holds while it runs, if no such Pass
+    /// holds it now.
+    fn try_kind(&self, kind: PassKind) -> Result<Option<File>> {
+        try_lock(&self.dir.join(format!("{}.lock", kind.word())))
     }
 }
 

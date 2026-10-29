@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
+use crate::command_limit::PassKind;
 use crate::git::Git;
 use crate::progress;
 
@@ -474,13 +475,16 @@ impl ReviewWorktree {
     }
 
     /// Check out `origin/<base>`, detached, in a new worktree next to the
-    /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before cleanup is removed only with
-    /// evidence of successful acquisition and unchanged instance ownership.
-    /// Failed, unmarked and uncertain acquisitions are retained and named.
-    pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
+    /// launch repository's root, named for the Pass of `kind` that runs in
+    /// it: `<repo>-architect` or `<repo>-security`. A worktree left there by
+    /// a process that ended before cleanup is removed only with evidence of
+    /// successful acquisition and unchanged instance ownership. Failed,
+    /// unmarked and uncertain acquisitions are retained and named. Only a
+    /// Pass of `kind` creates it, holding the lock of its kind, so no live
+    /// Pass's worktree is ever taken for such a leftover.
+    pub fn create(launch: &Git, repo: &str, base: &str, kind: PassKind) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
+        let (root, path) = sibling(launch, &format!("{repo}-{}", kind.word()))?;
         ownership::recover_review(launch, &path)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
