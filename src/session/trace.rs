@@ -90,7 +90,18 @@ impl Trace {
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
             spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
-            export: crate::logs::otlp_endpoint().and_then(Export::start),
+            // These sessions carry private finding write-ups even when a
+            // Custom process, rather than a Security run, owns the Command.
+            export: if super::Logged::read(kind).is_some_and(|logged| {
+                matches!(
+                    logged.kind,
+                    super::Kind::SecurityAudit | super::Kind::SecurityReproduction(_)
+                )
+            }) {
+                None
+            } else {
+                crate::logs::otlp_endpoint().and_then(Export::start)
+            },
             resource: Resource {
                 attributes: {
                     let mut resource = attrs.clone();

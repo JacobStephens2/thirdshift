@@ -18,6 +18,7 @@ use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
 pub mod close;
+pub(crate) mod findings;
 pub(crate) mod fixing;
 pub mod reproduction;
 pub(crate) mod review;
@@ -121,6 +122,7 @@ impl fmt::Display for Skipped {
     }
 }
 
+#[derive(Default)]
 pub struct Recorded {
     pub created: usize,
     pub existing: usize,
@@ -401,111 +403,30 @@ fn audit_and_record(
     base: &str,
     offer_command: Option<&str>,
 ) -> Ended {
-    let mut advice = Vec::new();
-    let mut findings = Vec::new();
-    let mut waiting = Vec::new();
-    let mut log = None;
-    let mut reproduction = None;
+    let mut findings = findings::Findings::default();
     let mut audit_started = false;
-    let recorded = (|| -> Result<Recorded> {
+    let recorded = (|| -> Result<()> {
         outside.check_harness(false)?;
         outside.check_node()?;
         outside.started(Work::SecurityRun(repo));
         let attempt = outside.audit(base);
         audit_started = attempt.started;
-        log = attempt.log;
-        let audited = attempt.outcome?;
-        let mut recorded = Recorded {
-            created: 0,
-            existing: 0,
-        };
-        if audited.findings.is_empty() {
-            return Ok(recorded);
-        }
-        let mut known = outside.security_records()?;
-        let mut records = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for finding in audited.findings {
-            let resolved = known.record_or_reuse(&finding, |records, draft| {
-                outside.create_security_record(records, draft)
-            })?;
-            if resolved.created {
-                recorded.created += 1;
-                outside.step("recorded a Security finding privately".to_string());
-            } else {
-                recorded.existing += 1;
-            }
-            let record = resolved.record;
-            if record.untriaged() {
-                waiting.push(record.metadata().url.clone());
-            }
-            let mut metadata = record.metadata().clone();
-            let url = metadata.url.clone();
-            let first = seen.insert(finding.fingerprint);
-            // A new record's text is the audit's write-up, which may quote an
-            // outcome no reproduction wrote.
-            let kept = (!resolved.created)
-                .then(|| record.completed_reproduction())
-                .flatten();
-            match (record.untriaged(), kept) {
-                (false, _) => outside.step(format!(
-                    "keeping the Day shift's grade for {}",
-                    record.name()
-                )),
-                // A completed reproduction is not repeated while the record waits.
-                (true, Some(outcome)) => {
-                    metadata.severity = listed_severity(&outcome, offer_command, &mut advice);
-                    if first {
-                        outside.step(format!(
-                            "keeping the completed Security reproduction of {}: {outcome}",
-                            record.name()
-                        ));
-                    }
-                }
-                (true, None) if first => records.push((record, url)),
-                (true, None) => {}
-            }
-            findings.push(metadata);
-        }
-        for (index, (record, url)) in records.iter().enumerate() {
-            let number = index + 1;
-            outside.step(format!(
-                "starting Security reproduction {number} of {}",
-                record.name()
-            ));
-            reproduction = Some(number);
-            let (reproduced, session_log) = outside.reproduce(record, number);
-            if session_log.is_some() {
-                log = session_log;
-            }
-            let reproduced = reproduced?;
-            outside.update_security_record(record, &reproduced)?;
-            let severity = listed_severity(&reproduced.outcome, offer_command, &mut advice);
-            for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
-                finding.severity = severity.clone();
-            }
-            outside.step(format!(
-                "Security reproduction {number}: {}",
-                reproduced.outcome
-            ));
-        }
-        Ok(recorded)
+        findings.log = attempt.log;
+        findings.record(outside, attempt.outcome?, offer_command)?;
+        findings.reproduce(outside, offer_command)
     })();
-    let failed_reproduction = if recorded.is_err() {
-        reproduction
-    } else {
-        None
-    };
     Ended {
-        outcome: recorded.map_err(|error| FailedRun {
-            log,
-            ..error.into()
-        }),
+        outcome: recorded
+            .map(|()| findings.recorded)
+            .map_err(|error| FailedRun {
+                log: findings.log,
+                ..error.into()
+            }),
         audit_started,
-        failed_reproduction,
-        findings,
-        waiting,
-        advice,
+        failed_reproduction: findings.failed_reproduction,
+        findings: findings.findings,
+        waiting: findings.waiting,
+        advice: findings.advice,
     }
 }
 

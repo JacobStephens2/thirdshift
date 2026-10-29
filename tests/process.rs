@@ -8,6 +8,8 @@ mod implement;
 mod land_tickets;
 #[path = "process/published.rs"]
 mod published;
+#[path = "process/security_audit.rs"]
+mod security_audit;
 #[path = "process/security_review.rs"]
 mod security_review;
 #[path = "process/spec_review.rs"]
@@ -934,7 +936,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge or land-tickets",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit or reproduce-findings",
             ),
             (
                 "review",
