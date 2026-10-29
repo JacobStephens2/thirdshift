@@ -60,6 +60,12 @@ The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
 session admission decision, also available with `thirdshift resources --json`.
 Reload to refresh it. Set `[resources] min_available_memory_mb` and
 `max_load_per_cpu_percent` in User config; zero disables each limit.
+Below the notification control on every reader page, a host indicator shows
+whether another session can start under those limits. It refreshes every ten
+seconds while the page is visible and links to Resources for measurements and
+blocking reasons. With both limits disabled it says **Host limits off**; a
+failed read says **Host resources unavailable**. Without JavaScript, reload
+the page to refresh the indicator. This is a snapshot, not reserved capacity.
 
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
@@ -213,6 +219,11 @@ title, a name or a count); open it to drill down, as deep as the record goes.
 Session traces fold into one count. Folds stay as you left them while live
 updates refresh the same Command. A file path shows on one line with its end
 kept and a copy icon that copies the whole path.
+
+Above **Full Command log**, Command details shows the last five lines of recent
+Command output, reading at most 4 KiB. It updates with the page's existing live
+connection, including while a Slow run keeps logging. Empty or unavailable logs
+say so without hiding the details; the full-log link stays available.
 
 Each Needs you row has a **Copy** button at the end of its line for sharing its
 problem with an agent. It copies the machine, Command selector, state, cause,

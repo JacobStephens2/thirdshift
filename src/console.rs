@@ -51,6 +51,7 @@ struct PageContext {
     hostname: String,
     consoles: Vec<String>,
     theme: String,
+    resources: resources::Status,
 }
 
 impl PageContext {
@@ -59,6 +60,7 @@ impl PageContext {
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
+            resources: resources::Status::new(config),
         }
     }
 }
@@ -83,6 +85,7 @@ enum View {
     ApproveEvalTask,
     CronJobs,
     Resources,
+    ResourceStatus,
     Inbox,
     Inspect,
     Spans,
@@ -187,6 +190,12 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift resources --json"],
         method: Method::GET,
         view: View::Resources,
+    },
+    PageRoute {
+        path: "/resources/status",
+        cli: &["thirdshift resources --json"],
+        method: Method::GET,
+        view: View::ResourceStatus,
     },
     PageRoute {
         path: "/cronjobs",
@@ -478,6 +487,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::BugOrigins, Method::GET) => get(bug_origins::show),
             (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
+            (View::ResourceStatus, Method::GET) => get(resources::status),
             (View::Inbox, Method::GET) => get(move |viewer, query| inbox(cli, path, viewer, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
@@ -707,7 +717,7 @@ async fn inspect(
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
+        Ok(peek::Peek::new(command, details, viewer.csrf, &config).render()?)
     })
     .await
     {
