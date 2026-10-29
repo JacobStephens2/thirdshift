@@ -55,26 +55,29 @@ impl Goal {
     }
 }
 
-/// A successful Ticket run ending: a PR, or a bug handed back for information.
+/// A successful Ticket run ending: a PR, a bug handed back for information,
+/// or a Custom process's Architecture review ending before Delivery.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
     PullRequest { url: String, goal: Goal },
     NotReproduced { comment_url: String },
+    ArchitectureReview { url: String, reason: String },
 }
 
 impl Resolution {
     pub fn goal(&self) -> Option<Goal> {
         match self {
             Self::PullRequest { goal, .. } => Some(*goal),
-            Self::NotReproduced { .. } => None,
+            Self::NotReproduced { .. } | Self::ArchitectureReview { .. } => None,
         }
     }
 
-    /// The PR or triage comment the ending points to.
+    /// The PR, triage comment or Architecture review issue the ending points to.
     pub fn url(&self) -> &str {
         match self {
             Self::PullRequest { url, .. } => url,
             Self::NotReproduced { comment_url } => comment_url,
+            Self::ArchitectureReview { url, .. } => url,
         }
     }
 }

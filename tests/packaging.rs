@@ -55,6 +55,7 @@ fn package_carries_the_built_in_process_folder() {
     for expected in [
         "processes/README.md",
         "processes/ticket-run.toml",
+        "processes/spec-run.toml",
         "processes/architect-run.toml",
     ] {
         assert!(

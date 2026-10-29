@@ -2,9 +2,9 @@
 //! Dispatch has already chosen its Issue-branch worktree and made any Claim. Its
 //! existing Delivery envelope supplies session identity and failure handling.
 
-use anyhow::{Result, bail, ensure};
+use anyhow::Result;
 
-use super::{DraftKind, load_inherited_builtin};
+use super::{WorktreeKind, builtin};
 
 /// Run a Custom Ticket Process in the worktree dispatch already acquired.
 /// The owning Command, Claim, Base branch and child outcome stay with dispatch.
@@ -83,7 +83,8 @@ pub(crate) fn run_custom(
         child_asks: delivery.child_asks.clone(),
         failure: None,
     };
-    if let Err(error) = execute_issue_steps(name, &prepared, &mut issue_run) {
+    let result = execute_issue_steps(name, &prepared, &mut issue_run);
+    if let Err(error) = result {
         let mut failed = match issue_run.failure.take() {
             Some(mut failed) => {
                 failed.error = error;
@@ -98,7 +99,12 @@ pub(crate) fn run_custom(
     }
     let own_pr = issue_run.pull_request.info().map(|pr| pr.url.clone());
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
-    let resolution = if let Some(comment_url) = completed.unreproduced_bug {
+    let resolution = if let Some(reason) = completed.architecture_end.filter(|_| own_pr.is_none()) {
+        crate::run::Resolution::ArchitectureReview {
+            url: result.expect("the Process completed successfully"),
+            reason,
+        }
+    } else if let Some(comment_url) = completed.unreproduced_bug {
         crate::run::Resolution::NotReproduced { comment_url }
     } else {
         completed
@@ -117,29 +123,9 @@ pub(crate) fn run_custom(
 #[cfg(test)]
 mod tests;
 
-pub(crate) enum Step {
-    Implement,
-    SecurityReview,
-    Delivery,
-    SelfMerge,
-}
-
-pub(crate) fn steps() -> Result<Vec<Step>> {
-    let file = load_inherited_builtin("ticket-run")?;
-    // This adapter uses the Command's already checked choices and held
-    // worktree. Refuse settings it cannot carry out rather than ignore them.
-    ensure!(
-        file.worktrees.len() == 1 && file.worktrees[0].kind == super::WorktreeKind::IssueBranch,
-        "ticket-run needs exactly one Issue-branch worktree"
-    );
-    file.steps
+pub(crate) fn steps() -> Result<Vec<builtin::Step>> {
+    builtin::steps("ticket-run", WorktreeKind::IssueBranch)?
         .into_iter()
-        .map(|step| match step.kind {
-            DraftKind::Implement { .. } => Ok(Step::Implement),
-            DraftKind::SecurityReview { .. } => Ok(Step::SecurityReview),
-            DraftKind::Delivery { .. } => Ok(Step::Delivery),
-            DraftKind::SelfMerge { .. } => Ok(Step::SelfMerge),
-            _ => bail!("unsupported ticket-run Step {}", step.name),
-        })
+        .map(builtin::delivery_step)
         .collect()
 }

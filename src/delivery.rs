@@ -1,6 +1,5 @@
 //! Delivery: publication and recovery shared by Process Steps and the Spec PR.
-//! The Ticket run's Process file owns its sequence. A Spec PR's Delivery
-//! opens with the Spec review and optional Security review, then shares the push,
+//! The Ticket and Spec runs' Process files own their sequences, sharing the push,
 //! marking the pull request ready, the Repair loop that keeps it mergeable
 //! and green, the Self-merge in a Merge run and its steps after the merge,
 //! and the Failed run path when any of these fails.
@@ -50,6 +49,7 @@ use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::processes::builtin::Step;
 use crate::progress;
 use crate::prompt;
 use crate::recovery::{self, Preservation, Recovery};
@@ -147,6 +147,7 @@ impl Delivery<'_> {
         prompt: String,
         pull_request: &mut PullRequest,
         checklist: &str,
+        steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         self.deliver_steps(
             worktree,
@@ -156,7 +157,7 @@ impl Delivery<'_> {
             },
             pull_request,
             Some(checklist),
-            None,
+            steps,
         )
     }
 
@@ -169,7 +170,7 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
     ) -> Result<Reached, FailedRun> {
         let steps = crate::processes::ticket::steps()?;
-        self.deliver_steps(worktree, opening, pull_request, None, Some(steps))
+        self.deliver_steps(worktree, opening, pull_request, None, steps)
     }
 
     fn deliver_steps(
@@ -178,7 +179,7 @@ impl Delivery<'_> {
         opening: Opening,
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
-        steps: Option<Vec<crate::processes::ticket::Step>>,
+        steps: Vec<Step>,
     ) -> Result<Reached, FailedRun> {
         let tracker = Tracker::new(opening.session.stage(), CommandLog);
         let logs = self.logs;
@@ -238,10 +239,7 @@ impl Delivery<'_> {
                     repair_cap,
                     protected_paths,
                 };
-                match steps {
-                    Some(steps) => route.process_steps(&mut outside, &opening, steps),
-                    None => route.spec_steps(&mut outside, &opening.prompt, checklist),
-                }
+                route.process_steps(&mut outside, &opening, steps, checklist)
             },
         )
     }
@@ -440,35 +438,15 @@ struct Route<'a> {
 }
 
 impl Route<'_> {
-    /// [`Delivery::spec_review`]'s steps, through `outside`, in order: catch up
-    /// from origin, the Spec review, the push, the
-    /// line saying what it was built with, checklist restoration, marking the
-    /// pull request ready, taking it to the goal through the Repair loop, then for [`Goal::Merged`], the steps after
-    /// the merge. Returns the pull request's URL.
-    fn spec_steps<O: Outside>(
-        &self,
-        outside: &mut O,
-        prompt: &str,
-        checklist: Option<&str>,
-    ) -> Result<Resolution> {
-        outside.catch_up()?;
-        outside.stage(Stage::SpecReview);
-        outside.session(Kind::SpecReview, prompt)?;
-        let review = self.review(outside)?;
-        let pr = self.publish(outside, checklist)?;
-        self.finish(outside, pr, self.goal, review.as_slice())
-    }
-
     /// The file supplies the sequence. Delivery and its adjacent Self-merge
     /// share one Repair loop, just as in a Custom process.
     fn process_steps(
         &self,
         outside: &mut impl Outside,
         opening: &Opening,
-        steps: Vec<crate::processes::ticket::Step>,
+        steps: Vec<Step>,
+        checklist: Option<&str>,
     ) -> Result<Resolution> {
-        use crate::processes::ticket::Step;
-
         let mut steps = steps.into_iter().peekable();
         let mut review = None;
         let mut resolution = None;
@@ -479,6 +457,11 @@ impl Route<'_> {
                         return Ok(early);
                     }
                 }
+                Step::SpecReview => {
+                    outside.catch_up()?;
+                    outside.stage(Stage::SpecReview);
+                    outside.session(Kind::SpecReview, &opening.prompt)?;
+                }
                 Step::SecurityReview => review = self.review(outside)?,
                 Step::Delivery => {
                     let goal = if matches!(steps.peek(), Some(Step::SelfMerge)) {
@@ -487,13 +470,13 @@ impl Route<'_> {
                     } else {
                         Goal::ReadyForReview
                     };
-                    let pr = self.publish(outside, None)?;
+                    let pr = self.publish(outside, checklist)?;
                     resolution = Some(self.finish(outside, pr, goal, review.as_slice())?);
                 }
                 Step::SelfMerge => anyhow::bail!("self-merge must directly follow delivery"),
             }
         }
-        resolution.context("ticket-run ended without delivery")
+        resolution.context("Built-in process ended without delivery")
     }
 
     fn implement(

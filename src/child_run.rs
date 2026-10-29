@@ -505,6 +505,8 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 pub enum Ended {
     /// Diagnosis completed, but the Ticket remains open needing information.
     NotReproduced { comment_url: String },
+    /// A Custom Ticket Process ended successfully without delivering its Ticket.
+    ArchitectureReview { reason: String },
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
     Reached {
@@ -869,10 +871,14 @@ impl Handle {
         let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
         let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
         let not_reproduced = reader.not_reproduced().map(String::from);
+        let architecture_end = reader.architecture_end().map(String::from);
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
             Ok(_) if not_reproduced.is_some() => Ended::NotReproduced {
                 comment_url: not_reproduced.unwrap(),
+            },
+            Ok(_) if architecture_end.is_some() => Ended::ArchitectureReview {
+                reason: architecture_end.unwrap(),
             },
             Ok(pr_url) => Ended::Reached {
                 pr_url,

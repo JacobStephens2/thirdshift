@@ -191,7 +191,8 @@ printf '%s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_record(&record, "notes", "custom", Some(&hash(source.as_bytes())));
     let spec = &record["dispatched"][0];
     assert_eq!(spec["kind"], "Spec run");
-    assert_record(spec, "Spec run", "built-in", None);
+    let spec_hash = hash(include_bytes!("../processes/spec-run.toml"));
+    assert_record(spec, "spec-run", "built-in", Some(&spec_hash));
     let children: Vec<_> = scenario
         .entries(PROCESS_LOGS)
         .into_iter()
@@ -206,7 +207,7 @@ printf '%s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     for path in traces(&scenario, PROCESS_LOGS) {
         let name = path.file_name().unwrap().to_str().unwrap();
         if name.contains("-spec-review.") {
-            assert_trace(&path, "Spec run", "built-in", None);
+            assert_trace(&path, "spec-run", "built-in", Some(&spec_hash));
             counts[0] += 1;
         } else if name.starts_with("9-") {
             assert_trace(&path, "ticket-run", "built-in", Some(&ticket_hash()));
