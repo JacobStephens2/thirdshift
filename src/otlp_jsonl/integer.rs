@@ -12,6 +12,10 @@ where
     T: FromStr,
     T::Err: Display,
 {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "a decimal integer is a JSON string or number; any other JSON value is an error"
+    )]
     let text = match serde_json::Value::deserialize(d)? {
         serde_json::Value::String(s) => s,
         serde_json::Value::Number(n) => n.to_string(),

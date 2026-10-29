@@ -308,13 +308,20 @@ impl<'a> Account<'a> {
                     .resolution
                     .goal()
                     .map(|goal| goal.outcome())
-                    .unwrap_or("bug not reproduced"),
+                    .unwrap_or(match &reached.resolution {
+                        crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
+                        crate::run::Resolution::PullRequest { .. }
+                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
+                    }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
                         format!("PR {url} is {}", goal.outcome())
                     }
                     crate::run::Resolution::NotReproduced { comment_url } => {
                         format!("bug not reproduced: {comment_url}")
+                    }
+                    crate::run::Resolution::ArchitectureReview { reason, .. } => {
+                        format!("Architecture review ended: {reason}")
                     }
                 }),
                 interrupted: false,
@@ -323,7 +330,16 @@ impl<'a> Account<'a> {
                 base_fix,
                 log: reached.log.as_deref(),
                 ticket_lines: &reached.ticket_lines,
-                review: None,
+                review: match &reached.resolution {
+                    crate::run::Resolution::ArchitectureReview { reason, .. } => Some(Review {
+                        title: None,
+                        strength: None,
+                        line: reason.clone(),
+                        dispatched: None,
+                    }),
+                    crate::run::Resolution::PullRequest { .. }
+                    | crate::run::Resolution::NotReproduced { .. } => None,
+                },
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -586,6 +602,12 @@ impl Reader {
     /// A successful child can hand a bug back instead of delivering a PR.
     pub fn not_reproduced(&self) -> Option<&str> {
         self.cause.as_deref()?.strip_prefix("bug not reproduced: ")
+    }
+
+    pub fn architecture_end(&self) -> Option<&str> {
+        self.cause
+            .as_deref()?
+            .strip_prefix("Architecture review ended: ")
     }
 
     /// Read the next line of the child's stderr.

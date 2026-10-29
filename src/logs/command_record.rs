@@ -28,11 +28,32 @@ fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRe
 }
 
 impl CommandTree {
+    fn active_dispatch_index(&self) -> Option<usize> {
+        self.dispatched
+            .iter()
+            .rposition(|dispatched| dispatched.outcome.is_none())
+    }
+
+    /// Completing a nested dispatch restores the unfinished outer run.
     pub fn active(&mut self) -> &mut CommandRecord {
-        match self.dispatched.last_mut() {
-            Some(dispatched) if dispatched.outcome.is_none() => dispatched,
-            _ => &mut self.command,
+        match self.active_dispatch_index() {
+            Some(index) => &mut self.dispatched[index],
+            None => &mut self.command,
         }
+    }
+
+    pub fn active_ref(&self) -> &CommandRecord {
+        self.active_dispatch_ref().unwrap_or(&self.command)
+    }
+
+    pub fn active_dispatch_ref(&self) -> Option<&CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&self.dispatched[index])
+    }
+
+    pub fn active_dispatch(&mut self) -> Option<&mut CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&mut self.dispatched[index])
     }
 }
 
@@ -104,9 +125,9 @@ pub(super) struct CommandRecord {
     pub security_fix_findings: Vec<crate::security::RecordedFinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<crate::evals::experiment::Description>,
-    /// The Custom process name. The selector in `name` stays `process-<name>-<stamp>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_name: Option<String>,
+    /// Process provenance is independent of the run type and Command selector.
+    #[serde(flatten)]
+    pub process: crate::processes::Identity,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -275,7 +296,7 @@ impl CommandRecord {
     /// The Custom process's own name. An older record with no `process_name`
     /// falls back to the selector in `name`.
     pub(super) fn process_label(&self) -> Option<&str> {
-        (self.kind == "Process").then(|| self.process_name.as_deref().unwrap_or(self.name.as_str()))
+        (self.kind == "Process").then(|| self.process.name.as_deref().unwrap_or(self.name.as_str()))
     }
 
     /// `Process <name> on <repo>`, or `Process <name> · <repo>#<n>` when the
@@ -361,7 +382,14 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_)
+                | Work::Process { .. } => None,
             },
         });
         let name = match work {
@@ -408,10 +436,7 @@ impl CommandRecord {
             security_findings: Vec::new(),
             security_fix_findings: Vec::new(),
             experiment: None,
-            process_name: match work {
-                Work::Process { name, .. } => Some(name.to_string()),
-                _ => None,
-            },
+            process: work.process(),
         }
     }
 

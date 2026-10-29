@@ -71,8 +71,15 @@ impl Logs {
         Logs {
             name: "process".to_string(),
             dir: logs::session_dir(repo),
-            recording: OnceCell::new(),
+            recording: recording::Recording::for_process().into(),
         }
+    }
+
+    /// A child Ticket's Steps must not overwrite its parent's Session traces.
+    pub fn for_child(mut self, issue: &IssueUrl, process: crate::processes::Identity) -> Self {
+        self.name = format!("{}-{}", issue.number, self.name);
+        self.recording = recording::Recording::capture().with_process(process).into();
+        self
     }
 
     /// An isolated Trial's artifacts, with no Command owner or factory logs.

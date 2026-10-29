@@ -1,9 +1,25 @@
 //! Custom processes through the CLI, real Git and fake Harnesses.
 
+#[path = "process/architecture_review.rs"]
+mod architecture_review;
+#[path = "process/findings.rs"]
+mod findings;
 #[path = "process/implement.rs"]
 mod implement;
+#[path = "process/land_tickets.rs"]
+mod land_tickets;
+#[path = "process/published.rs"]
+mod published;
+#[path = "process/security_audit.rs"]
+mod security_audit;
 #[path = "process/security_review.rs"]
 mod security_review;
+#[path = "process/security_run.rs"]
+mod security_run;
+#[path = "process/spec_review.rs"]
+mod spec_review;
+#[path = "process/spec_run.rs"]
+mod spec_run;
 mod support;
 #[path = "process/ticket_run.rs"]
 mod ticket_run;
@@ -26,6 +42,48 @@ description = \"Review the diff\"
 name = \"review\"
 skill = \"code-review\"
 ";
+
+fn assert_compiled_process(
+    scenario: &Scenario,
+    name: &str,
+    steps: &[&str],
+    issue: Option<&str>,
+) -> String {
+    let shown = scenario.run(&["process", "show", name]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let mut remaining = shown.stdout.as_str();
+    for step in steps {
+        remaining = remaining
+            .split_once(&format!("catalogue = \"{step}\""))
+            .unwrap_or_else(|| panic!("missing or out-of-order Step {step}: {}", shown.stdout))
+            .1;
+    }
+    for choice in ["harness =", "model =", "effort ="] {
+        assert!(!shown.stdout.contains(choice), "{}", shown.stdout);
+    }
+    let listed = scenario.run(&["process", "list"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert!(
+        listed.stdout.contains(&format!("{name} (built-in):")),
+        "{}",
+        listed.stdout
+    );
+    let mut args = vec!["process", "check", name];
+    if let Some(issue) = issue {
+        args.extend(["issue", issue]);
+    }
+    let checked = scenario.run(&args);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    for step in steps {
+        assert!(
+            checked.stdout.contains(&format!("{step}: {step}")),
+            "{}",
+            checked.stdout
+        );
+    }
+    assert!(scenario.claude_calls().is_empty());
+    shown.stdout
+}
 
 #[test]
 fn each_process_skill_step_retains_its_session_trace() {
@@ -733,7 +791,7 @@ fn process_lists_custom_processes_with_their_descriptions() {
     assert_eq!(empty.code, Some(0), "{}", empty.stderr);
     assert_eq!(
         empty.stdout,
-        "ticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+        "architect-run (built-in): Review architecture, then run the Strong plan\nsecurity-run (built-in): Audit, reproduce, fix and close private Security findings\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
     );
 
     write_process(&scenario, "review", REVIEW);
@@ -757,7 +815,7 @@ skill = \"to-spec\"
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
             result.stdout,
-            "gather: Gather notes\nreview: Review the diff\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+            "architect-run (built-in): Review architecture, then run the Strong plan\ngather: Gather notes\nreview: Review the diff\nsecurity-run (built-in): Audit, reproduce, fix and close private Security findings\nspec-run (built-in): Land a Spec's Tickets, review and deliver its pull request\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
         );
     }
 }
@@ -822,9 +880,9 @@ bogus = \"echo hi\"
                 ":7: unknown harness: nope",
             ),
             (
-                "spec-run",
+                "pickup-run",
                 None,
-                "processes/spec-run.toml:1: reserved name: spec-run",
+                "processes/pickup-run.toml:1: reserved name: pickup-run",
             ),
             (
                 "review",
@@ -924,7 +982,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review or self-merge",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit, reproduce-findings, fix-findings or close-findings",
             ),
             (
                 "review",
@@ -1044,7 +1102,10 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        let actions = if name == "ticket-run" {
+        let actions = if matches!(
+            name,
+            "ticket-run" | "spec-run" | "architect-run" | "security-run"
+        ) {
             vec![vec!["process", name]]
         } else {
             vec![

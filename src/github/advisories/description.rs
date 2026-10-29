@@ -148,6 +148,13 @@ impl<'a> Description<'a> {
         Ok(None)
     }
 
+    pub(super) fn succeeded_fix(&self) -> Result<Option<IssueUrl>> {
+        if matches!(self.fix_status(), Some(FixStatus::Succeeded)) {
+            return Ok(Some(IssueUrl::parse(self.fix_link().unwrap_or_default())?));
+        }
+        Ok(None)
+    }
+
     pub(super) fn with_pending_fix(&self, captured: &str, issue: &IssueUrl) -> Result<String> {
         if self.0 != captured {
             bail!("the private record changed while publishing its fix; leaving it unchanged");

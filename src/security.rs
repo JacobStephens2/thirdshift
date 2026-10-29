@@ -18,6 +18,7 @@ use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
 pub mod close;
+pub(crate) mod findings;
 pub(crate) mod fixing;
 pub mod reproduction;
 pub(crate) mod review;
@@ -121,6 +122,7 @@ impl fmt::Display for Skipped {
     }
 }
 
+#[derive(Default)]
 pub struct Recorded {
     pub created: usize,
     pub existing: usize,
@@ -158,7 +160,7 @@ pub fn run(
     };
     run_through(
         &mut LaunchAndGitHub {
-            launch: &directory,
+            launch: directory.git(),
             base: &base,
             repo: &repo,
             harness,
@@ -204,79 +206,61 @@ fn run_through(
         Ok(None) => {}
         Err(error) => return Outcome::Audited(error.into()),
     }
-    if fixing {
+    let pending = if fixing {
         match records.next_fix() {
-            Ok(Some((record, metadata))) => {
-                return fix(outside, repo, base, record, metadata, None, closing);
+            Ok(pending) => pending,
+            Err(error) => return Outcome::Audited(error.into()),
+        }
+    } else {
+        None
+    };
+    if pending.is_none() {
+        match outside.base_unchanged_since_security_audit() {
+            Ok(true) => {
+                let skipped = Skipped::UnchangedBase(base.to_string());
+                outside.skipped(Pass::Security, &skipped);
+                return Outcome::Skipped(skipped);
             }
-            Ok(None) => {}
+            Ok(false) => {}
             Err(error) => return Outcome::Audited(error.into()),
         }
     }
-    match outside.base_unchanged_since_security_audit() {
-        Ok(true) => {
-            let skipped = Skipped::UnchangedBase(base.to_string());
-            outside.skipped(Pass::Security, &skipped);
-            return Outcome::Skipped(skipped);
-        }
-        Ok(false) => {}
-        Err(error) => return Outcome::Audited(error.into()),
-    }
-    let audited = audit_and_record(outside, repo, base, offer_command);
-    if fixing && audited.outcome.is_ok() {
-        match outside
-            .security_records()
-            .and_then(|records| records.next_fix())
-        {
-            Ok(Some((record, metadata))) => {
-                return fix(
-                    outside,
-                    repo,
-                    base,
-                    record,
-                    metadata,
-                    Some(Box::new(audited)),
-                    closing,
-                );
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return Outcome::Audited(Ended {
-                    outcome: Err(error.into()),
-                    ..audited
-                });
-            }
-        }
-    }
-    Outcome::Audited(audited)
+    crate::processes::security::run(
+        outside,
+        crate::processes::security::SecurityRun {
+            repo,
+            base,
+            fixing,
+            closing,
+            offer_command,
+            pending,
+        },
+    )
 }
 
-/// Dispatch the fix for `record`, after `audit` if this Security run audited.
-fn fix(
-    outside: &mut impl Outside,
+/// Publish, link, dispatch and record a reproduced fix through the same
+/// privacy rules for a Security run and a catalogue Step. The caller owns
+/// child Process selection and keeps the record for a later close Step.
+pub(crate) fn fix_record<O: Outside>(
+    outside: &mut O,
     repo: &Repo,
     base: &str,
-    record: crate::github::SecurityRecord,
-    metadata: RecordedFinding,
-    audit: Option<Box<Ended>>,
-    closing: bool,
-) -> Outcome {
+    record: &crate::github::SecurityRecord,
+    metadata: &RecordedFinding,
+    dispatch: impl FnOnce(&mut O, &crate::issue::IssueUrl, reproduction::FixSize) -> crate::run::Ended,
+) -> (crate::run::Ended, Option<crate::issue::IssueUrl>) {
     let mut log = None;
     let outcome = (|| -> Result<(crate::run::Ended, crate::issue::IssueUrl)> {
         outside.check_harness(true)?;
         outside.started(Work::SecurityRun(repo));
-        let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
+        let (published, session_log) = outside.publish_security_fix(base, record, &metadata.url);
         log = session_log;
         let issue = published?;
-        outside.link_security_fix(&record, &issue)?;
-        let mut ended = outside.dispatch(crate::pass::Dispatch::SecurityFix {
-            issue: &issue,
-            is_spec: record.fix_size()? == reproduction::FixSize::Spec,
-            base,
-            finding: &metadata,
-        });
+        let size = record.fix_size()?;
+        outside.link_security_fix(record, &issue)?;
+        let mut ended = dispatch(outside, &issue, size);
         if let Err(error) =
-            outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
+            outside.record_security_fix_ending(record, &issue, ended.outcome.is_ok())
         {
             ended.outcome = Err(match ended.outcome {
                 Err(mut failed) => {
@@ -300,7 +284,7 @@ fn fix(
         }
         Ok((ended, issue))
     })();
-    let (ended, issue) = match outcome {
+    match outcome {
         Ok((ended, issue)) => (ended, Some(issue)),
         Err(error) => (
             crate::run::Ended {
@@ -313,20 +297,6 @@ fn fix(
             },
             None,
         ),
-    };
-    let close = match (&ended.outcome, &issue) {
-        (Ok(reached), Some(issue))
-            if closing && reached.resolution.goal() == Some(crate::run::Goal::Merged) =>
-        {
-            close_after_merge(outside, base, &record, issue, reached.resolution.url())
-        }
-        _ => CloseOutcome::NotAttempted,
-    };
-    Outcome::Fixed {
-        ended,
-        finding: metadata,
-        audit,
-        close,
     }
 }
 
@@ -334,7 +304,7 @@ fn fix(
 /// proof-of-concept test against the merged Base branch. A check that does
 /// not pass, or any step that fails, leaves the record open with a private
 /// note of what happened, and never changes the fix's outcome.
-fn close_after_merge(
+pub(crate) fn close_after_merge(
     outside: &mut impl Outside,
     base: &str,
     record: &crate::github::SecurityRecord,
@@ -395,120 +365,6 @@ fn leave_open(
     CloseOutcome::LeftOpen { reason }
 }
 
-fn audit_and_record(
-    outside: &mut impl Outside,
-    repo: &Repo,
-    base: &str,
-    offer_command: Option<&str>,
-) -> Ended {
-    let mut advice = Vec::new();
-    let mut findings = Vec::new();
-    let mut waiting = Vec::new();
-    let mut log = None;
-    let mut reproduction = None;
-    let mut audit_started = false;
-    let recorded = (|| -> Result<Recorded> {
-        outside.check_harness(false)?;
-        outside.check_node()?;
-        outside.started(Work::SecurityRun(repo));
-        let attempt = outside.audit(base);
-        audit_started = attempt.started;
-        log = attempt.log;
-        let audited = attempt.outcome?;
-        let mut recorded = Recorded {
-            created: 0,
-            existing: 0,
-        };
-        if audited.findings.is_empty() {
-            return Ok(recorded);
-        }
-        let mut known = outside.security_records()?;
-        let mut records = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for finding in audited.findings {
-            let resolved = known.record_or_reuse(&finding, |records, draft| {
-                outside.create_security_record(records, draft)
-            })?;
-            if resolved.created {
-                recorded.created += 1;
-                outside.step("recorded a Security finding privately".to_string());
-            } else {
-                recorded.existing += 1;
-            }
-            let record = resolved.record;
-            if record.untriaged() {
-                waiting.push(record.metadata().url.clone());
-            }
-            let mut metadata = record.metadata().clone();
-            let url = metadata.url.clone();
-            let first = seen.insert(finding.fingerprint);
-            // A new record's text is the audit's write-up, which may quote an
-            // outcome no reproduction wrote.
-            let kept = (!resolved.created)
-                .then(|| record.completed_reproduction())
-                .flatten();
-            match (record.untriaged(), kept) {
-                (false, _) => outside.step(format!(
-                    "keeping the Day shift's grade for {}",
-                    record.name()
-                )),
-                // A completed reproduction is not repeated while the record waits.
-                (true, Some(outcome)) => {
-                    metadata.severity = listed_severity(&outcome, offer_command, &mut advice);
-                    if first {
-                        outside.step(format!(
-                            "keeping the completed Security reproduction of {}: {outcome}",
-                            record.name()
-                        ));
-                    }
-                }
-                (true, None) if first => records.push((record, url)),
-                (true, None) => {}
-            }
-            findings.push(metadata);
-        }
-        for (index, (record, url)) in records.iter().enumerate() {
-            let number = index + 1;
-            outside.step(format!(
-                "starting Security reproduction {number} of {}",
-                record.name()
-            ));
-            reproduction = Some(number);
-            let (reproduced, session_log) = outside.reproduce(record, number);
-            if session_log.is_some() {
-                log = session_log;
-            }
-            let reproduced = reproduced?;
-            outside.update_security_record(record, &reproduced)?;
-            let severity = listed_severity(&reproduced.outcome, offer_command, &mut advice);
-            for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
-                finding.severity = severity.clone();
-            }
-            outside.step(format!(
-                "Security reproduction {number}: {}",
-                reproduced.outcome
-            ));
-        }
-        Ok(recorded)
-    })();
-    let failed_reproduction = if recorded.is_err() {
-        reproduction
-    } else {
-        None
-    };
-    Ended {
-        outcome: recorded.map_err(|error| FailedRun {
-            log,
-            ..error.into()
-        }),
-        audit_started,
-        failed_reproduction,
-        findings,
-        waiting,
-        advice,
-    }
-}
-
 /// The severity a finding is listed with. A reproduced finding left unfixed
 /// offers fixing when neither the command nor the User config decided.
 fn listed_severity(
@@ -533,821 +389,4 @@ fn listed_severity(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::pass::{Call, InMemory, widgets};
-
-    #[test]
-    fn a_reproduced_fix_precedes_the_unchanged_base_but_yields_to_a_ready_issue() {
-        for ready in [false, true] {
-            let mut outside = InMemory::default().advisories(vec![
-                serde_json::json!({"state":"draft", "severity":null}),
-                serde_json::json!({
-                    "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
-                    "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
-                    "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
-                }),
-                serde_json::json!({
-                    "state":"draft", "severity":"critical", "ghsa_id":"GHSA-second",
-                    "summary":"Other bound", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-second",
-                    "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
-                }),
-            ]).unchanged_base().dispatched_ending(crate::pass::ready_for_review());
-            if ready {
-                outside = outside.ready(7, false);
-            }
-            let outcome = run_through(&mut outside, &widgets(), "main", true, false, None);
-            if ready {
-                assert!(matches!(outcome, Outcome::Skipped(Skipped::ReadyIssue(_))));
-                assert!(matches!(
-                    &outside.calls[..],
-                    [Call::ReadySearch, Call::Skipped(_)]
-                ));
-            } else {
-                assert!(matches!(
-                    outcome,
-                    Outcome::Fixed {
-                        ended: crate::run::Ended { outcome: Ok(_), .. },
-                        ..
-                    }
-                ));
-                assert!(
-                    outside
-                        .calls
-                        .contains(&Call::PublishSecurityFix("GHSA-first".into()))
-                );
-                assert!(outside.calls.contains(&Call::DispatchSecurityFix {
-                    issue: 8,
-                    is_spec: false,
-                    base: "main".into()
-                }));
-                assert!(!outside.calls.contains(&Call::AuditHistory));
-                assert!(!outside.calls.contains(&Call::NodeCheck));
-            }
-        }
-    }
-
-    /// A dispatched fix that ended merged, for close-gate tests.
-    fn merged(pr_url: &str) -> crate::run::Ended {
-        crate::run::Ended {
-            outcome: Ok(crate::run::Reached {
-                resolution: crate::run::Resolution::PullRequest {
-                    url: pr_url.to_string(),
-                    goal: crate::run::Goal::Merged,
-                },
-                log: None,
-                ticket_lines: Vec::new(),
-            }),
-            base_fix: None,
-            advice: Vec::new(),
-        }
-    }
-
-    const MERGED_PR: &str = "https://github.com/acme/widgets/pull/12";
-
-    /// One reproduced advisory awaiting its fix, as the fix flow reads it.
-    fn reproduced_advisory() -> serde_json::Value {
-        serde_json::json!({
-            "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
-            "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
-            "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
-        })
-    }
-
-    #[test]
-    fn a_merged_fix_with_closing_allowed_closes_the_finding_naming_its_pull_request() {
-        for private in [false, true] {
-            let record = if private {
-                serde_json::json!({
-                    "number": 7, "state": "open", "title": "Bound input",
-                    "html_url": "https://github.com/acme/widgets/issues/7",
-                    "body": "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n",
-                    "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
-                })
-            } else {
-                reproduced_advisory()
-            };
-            let mut outside = if private {
-                InMemory::default().finding_issues(vec![record])
-            } else {
-                InMemory::default().advisories(vec![record])
-            }
-            .dispatched_ending(merged(MERGED_PR))
-            .close_check(true, "the bound holds; exit 0");
-            let Outcome::Fixed { ended, close, .. } =
-                run_through(&mut outside, &widgets(), "main", true, true, None)
-            else {
-                panic!("private {private}: fix expected");
-            };
-            assert!(ended.outcome.is_ok(), "private {private}");
-            assert_eq!(
-                close,
-                CloseOutcome::Closed {
-                    pr_url: MERGED_PR.into()
-                },
-                "private {private}"
-            );
-            let record_name = if private { "issue #7" } else { "GHSA-first" };
-            let at = |call: &Call| outside.calls.iter().position(|c| c == call);
-            let dispatched = at(&Call::DispatchSecurityFix {
-                issue: 8,
-                is_spec: false,
-                base: "main".into(),
-            })
-            .expect("private {private}: no dispatch");
-            let rechecked = at(&Call::RecheckSecurityFix {
-                record: record_name.into(),
-                base: "main".into(),
-            })
-            .expect("private {private}: no recheck");
-            let closed = at(&Call::CloseSecurityRecord {
-                issue: 8,
-                pr: MERGED_PR.into(),
-            })
-            .expect("private {private}: no close");
-            assert!(
-                dispatched < rechecked && rechecked < closed,
-                "private {private}: out of order: {:?}",
-                outside.calls
-            );
-            assert!(
-                !outside
-                    .calls
-                    .iter()
-                    .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { .. })),
-                "private {private}: a close must leave no note"
-            );
-            assert!(
-                outside.calls.iter().any(|call| matches!(
-                    call,
-                    Call::Step(line) if line.contains(&format!("closed {record_name} by {MERGED_PR}"))
-                )),
-                "private {private}: no closed step: {:?}",
-                outside.calls
-            );
-        }
-    }
-
-    #[test]
-    fn without_closing_allowed_or_without_a_merge_a_fix_closes_nothing() {
-        // Closing off, or the fix left ready for review, attempts no close.
-        for (closing, ending, expected) in [
-            (false, merged(MERGED_PR), CloseOutcome::NotAttempted),
-            (
-                true,
-                crate::pass::ready_for_review(),
-                CloseOutcome::NotAttempted,
-            ),
-        ] {
-            let mut outside = InMemory::default()
-                .advisories(vec![reproduced_advisory()])
-                .dispatched_ending(ending);
-            let Outcome::Fixed { ended, close, .. } =
-                run_through(&mut outside, &widgets(), "main", true, closing, None)
-            else {
-                panic!("fix expected");
-            };
-            assert!(ended.outcome.is_ok());
-            assert_eq!(close, expected);
-            assert!(
-                !outside.calls.iter().any(|call| matches!(
-                    call,
-                    Call::RecheckSecurityFix { .. }
-                        | Call::CloseSecurityRecord { .. }
-                        | Call::NoteSecurityCloseLeftOpen { .. }
-                )),
-                "closing {closing}: a close was attempted: {:?}",
-                outside.calls
-            );
-        }
-    }
-
-    #[test]
-    fn a_failing_proof_of_concept_leaves_the_finding_open_with_a_note() {
-        let mut outside = InMemory::default()
-            .advisories(vec![reproduced_advisory()])
-            .dispatched_ending(merged(MERGED_PR))
-            .close_check(false, "the bound still overflows; exit 1");
-        let Outcome::Fixed { ended, close, .. } =
-            run_through(&mut outside, &widgets(), "main", true, true, None)
-        else {
-            panic!("fix expected");
-        };
-        // The run's outcome stays the fix's outcome.
-        assert!(ended.outcome.is_ok());
-        let CloseOutcome::LeftOpen { reason } = close else {
-            panic!("left open expected");
-        };
-        assert!(reason.contains("did not pass"), "{reason}");
-        assert!(
-            !outside
-                .calls
-                .iter()
-                .any(|call| matches!(call, Call::CloseSecurityRecord { .. })),
-            "a failed check must close nothing"
-        );
-        assert!(
-            outside
-                .calls
-                .iter()
-                .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { issue: 8, .. })),
-            "no left-open note: {:?}",
-            outside.calls
-        );
-        assert!(
-            outside.calls.iter().any(|call| matches!(
-                call,
-                Call::Step(line) if line.contains("left GHSA-first open")
-            )),
-            "no left-open step: {:?}",
-            outside.calls
-        );
-    }
-
-    #[test]
-    fn a_failed_recheck_or_close_leaves_the_finding_open_without_changing_the_outcome() {
-        for (recheck, failing) in [
-            (
-                InMemory::default().close_check_error("the sandbox is unavailable"),
-                false,
-            ),
-            (InMemory::default().close_check(true, "exit 0"), true),
-        ] {
-            let outside = recheck
-                .advisories(vec![reproduced_advisory()])
-                .dispatched_ending(merged(MERGED_PR));
-            let mut outside = if failing {
-                outside.close_failing()
-            } else {
-                outside
-            };
-            let Outcome::Fixed { ended, close, .. } =
-                run_through(&mut outside, &widgets(), "main", true, true, None)
-            else {
-                panic!("fix expected");
-            };
-            assert!(ended.outcome.is_ok());
-            let CloseOutcome::LeftOpen { reason } = close else {
-                panic!("left open expected");
-            };
-            if failing {
-                assert!(reason.contains("could not close"), "{reason}");
-                assert!(outside.calls.contains(&Call::CloseSecurityRecord {
-                    issue: 8,
-                    pr: MERGED_PR.into()
-                }));
-            } else {
-                assert!(reason.contains("could not re-run"), "{reason}");
-            }
-            assert!(
-                outside
-                    .calls
-                    .iter()
-                    .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { issue: 8, .. })),
-                "no left-open note: {:?}",
-                outside.calls
-            );
-        }
-    }
-
-    #[test]
-    fn a_failed_left_open_note_still_leaves_the_outcome_unchanged() {
-        let mut outside = InMemory::default()
-            .advisories(vec![reproduced_advisory()])
-            .dispatched_ending(merged(MERGED_PR))
-            .close_check(false, "the bound still overflows; exit 1")
-            .note_failing();
-        let Outcome::Fixed { ended, close, .. } =
-            run_through(&mut outside, &widgets(), "main", true, true, None)
-        else {
-            panic!("fix expected");
-        };
-        assert!(ended.outcome.is_ok());
-        assert!(matches!(close, CloseOutcome::LeftOpen { .. }));
-        assert!(
-            outside.calls.iter().any(|call| matches!(
-                call,
-                Call::Step(line) if line.contains("could not note why GHSA-first stays open")
-            )),
-            "no note-failure step: {:?}",
-            outside.calls
-        );
-    }
-
-    #[test]
-    fn a_closed_finding_is_neither_waiting_nor_fixed_again() {
-        let closed = "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: succeeded\n\n<!-- thirdshift:security-close -->\nClosed by: https://github.com/acme/widgets/pull/12\n";
-        let mut outside = InMemory::default().advisories(vec![serde_json::json!({
-            "state":"closed", "severity":"critical", "ghsa_id":"GHSA-first",
-            "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
-            "description": closed,
-        })]);
-        let outcome = run_through(&mut outside, &widgets(), "main", true, true, None);
-        assert!(
-            matches!(outcome, Outcome::Audited(Ended { outcome: Ok(_), .. })),
-            "a closed finding must not dispatch another fix"
-        );
-        assert!(
-            !outside.calls.iter().any(|call| matches!(
-                call,
-                Call::DispatchSecurityFix { .. }
-                    | Call::RecheckSecurityFix { .. }
-                    | Call::CloseSecurityRecord { .. }
-            )),
-            "a closed finding was picked up: {:?}",
-            outside.calls
-        );
-    }
-
-    #[test]
-    fn a_finding_waiting_for_the_day_shift_does_not_hold_off_the_audit() {
-        let reproduced = "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced high single\n";
-        for fixing in [false, true] {
-            for private in [false, true] {
-                // With fixing allowed, a reproduced finding is fixed instead.
-                for description in ["Private record\n", reproduced] {
-                    if fixing && description == reproduced {
-                        continue;
-                    }
-                    let mut outside = if private {
-                        InMemory::default().finding_issues(vec![serde_json::json!({
-                            "state": "open", "body": description,
-                            "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
-                        })])
-                    } else {
-                        InMemory::default().advisories(vec![serde_json::json!({
-                            "state": "draft", "description": description,
-                            "severity": if description == reproduced { Some("high") } else { None }
-                        })])
-                    };
-                    let outcome =
-                        run_through(&mut outside, &widgets(), "main", fixing, false, None);
-                    assert!(
-                        matches!(outcome, Outcome::Audited(Ended { outcome: Ok(_), .. })),
-                        "fixing {fixing}, private {private}: {description}"
-                    );
-                    assert_eq!(
-                        outside.calls[..7],
-                        [
-                            Call::ReadySearch,
-                            Call::AdvisoryList,
-                            Call::AuditHistory,
-                            Call::HarnessCheck,
-                            Call::NodeCheck,
-                            Call::Started(None),
-                            Call::SecurityAudit("main".to_string())
-                        ]
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn checks_prerequisites_then_audits_without_pulling() {
-        let mut outside = InMemory::default();
-        let outcome = run_through(&mut outside, &widgets(), "main", false, false, None);
-        assert!(matches!(
-            outcome,
-            Outcome::Audited(Ended { outcome: Ok(_), .. })
-        ));
-        assert_eq!(
-            outside.calls,
-            vec![
-                Call::ReadySearch,
-                Call::AdvisoryList,
-                Call::AuditHistory,
-                Call::HarnessCheck,
-                Call::NodeCheck,
-                Call::Started(None),
-                Call::SecurityAudit("main".to_string())
-            ]
-        );
-    }
-    #[test]
-    fn a_ready_issue_precedes_every_prerequisite_and_audit() {
-        let mut outside = InMemory::default()
-            .ready(7, false)
-            .advisories(vec![serde_json::json!({"state":"draft", "severity":null})])
-            .unchanged_base()
-            .node_failing()
-            .harness_failing();
-        assert!(matches!(
-            run_through(&mut outside, &widgets(), "main", false, false, None),
-            Outcome::Skipped(Skipped::ReadyIssue(_))
-        ));
-        assert!(matches!(
-            &outside.calls[..],
-            [Call::ReadySearch, Call::Skipped(_)]
-        ));
-    }
-
-    #[test]
-    fn security_gates_choose_ready_then_failed_fix_then_unchanged_before_work() {
-        let failed = "Private record\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: failed\n";
-        for ready in [false, true] {
-            for failed_fix in [false, true] {
-                for unchanged in [false, true] {
-                    // A finding waiting for the Day shift is no gate.
-                    let mut advisories =
-                        vec![serde_json::json!({"state":"draft", "severity":null})];
-                    if failed_fix {
-                        advisories.push(serde_json::json!({
-                            "state": "draft", "severity": null, "description": failed,
-                        }));
-                    }
-                    let mut outside = InMemory::default().advisories(advisories);
-                    if ready {
-                        outside = outside.ready(7, false);
-                    }
-                    if unchanged {
-                        outside = outside.unchanged_base();
-                    }
-                    let outcome = run_through(&mut outside, &widgets(), "main", false, false, None);
-                    let expected = if ready {
-                        "Ready issue #7"
-                    } else if failed_fix {
-                        "failed Security fix #8 is still open"
-                    } else if unchanged {
-                        "Base branch main hasn't changed since the last completed Security audit"
-                    } else {
-                        assert!(matches!(
-                            outcome,
-                            Outcome::Audited(Ended { outcome: Ok(_), .. })
-                        ));
-                        assert!(outside.calls.contains(&Call::SecurityAudit("main".into())));
-                        continue;
-                    };
-                    let Outcome::Skipped(skipped) = outcome else {
-                        panic!("Security run should skip");
-                    };
-                    assert!(skipped.to_string().starts_with(expected), "{skipped}");
-                    assert!(!outside.calls.contains(&Call::HarnessCheck));
-                    assert_eq!(outside.calls.contains(&Call::AdvisoryList), !ready);
-                    assert_eq!(
-                        outside.calls.contains(&Call::AuditHistory),
-                        !ready && !failed_fix
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_failed_fix_yields_to_ready_work_but_precedes_audit_history() {
-        for private in [false, true] {
-            for ready in [false, true] {
-                for closed in [false, true] {
-                    for fixing in [false, true] {
-                        let body = "Private record\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: failed\n";
-                        let values = vec![
-                            serde_json::json!({
-                                "state": if private { "open" } else { "draft" },
-                                "severity": null, "description": body, "body": body,
-                                "security_fix_closed": closed,
-                            }),
-                            serde_json::json!({
-                                "state": if private { "open" } else { "draft" },
-                                "severity": null, "labels": [{"name":"needs-triage"}],
-                            }),
-                        ];
-                        let mut outside = if private {
-                            InMemory::default().finding_issues(values)
-                        } else {
-                            InMemory::default().advisories(values)
-                        }
-                        .unchanged_base();
-                        if ready {
-                            outside = outside.ready(7, false);
-                        }
-                        let Outcome::Skipped(skipped) =
-                            run_through(&mut outside, &widgets(), "main", fixing, false, None)
-                        else {
-                            panic!("Security run should skip");
-                        };
-                        let expected = if ready {
-                            "Ready issue #7"
-                        } else if !closed {
-                            "failed Security fix #8 is still open"
-                        } else {
-                            "Base branch main hasn't changed"
-                        };
-                        assert!(skipped.to_string().starts_with(expected), "{skipped}");
-                        assert!(!outside.calls.contains(&Call::HarnessCheck));
-                        assert_eq!(
-                            outside.calls.contains(&Call::AuditHistory),
-                            !ready && closed
-                        );
-                        assert_eq!(outside.calls.contains(&Call::AdvisoryList), !ready);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn each_failed_prerequisite_prevents_later_operations() {
-        for (mut outside, expected) in [
-            (
-                InMemory::default().harness_failing(),
-                vec![
-                    Call::ReadySearch,
-                    Call::AdvisoryList,
-                    Call::AuditHistory,
-                    Call::HarnessCheck,
-                ],
-            ),
-            (
-                InMemory::default().node_failing(),
-                vec![
-                    Call::ReadySearch,
-                    Call::AdvisoryList,
-                    Call::AuditHistory,
-                    Call::HarnessCheck,
-                    Call::NodeCheck,
-                ],
-            ),
-        ] {
-            assert!(matches!(
-                run_through(&mut outside, &widgets(), "main", false, false, None),
-                Outcome::Audited(Ended {
-                    outcome: Err(_),
-                    ..
-                })
-            ));
-            assert_eq!(outside.calls, expected);
-        }
-    }
-
-    #[test]
-    fn a_failed_audit_records_nothing_and_keeps_its_session_log() {
-        let mut outside = InMemory::default()
-            .audit_failing("invalid report")
-            .session_log("audit.jsonl");
-        let Outcome::Audited(Ended {
-            outcome: Err(failed),
-            ..
-        }) = run_through(&mut outside, &widgets(), "main", false, false, None)
-        else {
-            panic!("audit should fail");
-        };
-        assert_eq!(failed.log, Some(std::path::PathBuf::from("audit.jsonl")));
-        assert_eq!(
-            outside
-                .calls
-                .iter()
-                .filter(|call| **call == Call::AdvisoryList)
-                .count(),
-            1
-        );
-        assert!(
-            !outside
-                .calls
-                .iter()
-                .any(|call| matches!(call, Call::CreateAdvisory(_)))
-        );
-    }
-
-    #[test]
-    fn repeated_fingerprints_preserve_counts_metadata_order_and_reproduce_once() {
-        use crate::github::{DraftAdvisory, Package};
-        use serde_json::json;
-        let draft = |fingerprint: &str| DraftAdvisory {
-            fingerprint: fingerprint.into(),
-            summary: "Candidate".into(),
-            description: format!("Fingerprint: `{fingerprint}`"),
-            package: Package {
-                ecosystem: "other".into(),
-                name: None,
-            },
-        };
-        let mut outside = InMemory::default()
-            .audited(vec![draft("old"), draft("new"), draft("new")])
-            .advisories(vec![
-                json!({"ghsa_id":"old", "state":"closed", "description":"Fingerprint: `old`", "summary":"Candidate", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-old"}),
-            ]);
-        let Outcome::Audited(Ended {
-            outcome: Ok(recorded),
-            findings,
-            ..
-        }) = run_through(&mut outside, &widgets(), "main", false, false, None)
-        else {
-            panic!("audit should succeed");
-        };
-        assert_eq!((recorded.created, recorded.existing), (1, 2));
-        assert_eq!(
-            findings
-                .iter()
-                .map(|finding| finding.url.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "https://github.com/acme/widgets/security/advisories/GHSA-old",
-                "https://github.com/acme/widgets/security/advisories/new",
-                "https://github.com/acme/widgets/security/advisories/new",
-            ]
-        );
-        assert_eq!(
-            outside
-                .calls
-                .iter()
-                .filter_map(|call| match call {
-                    Call::CreateAdvisory(fingerprint) => Some(fingerprint.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            vec!["new"]
-        );
-        assert_eq!(
-            outside
-                .calls
-                .iter()
-                .filter_map(|call| match call {
-                    Call::Reproduce(record) => Some(record.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            vec!["new"]
-        );
-    }
-
-    #[test]
-    fn a_refound_finding_keeps_its_completed_reproduction() {
-        use crate::github::{DraftAdvisory, Package};
-        use serde_json::json;
-        let draft = |fingerprint: &str| DraftAdvisory {
-            fingerprint: fingerprint.into(),
-            summary: "Candidate".into(),
-            description: format!("Fingerprint: `{fingerprint}`"),
-            package: Package {
-                ecosystem: "other".into(),
-                name: None,
-            },
-        };
-        // A failed, refused or interrupted reproduction leaves no outcome.
-        let findings = [
-            ("confirmed", Some("reproduced high spec"), Some("high")),
-            ("refuted", Some("not reproduced"), None),
-            ("unfinished", None, None),
-        ];
-        for private in [false, true] {
-            let records = findings
-                .iter()
-                .enumerate()
-                .map(|(index, (fingerprint, outcome, severity))| {
-                    let description = match outcome {
-                        Some(outcome) => format!(
-                            "Fingerprint: `{fingerprint}`\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: {outcome}\n"
-                        ),
-                        None => format!("Fingerprint: `{fingerprint}`\n"),
-                    };
-                    if private {
-                        json!({
-                            "number": index + 1, "state": "open", "body": description,
-                            "title": "Candidate",
-                            "html_url": format!("https://github.com/acme/widgets/issues/{}", index + 1),
-                            "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
-                        })
-                    } else {
-                        json!({
-                            "ghsa_id": fingerprint, "state": "draft", "description": description,
-                            "summary": "Candidate", "severity": severity,
-                            "html_url": format!("https://github.com/acme/widgets/security/advisories/{fingerprint}")
-                        })
-                    }
-                })
-                .collect();
-            let outside = InMemory::default().audited(vec![
-                draft("confirmed"),
-                draft("refuted"),
-                draft("unfinished"),
-                draft("refuted"),
-            ]);
-            let mut outside = if private {
-                outside.finding_issues(records)
-            } else {
-                // A reproduced advisory carries its severity, so it reads as graded.
-                outside.advisories(records)
-            };
-            let Outcome::Audited(Ended {
-                outcome: Ok(recorded),
-                findings,
-                ..
-            }) = run_through(&mut outside, &widgets(), "main", false, false, None)
-            else {
-                panic!("audit should succeed");
-            };
-            assert_eq!((recorded.created, recorded.existing), (0, 4));
-            let unfinished = if private { "issue #3" } else { "unfinished" };
-            assert_eq!(
-                outside
-                    .calls
-                    .iter()
-                    .filter(|call| matches!(
-                        call,
-                        Call::Reproduce(_) | Call::UpdateSecurityRecord(_)
-                    ))
-                    .collect::<Vec<_>>(),
-                vec![
-                    &Call::Reproduce(unfinished.into()),
-                    &Call::UpdateSecurityRecord(unfinished.into())
-                ],
-                "private {private}"
-            );
-            let refuted = if private { "issue #2" } else { "refuted" };
-            assert_eq!(
-                outside
-                    .calls
-                    .iter()
-                    .filter(|call| matches!(call, Call::Step(line) if line.contains(refuted)))
-                    .collect::<Vec<_>>(),
-                vec![&Call::Step(format!(
-                    "keeping the completed Security reproduction of {refuted}: not reproduced"
-                ))]
-            );
-            assert_eq!(
-                findings
-                    .iter()
-                    .map(|finding| finding.severity.as_deref())
-                    .collect::<Vec<_>>(),
-                vec![Some("high"), None, None, None]
-            );
-        }
-    }
-
-    #[test]
-    fn a_kept_reproduced_finding_left_unfixed_still_offers_fixing() {
-        let body = "Fingerprint: `confirmed`\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: reproduced high single\n";
-        let mut outside = InMemory::default()
-            .audited(vec![crate::github::DraftAdvisory {
-                fingerprint: "confirmed".into(),
-                summary: "Candidate".into(),
-                description: "Fingerprint: `confirmed`".into(),
-                package: crate::github::Package {
-                    ecosystem: "other".into(),
-                    name: None,
-                },
-            }])
-            .finding_issues(vec![serde_json::json!({
-                "number": 1, "state": "open", "body": body, "title": "Candidate",
-                "html_url": "https://github.com/acme/widgets/issues/1",
-                "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
-            })]);
-        let Outcome::Audited(ended) = run_through(
-            &mut outside,
-            &widgets(),
-            "main",
-            false,
-            false,
-            Some("thirdshift secure security-fix"),
-        ) else {
-            panic!("audit expected");
-        };
-        assert!(ended.outcome.is_ok());
-        assert_eq!(ended.findings[0].severity.as_deref(), Some("high"));
-        assert!(
-            !ended.advice.is_empty(),
-            "a reproduced finding was left unfixed with no offer"
-        );
-    }
-
-    #[test]
-    fn a_new_finding_is_reproduced_even_when_its_write_up_quotes_an_outcome() {
-        use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, Package};
-        // An audit's write-up may quote text that looks like a completed
-        // reproduction. Only a reproduction session may write that outcome.
-        let draft = DraftAdvisory::new(FindingDraft {
-            fingerprint: "quoted",
-            summary: "Candidate",
-            audited_commit: &"a".repeat(40),
-            provenance: FindingProvenance::Audit,
-            original_description: "Quoted fixture:\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n",
-            evidence: "{}",
-            package: Package {
-                ecosystem: "other".into(),
-                name: None,
-            },
-        });
-        for private in [false, true] {
-            let outside = InMemory::default().audited(vec![draft.clone()]);
-            let mut outside = if private {
-                outside.finding_issues(Vec::new())
-            } else {
-                outside
-            };
-            let Outcome::Audited(ended) =
-                run_through(&mut outside, &widgets(), "main", false, false, None)
-            else {
-                panic!("audit expected");
-            };
-            assert!(ended.outcome.is_ok());
-            assert!(
-                outside
-                    .calls
-                    .iter()
-                    .any(|call| matches!(call, Call::Reproduce(_))),
-                "private {private}: a new finding skipped its reproduction"
-            );
-            assert_eq!(ended.findings[0].severity, None, "private {private}");
-        }
-    }
-}
+mod tests;

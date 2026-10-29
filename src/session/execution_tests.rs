@@ -87,12 +87,7 @@ impl Drop for Fixture {
         if let Ok(pid) = fs::read_to_string(self.path("pid"))
             && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
         {
-            // SAFETY: clean up only this fixture's exact child and group if
-            // an assertion failed before production cleanup could finish.
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-                libc::kill(pid, libc::SIGKILL);
-            }
+            crate::process::testing::kill_process_and_group(pid);
         }
     }
 }
@@ -141,8 +136,7 @@ fn assert_owned_child_stopped(root: &Path) {
         .trim()
         .parse()
         .unwrap();
-    // SAFETY: probe only this fixture's recorded PID.
-    assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "owned child survived");
+    assert!(!crate::process::is_alive(pid), "owned child survived");
 }
 
 #[test]

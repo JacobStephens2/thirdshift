@@ -45,7 +45,11 @@ impl Span {
                 |(kind, subject)| format!("{} · {subject}", super::display_name(kind)),
             ),
             SpanKind::Stage => super::display_name(&self.name).to_owned(),
-            _ => self.name.clone(),
+            SpanKind::Sess
+            | SpanKind::Model
+            | SpanKind::Turn
+            | SpanKind::Tool
+            | SpanKind::Agent => self.name.clone(),
         }
     }
 }

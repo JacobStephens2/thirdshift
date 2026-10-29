@@ -210,6 +210,8 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 .folders .count { color: var(--dim); }
 .folders a[data-group="needs you"]:not([data-empty]) .count { color: var(--urgent-text); font-weight: var(--head-weight); }
 #inbox > .group { border: 1px solid var(--rule); border-radius: var(--radius); margin-top: 12px; }
+#inbox > .group > h3 { margin: 0; padding: 10px; border-bottom: 1px solid var(--rule); font-size: 14px; }
+#inbox > .group > h3 .count { margin-left: 8px; color: var(--dim); }
 #inbox > .group > .empty, #inbox > .group > p { margin: 0; padding: 10px; }
 .row-head > .gist { display: none; }
 .one-line .command { margin: 0; border-radius: 0; border-bottom: 1px solid var(--rule); }

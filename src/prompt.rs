@@ -207,7 +207,7 @@ impl ReviewInstruction {
     fn address_findings(&self) -> String {
         let ending = match self {
             Self::SpecReview => ", using the `thirdshift-tdd` skill where it fits, and commit.",
-            _ => ".",
+            Self::Implement | Self::ForeignCommits => ".",
         };
         format!(
             "For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
@@ -227,7 +227,7 @@ impl ReviewInstruction {
                 " marked as coming from their commits,",
                 " Keep the rest of the body as it is.",
             ),
-            _ => (
+            Self::Implement | Self::SpecReview => (
                 "In the PR body, add an",
                 "listing each skipped finding",
                 "",

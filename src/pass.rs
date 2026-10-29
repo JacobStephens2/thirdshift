@@ -20,12 +20,13 @@ use anyhow::Result;
 
 use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
+use crate::git::Git;
 use crate::github::{GitHub, Issue, ListedIssue};
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Edit, Label};
-use crate::launch::{BaseBranch, LaunchDirectory};
+use crate::launch::BaseBranch;
 use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, PickupOrder, PriorityIssue, ReadyIssue};
@@ -175,7 +176,7 @@ pub trait Outside {
 /// the logs, the pass's Harness choice `harness`, and the command's `flags`
 /// and the User config `config`, which ask the run it dispatches.
 pub struct LaunchAndGitHub<'a> {
-    pub launch: &'a LaunchDirectory,
+    pub launch: &'a Git,
     pub base: &'a BaseBranch,
     pub repo: &'a Repo,
     /// Settled on the Harness's names for its Model and Effort once
@@ -211,11 +212,11 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch.git(), self.repo, self.config.pickup_wait, order)
+        ready::first(self.launch, self.repo, self.config.pickup_wait, order)
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
-        ready::before_architect(self.launch.git(), self.repo, self.config.pickup_wait)
+        ready::before_architect(self.launch, self.repo, self.config.pickup_wait)
     }
 
     fn step(&mut self, line: String) {
@@ -256,7 +257,7 @@ impl Outside for LaunchAndGitHub<'_> {
         prompt: &str,
         conclude: impl FnOnce(&mut Self, Option<&str>) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let worktree = match ReviewWorktree::create(self.launch.git(), &self.repo.name, base) {
+        let worktree = match ReviewWorktree::create(self.launch, &self.repo.name, base) {
             Ok(worktree) => worktree,
             Err(error) => return (Err(error), None),
         };
@@ -283,7 +284,7 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn audit(&mut self, base: &str) -> crate::security::audit::Attempt {
         logs::stage(logs::Stage::SecurityAudit);
-        crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
+        crate::security::audit::run(self.launch, self.repo, base, self.harness)
     }
 
     fn security_records(&mut self) -> Result<SecurityRecords> {
@@ -311,13 +312,7 @@ impl Outside for LaunchAndGitHub<'_> {
         number: usize,
     ) -> (Result<Reproduction>, Option<PathBuf>) {
         logs::stage(logs::Stage::SecurityReproduction);
-        crate::security::reproduction::run(
-            self.launch.git(),
-            self.repo,
-            record,
-            number,
-            self.harness,
-        )
+        crate::security::reproduction::run(self.launch, self.repo, record, number, self.harness)
     }
 
     fn update_security_record(
@@ -333,7 +328,7 @@ impl Outside for LaunchAndGitHub<'_> {
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
         let security_fix_findings = match &dispatch {
             Dispatch::SecurityFix { finding, .. } => std::slice::from_ref(*finding),
-            _ => &[],
+            Dispatch::ArchitectPlan { .. } | Dispatch::ReadyIssue { .. } => &[],
         };
         let (issue, asks, base, is_spec) = match dispatch {
             Dispatch::SecurityFix {
@@ -385,14 +380,7 @@ impl Outside for LaunchAndGitHub<'_> {
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>) {
         logs::stage(logs::Stage::SecurityFixPublishing);
-        crate::security::fixing::publish(
-            self.launch.git(),
-            self.repo,
-            base,
-            record,
-            url,
-            self.harness,
-        )
+        crate::security::fixing::publish(self.launch, self.repo, base, record, url, self.harness)
     }
 
     fn link_security_fix(&mut self, record: &SecurityRecord, issue: &IssueUrl) -> Result<()> {
@@ -420,14 +408,7 @@ impl Outside for LaunchAndGitHub<'_> {
         pr_url: &str,
     ) -> (Result<crate::security::close::Check>, Option<PathBuf>) {
         logs::stage(logs::Stage::SecurityCloseCheck);
-        crate::security::close::recheck(
-            self.launch.git(),
-            self.repo,
-            base,
-            pr_url,
-            record,
-            self.harness,
-        )
+        crate::security::close::recheck(self.launch, self.repo, base, pr_url, record, self.harness)
     }
 
     fn close_security_record(

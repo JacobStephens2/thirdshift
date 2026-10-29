@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.17.4"
+version = "0.18.0"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -50,6 +50,10 @@ tokio = { version = "1.53.1", features = ["rt", "net", "time", "sync"] }
 opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "logs", "trace", "with-serde"] }
 stateright = "=0.31.0"
 tower-layer = "0.3.3"
+
+[lints.clippy]
+# List every variant of a match on Run state or an outcome; keep a wildcard only under an #[expect] whose reason says why.
+wildcard_enum_match_arm = "warn"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies
 # get no debuginfo, so their frames show no file or line. Full debuginfo made

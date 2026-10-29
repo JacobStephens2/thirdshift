@@ -89,6 +89,8 @@ pub struct SpecPr {
 /// What a child Run is given by the Run that starts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Given {
+    /// The Ticket Process selected for this child; Base fixes use the Built-in.
+    pub process: Option<String>,
     /// What it is, with its Base branch.
     pub kind: Kind,
     /// The start stamp of the command that started it, which its Session
@@ -96,6 +98,9 @@ pub struct Given {
     pub stamp: String,
     /// The owning command, whose folder its Session traces inherit.
     pub command: logs::CommandKind,
+    /// When set, this child and the Runs it starts export no OTLP spans.
+    /// Finding Steps set it so private records stay off a Process command's endpoint.
+    pub suppress_otlp: bool,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
     /// What the Run that started it hands on to every child Run.
@@ -122,6 +127,11 @@ const STAMP: &str = "--stamp";
 /// The hidden argument followed by the owning command's log folder.
 const LOGS_COMMAND: &str = "--logs-command";
 
+/// The hidden argument that keeps a child Run's sessions off the OTLP
+/// endpoint. Finding Steps pass it; a Security run's children need no such
+/// argument because their command kind already exports nothing.
+const SUPPRESS_OTLP: &str = "--suppress-otlp";
+
 /// The hidden argument that asks a child Run [`BaseFixAsk::Allow`].
 const ALLOW_BASE_FIX: &str = "--allow-base-fix";
 
@@ -132,7 +142,9 @@ const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
 const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
 const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
+const ALLOW_SECURITY_CLOSE: &str = "--allow-security-close";
 const DELIVERY_LIMITS: &str = "--delivery-limits";
+const TICKET_PROCESS: &str = "--ticket-process";
 
 /// The hidden argument followed by the command that starts the Spec run
 /// again with a Base fix allowed, for the child Run to offer: it asks
@@ -184,6 +196,12 @@ impl Given {
         if self.asks.security_fix {
             args.push(ALLOW_SECURITY_FIX);
         }
+        if self.asks.security_close {
+            args.push(ALLOW_SECURITY_CLOSE);
+        }
+        if self.suppress_otlp {
+            args.push(SUPPRESS_OTLP);
+        }
         if self.asks.security_review {
             args.push(SECURITY_REVIEW);
         }
@@ -195,6 +213,9 @@ impl Given {
             append_choice(&mut args, security, REVIEW_FLAGS);
         }
         let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        if let Some(process) = &self.process {
+            args.extend([TICKET_PROCESS.to_string(), process.clone()]);
+        }
         if let Some(spec_pr) = self.kind.spec_pr() {
             args.extend([
                 SPEC_PR.to_string(),
@@ -295,6 +316,7 @@ impl PendingChoice {
 /// takes itself.
 #[derive(Default)]
 pub struct Reader {
+    process: Option<String>,
     delivery_limits: Option<crate::delivery::Limits>,
     kind: Option<Kind>,
     spec_pr: Option<SpecPr>,
@@ -303,6 +325,8 @@ pub struct Reader {
     base_fix: Option<BaseFixAsk>,
     security_review: bool,
     security_fix: bool,
+    security_close: bool,
+    suppress_otlp: bool,
     sessions: PendingChoice,
     review: PendingChoice,
     review_default: PendingChoice,
@@ -328,6 +352,14 @@ impl Reader {
             None => bail!("missing {missing}"),
         };
         match arg {
+            TICKET_PROCESS => {
+                not_yet_given(&self.process, arg)?;
+                let name = value("Ticket Process")?;
+                if !crate::args::one_path_component(&name) {
+                    bail!("{TICKET_PROCESS} must name a Process");
+                }
+                self.process = Some(name);
+            }
             DELIVERY_LIMITS => {
                 not_yet_given(&self.delivery_limits, arg)?;
                 let limits: crate::delivery::Limits =
@@ -348,6 +380,18 @@ impl Reader {
                     bail!("repeated argument: {arg}");
                 }
                 self.security_fix = true;
+            }
+            ALLOW_SECURITY_CLOSE => {
+                if self.security_close {
+                    bail!("repeated argument: {arg}");
+                }
+                self.security_close = true;
+            }
+            SUPPRESS_OTLP => {
+                if self.suppress_otlp {
+                    bail!("repeated argument: {arg}");
+                }
+                self.suppress_otlp = true;
             }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 not_yet_given(&self.kind, arg)?;
@@ -427,12 +471,15 @@ impl Reader {
             (kind, None) => kind,
         };
         let Some(kind) = kind else {
-            if self.command.is_some()
+            if self.process.is_some()
+                || self.command.is_some()
                 || self.delivery_limits.is_some()
                 || self.stamp.is_some()
                 || self.base_fix.is_some()
                 || self.security_review
                 || self.security_fix
+                || self.security_close
+                || self.suppress_otlp
                 || self.sessions.is_given()
                 || self.review.is_given()
                 || self.review_default.is_given()
@@ -442,7 +489,8 @@ impl Reader {
                      {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
                      {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
                      {SECURITY_REVIEW_EFFORT}, {SECURITY_REVIEW_DEFAULT}, \
-                     {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT} or {LOGS_COMMAND}"
+                     {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT}, {LOGS_COMMAND} or \
+                     {SUPPRESS_OTLP}"
                 );
             }
             return Ok(None);
@@ -457,11 +505,13 @@ impl Reader {
             .finish(SESSION_FLAGS, ChosenBy::Command)?
             .with_context(|| format!("missing {SESSIONS_HARNESS}"))?;
         Ok(Some(Given {
+            process: self.process,
             kind,
             stamp,
             command: self
                 .command
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
+            suppress_otlp: self.suppress_otlp,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             asks: ChildAsks {
                 delivery_limits: self.delivery_limits.unwrap_or_default(),
@@ -469,6 +519,7 @@ impl Reader {
                 security_review_harness,
                 security_review_default,
                 security_fix: self.security_fix,
+                security_close: self.security_close,
                 security_review: self.security_review,
             },
         }))
@@ -488,6 +539,8 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 pub enum Ended {
     /// Diagnosis completed, but the Ticket remains open needing information.
     NotReproduced { comment_url: String },
+    /// A Custom Ticket Process ended successfully without delivering its Ticket.
+    ArchitectureReview { reason: String },
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
     Reached {
@@ -532,10 +585,22 @@ pub fn start(
     base_fix: BaseFixAsk,
     asks: &ChildAsks,
 ) -> Result<Handle> {
+    start_process(issue, kind, base_fix, asks, "ticket-run")
+}
+
+pub(super) fn start_process(
+    issue: &IssueUrl,
+    kind: Kind,
+    base_fix: BaseFixAsk,
+    asks: &ChildAsks,
+    process: &str,
+) -> Result<Handle> {
     let given = Given {
+        process: (process != "ticket-run").then(|| process.to_string()),
         kind,
         stamp: logs::stamp(),
         command: logs::command_kind(),
+        suppress_otlp: logs::otlp_suppressed(),
         base_fix,
         asks: asks.clone(),
     };
@@ -812,9 +877,7 @@ impl Handle {
         if !self.reaped && !self.stop_sent {
             // The process group is shared. Signal only this unreaped child,
             // allowing its Failed run path to finish before reaping it.
-            // SAFETY: kill has no memory-safety preconditions; this PID is
-            // still owned and has not been reaped.
-            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            let _ = crate::process::signal(self.child.id() as libc::pid_t, libc::SIGTERM);
             self.stop_sent = true;
         }
         // Setup may have failed before either pipe got its reader.
@@ -841,10 +904,14 @@ impl Handle {
         let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
         let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
         let not_reproduced = reader.not_reproduced().map(String::from);
+        let architecture_end = reader.architecture_end().map(String::from);
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
             Ok(_) if not_reproduced.is_some() => Ended::NotReproduced {
                 comment_url: not_reproduced.unwrap(),
+            },
+            Ok(_) if architecture_end.is_some() => Ended::ArchitectureReview {
+                reason: architecture_end.unwrap(),
             },
             Ok(pr_url) => Ended::Reached {
                 pr_url,
@@ -925,9 +992,11 @@ mod tests {
     fn cause_of_not_starting_from(executable: &Path) -> String {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/248").unwrap();
         let given = Given {
+            process: None,
             kind: ticket(),
             stamp: STAMPED.to_string(),
             command: logs::CommandKind::Issue,
+            suppress_otlp: false,
             base_fix: BaseFixAsk::Forbid,
             asks: ChildAsks::default(),
         };
@@ -978,6 +1047,10 @@ mod tests {
     /// the argument parser takes each argument it doesn't recognise itself.
     fn read(args: &[impl AsRef<str>]) -> Result<Option<Given>> {
         let args: Vec<String> = args.iter().map(|arg| arg.as_ref().to_string()).collect();
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "a test helper that reads back a Run; any other Command fails the test"
+        )]
         match crate::args::parse(&args)? {
             crate::args::Command::Run(run) => Ok(run.given),
             _ => panic!("{args:?}: not a Run"),
@@ -1010,7 +1083,14 @@ mod tests {
         };
         let harnesses = [on_claude, on_opus];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
-        let securities = [(false, false), (true, false), (false, true), (true, true)];
+        let securities = [
+            (false, false, false),
+            (false, false, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+        ];
         for ((kind, harness), security_review_harness) in [
             ticket(),
             ticket_with_its_spec_pr(),
@@ -1021,15 +1101,17 @@ mod tests {
         .zip(harnesses.iter().cycle())
         .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
-            for (base_fix, (security_fix, security_review)) in
+            for (base_fix, (security_fix, security_close, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]
                     .into_iter()
                     .flat_map(|base_fix| securities.map(|security| (base_fix.clone(), security)))
             {
                 let given = Given {
+                    process: None,
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     command: logs::CommandKind::Issue,
+                    suppress_otlp: false,
                     base_fix,
                     asks: ChildAsks {
                         delivery_limits: crate::delivery::Limits::default(),
@@ -1042,6 +1124,7 @@ mod tests {
                             chosen_by: ChosenBy::UserConfig,
                         }),
                         security_fix,
+                        security_close,
                         security_review,
                     },
                 };
@@ -1069,8 +1152,8 @@ mod tests {
     const ONLY_A_CHILD_RUN: &str = "only a child Ticket run is given --stamp, --allow-base-fix, \
         --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
         --security-review-harness, --security-review-model, --security-review-effort, \
-        --security-review-default, --security-review-default-model, --security-review-default-effort or \
-        --logs-command";
+        --security-review-default, --security-review-default-model, --security-review-default-effort, \
+        --logs-command or --suppress-otlp";
 
     #[test]
     fn hidden_arguments_that_are_repeated_have_no_value_or_lack_a_kind_or_stamp_are_rejected() {

@@ -196,13 +196,19 @@ mod tests {
         assert_eq!(
             events
                 .iter()
-                .filter_map(|event| match event {
-                    Event::ModelCallStarted { id, .. }
-                    | Event::ModelCallEnded { id, .. }
-                    | Event::ToolCallStarted { id, .. }
-                    | Event::ToolCallEnded { id, .. } => Some(id.as_str()),
-                    _ => None,
-                })
+                .filter_map(
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "the test asserts on call ids; other events are not under test"
+                    )]
+                    |event| match event {
+                        Event::ModelCallStarted { id, .. }
+                        | Event::ModelCallEnded { id, .. }
+                        | Event::ToolCallStarted { id, .. }
+                        | Event::ToolCallEnded { id, .. } => Some(id.as_str()),
+                        _ => None,
+                    },
+                )
                 .collect::<Vec<_>>(),
             ["r:m1", "r:m1", "r:t1", "r:t1"]
         );

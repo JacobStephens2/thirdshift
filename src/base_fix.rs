@@ -248,7 +248,7 @@ impl BaseFix {
                     ));
                     open
                 }
-                mark => {
+                mark @ (Mark::Running(_) | Mark::None) => {
                     drop(looking);
                     return self.wait_on(outside, open, mark.into_watch(), base);
                 }
@@ -279,6 +279,9 @@ impl BaseFix {
         match outside.run_base_fix(&taken.issue, base)? {
             Ended::NotReproduced { comment_url } => {
                 bail!("Base fix #{number} did not reproduce: {comment_url}")
+            }
+            Ended::ArchitectureReview { reason } => {
+                bail!("Base fix #{number} ended before Delivery: {reason}")
             }
             Ended::Reached { .. } => {
                 taken.reached = true;

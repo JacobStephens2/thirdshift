@@ -135,7 +135,12 @@ impl CodexProgress {
             ItemKind::Error => {
                 self.reported(item);
             }
-            _ => {}
+            ItemKind::FileChange
+            | ItemKind::McpTool
+            | ItemKind::WebSearch
+            | ItemKind::Reasoning
+            | ItemKind::TodoList
+            | ItemKind::Unknown => {}
         }
         if !self.seen.insert(id) {
             return Vec::new();
@@ -165,7 +170,11 @@ impl CodexProgress {
             ItemKind::McpTool => vec![format!("{} {}", text("server"), text("tool"))],
             ItemKind::WebSearch => vec![format!("web search {}", shorten(text("query")))],
             ItemKind::CollabTool => vec![format!("agent {}", text("tool"))],
-            _ => Vec::new(),
+            ItemKind::AgentMessage
+            | ItemKind::Reasoning
+            | ItemKind::TodoList
+            | ItemKind::Error
+            | ItemKind::Unknown => Vec::new(),
         }
     }
 

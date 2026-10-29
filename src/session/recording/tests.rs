@@ -1164,7 +1164,9 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
         .lines()
         .filter_map(|line| match progress::ChildLine::of(line) {
             progress::ChildLine::Own(message) if message.contains(": Model:") => Some(message),
-            _ => None,
+            progress::ChildLine::Own(_)
+            | progress::ChildLine::Relayed
+            | progress::ChildLine::Continuation => None,
         })
         .collect();
     assert_eq!(

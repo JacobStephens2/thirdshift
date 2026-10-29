@@ -175,6 +175,10 @@ struct Fact<'a> {
 impl<'a> Fact<'a> {
     fn of(event: &'a Event) -> Option<Self> {
         use Event::*;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only tool calls name a tool"
+        )]
         let tool = match event {
             ToolCallStarted { tool, .. } | ToolCallEnded { tool, .. } => Some(tool.as_str()),
             _ => None,
@@ -204,7 +208,7 @@ impl<'a> Fact<'a> {
                 (SpanKind::Agent, id, parent_id.as_deref(), None)
             }
             SubagentEnded { id, outcome, .. } => (SpanKind::Agent, id, None, Some(*outcome)),
-            _ => return None,
+            Message { .. } | Usage { .. } | Error { .. } | WorkEnded { .. } => return None,
         };
         Some(Self {
             kind,
