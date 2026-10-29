@@ -169,6 +169,7 @@ impl Fixture {
                 },
                 stamp: "20261003T120000-0400".to_string(),
                 command: logs::CommandKind::Issue,
+                suppress_otlp: false,
                 base_fix: BaseFixAsk::Forbid,
                 asks: super::ChildAsks::default(),
             },

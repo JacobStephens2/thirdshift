@@ -505,6 +505,7 @@ mod tests {
         Given {
             process: None,
             command: crate::logs::CommandKind::Issue,
+            suppress_otlp: false,
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,

@@ -66,6 +66,17 @@ overrides the config. Findings and their Session traces remain private even
 with OTLP export configured. The Security run's existing sequence and gates stay
 as they are; its Built-in process file is a later move.
 
+`fix-findings` → `close-findings` lets a Custom process fix each pending
+reproduced Security finding, then recheck merged fixes against the merged
+Base branch before closing their private records. Both keep the Security run's
+permission and privacy rules (ADR-0015), leave their sessions and child
+Ticket runs off any OTLP endpoint, run outside parallel groups and use
+throwaway worktrees. `fix-findings` takes the same optional `process` setting
+as `run-published-issue`, defaulting to `ticket-run`. A failed fix stays with
+the Day shift. `security-fix` and `security-close` (or their `no-` forms)
+override `[security]` settings. The existing Security run is unchanged and
+still fixes at most one finding per invocation.
+
 Command records and Session traces retain the Process name, whether it is
 Built-in or Custom, and the SHA-256 hash of its exact file bytes. Each child
 Ticket run records its selected Process independently of its parent, defaulting

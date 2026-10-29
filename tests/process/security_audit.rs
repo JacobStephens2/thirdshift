@@ -44,6 +44,69 @@ printf '%s\n' 'Private reproduction evidence and impact reasoning.' 'Security re
 "#;
 
 #[test]
+fn audit_reproduction_fix_and_close_compose_with_command_permissions() {
+    let receiver = ResendStandIn::replying(200, "{}");
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.user_config_is(&format!(
+        "[security]\nfix = false\nclose = false\n[otlp]\nendpoint = '{}/v1/traces'\n",
+        receiver.url()
+    ));
+    write_process(
+        &scenario,
+        "audit-and-fix",
+        &format!(
+            "{AUDIT}\n[[steps]]\nname = 'fix'\ncatalogue = 'fix-findings'\n\
+             [[steps]]\nname = 'close'\ncatalogue = 'close-findings'\n"
+        ),
+    );
+    scenario.agent_does_in_session(1, &audit_script());
+    scenario.agent_does_in_session(2, REPRODUCE);
+    scenario.agent_does_in_session(
+        3,
+        r#"printf 'Proposed public issue:\nTitle: Bound accepted input\nBody:\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(
+        8,
+        r#"echo bounded > bounded.txt
+git add bounded.txt
+git commit -qm 'Bound accepted input'
+gh pr create --base main --head issue-8 --title Fix --body 'Closes #8'
+"#,
+    );
+    scenario.agent_does_for_in_session(
+        8,
+        2,
+        r#"test -f bounded.txt
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+printf 'Security close check: passes\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&[
+        "process",
+        "audit-and-fix",
+        "security-fix",
+        "security-close",
+        "merge",
+    ]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 5, "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    assert_eq!(state["advisories"][0]["state"], "closed");
+    let description = state["advisories"][0]["description"].as_str().unwrap();
+    assert!(
+        description.contains("Outcome: reproduced high single"),
+        "{description}"
+    );
+    assert!(description.contains("Fix Run: succeeded"), "{description}");
+    assert!(receiver.requests().is_empty(), "private sessions exported");
+}
+
+#[test]
 fn catalogue_audits_and_reproduces_privately_and_keeps_completed_reproductions() {
     for private in [false, true] {
         let scenario = Scenario::new();

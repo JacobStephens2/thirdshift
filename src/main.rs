@@ -95,7 +95,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
-       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security-review flags match a Ticket run (experimental)
+       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security flags match a Ticket run (experimental)
        thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
@@ -336,6 +336,12 @@ fn main() -> ExitCode {
         Ok(Command::Run(run_args)) => *run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    // A finding Step's child Ticket run carries this so its sessions stay
+    // local even though the owning command is a Process, not a Security run.
+    let _suppress_otlp = given
+        .as_ref()
+        .filter(|given| given.suppress_otlp)
+        .map(|_| logs::SuppressOtlp::new());
     let issue = match launch::resolve_issue(issue) {
         Ok(issue) => issue,
         Err(error) => return failure(&error),

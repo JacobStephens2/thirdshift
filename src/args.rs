@@ -36,8 +36,9 @@ pub struct ProcessRun {
     pub goal: Option<Goal>,
     /// Whether this Process's Security review Step is requested.
     pub security_review: Option<crate::security::review::Ask>,
-    /// Whether a recorded finding awaiting a fix skips audit and reproduction.
+    /// Whether Security finding Steps are allowed to fix findings.
     pub security_fix: Option<crate::security::FixAsk>,
+    pub security_close: Option<crate::security::CloseAsk>,
     /// Stop architecture-review after publishing a plan, without dispatch.
     pub plan_only: bool,
 }
@@ -866,7 +867,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [--plan-only]";
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() || matches!(args, [word] if word == "list") {
@@ -918,6 +919,10 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
                 | "--security-fix"
                 | "no-security-fix"
                 | "--no-security-fix"
+                | "security-close"
+                | "--security-close"
+                | "no-security-close"
+                | "--no-security-close"
         ) && (name.is_some() || arg.starts_with("--"))
         {
             take_flag(&mut review_flags, arg, &mut words)?;
@@ -957,6 +962,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             || goal.is_some()
             || review_flags.security_review.is_some()
             || review_flags.security_fix.is_some()
+            || review_flags.security_close.is_some()
             || plan_only)
             && (check || name.is_none()))
     {
@@ -973,6 +979,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         goal,
         security_review: review_flags.security_review,
         security_fix: review_flags.security_fix,
+        security_close: review_flags.security_close,
         plan_only,
     };
     Ok(if check {

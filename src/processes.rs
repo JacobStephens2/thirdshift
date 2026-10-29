@@ -61,6 +61,7 @@ pub(crate) mod architect;
 mod architecture;
 pub(crate) mod builtin;
 mod catalog;
+mod findings;
 mod identity;
 mod security_audit;
 pub(crate) mod spec;
@@ -85,6 +86,7 @@ struct ProcessFile {
     /// this ready for review; `check` never merges.
     goal: Goal,
     security_review: bool,
+    security_flags: Flags,
     security_fix: bool,
     plan_only: bool,
 }
@@ -168,6 +170,8 @@ enum DraftKind {
     SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
     LandTickets { line: usize },
+    FixFindings { line: usize },
+    CloseFindings { line: usize },
 }
 
 struct DeclaredWorktree {
@@ -205,6 +209,8 @@ impl ResolvedStep {
             StepKind::SelfMerge => "self-merge",
             StepKind::RunPublishedIssue { .. } => "run-published-issue",
             StepKind::LandTickets { .. } => "land-tickets",
+            StepKind::FixFindings { .. } => "fix-findings",
+            StepKind::CloseFindings => "close-findings",
         };
         format!(
             "{kind}; worktree {}; {}",
@@ -384,6 +390,8 @@ enum StepKind {
     SelfMerge,
     RunPublishedIssue { process: String },
     LandTickets { process: String },
+    FixFindings { process: String },
+    CloseFindings,
 }
 
 struct OwnedWorktree {
@@ -413,6 +421,7 @@ struct Prepared {
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
     security_review: bool,
+    security_flags: Flags,
     security_fix: bool,
     security_findings: Mutex<Option<crate::security::findings::Findings>>,
     plan_only: bool,
@@ -433,6 +442,8 @@ struct CompletedRuns {
     unreproduced_bug: Option<String>,
     /// Why architecture-review ended successfully without a child run.
     architecture_end: Option<String>,
+    /// Presence keeps private Security diagnostics out of Run notifications.
+    security_findings: Option<Vec<crate::security::RecordedFinding>>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -492,6 +503,7 @@ impl Drop for HeldClaim<'_> {
 struct StepRun<'a> {
     process: &'a str,
     plan_only: bool,
+    security_flags: &'a Flags,
     security_fix: bool,
     goal: Goal,
     limits: &'a Limits,
@@ -612,11 +624,13 @@ fn run(command: &ProcessRun) -> Result<String> {
         ..Flags::default()
     }
     .security_review(&config);
-    file.security_fix = Flags {
+    file.security_flags = Flags {
         security_fix: command.security_fix,
+        security_close: command.security_close,
+        security_review: command.security_review,
         ..Flags::default()
-    }
-    .security_fix_allowed(&config);
+    };
+    file.security_fix = file.security_flags.security_fix_allowed(&config);
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way. An Issue-branch
     // worktree with no issue is refused before the Pass log. A failure here
@@ -804,7 +818,7 @@ fn notify(
             }),
         failed_reproduction: None,
         pre_audit_failure: None,
-        security_findings: None,
+        security_findings: completed.security_findings.as_deref(),
         security_findings_waiting: false,
         security_fix: None,
         security_close: None,
@@ -1375,6 +1389,7 @@ fn run_parallel(
                 let run = StepRun {
                     process: &process,
                     plan_only: prepared.plan_only,
+                    security_flags: &prepared.security_flags,
                     security_fix: prepared.security_fix,
                     goal,
                     limits,
@@ -1470,6 +1485,7 @@ fn run_step(
     let run = StepRun {
         process,
         plan_only: prepared.plan_only,
+        security_flags: &prepared.security_flags,
         security_fix: prepared.security_fix,
         goal: prepared.goal,
         limits: &prepared.limits,
@@ -1837,6 +1853,10 @@ fn run_step_in(
         StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
         StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
         StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
+        StepKind::FixFindings { process } => {
+            findings::fix(run, process).map_err(findings::private_failure)
+        }
+        StepKind::CloseFindings => findings::close(run).map_err(findings::private_failure),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
                 "running step {} with {choice}",
@@ -2333,6 +2353,10 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
         StepKind::LandTickets { process } => {
             format!("{}: land-tickets (process {process})", step.name)
         }
+        StepKind::FixFindings { process } => {
+            format!("{}: fix-findings (process {process})", step.name)
+        }
+        StepKind::CloseFindings => format!("{}: close-findings", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
         let _ = write!(line, " (worktree {worktree})");
@@ -2357,6 +2381,7 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     refuse_worktrees(path, &file)?;
     refuse_implement(path, &file)?;
     architecture::validate(path, &file)?;
+    findings::validate(path, &file)?;
     security_audit::validate(path, &file)?;
     refuse_self_merge(path, &file)?;
     refuse_issue_branch(path, &file)?;
@@ -2464,6 +2489,7 @@ fn prepare_from(
         limits: file.limits,
         goal: file.goal,
         security_review: file.security_review,
+        security_flags: file.security_flags,
         security_fix: file.security_fix,
         security_findings: Mutex::default(),
         plan_only: file.plan_only,
@@ -2967,13 +2993,14 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
         let (line, published) = match step.kind {
             DraftKind::RunPublishedIssue { line } => (line, true),
             DraftKind::LandTickets { line } => (line, false),
+            DraftKind::FixFindings { line } => (line, false),
             _ => {
                 if let Some((_, line)) = &step.process {
                     return Err(rule(
                         path,
                         *line,
                         "process",
-                        "process is only for run-published-issue or land-tickets",
+                        "process is only for run-published-issue, land-tickets or fix-findings",
                     ));
                 }
                 continue;
@@ -3048,6 +3075,10 @@ fn resolve(
         DraftKind::LandTickets { line } => StepKind::LandTickets {
             process: step.child_process(*line).0.to_string(),
         },
+        DraftKind::FixFindings { line } => StepKind::FixFindings {
+            process: step.child_process(*line).0.to_string(),
+        },
+        DraftKind::CloseFindings { .. } => StepKind::CloseFindings,
     };
     let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
@@ -3125,6 +3156,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         security_review: false,
         security_fix: false,
         plan_only: false,
+        security_flags: Flags::default(),
     })
 }
 
@@ -3567,13 +3599,15 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         "reproduce-findings" => DraftKind::ReproduceFindings { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
         "land-tickets" => DraftKind::LandTickets { line },
+        "fix-findings" => DraftKind::FixFindings { line },
+        "close-findings" => DraftKind::CloseFindings { line },
         "self-merge" => DraftKind::SelfMerge { line },
         _ => {
             return Err(rule(
                 path,
                 line,
                 "catalogue",
-                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit or reproduce-findings",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit, reproduce-findings, fix-findings or close-findings",
             ));
         }
     };

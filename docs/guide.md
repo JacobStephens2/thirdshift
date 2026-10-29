@@ -1201,7 +1201,7 @@ group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
 built-in Step: `implement`, `spec-review`, `security-review`, `delivery`, `self-merge` or
 `land-tickets`, described above, or `architecture-review`, `run-published-issue`,
-`security-audit` or `reproduce-findings`.
+`security-audit`, `reproduce-findings`, `fix-findings` or `close-findings`.
 
 `security-audit` audits origin's Base branch in its own throwaway worktree,
 validates the report and creates or reuses each finding's private record.
@@ -1372,7 +1372,7 @@ that Step instead of starting the session. The Command log names the cause.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
-a catalogue value other than `implement`, `delivery`, `run-published-issue`, `security-review` or `self-merge`, an
+a catalogue value outside the documented Step catalogue, an
 `implement` Step outside an Issue-branch worktree, a
 `self-merge` Step that is not directly after `delivery`, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a
@@ -1402,6 +1402,55 @@ Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
 and `[resources]` is checked before each Step and each session's Resume.
 Every skill Step keeps a Session trace and Model evidence. Its prompt names
 the worktree kind, and it gets the usual one Resume with or without an issue.
+
+### Fixing and closing Security findings
+
+`fix-findings` reads the repository's private finding records and, when
+`security-fix` or `fix = true` under `[security]` allows it, fixes each
+reproduced finding still awaiting a fix, in severity order. `no-security-fix`
+overrides the setting. Unreproduced findings and findings with an existing
+fix are skipped. The Step uses the Security run's private publication checks:
+a public fix issue contains only the proposed change and a private-record
+link. It links the fix, starts a Ticket run or Spec run, and records its
+ending privately. A failed fix stops the Step and stays with the Day shift.
+If a merged fix auto-closes a private finding issue, the Step reopens it until
+`close-findings` verifies the proof, even when closing is disabled or omitted.
+The optional `process = "<name>"` setting selects a child Ticket Process,
+defaulting to `ticket-run`, with the same validation and Spec dispatch as
+`run-published-issue`. Children inherit the Step's Harness, Model and Effort,
+the Command's merge choice and the file's tighter limits.
+
+`close-findings` reads successful fixes from the private records and checks
+which merged into this Base branch, including fixes from an earlier Process
+that failed or stopped before closing. Each proof-of-concept test runs against
+the current merged Base branch on origin. Only a passing check closes the
+private record; a failing check or error leaves a private note for the Day
+shift and reopens a private finding issue that its fix PR closed.
+Unmerged fixes are left open. Closing defaults to allowed when fixing
+is allowed; `no-security-close` or `close = false` under `[security]`
+disables it, and `security-close` overrides that setting. Both Steps run
+outside parallel groups and use throwaway worktrees; their sessions acquire
+fresh worktrees for publication and merged-Base checks. Their sessions and the
+Ticket runs they start stay off any configured OTLP endpoint, as a Security
+run's do. The existing Security run still fixes at most one finding per
+invocation.
+
+```toml
+version = 1
+description = "Fix reproduced findings"
+[[steps]]
+name = "fix"
+catalogue = "fix-findings"
+# process = "contractor-ticket"
+[[steps]]
+name = "close"
+catalogue = "close-findings"
+```
+
+```sh
+thirdshift process fix-records security-fix merge
+thirdshift process fix-records no-security-fix
+```
 
 `thirdshift status` and `status --json` list a running or finished Process as
 Process `<name>`, with the ending succeeded, failed, skipped or interrupted.
@@ -1477,7 +1526,7 @@ model = "gemini-3.8-flash"
 effort = "medium"
 ```
 
-`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.
+`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. `fix-findings` and `close-findings` likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 

@@ -149,7 +149,7 @@ pub fn run(
         crate::progress::warn(&error, format_args!("could not file CI-red Ticket"));
     }
     let mut outside = LaunchAndGitHub {
-        launch: &directory,
+        launch: directory.git(),
         base: &base,
         repo: &repo,
         harness,

@@ -1089,7 +1089,7 @@ group or a protected-path glob is refused before a step runs, so the plan
 <code>check</code> prints cannot hide the command. <code>catalogue</code> names a
 built-in Step: <code>implement</code>, <code>spec-review</code>, <code>security-review</code>, <code>delivery</code>, <code>self-merge</code> or
 <code>land-tickets</code>, described above, or <code>architecture-review</code>, <code>run-published-issue</code>,
-<code>security-audit</code> or <code>reproduce-findings</code>.</p>
+<code>security-audit</code>, <code>reproduce-findings</code>, <code>fix-findings</code> or <code>close-findings</code>.</p>
 <p><code>security-audit</code> audits origin&#39;s Base branch in its own throwaway worktree,
 validates the report and creates or reuses each finding&#39;s private record.
 Follow it with <code>reproduce-findings</code> to run one reproduction session per pending
@@ -1243,7 +1243,7 @@ that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong <code>version</code>, an unknown key, an unknown Harness, a Step without exactly one of
 <code>skill</code>, <code>command</code> and <code>catalogue</code>, a command that is not a string or is empty,
-a catalogue value other than <code>implement</code>, <code>delivery</code>, <code>run-published-issue</code>, <code>security-review</code> or <code>self-merge</code>, an
+a catalogue value outside the documented Step catalogue, an
 <code>implement</code> Step outside an Issue-branch worktree, a
 <code>self-merge</code> Step that is not directly after <code>delivery</code>, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a
@@ -1272,6 +1272,50 @@ Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
 and <code>[resources]</code> is checked before each Step and each session&#39;s Resume.
 Every skill Step keeps a Session trace and Model evidence. Its prompt names
 the worktree kind, and it gets the usual one Resume with or without an issue.</p>
+</div></details>
+<details class="fold"><summary><h3>Fixing and closing Security findings</h3></summary>
+<div class="manual-content" id="fixing-and-closing-security-findings">
+<p><code>fix-findings</code> reads the repository&#39;s private finding records and, when
+<code>security-fix</code> or <code>fix = true</code> under <code>[security]</code> allows it, fixes each
+reproduced finding still awaiting a fix, in severity order. <code>no-security-fix</code>
+overrides the setting. Unreproduced findings and findings with an existing
+fix are skipped. The Step uses the Security run&#39;s private publication checks:
+a public fix issue contains only the proposed change and a private-record
+link. It links the fix, starts a Ticket run or Spec run, and records its
+ending privately. A failed fix stops the Step and stays with the Day shift.
+If a merged fix auto-closes a private finding issue, the Step reopens it until
+<code>close-findings</code> verifies the proof, even when closing is disabled or omitted.
+The optional <code>process = &quot;&lt;name&gt;&quot;</code> setting selects a child Ticket Process,
+defaulting to <code>ticket-run</code>, with the same validation and Spec dispatch as
+<code>run-published-issue</code>. Children inherit the Step&#39;s Harness, Model and Effort,
+the Command&#39;s merge choice and the file&#39;s tighter limits.</p>
+<p><code>close-findings</code> reads successful fixes from the private records and checks
+which merged into this Base branch, including fixes from an earlier Process
+that failed or stopped before closing. Each proof-of-concept test runs against
+the current merged Base branch on origin. Only a passing check closes the
+private record; a failing check or error leaves a private note for the Day
+shift and reopens a private finding issue that its fix PR closed.
+Unmerged fixes are left open. Closing defaults to allowed when fixing
+is allowed; <code>no-security-close</code> or <code>close = false</code> under <code>[security]</code>
+disables it, and <code>security-close</code> overrides that setting. Both Steps run
+outside parallel groups and use throwaway worktrees; their sessions acquire
+fresh worktrees for publication and merged-Base checks. Their sessions and the
+Ticket runs they start stay off any configured OTLP endpoint, as a Security
+run&#39;s do. The existing Security run still fixes at most one finding per
+invocation.</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Fix reproduced findings&quot;
+[[steps]]
+name = &quot;fix&quot;
+catalogue = &quot;fix-findings&quot;
+# process = &quot;contractor-ticket&quot;
+[[steps]]
+name = &quot;close&quot;
+catalogue = &quot;close-findings&quot;
+</code></pre>
+<pre><code class="language-sh">thirdshift process fix-records security-fix merge
+thirdshift process fix-records no-security-fix
+</code></pre>
 <p><code>thirdshift status</code> and <code>status --json</code> list a running or finished Process as
 Process <code>&lt;name&gt;</code>, with the ending succeeded, failed, skipped or interrupted.
 The stored kind stays <code>Process</code>, and the selector used by <code>show</code> and <code>stop</code>
@@ -1342,7 +1386,7 @@ effort = &quot;&quot;
 model = &quot;gemini-3.8-flash&quot;
 effort = &quot;medium&quot;
 </code></pre>
-<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.</p>
+<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. <code>fix-findings</code> and <code>close-findings</code> likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
 <pre><code class="language-toml">[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
