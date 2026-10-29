@@ -377,8 +377,10 @@ async function loadPeek(url) {
     if (request.signal.aborted) return;
     const restoreCopy = keepCopy();
     const restoreFolds = keepFolds(url);
-    // Only the server's escaped show template is inserted, never a log.
+    // The server's template escapes facts and the plain-text Command output.
     content.replaceChildren(document.createRange().createContextualFragment(html));
+    const output = content.querySelector('.peek-output pre');
+    if (output) output.scrollTop = output.scrollHeight;
     restoreCopy();
     restoreFolds();
     showDismissal();
