@@ -97,8 +97,8 @@ fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
     let fixture = Fixture::new();
     let script = fixture.scenario.path("claude-script.sh.grader");
     let valid = fs::read_to_string(&script).unwrap();
-    fs::write(&script, format!("sleep 3\n{valid}")).unwrap();
-    let paused = fixture.run(&["--timeout", "1"]);
+    fs::write(&script, format!("sleep 10\n{valid}")).unwrap();
+    let paused = fixture.run(&["--timeout", SHORT_TIMEOUT]);
     assert_eq!(paused.code, Some(1), "{}", paused.stderr);
     assert_eq!(fixture.experiment()["state"], "paused");
     assert_eq!(fixture.trial_calls().len(), 2);
@@ -112,7 +112,7 @@ fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
         );
     }
     fs::write(&script, valid).unwrap();
-    let resumed = fixture.run(&["--timeout", "1"]);
+    let resumed = fixture.run(&["--timeout", SHORT_TIMEOUT]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
     assert_eq!(fixture.experiment()["state"], "completed");
     assert_eq!(fixture.trial_calls().len(), 2, "resume reran Trials");

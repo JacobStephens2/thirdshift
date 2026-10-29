@@ -47,8 +47,9 @@ fn calls(release: &Release) -> Vec<Value> {
 }
 
 #[test]
-fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
+fn a_resumed_release_tags_its_candidate_when_main_gains_other_content() {
     let release = Release::new();
+    let candidate = release.origin(&["rev-parse", "main"]);
     cargo_reports(&release, &[json!(1)]);
     let interrupted = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
     assert!(!interrupted.status.success());
@@ -61,18 +62,18 @@ fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
     release.ci_reports(GREEN);
     cargo_reports(&release, &[verdict("pass")]);
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed).contains("main contains content absent from the measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_eq!(
+        release.origin(&["rev-parse", &format!("{head}^")]),
+        candidate
     );
-    assert!(!release.origin_branch("release-0.2.0"));
-    assert!(release.origin_tag("v0.2.0").is_none());
+    assert_eq!(calls(&release)[1]["args"][2], candidate);
 }
 
 #[test]
-fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
+fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -82,14 +83,12 @@ fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
 
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
 
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed)
-            .contains("release merge contains content absent from its measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_ne!(
+        release.origin(&["rev-parse", "main^{tree}"]),
+        release.origin(&["rev-parse", &format!("{head}^{{tree}}")])
     );
-    assert!(release.origin_tag("v0.2.0").is_none());
 }
 
 #[test]

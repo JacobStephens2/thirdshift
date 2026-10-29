@@ -131,7 +131,7 @@ fn check_timeout_cleans_descendants_before_packet_and_remains_failed() {
     fixture.scenario.agent_does(review_reports_prelude());
     let script = waiting_check(&fixture);
     set_checks(&fixture, &[&["python3", "-c", &script], &["true"]]);
-    let run = fixture.run(&["--timeout", "1"]);
+    let run = fixture.run(&["--timeout", SHORT_TIMEOUT]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     let results = experiment["results"].as_array().unwrap();
