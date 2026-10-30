@@ -26,6 +26,15 @@ impl fmt::Display for ReadFailure {
 
 impl std::error::Error for ReadFailure {}
 
+impl ReadFailure {
+    pub(super) fn http_status(&self) -> Option<u16> {
+        self.stderr
+            .split("HTTP ")
+            .skip(1)
+            .find_map(|tail| tail.get(..3).and_then(|code| code.parse().ok()))
+    }
+}
+
 pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     if let Some(error) = error.downcast_ref::<serde_json::Error>() {
         return error.is_eof();
@@ -44,12 +53,7 @@ pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     }
     // gh reports HTTP status in stderr. Prefer it to incidental prose, so
     // an authentication or validation failure mentioning EOF stays permanent.
-    if let Some(status) = failure
-        .stderr
-        .split("HTTP ")
-        .skip(1)
-        .find_map(|tail| tail.get(..3).and_then(|code| code.parse::<u16>().ok()))
-    {
+    if let Some(status) = failure.http_status() {
         return status == 429 || (500..600).contains(&status);
     }
     if stderr == "eof" || stderr.ends_with(": eof") {

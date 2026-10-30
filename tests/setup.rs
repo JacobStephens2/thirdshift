@@ -462,6 +462,31 @@ fn setup_keeps_existing_security_outside_completed_harness_settings() {
 }
 
 #[test]
+fn setup_preserves_repository_email_routes_and_their_spelling() {
+    for routes in [
+        "[email.to_by_repo]\n'Acme/Widgets' = 'personal@example.com' # personal inbox\n",
+        "[email]\nto_by_repo = { 'Acme/Widgets' = 'personal@example.com' } # personal inbox\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(routes);
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let text = user_config(&scenario).unwrap();
+        assert!(text.starts_with(routes), "{text}");
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(
+            config["email"]["to_by_repo"]["Acme/Widgets"].as_str(),
+            Some("personal@example.com")
+        );
+        let again = scenario.run(&["setup"]);
+        assert_eq!(again.code, Some(0), "{}", again.stderr);
+        assert_eq!(user_config(&scenario).unwrap(), text);
+    }
+}
+
+#[test]
 fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then_avoids_replacement()
  {
     let scenario = Scenario::new();

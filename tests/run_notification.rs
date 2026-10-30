@@ -817,6 +817,79 @@ fn a_bare_flag_sends_to_email_to() {
 }
 
 #[test]
+fn repository_notification_routing_preserves_flags_and_fallbacks() {
+    for (settings, repo, flags, expected) in [
+        (
+            "always = true\nto = 'work@example.com'",
+            "ACME/WIDGETS",
+            vec![],
+            Some("personal@example.com"),
+        ),
+        (
+            "always = true\nto = 'work@example.com'",
+            "acme/work",
+            vec![],
+            Some("work@example.com"),
+        ),
+        (
+            "always = true",
+            "acme/widgets",
+            vec![],
+            Some("personal@example.com"),
+        ),
+        (
+            "",
+            "acme/widgets",
+            vec!["--email"],
+            Some("personal@example.com"),
+        ),
+        (
+            "always = true",
+            "acme/widgets",
+            vec!["email", "once@example.com"],
+            Some("once@example.com"),
+        ),
+        (
+            "",
+            "acme/widgets",
+            vec!["email-unless-merged"],
+            Some("personal@example.com"),
+        ),
+        (
+            "unless_merged = true",
+            "acme/widgets",
+            vec![],
+            Some("personal@example.com"),
+        ),
+        ("always = true", "acme/widgets", vec!["no-email"], None),
+        ("", "acme/widgets", vec![], None),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "[email]\n{settings}\n[ email.to_by_repo ]\n\"{repo}\" = 'personal@example.com'\n"
+        ));
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let issue = scenario.issue_url(7);
+        let mut args = vec![issue.as_str()];
+        args.extend_from_slice(&flags);
+
+        let result = run(&scenario, &resend, &args, expected.map(|_| KEY));
+
+        assert_eq!(
+            result.code,
+            Some(0),
+            "{settings}; {flags:?}: {}",
+            result.stderr
+        );
+        match expected {
+            Some(to) => assert_eq!(the_one_request(&resend).body["to"], to),
+            None => assert!(resend.requests().is_empty()),
+        }
+    }
+}
+
+#[test]
 fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nto = \"me@example.com\"\n");

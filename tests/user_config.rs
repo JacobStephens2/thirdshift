@@ -82,6 +82,58 @@ fn an_unknown_key_or_section_stops_the_run_naming_it_and_the_file() {
 }
 
 #[test]
+fn invalid_repository_email_routes_stop_before_work_naming_the_file_and_entry() {
+    for (routes, reason) in [
+        (
+            "[email]\nto_by_repo = []\n",
+            "email.to_by_repo must be a table",
+        ),
+        (
+            "[email.to_by_repo]\n'widgets' = 'a@b.c'\n",
+            "key \"widgets\" must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets/extra' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widget s' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets' = 7\n",
+            "email.to_by_repo[\"acme/widgets\"] must be a nonblank quoted email address",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets' = '  '\n",
+            "must be a nonblank quoted email address",
+        ),
+        (
+            "[email.to_by_repo]\n'Acme/Widgets' = 'a@b.c'\n'acme/widgets' = 'd@e.f'\n",
+            "duplicate repository",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(routes);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{routes}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains(reason),
+            "{routes}: {}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
+    }
+}
+
+#[test]
 fn invalid_console_sign_in_entries_stop_loading_and_name_the_entry() {
     for email in [
         "jstephens@etadoichuk@etadventures.com",

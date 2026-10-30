@@ -907,8 +907,7 @@ impl GitHub {
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
         // CI retries the complete observation, not its individual requests.
-        let runs =
-            self.gh_api_items_once(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
+        let runs = self.check_runs_on(issue, sha)?;
         let statuses =
             self.gh_api_items_once(&format!("{commit}/status?per_page=100"), "statuses")?;
         let url = |value: &Value| {
@@ -919,7 +918,7 @@ impl GitHub {
         };
 
         let mut checks = Vec::new();
-        for run in &runs {
+        for run in &runs.records {
             let conclusion = match run["status"].as_str() {
                 Some("completed") => Conclusion::of_check_run(run["conclusion"].as_str()),
                 _ => Conclusion::Unfinished,
@@ -952,55 +951,65 @@ impl GitHub {
                 workflow_run: None,
             });
         }
-        if checks.iter().any(|check| check.job.is_some()) {
-            self.exclude_superseded_runs(issue, sha, &mut checks)?;
+        let workflows = match runs.workflows {
+            Some(workflows) => Some(workflows),
+            None if checks.iter().any(|check| check.job.is_some()) => {
+                Some(self.workflow_runs_on(issue, sha)?)
+            }
+            None => None,
+        };
+        if let Some(workflows) = workflows {
+            Self::exclude_superseded_runs(&workflows, &mut checks);
         }
         Ok(checks)
+    }
+
+    /// Check-run shaped records, using Actions jobs when Checks is forbidden.
+    /// Both CI watch and Score packets use this read and supersession rule.
+    fn check_runs_on(&self, issue: &IssueUrl, sha: &str) -> Result<CheckRuns> {
+        let path = format!(
+            "repos/{}/commits/{sha}/check-runs?per_page=100",
+            issue.repo_slug()
+        );
+        match self.gh_api_items_once(&path, "check_runs") {
+            Ok(records) => {
+                return Ok(CheckRuns {
+                    records,
+                    workflows: None,
+                });
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<check_read::ReadFailure>()
+                    .is_some_and(|failure| failure.http_status() == Some(403)) => {}
+            Err(error) => return Err(error),
+        }
+        let workflows = self.workflow_runs_on(issue, sha)?;
+        let mut checks = Vec::new();
+        for run in workflows.iter().filter(|run| !run.superseded) {
+            let path = format!(
+                "repos/{}/actions/runs/{}/jobs?per_page=100",
+                issue.repo_slug(),
+                run.id
+            );
+            for mut job in self.gh_api_items_once(&path, "jobs")? {
+                job["details_url"] = job["html_url"].clone();
+                checks.push(job);
+            }
+        }
+        Ok(CheckRuns {
+            records: checks,
+            workflows: Some(workflows),
+        })
     }
 
     /// Ignore checks of earlier workflow runs on this same commit, including
     /// jobs whose names the newest run no longer uses. A re-run keeps its run
     /// id and creation time, so its attempts are never superseded here.
-    fn exclude_superseded_runs(
-        &self,
-        issue: &IssueUrl,
-        sha: &str,
-        checks: &mut Vec<Check>,
-    ) -> Result<()> {
-        #[derive(serde::Deserialize)]
-        struct ListedRun {
-            id: u64,
-            workflow_id: u64,
-            created_at: String,
-            status: Option<String>,
-            conclusion: Option<String>,
-            name: Option<String>,
-            html_url: Option<String>,
-        }
-        let path = format!(
-            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
-            issue.repo_slug()
-        );
-        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
-        let runs: Vec<ListedRun> = runs
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<Result<_, _>>()
-            .context(CommandFailure::InvalidResponse(
-                "unreadable workflow run".into(),
-            ))?;
-        let mut latest = HashMap::new();
-        for run in &runs {
-            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
-                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
-            )?;
-            let candidate = (created, run.id);
-            let selected = latest.entry(run.workflow_id).or_insert(candidate);
-            *selected = (*selected).max(candidate);
-        }
+    fn exclude_superseded_runs(runs: &[ListedRun], checks: &mut Vec<Check>) {
         let superseded: HashSet<_> = runs
             .iter()
-            .filter(|run| latest[&run.workflow_id].1 != run.id)
+            .filter(|run| run.superseded)
             .map(|run| run.id)
             .collect();
         checks.retain(|check| {
@@ -1019,13 +1028,45 @@ impl GitHub {
                         });
             }
         }
+        Self::include_unobserved_workflows(runs, checks);
+    }
+
+    fn workflow_runs_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<ListedRun>> {
+        let path = format!(
+            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
+            issue.repo_slug()
+        );
+        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
+        let mut runs: Vec<ListedRun> = runs
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .context(CommandFailure::InvalidResponse(
+                "unreadable workflow run".into(),
+            ))?;
+        let mut latest = HashMap::new();
+        for run in &runs {
+            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
+                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
+            )?;
+            let candidate = (created, run.id);
+            let selected = latest.entry(run.workflow_id).or_insert(candidate);
+            *selected = (*selected).max(candidate);
+        }
+        for run in &mut runs {
+            run.superseded = latest[&run.workflow_id].1 != run.id;
+        }
+        Ok(runs)
+    }
+
+    fn include_unobserved_workflows(runs: &[ListedRun], checks: &mut Vec<Check>) {
         // The two reads are separate observations. A new run may have none of
         // its jobs yet, or only jobs that already finished while a later one
         // has not been created. Until the run has completed, that gap must
         // stay pending: the older run's checks are already gone, and a
         // listing of only finished successes is CI passed.
-        for run in &runs {
-            if latest[&run.workflow_id].1 != run.id {
+        for run in runs {
+            if run.superseded {
                 continue;
             }
             let mut saw_job = false;
@@ -1063,7 +1104,6 @@ impl GitHub {
                 }),
             });
         }
-        Ok(())
     }
 
     /// The GitHub Actions job whose check run is `check_run`, as the jobs
@@ -1789,6 +1829,24 @@ pub struct Check {
 pub struct WorkflowRun {
     pub id: u64,
     pub workflow_id: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct ListedRun {
+    id: u64,
+    workflow_id: u64,
+    created_at: String,
+    status: Option<String>,
+    conclusion: Option<String>,
+    name: Option<String>,
+    html_url: Option<String>,
+    #[serde(skip)]
+    superseded: bool,
+}
+
+struct CheckRuns {
+    records: Vec<Value>,
+    workflows: Option<Vec<ListedRun>>,
 }
 
 /// A job of a GitHub Actions workflow run, as one of its attempts ran it.

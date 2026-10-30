@@ -49,6 +49,20 @@ pub enum About<'a> {
     },
 }
 
+impl About<'_> {
+    /// The repository whose Run notification defaults apply. A Pickup run
+    /// knows its repository before it selects an issue or checks its gates.
+    fn repo(&self) -> Option<Repo> {
+        match self {
+            About::Issue(issue) => Some(issue.repo()),
+            About::ArchitectRun | About::PickupRun | About::SecurityRun | About::Process { .. } => {
+                launch::repo().ok()
+            }
+            About::ScoringRun => None,
+        }
+    }
+}
+
 /// What a Run notification's subject names.
 enum Subject {
     /// The issue a Run or a Spec run is on, with its title if it is known:
@@ -114,9 +128,11 @@ impl RunNotification {
     pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
         let started = Instant::now();
         let started_at = chrono::Utc::now();
+        let repo = about.repo();
         let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
             NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
+                let to = to.or_else(|| repo.as_ref().and_then(|repo| settings.to_for_repo(repo)));
                 Some(Resend::new(to, settings)?)
             }
             NotificationAsk::Skip => None,
@@ -136,14 +152,14 @@ impl RunNotification {
             },
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
-            About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
+            About::ArchitectRun => Subject::ArchitectRun(repo),
             About::PickupRun => Subject::Pending,
-            About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
+            About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),
-                repo: launch::repo().ok(),
+                repo,
             },
         };
         Ok(RunNotification {
