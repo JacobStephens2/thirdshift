@@ -167,7 +167,6 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     assert!(fix["run_metrics"]["total_minutes"].is_number());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_run_whose_thirdshift_was_removed_after_it_started_still_starts_its_base_fix() {
     let scenario = Scenario::new();

@@ -148,12 +148,7 @@ fn marked_processes(marker: &str, warning: &mut Option<anyhow::Error>) -> Result
                 found.push(pid);
             }
             Ok(_) => {}
-            // Darwin's KERN_PROCARGS2 also returns EINVAL when the listed
-            // process has exited or no longer has an argument area.
-            Err(error)
-                if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT))
-                    || (cfg!(target_os = "macos")
-                        && error.raw_os_error() == Some(libc::EINVAL)) => {}
+            Err(error) if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT)) => {}
             Err(error) => {
                 warning.get_or_insert_with(|| {
                     anyhow::anyhow!("could not read process {pid}'s environment: {error}")
@@ -164,73 +159,8 @@ fn marked_processes(marker: &str, warning: &mut Option<anyhow::Error>) -> Result
     Ok(found)
 }
 
-#[cfg(target_os = "linux")]
 fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
     std::fs::read(format!("/proc/{pid}/environ"))
-}
-
-#[cfg(target_os = "macos")]
-fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
-    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-    let mut size = 0;
-    // SAFETY: mib and size point to initialized writable storage; the first
-    // sysctl queries the required size without an output buffer.
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            std::ptr::null_mut(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    let mut bytes = vec![0u8; size];
-    // SAFETY: bytes has the queried capacity and size is its writable length.
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            bytes.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    bytes.truncate(size);
-    // KERN_PROCARGS2 prefixes the environment with argc, the executable path
-    // and argv. Do not mistake a marker in a command argument for ownership.
-    let integer = std::mem::size_of::<libc::c_int>();
-    let argc = bytes
-        .get(..integer)
-        .ok_or_else(|| io::Error::other("missing argc"))?;
-    let argc = libc::c_int::from_ne_bytes(argc.try_into().unwrap());
-    if argc < 0 {
-        return Err(io::Error::other("negative argc"));
-    }
-    let mut rest = &bytes[integer..];
-    let executable = rest
-        .iter()
-        .position(|&byte| byte == 0)
-        .ok_or_else(|| io::Error::other("missing executable"))?;
-    rest = &rest[executable..];
-    while rest.first() == Some(&0) {
-        rest = &rest[1..];
-    }
-    for _ in 0..argc {
-        let end = rest
-            .iter()
-            .position(|&byte| byte == 0)
-            .ok_or_else(|| io::Error::other("missing argument"))?;
-        rest = &rest[end + 1..];
-    }
-    Ok(rest.to_vec())
 }
 
 #[cfg(test)]

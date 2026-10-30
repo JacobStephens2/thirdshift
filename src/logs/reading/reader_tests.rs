@@ -63,11 +63,8 @@ fn inventory_reads_unowned_files_by_path_bytes_and_refuses_excluded_storage() {
         commands.join("issue/notes.log"),
         commands.join("issue/draft.logs.jsonl"),
     ];
-    // APFS refuses names that are not UTF-8, so only other filesystems can hold one.
-    if cfg!(not(target_os = "macos")) {
-        let unnamed = commands.join(std::ffi::OsStr::from_bytes(b"kind-\xff"));
-        unowned.push(unnamed.join("notes.log"));
-    }
+    let unnamed = commands.join(std::ffi::OsStr::from_bytes(b"kind-\xff"));
+    unowned.push(unnamed.join("notes.log"));
     for path in unowned {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"unowned\n").unwrap();

@@ -10,7 +10,6 @@ const NETWORK: u8 = 21;
 const HOME: u8 = 22;
 const SCRATCH: u8 = 23;
 
-#[cfg(target_os = "linux")]
 const REMEDIES: &str = "\
 On Debian/Ubuntu, install bubblewrap:
   sudo apt install bubblewrap
@@ -28,41 +27,12 @@ The profile grants user namespaces to /usr/bin/bwrap; use the installed binary's
 Then rerun thirdshift setup. These commands are printed only; Setup never runs them.";
 
 pub(super) fn report(config_path: &Path) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        match probe(config_path) {
-            Ok(()) => "Security sandbox probe: PASS (sandbox start, network connection blocked, host home read-only, scratch writable); sessions must still enforce every audit skill control".into(),
-            Err(error) => format!("Security sandbox probe: FAIL ({error:#})\n{REMEDIES}"),
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = config_path;
-        unavailable_report(std::env::consts::OS)
+    match probe(config_path) {
+        Ok(()) => "Security sandbox probe: PASS (sandbox start, network connection blocked, host home read-only, scratch writable); sessions must still enforce every audit skill control".into(),
+        Err(error) => format!("Security sandbox probe: FAIL ({error:#})\n{REMEDIES}"),
     }
 }
 
-#[cfg(any(test, not(target_os = "linux")))]
-fn unavailable_report(os: &str) -> String {
-    let mut report = format!(
-        "Security sandbox probe: unavailable on {os}; Setup did not check isolation on this OS.\n\
-         Before running target code, each Security session must enforce:\n\
-         - no external network;\n\
-         - an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
-         - a read-only target and toolchain, with writes only inside scratch;\n\
-         - explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
-         If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them.\n\
-         Setup only prints this guidance and runs nothing; the probe result does not stop Setup."
-    );
-    if os == "macos" {
-        report.push_str(
-            "\nOn macOS, sandbox-exec (Seatbelt) is the usual route, but Setup has not verified that it meets every control.",
-        );
-    }
-    report
-}
-
-#[cfg(target_os = "linux")]
 fn probe(config_path: &Path) -> anyhow::Result<()> {
     use anyhow::{Context, bail};
     use std::net::{TcpListener, TcpStream};
@@ -179,43 +149,4 @@ pub(crate) fn child(args: &[String]) -> Option<ExitCode> {
         return Some(ExitCode::from(SCRATCH));
     }
     Some(ExitCode::from(PASSED))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unavailable_report;
-
-    #[test]
-    fn macos_report_explains_unchecked_controls_and_needs_validation() {
-        assert_eq!(
-            unavailable_report("macos"),
-            "Security sandbox probe: unavailable on macos; Setup did not check isolation on this OS.\n\
-             Before running target code, each Security session must enforce:\n\
-             - no external network;\n\
-             - an empty environment populated from an explicit allowlist with safe values, with scratch-local HOME, temporary directories and caches;\n\
-             - a read-only target and toolchain, with writes only inside scratch;\n\
-             - explicit low CPU, memory, process, file-size, disk and wall-clock limits.\n\
-             If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them.\n\
-             Setup only prints this guidance and runs nothing; the probe result does not stop Setup.\n\
-             On macOS, sandbox-exec (Seatbelt) is the usual route, but Setup has not verified that it meets every control."
-        );
-    }
-
-    #[test]
-    fn other_platforms_get_unchecked_isolation_guidance_without_seatbelt() {
-        let report = unavailable_report("freebsd");
-        assert!(report.starts_with(
-            "Security sandbox probe: unavailable on freebsd; Setup did not check isolation on this OS."
-        ));
-        assert!(report.contains("report findings as needs-validation instead of reproducing them"));
-        assert!(!report.contains("sandbox-exec"));
-        assert!(!report.contains("Seatbelt"));
-    }
-
-    #[test]
-    fn report_does_not_promise_setup_succeeds() {
-        // Credentials and the test email come after the report and can still
-        // fail Setup; in the first-Run offer, the Ticket run carries on instead.
-        assert!(!unavailable_report("macos").contains("exits successfully"));
-    }
 }

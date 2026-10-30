@@ -265,7 +265,6 @@ while not (root / 'release').exists():
     assert!(!second.running());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_live_scope_catches_work_that_clears_its_environment() {
     if !crate::scope::available() {
@@ -312,30 +311,5 @@ fn detached_work_ignoring_sigterm_is_killed_after_the_grace_period() {
     assert!(
         !detached.running(),
         "SIGTERM-ignoring detached work survived SIGKILL escalation"
-    );
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn macos_marker_sweep_kills_detached_nohup_work() {
-    let detached = Detached::new();
-    let mut launched = crate::scope::session_command("/bin/sh");
-    launched
-        .command()
-        .args([
-            "-c",
-            "nohup sleep 600 </dev/null >/dev/null 2>&1 & echo $! > pid",
-        ])
-        .current_dir(detached.0.path());
-    let _ = Recording::for_trial().run(
-        "implement",
-        &Choice::default(),
-        launched.as_mut(),
-        Input::default(),
-        &detached.0.path().join("session.jsonl"),
-    );
-    assert!(
-        !detached.running(),
-        "detached nohup work survived the macOS marker sweep"
     );
 }

@@ -790,13 +790,11 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
 
 /// The file in the scenario root that says the stand-in for a newer
 /// thirdshift was run.
-#[cfg(target_os = "linux")]
 const REPLACEMENT_RAN: &str = "replacement-ran";
 
 /// Rename a stand-in for a newer thirdshift, a script that only records that
 /// it was run, over `installed`, as the release installer, `thirdshift
 /// update` and `cargo install` each put a new binary in place.
-#[cfg(target_os = "linux")]
 fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
     let script = format!(
         "#!/bin/sh\ntouch {}\nexit 1\n",
@@ -807,7 +805,6 @@ fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
     std::fs::rename(&new, installed).unwrap();
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_tickets_run_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_binary() {
     let scenario = linear_spec();
@@ -852,7 +849,6 @@ fn a_tickets_run_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_bi
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_tickets_run_started_after_thirdshift_was_replaced_can_still_start_its_base_fix() {
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
