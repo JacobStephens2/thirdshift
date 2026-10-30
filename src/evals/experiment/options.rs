@@ -166,8 +166,8 @@ pub fn parse(args: &[String]) -> Result<Options> {
         .map(|name| super::names::parse(name)?.context("Experiment name must not be empty"))
         .transpose()?;
     ensure!(
-        !release || (baseline.is_none() && suites.is_empty()),
-        "release mode selects its Baseline and touched suites; --baseline and --suite do not apply"
+        !release || suites.is_empty(),
+        "release mode selects its touched suites; --suite does not apply"
     );
     let mut bar = Bar {
         min_discriminating_tasks: Some(20),

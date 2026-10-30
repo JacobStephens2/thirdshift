@@ -92,6 +92,69 @@ fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
 }
 
 #[test]
+fn a_recut_checks_the_new_experiment_and_honors_summary_review_before_pushing() {
+    for answer in ["n\n", "y\n"] {
+        let release = Release::failed_unpublished();
+        release.merge_pr("newer", "New recovery content", "");
+        release.main_ci("completed", "success");
+        let candidate = release.origin(&["rev-parse", "main"]);
+        let refs = release.origin_refs();
+        let body = release.pr_body("release-0.2.0");
+        release.release_workflow(json!({}));
+        release.ci_reports(GREEN);
+        cargo_reports(&release, &[verdict("pass")]);
+        release.agent_runs("printf 'Updated recovery summary' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let output =
+            release.run_script_with(&["--with-experiment", "--review", "0.2.0"], answer, &[]);
+
+        assert_eq!(calls(&release)[0]["args"][2], candidate);
+        if answer == "n\n" {
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert_eq!(release.origin_refs(), refs);
+            assert_eq!(release.pr_body("release-0.2.0"), body);
+        } else {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(
+                release
+                    .pr_body("release-0.2.0")
+                    .contains("Updated recovery summary")
+            );
+            assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+        }
+    }
+}
+
+#[test]
+fn an_old_merged_recut_keeps_the_prior_release_as_the_experiment_baseline() {
+    let release = Release::failed_unpublished();
+    let old = release.pr_head("release-0.2.0");
+    release.merge_bump_pr("0.2.0", &old);
+    release.merge_pr("newer", "New content after the old bump was merged", "");
+    release.main_ci("completed", "success");
+    let candidate = release.origin(&["rev-parse", "main"]);
+    release.release_workflow(json!({}));
+    release.ci_reports(GREEN);
+    cargo_reports(&release, &[verdict("pass")]);
+
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        calls(&release)[0]["args"],
+        json!([
+            "experiment",
+            "--release",
+            candidate,
+            "--baseline",
+            "v0.1.0",
+            "--json",
+            "--yes"
+        ])
+    );
+}
+
+#[test]
 fn a_passing_experiment_is_checked_before_any_push() {
     for args in [
         &["--with-experiment", "0.2.0"][..],
