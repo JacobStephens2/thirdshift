@@ -18,6 +18,10 @@ in `needs-info` (#1561).
 
 - A CI-red Ticket in `needs-info` cannot suppress a new report. Otherwise an
   open CI-red Ticket receives new failing commits as comments, once per commit.
+- A CI-red Ticket is titled `CI red on <base>` and labelled `bug`. Its body
+  and later comments name the failing commit and attempt URLs and omit job
+  names and log lines. The Day shift writes the task and applies
+  `ready-for-agent` before a Pickup run can take it (amended 2026-10-30, #1647).
 - Flaky reports are deduplicated by failed run attempt, including closed
   reports, and by tests already named in open Flaky-test Tickets. Unknown test
   names still permit a report deduplicated by attempt.

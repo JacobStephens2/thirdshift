@@ -108,34 +108,37 @@ fn an_open_flaky_ticket_naming_the_same_test_suppresses_a_new_report() {
 }
 
 #[test]
-fn pickup_files_one_ci_red_ticket_with_evidence() {
+fn pickup_files_one_ci_red_ticket_without_job_names_logs_or_ready_for_agent() {
     let scenario = Scenario::new();
     failed_push(&scenario);
     let result = scenario.run(&["pickup"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
-    assert_eq!(
-        state["titles"]["8"], "CI red on main: Rust (Linux)",
-        "{state}"
-    );
-    assert_eq!(scenario.issue_labels(8), ["bug", READY_FOR_AGENT]);
+    assert_eq!(state["titles"]["8"], "CI red on main", "{state}");
+    assert_eq!(scenario.issue_labels(8), ["bug"]);
     let body = state["bodies"]["8"].as_str().unwrap();
     for evidence in [
         "badc0ffee",
-        "Rust (Linux)",
-        "pickup::tests::regression",
-        "another_regression",
         "https://github.com/acme/widgets/actions/runs/900",
         "https://github.com/acme/widgets/actions/runs/900/attempts/1",
         "https://github.com/acme/widgets/actions/runs/900/attempts/2",
     ] {
         assert!(body.contains(evidence), "{body}");
     }
-    assert!(!body.contains("- site"), "{body}");
+    for omitted in [
+        "Rust (Linux)",
+        "pickup::tests::regression",
+        "another_regression",
+        "FAILED",
+        "site",
+    ] {
+        assert!(!body.contains(omitted), "{omitted} in {body}");
+    }
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
     let result = scenario.run(&["pickup"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 2);
+    assert_eq!(scenario.issue_labels(8), ["bug"]);
     assert!(
         scenario
             .origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"])
@@ -277,7 +280,7 @@ fn dotted_node_test_names_do_not_cover_a_different_test() {
 }
 
 #[test]
-fn pickup_reads_origin_and_the_named_base_and_can_take_the_ticket_normally() {
+fn pickup_files_ci_red_for_the_named_base_and_does_not_take_it() {
     let scenario = Scenario::new();
     failed_push(&scenario);
     scenario.origin_has_branch("develop", "main", &["Develop"]);
@@ -290,17 +293,16 @@ fn pickup_reads_origin_and_the_named_base_and_can_take_the_ticket_normally() {
     unrelated["event"] = json!("pull_request");
     state["runs"].as_array_mut().unwrap().push(unrelated);
     scenario.write_gh_state(&state);
-    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
-    scenario.agent_does_for(8, &agent_fixes_bug(8, "develop"));
     let result = scenario.run(&["pickup", "base", "develop"]);
-    let pr = pr_from(&scenario, "issue-8");
-    assert_ended_with_pr(&result, &pr, "ready for review");
-    assert_eq!(pr["base"], "develop");
-    assert_eq!(
-        scenario.gh_state()["titles"]["8"],
-        "CI red on develop: Rust (Linux)"
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("no Ready issue"),
+        "{}",
+        result.stderr
     );
-    assert_eq!(scenario.issue_labels(8), ["bug", IN_PROGRESS]);
+    assert_eq!(scenario.gh_state()["titles"]["8"], "CI red on develop");
+    assert_eq!(scenario.issue_labels(8), ["bug"]);
+    assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -333,10 +335,8 @@ fn a_needs_info_ci_red_ticket_does_not_block_a_new_failure() {
     scenario.issue_labelled(7, &["bug", "NeEdS-InFo"]);
     let result = scenario.run(&["pickup"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(
-        scenario.gh_state()["titles"]["8"],
-        "CI red on main: Rust (Linux)"
-    );
+    assert_eq!(scenario.gh_state()["titles"]["8"], "CI red on main");
+    assert_eq!(scenario.issue_labels(8), ["bug"]);
 }
 
 #[test]
@@ -364,13 +364,16 @@ fn an_open_ci_red_ticket_gets_new_commit_evidence_only_once() {
         assert_eq!(comments.len(), usize::from(different), "{state}");
         if different {
             let body = comments[0].as_str().unwrap();
-            for evidence in [
-                "badc0ffee",
-                "/900/attempts/2",
+            for evidence in ["badc0ffee", "/900/attempts/2"] {
+                assert!(body.contains(evidence), "{body}");
+            }
+            for omitted in [
+                "Rust (Linux)",
                 "pickup::tests::regression",
                 "another_regression",
+                "FAILED",
             ] {
-                assert!(body.contains(evidence), "{body}");
+                assert!(!body.contains(omitted), "{omitted} in {body}");
             }
         }
     }
@@ -394,13 +397,11 @@ fn refused_or_impossible_first_reruns_warn_and_fall_back_to_filing() {
         let result = scenario.run(&["pickup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let state = scenario.gh_state();
-        assert!(
-            state["titles"]["8"]
-                .as_str()
-                .unwrap()
-                .starts_with("CI red on main:"),
-            "{state}"
-        );
+        assert_eq!(state["titles"]["8"], "CI red on main", "{state}");
+        assert_eq!(scenario.issue_labels(8), ["bug"]);
+        let body = state["bodies"]["8"].as_str().unwrap();
+        assert!(!body.contains("Rust (Linux)"), "{body}");
+        assert!(!body.contains("FAILED"), "{body}");
         assert!(result.stderr.contains("falling back"), "{}", result.stderr);
         assert!(result.stderr.contains("warning"), "{}", result.stderr);
     }
@@ -412,7 +413,6 @@ fn unreadable_ci_files_nothing_and_does_not_stop_ready_dispatch() {
         "api repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1",
         "api repos/acme/widgets/actions/runs/900/attempts/1",
         "api --paginate --jq .jobs[] repos/acme/widgets/actions/runs/900/attempts/2/jobs?per_page=100",
-        "api repos/acme/widgets/actions/jobs/901/logs",
         "api --paginate --jq .[] repos/acme/widgets/issues?state=open&sort=created&direction=desc&per_page=100",
     ] {
         let scenario = Scenario::new();
@@ -429,6 +429,23 @@ fn unreadable_ci_files_nothing_and_does_not_stop_ready_dispatch() {
         );
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
     }
+}
+
+#[test]
+fn unreadable_job_logs_still_file_a_ci_red_ticket_without_log_lines() {
+    let scenario = Scenario::new();
+    failed_push(&scenario);
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+    scenario.gh_fails("api repos/acme/widgets/actions/jobs/901/logs");
+    let result = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    let state = scenario.gh_state();
+    assert_eq!(state["titles"]["8"], "CI red on main");
+    let body = state["bodies"]["8"].as_str().unwrap();
+    assert!(!body.contains("Rust (Linux)"), "{body}");
+    assert!(!body.contains("pickup::tests::regression"), "{body}");
+    assert!(!body.contains("FAILED"), "{body}");
 }
 
 #[test]
