@@ -32,6 +32,14 @@ test("Session trace documentation does not advertise retired conversion commands
   }
 });
 
+test("the Linux-only manual does not direct native non-Linux Console execution", async () => {
+  for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
+    const manual = await readFile(resolve(__dirname, file), "utf8");
+    assert.doesNotMatch(manual, /On other operating systems, run/,
+      `${file}: Linux-only documentation still directs native non-Linux execution`);
+  }
+});
+
 test("the README and manual's repository links reach files and section anchors", async () => {
   const { marked } = await import("marked");
   const { default: GithubSlugger } = await import("github-slugger");

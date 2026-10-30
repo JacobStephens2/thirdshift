@@ -144,7 +144,7 @@ The Inbox leaves the last of GitHub's quota to the factory. Both the Console and
 
 A row a later Command took up says so wherever it goes: `status` prints `left needs you: taken up by a later Command started at <time>` (or `left ready for review: …`), `status --json` carries `left_from`, `left_reason` and `left_at`, and the Console shows the same line on the row. A row GitHub moved out of Ready for review says `left ready for review: pull request merged at <time>` (or `pull request closed at <time>`); a Needs you row says `left needs you: issue closed at <time>`, `pull request merged at <time>` or `needs-triage removed at <time>`. `status` batches these rows' issues and pull requests in the same read. A dismissed row says so the same way: `status` prints `dismissed by <who> from the CLI at <time>`, `status --json` carries `dismissal` with `who`, `dismissed_at`, `source`, `kind` and all covered `kinds`, and the Console shows the same line on the row. A Command that never waited still goes by when it ended.
 
-`--all` adds **History** for everything older or without a known ending. Each row read from a Command record has a state word: its Needs you kind (`Silent`, `Slow`, `Died`, `Failed`, `Paused`, `Triage` or `Finding`), `Stopping` while a live Command given a Stop is still ending, `Ready` in Ready for review, `Landing` in Landing, and otherwise `live`, `ended` or `died`. The Console shows the same word. Rows read from Activity logs or Session traces show their start, end and outcome instead; only the Console gives them a word, such as `Ready`. After the word come its issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Ticket runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Ticket runs, and each Ticket run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. A Command or child Ticket run with no outcome whose process has gone shows as `died at <stage>`; its start time bounds how long it stays in Needs you when no ending is known. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
+`--all` adds **History** for everything older or without a known ending. Each row read from a Command record has a state word: its Needs you kind (`Silent`, `Slow`, `Died`, `Failed`, `Paused`, `Triage` or `Finding`), `Stopping` while a live Command given a Stop is still ending, `Ready` in Ready for review, `Landing` in Landing, and otherwise `live`, `ended` or `died`. The Console shows the same word. Rows read from Activity logs or Session traces show their start, end and outcome instead; only the Console gives them a word, such as `Ready`. After the word come its issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Ticket runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Ticket runs, and each Ticket run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. A Command or child Ticket run with no outcome whose process has gone shows as `died at <stage>`; its start time bounds how long it stays in Needs you when no ending is known. Linux process start identifiers distinguish a reused process id. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
 
 History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session traces in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and exact Command owner; they have no known end or outcome and appear only with `--all`. A Spec run or Pass's Sessions share that Command's stamp and owner token. Legacy tokenless logs retain their existing grouping. The flat layout from before [ADR 0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
 
@@ -397,7 +397,7 @@ Install `curl` before running the script. After enabling and restarting the Cons
 
 For Caddy it writes `/etc/caddy/sites/thirdshift-console.caddy`, imports the sites folder from `/etc/caddy/Caddyfile` if needed, and disables proxy buffering with `flush_interval -1`. Caddy handles HTTPS. It **restarts**, rather than reloads, Caddy to preserve HTTP/3 on Android. For Apache it writes the port-80 site under `/etc/apache2/sites-available` or `/etc/httpd/conf.d`, preserves Host, forwards the request protocol and disables gzip on the Console's event streams. Install certbot with its Apache plugin first; the script runs `certbot --apache -d <name>`. Debian's module/site helpers are included. On an `httpd` machine, enable `proxy`, `proxy_http`, `headers`, `ssl` and `setenvif` and permit proxy connections in the host's SELinux policy first.
 
-With neither proxy, the script installs a localhost-only service with `--no-sign-in` and prints an SSH tunnel command. No address or accounts are needed for that mode. Run the tunnel on your computer and open the printed `http://localhost:<port>` address. On other operating systems, run `thirdshift console --no-sign-in` directly and use the same tunnel; only the Linux installer assumes systemd.
+With neither proxy, the script installs a localhost-only service with `--no-sign-in` and prints an SSH tunnel command. No address or accounts are needed for that mode. Run the tunnel on your computer and open the printed `http://localhost:<port>` address. When using a Linux VM on Apple Silicon macOS or WSL2 on Windows, keep the Console inside Linux and open the tunnel from the host.
 
 #### nginx
 
@@ -432,7 +432,7 @@ Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The 
 thirdshift update
 ```
 
-It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Ticket run or a Spec run is using the old binary: it keeps running it. On Linux so do the child Ticket runs it starts afterwards, a Ticket run or a Base fix, which it starts from the binary it is running rather than from the install path, so they run its version even once that path holds the new one or nothing at all. On macOS a child Ticket run is started from the install path, so one started after the update runs the new binary. A Ticket run never checks for updates or updates itself.
+It replaces the installed binary with the latest stable GitHub Release, or says it is already on it. Messages go to stderr and stdout stays empty. It exits `0` when it updated or was already up to date, and `1` on any failure, such as no network. Updating is safe while a Ticket run or a Spec run is using the old binary: it keeps running it. So do the child Ticket runs it starts afterwards, a Ticket run or a Base fix, which it starts through `/proc/self/exe` from the binary it is running rather than from the install path, so they run its version even once that path holds the new one or nothing at all. A Ticket run never checks for updates or updates itself.
 
 `thirdshift update` only replaces a copy put in place by the shell installer (the `curl` command above), which leaves an install receipt in `~/.config/thirdshift/`. It refuses to touch any other copy and lists the command that updates each other kind of install: `cargo install thirdshift` for a crates.io install, pulling and reinstalling for a build from source (see [Building from source](#building-from-source)), and the `curl` command for a copy placed by hand.
 
@@ -440,13 +440,19 @@ Keep a single copy: with copies in more than one directory on your `PATH` (say `
 
 ## Supported platforms
 
-- **Rocky Linux** 9.8 and later, x86_64.
-- **Ubuntu** 24.04.3 and later, x86_64.
-- **Ubuntu** 24.04 and later, aarch64 (ARM Linux), with full CI test coverage on `main` and nightly.
-- **WSL2**, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. `~/repos`), not under `/mnt/c`, where git is slow and file permissions misbehave. WSL1 is not supported.
-- **macOS** Tahoe 26.5.2 and later, Apple Silicon.
+thirdshift supports Linux only. Each architecture gets a statically linked musl binary, so it doesn't depend on the host's glibc: `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`.
 
-Each Linux architecture gets a statically linked binary, so it doesn't depend on the host's glibc; macOS gets a native build. Rocky Linux and WSL2 support is x86_64 only.
+**Test suite in CI:**
+
+- **Ubuntu** 24.04.3 and later, `x86_64`.
+- **Ubuntu** 24.04.3 and later, `aarch64` (ARM Linux), with the full CI test suite on `main` and nightly. On Apple Silicon macOS, run Ubuntu 24.04 `aarch64` in a Linux VM such as Lima, using `vz` and `--mount-none`. Keep repositories on the VM's Linux filesystem (e.g. `~/repos`), not under `/Users`, just as WSL2 repositories stay off `/mnt/c`. Install and authenticate `gh` and the Harness inside the VM, and run thirdshift there.
+
+**Release smoke check only:**
+
+- **Rocky Linux** 9.8 and later, `x86_64`.
+- **WSL2**, latest release, with Ubuntu 24.04 or later, `x86_64`. Keep your repositories on the Linux filesystem (e.g. `~/repos`), not under `/mnt/c`, where git is slow and file permissions misbehave. WSL1 is not supported.
+
+Native macOS (including Intel macOS) and native Windows have no binary. Apple Silicon macOS uses the `aarch64` Linux binary in its VM; Windows uses the `x86_64` Linux binary in WSL2. Rocky Linux and WSL2 support is `x86_64` only.
 
 ## Prerequisites
 
@@ -469,7 +475,7 @@ Every factory session on Claude Code, Repairs, reviews and Resumes included, als
 
 When a Harness session ends normally, fails or is stopped, thirdshift stops its process tree, then sweeps for surviving processes. On Linux with a reachable systemd user manager, ordinary sessions have their own scopes: cleanup kills everything left in that cgroup, even work detached by `setsid`, a double fork or reparenting. Ordinary sessions get no new resource limits. Trials and Graders keep their existing memory caps. A Trial's sequential sessions reuse its dedicated capped scope, sweeping processes added by each session while preserving the supervisor; parallel Trials have separate scopes. An uncapped standalone `--trial` creates its own session scope. When an external caller caps a standalone Trial without declaring a verified dedicated Trial scope, it stays in the caller's cgroup and uses the marker fallback, preserving that caller's limits.
 
-On macOS, and Linux without a user manager, cleanup is best effort: each session carries a unique `THIRDSHIFT_SESSION` environment marker, and thirdshift finds processes belonging to the same OS user with that exact marker. It sends SIGTERM, waits the existing ten-second grace period, then sends SIGKILL to survivors. A process that clears its environment can escape this fallback. Parallel sessions have different markers and scopes. Cleanup logs a count when it kills survivors; a sweep failure logs a warning and leaves the Command's outcome unchanged. This cleans up work from the current session, not processes older versions already leaked.
+On Linux without a user manager, cleanup is best effort: each session carries a unique `THIRDSHIFT_SESSION` environment marker, and thirdshift finds processes belonging to the same OS user with that exact marker. It sends SIGTERM, waits the existing ten-second grace period, then sends SIGKILL to survivors. A process that clears its environment can escape this fallback. Parallel sessions have different markers and scopes. Cleanup logs a count when it kills survivors; a sweep failure logs a warning and leaves the Command's outcome unchanged. This cleans up work from the current session, not processes older versions already leaked.
 
 File cleanup removes thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Other files an agent creates as your user stay. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
 
@@ -1846,14 +1852,14 @@ For Claude's Model, Setup suggests `default`, `best`, `fable`, `opus`, `sonnet`,
 
 When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
 
-On non-Linux systems, the report starts `Security sandbox probe: unavailable on <os>` (`macos` on macOS) and says Setup did not check isolation on this OS. Before running target code, each Security session must enforce:
+Before running target code, each Security session must enforce:
 
 - no external network;
 - an empty environment populated from an explicit allowlist with safe values, with scratch-local `HOME`, temporary directories and caches;
 - a read-only target and toolchain, with writes only inside scratch; and
 - explicit low CPU, memory, process, file-size, disk and wall-clock limits.
 
-If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them. On macOS, `sandbox-exec` (Seatbelt) is the usual route, but Setup has not verified that it meets every control. Setup only prints this guidance and runs nothing. The User config is already saved by then, and the probe result does not stop Setup.
+If a session cannot enforce every control, Security runs and Security reviews on this machine report findings as needs-validation instead of reproducing them. The User config is already saved by then, and the probe result does not stop Setup.
 
 Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.failure_limit`, `pickup.wait_minutes`, `pickup.order` and `security.harness` are not asked about. Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, the Resend key is not asked about and stays as it was, so `--email` on a single Ticket run still works. The Claude setup token is offered independently. Credentials a Ticket run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Ticket run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
@@ -1913,7 +1919,7 @@ With `harness grok`, every session runs `grok -p <prompt> --always-approve --san
 
 Grok reads both `AGENTS.md` and `CLAUDE.md` when both exist, along with `AGENT.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` and project rules under `.grok`, `.claude` and `.cursor`. It also reads `~/.grok/rules`, `~/.claude/CLAUDE.md` and `~/.claude/rules`; thirdshift writes none of these user-level files. Grok Build uses `~/.grok` for sign-in and sessions (or `GROK_HOME` when set).
 
-Interrupting a Command stops every session's process tree on every Harness, including commands that started their own process group or session. The same owner supervises all Model/Effort checks, from Command startup and terminal Setup: interruption stops the check and its owned commands, even after the CLI exits while its captured output pipes are still open. A cancelled Command check ends before any Claim, worktree or Command log. thirdshift snapshots the descendants with `ps` on Linux and macOS, sends each process group the Harness's stop signals with a 10-second grace period each, then takes another snapshot before SIGKILL to catch commands started in the meantime. If the CLI exits on an earlier signal, thirdshift kills the remaining commands immediately without another grace period.
+Interrupting a Command stops every session's process tree on every Harness, including commands that started their own process group or session. The same owner supervises all Model/Effort checks, from Command startup and terminal Setup: interruption stops the check and its owned commands, even after the CLI exits while its captured output pipes are still open. A cancelled Command check ends before any Claim, worktree or Command log. thirdshift snapshots the descendants with `ps`, sends each process group the Harness's stop signals with a 10-second grace period each, then takes another snapshot before SIGKILL to catch commands started in the meantime. If the CLI exits on an earlier signal, thirdshift kills the remaining commands immediately without another grace period.
 
 Before any work, where an Origin match failure would stop it, and so before the Claim, the worktree and any Command log, a command checks what it chose: the Harness's CLI must be on `PATH`, else it fails naming the CLI and the setting that chose it; and on Claude a named Model gets a minimal test call, `claude -p --model <model>` with the Effort, if any, which must succeed, else the command fails with what Claude said. No test call is made when no Model is named. Claude Code and Codex first check sign-in with the non-billed `claude auth status` and `codex login status`; a signed-out status fails before any Model test call. For other Harnesses without a non-billed sign-in check, sign-in is left to the session; the Security review startup fallback covers those failures. On Codex a named Model and Effort are checked against `codex debug models`, which costs no tokens: each matches regardless of case, a Model by its slug or its display name, and becomes the name Codex takes, so `model GPT-6.1-Sol effort Max` reaches Codex as `gpt-6.1-sol` and `max`. An unknown Model, or an Effort that Model doesn't support (with no Model, one no Model supports), fails naming the valid choices. On Grok Build, `grok models` lists the available Models without a model call and refreshes `models_cache.json` under `GROK_HOME` or `~/.grok`; thirdshift reads that cache for each Model's supported Efforts. Both are matched regardless of case and passed as Grok names them. With no Model named, a named Effort is checked against Grok's current default Model. Unknown Models and unsupported Efforts fail with the valid choices, and an unreadable catalog fails before work. The check has the same null stdin and fixed environment as sessions. What the command records is what the check settled on. A Pass makes these checks only once it has decided not to skip, and a Spec run makes them once for all its Tickets.
 
@@ -2456,63 +2462,7 @@ The first leaves the pull request for you to review, and the second stops at the
 
 A scheduled Architect run is skipped when the repository is at its [Command limit](#the-command-limit), a Pass's Spec run or Ticket run counted, or another Architect run is still running there, when an [Architect plan is still open](#one-architect-plan-at-a-time), when an [Architect idea waits for triage](#an-architect-idea-waits-for-triage), or when the repository has a [Ready issue](#a-ready-issue-goes-first), so a `ready-for-agent` issue with no Pickup line to take it holds off every night until you run it: no new refactor is planned until last night's Architect plan is closed or loses its `architect-plan` label. Merging its pull request closes it; if its run failed, pick it up with `thirdshift <plan URL>` first. Closing the pull request alone leaves the Architect plan open. A skip exits `0`, so the scheduler sees no failure, and the repository's [Activity log](#logs) has the line that says why, as does the log file unless `activity.quiet_skips` is set. With Run notifications on, by `email.always = true` in the User config or `email` on the line, an Architect run that did work sends one email, and a skipped one sends none, so a crontab line can fire every few minutes, as for [Architect runs every few minutes](#architect-runs-every-few-minutes), without flooding your inbox. A night without an email means it was skipped, or failed before the notification's checks passed: look in the log file.
 
-Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out. On macOS, use a LaunchAgent rather than cron: see [On macOS, a LaunchAgent](#on-macos-a-launchagent).
-
-#### On macOS, a LaunchAgent
-
-On macOS cron fires its lines too, but the passes it starts can't log in: `gh` and Claude Code (`claude`) keep their logins in the macOS Keychain, and a cron job runs outside your login session, so it can't read the Keychain. `gh` then makes unauthenticated requests, and GitHub gives unauthenticated GraphQL requests a rate limit of 0, so every pass that gets as far as choosing an issue fails, and the log file has a line such as:
-
-```
-gh api graphql failed: gh: API rate limit exceeded for 203.0.113.7. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.) (HTTP 403)
-```
-
-A pass skipped earlier, at the [Command limit](#the-command-limit) or the [Failure limit](#the-failure-limit), looks fine, and a pass that gets past `gh` can fail instead on the Harness's CLI not being logged in. The same command typed in a terminal works, since your shell is inside the login session.
-
-A **LaunchAgent** runs inside your login session, so both can read their logins. This one starts a Pickup run every half hour, as the crontab line in [A Pickup run on a schedule](#a-pickup-run-on-a-schedule) does. Save it as `~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist`, with your own paths in place of `/Users/you` and `/Users/you/repos/widgets`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>local.thirdshift.pickup.widgets</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-c</string>
-    <string>cd /Users/you/repos/widgets &amp;&amp; thirdshift pickup base main >> /Users/you/.thirdshift/logs/cron.log 2>&amp;1</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/Users/you/.local/bin:/Users/you/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-  </dict>
-  <key>StartInterval</key>
-  <integer>1800</integer>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-```
-
-- **The command** is the crontab line's, given to `/bin/zsh -c`. A plist is XML, so each `&` in it must be written `&amp;`: `&&` is `&amp;&amp;`, and `2>&1` is `2>&amp;1`. Write every path in full: launchd expands neither `~` nor `$HOME`.
-- **`PATH`** lists the same directories as the crontab's `PATH` line, since launchd reads no shell profile either. Homebrew on Apple Silicon installs into `/opt/homebrew/bin`.
-- **`StartInterval`** is the interval in seconds, here half an hour. launchd doesn't start a job again while its last start is still running, so a long pass simply delays the next one, which matches thirdshift's own [Command limit](#the-command-limit) skip.
-- **`RunAtLoad`** also starts a pass as soon as the LaunchAgent is loaded, and at each login.
-- **The log file** is the one fixed file every line writes to, as for cron, named `cron.log` whatever starts the pass, and its folder must exist: `mkdir -p ~/.thirdshift/logs`.
-
-`plutil -lint ~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist` checks the file. Load it, check it, and unload it with:
-
-```
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.thirdshift.pickup.widgets.plist
-launchctl print gui/$(id -u)/local.thirdshift.pickup.widgets
-launchctl bootout gui/$(id -u)/local.thirdshift.pickup.widgets
-```
-
-`launchctl print` shows the job's state, how many times it has run and its last exit code. To change the file, unload it and load it again. Write one LaunchAgent per line you would have put in a crontab, each with its own `Label` and file name: an Architect run's command is its crontab line's, given to `/bin/zsh -c` in the same way, with `StartInterval` set to `300` for [every five minutes](#architect-runs-every-few-minutes). A nightly run at a fixed hour uses `StartCalendarInterval`, such as `<key>StartCalendarInterval</key><dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>` for 02:00, in place of `StartInterval`.
-
-A LaunchAgent runs only while you are logged in, and neither it nor cron fires while the Mac is asleep. `thirdshift cronjobs` and the Console's Cron jobs page list only crontab entries, not LaunchAgents. They, and `thirdshift status`, still show when each repository's Passes last fired, whatever started them.
+Any scheduler that runs the command works; a systemd user timer needs lingering on (`loginctl enable-linger`) to fire while you are logged out. Inside a Linux VM on Apple Silicon macOS, use Linux cron or a systemd user timer directly, with `gh` and the Harness authenticated inside the VM. These schedules use the Linux logins and have no macOS Keychain restrictions. Keep the VM running and the Mac awake for schedules to fire.
 
 ### Architect runs every few minutes
 
@@ -2749,7 +2699,7 @@ PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 */30 * * * * cd ~/repos/widgets && thirdshift pickup base main >> ~/.thirdshift/logs/cron.log 2>&1
 ```
 
-The `PATH` line, the `cd` and `base main`, the log file's directory, the logins the Harness's CLI and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). On macOS, start it from a LaunchAgent rather than cron: [On macOS, a LaunchAgent](#on-macos-a-launchagent) shows this very line. What differs for a Pickup run:
+The `PATH` line, the `cd` and `base main`, the log file's directory, the logins the Harness's CLI and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). What differs for a Pickup run:
 
 - **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so at the default [Command limit](#the-command-limit) of 1 the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its [Failure limit](#the-failure-limit): at 3 failures left for you, or the `pickup.failure_limit` you set, the passes take nothing until you have dealt with one. A pull request left for review never holds them back. An issue you have just labelled also waits five minutes by default, or the `pickup.wait_minutes` you set, until it is settled. A Ticket run you start by hand on an Issue URL never waits for a pass, but it fills a slot, so at the limit it makes one skip. Raise `pass.command_limit` to let a repository's passes overlap.
 - **One line per repository.** thirdshift keeps no list of repositories. Each Pass on one repository skips at its [Command limit](#the-command-limit), 1 by default, so both lines can go in one crontab and, by default, two Passes never build that repository at once. Passes on different repositories do run at the same time: give their lines different minutes, such as `15,45`, if they would compete for the machine.
@@ -3051,7 +3001,7 @@ Before it pushes anything, it refuses a release that can't be cut and says why: 
 
 If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, merges the PR, then waits for publication. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged, merges the PR if still open and picks up from the release workflow run: it waits for a run still going, prints the GitHub Release's URL and exits `0` for one that succeeded, and exits `1` as above for one that failed, reporting the run's latest attempt, so a rerun of its failed jobs counts. So you can stop it with Ctrl-C while it waits and run it again to carry on waiting. A `v<version>` tag anywhere else on origin is still refused.
 
-The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the Linux and macOS binaries and the installer, checks that the Linux binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
+The tag starts the release workflow, generated by [`dist`](https://github.com/axodotdev/cargo-dist) from `dist-workspace.toml`, with the event policy applied by `python3 scripts/generate-release.py` (`--check` verifies freshness). It builds the two Linux musl binaries and the installer, smoke-checks that the `x86_64` binary starts on Rocky Linux 9 and in WSL2 with Ubuntu 24.04, checks the `aarch64` binary's static linking and version on Ubuntu, and only then publishes the GitHub Release. It then publishes the same version to crates.io, skipping it if it is already there, and finally replaces the Release's body with the bump pull request's summary, then notes generated from the merged pull requests, then the install instructions. [`scripts/release-notes.sh`](../scripts/release-notes.sh) builds that body; for a tag pushed by hand, with no bump pull request summary, it is the generated notes and the install instructions alone.
 
 ## Credits and license
 
