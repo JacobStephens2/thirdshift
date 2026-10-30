@@ -50,6 +50,64 @@ const GREEN: &str =
 const RED: &str =
     r#"[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]"#;
 
+fn actions_jobs_on_head(conclusion: &str) -> String {
+    format!(
+        r#"
+gh fake run "{{\"id\":900,\"databaseId\":900,\"workflow_id\":10,\"headSha\":\"$(git rev-parse HEAD)\",\"created_at\":\"2026-10-19T12:00:00Z\"}}"
+gh fake run "{{\"id\":901,\"databaseId\":901,\"workflow_id\":10,\"headSha\":\"$(git rev-parse HEAD)\",\"created_at\":\"2026-10-19T12:01:00Z\",\"status\":\"completed\",\"conclusion\":\"{conclusion}\",\"jobs\":[{{\"id\":42,\"name\":\"test\",\"status\":\"completed\",\"conclusion\":\"{conclusion}\",\"html_url\":\"https://github.com/acme/widgets/actions/runs/901/job/42\"}}]}}"
+"#
+    )
+}
+
+#[test]
+fn actions_jobs_survive_a_check_runs_403_and_red_ci_gets_a_repair() {
+    for conclusion in ["success", "failure"] {
+        let scenario = Scenario::new();
+        let mut state = scenario.gh_state();
+        state["failing"] = serde_json::json!(["api --paginate --jq .check_runs[]"]);
+        state["failing_stderr"] =
+            "gh: Resource not accessible by personal access token (HTTP 403)".into();
+        state["job_logs"] = serde_json::json!({"42":"test failed: expected 42"});
+        scenario.write_gh_state(&state);
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}{}",
+            actions_jobs_on_head(conclusion)
+        ));
+        scenario.agent_does_in_session(
+            2,
+            &format!(
+                "gh api repos/acme/widgets/actions/jobs/42/logs > failure.log\n{}{}",
+                commits_fix(1),
+                actions_jobs_on_head("success")
+            ),
+        );
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(result.stderr.contains("CI passed"), "{}", result.stderr);
+        if conclusion == "failure" {
+            assert_one_repair(&scenario, &result);
+            let prompt = scenario.claude_calls()[1]["prompt"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(
+                prompt.contains("https://github.com/acme/widgets/actions/runs/901/job/42"),
+                "{prompt}"
+            );
+            assert!(
+                scenario
+                    .gh_calls_of("api", "repos/acme/widgets/actions/jobs/42/logs")
+                    .len()
+                    == 1
+            );
+        } else {
+            assert_eq!(scenario.claude_calls().len(), 1);
+        }
+    }
+}
+
 /// Bash that records successive workflow runs of one workflow on `commit`.
 fn workflow_runs_on(commit: &str) -> String {
     format!(
