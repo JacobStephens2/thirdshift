@@ -148,7 +148,12 @@ fn marked_processes(marker: &str, warning: &mut Option<anyhow::Error>) -> Result
                 found.push(pid);
             }
             Ok(_) => {}
-            Err(error) if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT)) => {}
+            // Darwin's KERN_PROCARGS2 also returns EINVAL when the listed
+            // process has exited or no longer has an argument area.
+            Err(error)
+                if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT))
+                    || (cfg!(target_os = "macos")
+                        && error.raw_os_error() == Some(libc::EINVAL)) => {}
             Err(error) => {
                 warning.get_or_insert_with(|| {
                     anyhow::anyhow!("could not read process {pid}'s environment: {error}")

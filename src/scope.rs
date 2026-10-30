@@ -150,9 +150,6 @@ fn override_or(env: &str, configured: &str) -> Result<String> {
 /// Whether `systemd-run --user --scope` can reach this user's manager here.
 /// Cron and other logged-out launchers need lingering for this to hold.
 pub fn available() -> bool {
-    if !cfg!(target_os = "linux") {
-        return false;
-    }
     if crate::process::find_executable("systemd-run").is_none() {
         return false;
     }
@@ -637,7 +634,7 @@ pub(crate) fn trial_session_command(
     match inherited {
         Ok(Some(scope)) => Box::new(Launch { command, scope }),
         Ok(None) => {
-            if available() {
+            if cfg!(target_os = "linux") && available() {
                 match uncapped_current_cgroup() {
                     Ok(true) => return session_command(command.get_program()),
                     Ok(false) => {}
