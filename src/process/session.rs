@@ -257,23 +257,11 @@ mod tests {
             &ps,
             &format!("#!/bin/sh\nprintf '2147483647 {uid} S\\n'\n"),
         );
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "process::session::tests::a_process_that_exits_before_its_environment_is_read_does_not_warn",
-                "--nocapture",
-            ])
-            .env(FIXTURE, "1")
-            .env("PATH", directory.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+        crate::test_support::assert_test_without_warnings(
+            "process::session::tests::a_process_that_exits_before_its_environment_is_read_does_not_warn",
+            |command| {
+                command.env(FIXTURE, "1").env("PATH", directory.path());
+            },
         );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stderr.contains("warning:"), "{stderr}");
     }
 }

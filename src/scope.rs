@@ -548,21 +548,22 @@ pub(crate) fn session_command(
     program: impl AsRef<std::ffi::OsStr>,
 ) -> Box<dyn crate::process::Invocation> {
     let program = program.as_ref();
-    let mut invocation: Box<dyn crate::process::Invocation> = if available() {
-        let unit = unit_name("session", "harness");
-        let mut command = scope_base(&unit, None);
-        command.arg(program);
-        Box::new(Launch {
-            command,
-            scope: Scope {
-                unit,
-                watch: RefCell::new(None),
-                observation: Box::new(Native),
-            },
-        })
-    } else {
-        Box::new(Command::new(program))
-    };
+    let mut invocation: Box<dyn crate::process::Invocation> =
+        if cfg!(target_os = "linux") && available() {
+            let unit = unit_name("session", "harness");
+            let mut command = scope_base(&unit, None);
+            command.arg(program);
+            Box::new(Launch {
+                command,
+                scope: Scope {
+                    unit,
+                    watch: RefCell::new(None),
+                    observation: Box::new(Native),
+                },
+            })
+        } else {
+            Box::new(Command::new(program))
+        };
     crate::process::session::mark(invocation.command());
     invocation
 }
@@ -804,24 +805,14 @@ mod tests {
             let program = directory.path().join(name);
             crate::test_support::write_executable(&program, "#!/bin/sh\nexit 0\n");
         }
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "scope::tests::availability_probes_the_manager_on_every_platform",
-                "--nocapture",
-            ])
-            .env(FIXTURE, directory.path())
-            .env("PATH", directory.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+        crate::test_support::assert_test_without_warnings(
+            "scope::tests::availability_probes_the_manager_on_every_platform",
+            |command| {
+                command
+                    .env(FIXTURE, directory.path())
+                    .env("PATH", directory.path());
+            },
         );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!stderr.contains("warning:"), "{stderr}");
     }
 
     #[test]
