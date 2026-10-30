@@ -1,5 +1,5 @@
-# Runs the built musl binary's `thirdshift version` on the Linux platforms it
-# has to start on, before the GitHub Release is created. dist's release.yml
+# Runs the built musl binaries' `thirdshift version` on the Linux platforms they
+# have to start on, before the GitHub Release is created. dist's release.yml
 # calls this after the builds, and its host job only publishes if it passes.
 #
 # On a tag push it always runs. On a pull request it only runs when the pull
@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run: ${{ steps.gate.outputs.run }}
+      arm-archive: ${{ steps.arm.outputs.archive }}
+      arm-artifact: ${{ steps.arm.outputs.artifact }}
     steps:
       # A pull request's merge commit has the base branch as its first
       # parent, so diffing the two gives exactly the pull request's changes.
@@ -45,6 +47,36 @@ jobs:
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
+      - id: arm
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          archive=$(jq -er '.artifacts[] | select(.kind == "executable-zip" and (.target_triples | index("aarch64-unknown-linux-musl"))) | .name' <<< "$PLAN")
+          targets=$(jq -er '.ci.github.artifacts_matrix.include[] | select(.targets | index("aarch64-unknown-linux-musl")) | .targets | join("_")' <<< "$PLAN")
+          echo "archive=${archive%.tar.xz}" >> "$GITHUB_OUTPUT"
+          echo "artifact=artifacts-build-local-$targets" >> "$GITHUB_OUTPUT"
+
+  arm-linux:
+    timeout-minutes: 5
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04-arm
+    env:
+      ARCHIVE: ${{ needs.gate.outputs.arm-archive }}
+      ARTIFACT: ${{ needs.gate.outputs.arm-artifact }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT }}
+      - name: Check the ARM binary is statically linked
+        run: |
+          tar -xJf "$ARCHIVE.tar.xz"
+          file "$ARCHIVE/thirdshift" | tee /dev/stderr | grep -qE 'static(ally|-pie)? linked'
+      - name: Run thirdshift version on ARM Linux
+        run: |
+          actual=$("$ARCHIVE/thirdshift" version)
+          echo "$actual"
+          [ "$actual" = "$EXPECTED" ]
 
   rocky:
     timeout-minutes: 5
