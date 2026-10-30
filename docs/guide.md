@@ -138,6 +138,8 @@ When GitHub cannot answer, each row keeps the group its last facts give it; a ro
 
 Ready for review rows show the pull request's latest head CI as **CI green**, **CI red**, **CI pending**, **No CI checks** or **CI unknown**, with text as well as colour. The same batched GitHub read refreshes CI; an older Command's ready outcome does not imply its pull request is still green. `status` shows the same label, and `status --json` includes `github_ci` (`green`, `red`, `pending`, `no_checks` or `unknown`) when the pull request has been read. Older saved answers and unread pull requests show CI unknown. Failed reads retain the last CI answer with the Inbox's existing freshness warning.
 
+A conflicting pull request also shows a separate **Merge conflict** pill beside CI, even when CI is green. It stays in Ready for review. The same GitHub read refreshes mergeability and wakes open pages when it changes; `status` prints **Merge conflict** too. `status --json` includes `github_mergeable` (`mergeable`, `conflicting` or `unknown`). Only `conflicting` shows the pill; unknown and older saved answers do not claim a conflict. Failed reads retain the last answer with the same freshness warning.
+
 Each row with a kept answer also carries `github`: `subjects` maps its own or dispatched issue and pull request URLs to their `facts` and RFC 3339 `answered_at`. An unresolved URL has null facts; an older cache without an observation time has null `answered_at`. Finding rows include `github.findings` with per-URL waiting flags, the first observed `triaged_at`, and `answered_at`, without private write-ups. History freezes these observation times with its facts. The existing `github_state` and `github_at` fields still describe the row's own pull request and its merge or close event.
 
 The Inbox leaves the last of GitHub's quota to the factory. Both the Console and `status` skip their GitHub reads while the last observation showed fewer than 500 GraphQL points or 500 REST requests remaining, until that quota's reset time. The warning says which quota is low, how much remains and when it resets, even while the kept answer is fresh. Neither the reserve nor the 5-minute warning threshold is a User config setting.
@@ -316,7 +318,11 @@ thirdshift metrics --from 2026-10-05 --through 2026-10-19 --repo acme/widgets --
 
 The version 1 JSON has `version`, `hostname` and either `command` or `weeks`. A Command has its identity, `metrics` and `children`. Each weekly row identifies its group and includes `runs`, separate numeric signal summaries (`observed`, `missing`, `sum`, `mean`), outcome counts, Unaddressed findings by Standards, Spec and Security, and stage summaries. A summary with no observations has null `sum` and `mean`; zero is reserved for an observed zero. Stage summaries keep times, Usual-range bounds, position counts and Standards and Spec review counts separate. Text shows the same signals, spelling null as `missing`. No view combines signals into a score.
 
-`show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
+`show --json` is a versioned API, usable outside a repository.
+
+When a local GitHub answer exists, the Command also includes the kept `github_state`, `github_ci`, `github_mergeable` and `github_at` fields for its pull request, and `github` with cached issue/pull request facts and their `answered_at` observation times. Fields without an answer are omitted. History uses its frozen observation. `show` reads this cache even when stale and makes no GitHub request.
+
+Version 1 wraps the selected Command in this shape:
 
 ```json
 {
