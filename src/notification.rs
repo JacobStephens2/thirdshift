@@ -49,6 +49,20 @@ pub enum About<'a> {
     },
 }
 
+impl About<'_> {
+    /// The repository whose Run notification defaults apply. A Pickup run
+    /// knows its repository before it selects an issue or checks its gates.
+    fn repo(&self) -> Option<Repo> {
+        match self {
+            About::Issue(issue) => Some(issue.repo()),
+            About::ArchitectRun | About::PickupRun | About::SecurityRun | About::Process { .. } => {
+                launch::repo().ok()
+            }
+            About::ScoringRun => None,
+        }
+    }
+}
+
 /// What a Run notification's subject names.
 enum Subject {
     /// The issue a Run or a Spec run is on, with its title if it is known:
@@ -117,6 +131,7 @@ impl RunNotification {
         let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
             NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
+                let to = to.or_else(|| about.repo().and_then(|repo| settings.to_for_repo(&repo)));
                 Some(Resend::new(to, settings)?)
             }
             NotificationAsk::Skip => None,

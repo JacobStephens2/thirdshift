@@ -4,6 +4,7 @@
 //! Only a Run offers Setup
 //! when there is none.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
+use crate::issue::Repo;
 use crate::ready::PickupOrder;
 
 pub mod console;
@@ -106,6 +108,19 @@ pub struct EmailSettings {
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
     pub from: Option<String>,
+    /// `email.to_by_repo`: Run notification recipients keyed by lowercase
+    /// `owner/repo`, ahead of `email.to` and behind an explicit address.
+    pub to_by_repo: BTreeMap<String, String>,
+}
+
+impl EmailSettings {
+    /// The Run notification recipient configured for this repository, if
+    /// any. GitHub repository identity is case-insensitive.
+    pub fn to_for_repo(&self, repo: &Repo) -> Option<String> {
+        self.to_by_repo
+            .get(&repo.slug().to_ascii_lowercase())
+            .cloned()
+    }
 }
 
 impl UserConfig {
@@ -289,6 +304,9 @@ impl UserConfig {
                     ("email", "to" | "from", _) => {
                         bail!("{section}.{key} must be a quoted email address in {file}")
                     }
+                    ("email", "to_by_repo", value) => {
+                        config.email.to_by_repo = repository_recipients(value, &file)?;
+                    }
                     ("spec", "parallel", value) => {
                         config.spec_parallel = whole_number_from_1(value, "spec.parallel", &file)?
                     }
@@ -397,6 +415,45 @@ impl UserConfig {
         }
         Ok(config)
     }
+}
+
+/// Read repository routes strictly, so a malformed name or ambiguous case
+/// variant cannot silently send a notification to the host's default inbox.
+fn repository_recipients(value: &Value, file: &str) -> Result<BTreeMap<String, String>> {
+    let routes = value.as_table().with_context(|| {
+        format!("email.to_by_repo must be a table of owner/repo addresses in {file}")
+    })?;
+    let mut recipients = BTreeMap::new();
+    for (repo, value) in routes {
+        let parts: Vec<_> = repo.split('/').collect();
+        if parts.len() != 2
+            || parts.iter().any(|part| {
+                part.is_empty()
+                    || !part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+            })
+        {
+            bail!("email.to_by_repo key {repo:?} must be owner/repo in {file}");
+        }
+        let to = value
+            .as_str()
+            .filter(|to| !to.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "email.to_by_repo[{repo:?}] must be a nonblank quoted email address in {file}"
+                )
+            })?;
+        if recipients
+            .insert(repo.to_ascii_lowercase(), to.to_string())
+            .is_some()
+        {
+            bail!(
+                "duplicate repository {repo:?} in email.to_by_repo (names are case-insensitive) in {file}"
+            );
+        }
+    }
+    Ok(recipients)
 }
 
 /// A validated User config with every setting present, ready for Setup.
@@ -972,6 +1029,7 @@ always = false                  # every Ticket run sends a Run notification, wit
 unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
+to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
@@ -1212,6 +1270,7 @@ mod tests {
                 "email.unless_merged",
                 "email.to",
                 "email.from",
+                "email.to_by_repo",
                 "logs.dir",
                 "logs.waiting_line_minutes",
                 "otlp.endpoint",
