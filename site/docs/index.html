@@ -408,7 +408,7 @@ sudo sh install-console.sh
 <p>The user account that runs thirdshift needs:</p>
 <ul>
 <li>The selected <strong>Harness</strong> installed and authenticated: <strong><code>claude</code></strong> (Claude Code, the default), <strong><code>codex</code></strong> (Codex CLI), <strong><code>agy</code></strong> (Google Antigravity CLI), <strong><code>grok</code></strong> (Grok Build), <strong><code>muse</code></strong> (Muse Code), or <strong><code>opencode</code></strong> (OpenCode, with a configured Model provider). See <a href="#harness-model-and-effort">Harness, Model and Effort</a> for each CLI&#39;s flags and quirks.</li>
-<li><strong><code>gh</code></strong> (GitHub CLI), logged in.</li>
+<li><strong><code>gh</code></strong> (GitHub CLI), logged in. For a fine-grained personal access token, grant repository permissions <strong>Contents</strong>, <strong>Issues</strong> and <strong>Pull requests</strong> read and write, plus <strong>Actions</strong> and <strong>Commit statuses</strong> read. If <code>check-runs</code> returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.</li>
 <li><strong><code>git</code></strong> with a global <code>user.name</code> and <code>user.email</code>, and credentials that can push to the repository (<code>gh auth setup-git</code> makes git use <code>gh</code>&#39;s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.</li>
 <li><strong><code>node</code></strong> (Node.js) on <code>PATH</code>, for a <a href="#security-runs">Security run</a> only: the Security audit&#39;s report validators run on it.</li>
 </ul>
