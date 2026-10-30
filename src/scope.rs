@@ -572,21 +572,25 @@ pub(crate) fn session_command(
 
 /// Metadata probes must still name the Harness after the scope launcher is
 /// prepended. Trial launches also carry thirdshift's oom-exec wrapper.
-pub(crate) fn unwrapped_program(command: &Command) -> &std::ffi::OsStr {
+/// The second value is the first underlying argument's index in `get_args`.
+pub(crate) fn unwrapped_command(command: &Command) -> (&std::ffi::OsStr, usize) {
     let original = command.get_program();
+    let mut args = command.get_args();
     if Path::new(original).file_name() != Some(std::ffi::OsStr::new("systemd-run")) {
-        return original;
+        return (original, 0);
     }
-    let mut args = command.get_args().skip_while(|arg| *arg != "--");
-    args.next();
-    let Some(program) = args.next() else {
-        return original;
+    if args.find(|arg| *arg == "--").is_none() {
+        return (original, 0);
+    }
+    let Some(mut program) = args.next() else {
+        return (original, 0);
     };
+    let mut index = command.get_args().len() - args.len();
     if args.next() == Some(std::ffi::OsStr::new("--oom-exec")) {
-        args.next().unwrap_or(program)
-    } else {
-        program
+        program = args.next().unwrap_or(program);
+        index = command.get_args().len() - args.len();
     }
+    (program, index)
 }
 
 /// Keep Trial Harnesses in the existing cap and retain the outer launcher's

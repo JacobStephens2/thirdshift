@@ -412,11 +412,12 @@ fn recorded_arguments(command: &std::process::Command) -> Vec<String> {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    if Path::new(command.get_program())
+    let (program, first_argument) = crate::scope::unwrapped_command(command);
+    if Path::new(program)
         .file_name()
         .is_some_and(|name| name == "bwrap")
     {
-        let mut index = 0;
+        let mut index = first_argument;
         while index < arguments.len() {
             match arguments[index].as_str() {
                 "--" => break,

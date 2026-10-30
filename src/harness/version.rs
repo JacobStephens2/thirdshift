@@ -44,7 +44,7 @@ impl Version {
         command_log: Option<&Path>,
         session: &Command,
     ) -> Self {
-        let mut command = Command::new(crate::scope::unwrapped_program(session));
+        let mut command = Command::new(crate::scope::unwrapped_command(session).0);
         command.arg("--version");
         if let Some(dir) = session.get_current_dir() {
             command.current_dir(dir);
