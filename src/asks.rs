@@ -338,6 +338,7 @@ mod tests {
                 unless_merged: false,
                 to: Some("config@example.com".to_string()),
                 from: None,
+                ..EmailSettings::default()
             },
             spec_parallel: n(5),
             harness: harness::Settings {

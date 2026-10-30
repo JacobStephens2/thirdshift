@@ -2259,6 +2259,32 @@ fn titled_ready_ticket() -> Scenario {
 const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
 
 #[test]
+fn a_pickup_routes_its_notification_to_the_repository_address() {
+    for origin in [
+        "https://github.com/acme/widgets.git",
+        "git@github.com:acme/widgets.git",
+        "ssh://git@github.com/acme/widgets.git",
+    ] {
+        let scenario = titled_ready_ticket();
+        scenario.set_origin_url(origin);
+        scenario.user_config_is(&format!(
+            "{EMAIL_ALWAYS}[email.to_by_repo]\n\"Acme/Widgets\" = \"personal@example.com\"\n\
+             \"acme/work\" = \"work@example.com\"\n"
+        ));
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+        assert_eq!(result.code, Some(0), "{origin}: {}", result.stderr);
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        let requests = resend.requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert_eq!(requests[0].body["to"], "personal@example.com");
+        assert_saved_notification(&scenario, "pickup", &requests[0]);
+    }
+}
+
+#[test]
 fn a_pass_that_took_an_issue_sends_one_notification_when_asked() {
     let scenario = titled_ready_ticket();
     scenario.user_config_is(EMAIL_ALWAYS);

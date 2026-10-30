@@ -1747,6 +1747,7 @@ always = false                  # every Ticket run sends a Run notification, wit
 unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
+to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
@@ -1812,7 +1813,7 @@ memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Tr
 memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 ```
 
-Every key holds its real value, so a Ticket run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Ticket run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Ticket run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
+Every key holds its real value, so a Ticket run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Ticket run never looks the suggestion up: `--email` with no address, no matching `email.to_by_repo` entry and no `email.to` still stops the Ticket run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
 
 1. The Harness for every Ticket run's sessions (`harness.default`), listing only those installed on `PATH`. An unavailable Harness or unknown name is refused and asked again. The default is the configured Harness when installed, else the first installed in `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` order. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Ticket run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For agy, Setup lists `agy models` and its supported Efforts, checks each answer without a model turn, and writes the canonical names regardless of case. For Grok Build, Setup lists `grok models` and the chosen Model's Efforts from its refreshed cache, and checks each answer against them. Muse proposes `muse-spark-1.3` and checks the answers against its cache, or with a minimal call; a refusal asks for the Model and Effort again. OpenCode proposes no Model and checks the Model and Effort with a minimal standalone call, asking again on a refusal. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
 2. `Every Ticket run Self-merges?` (`merge.always`)
@@ -1848,7 +1849,7 @@ With `base.fix = true`, every Ticket run may start a [Base fix](#base-fix), as i
 
 With `launch.pull = true`, every Ticket run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Ticket run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Ticket run carries on with the same outcome and exit code. The setting only affects your checkout: the Ticket run's worktree starts from `origin/<Base branch>` either way.
 
-With `email.always = true`, every Ticket run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Ticket run. With `email.unless_merged = true`, with or without `email.always`, every Ticket run sends one only when it did not end merged, as if given `--email-unless-merged`; `--email` on the command line still emails that one Ticket run whatever its outcome, and `--no-email` sends none. Answering no to Setup's Run notifications question turns both off.
+With `email.always = true`, every Ticket run sends a [Run notification](#run-notifications) to its repository's `email.to_by_repo` entry, falling back to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Ticket run. With `email.unless_merged = true`, with or without `email.always`, every Ticket run sends one only when it did not end merged, as if given `--email-unless-merged`; `--email` on the command line still emails that one Ticket run whatever its outcome, and `--no-email` sends none. Answering no to Setup's Run notifications question turns both off.
 
 `spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
 
@@ -1928,7 +1929,22 @@ thirdshift sends email itself, with one HTTPS request to [Resend](https://resend
   ```
 
   `thirdshift setup` asks for the key, hidden, and saves it there for you. The environment variable wins, so a CI secret or an `export` overrides the saved key for one command. The Credentials are what let a Ticket run started from cron, `nohup` or an agent's shell find the key, since those read no shell profile. thirdshift never reads the key from the User config, so that file holds no secret.
-- **`email.to`** in the [User config](#user-config) is the address email goes to when the command gives none.
+- **`email.to`** in the [User config](#user-config) is the host's default recipient when the command gives none.
+- **`email.to_by_repo`** overrides that recipient for Run notifications in particular repositories, so work and personal repositories on one host can use different inboxes:
+
+  ```toml
+  [email]
+  always = true
+  to = "work@example.com"
+  from = "thirdshift@your-verified-domain.example"
+
+  [email.to_by_repo]
+  "JacobStephens2/thirdshift" = "personal@example.com"
+  ```
+
+  Keys are quoted `owner/repo` names, matched without regard to case. Each value must be a nonblank quoted address; duplicate names differing only in case are refused. You can also write the map inline under `[email]`, for example `to_by_repo = { "JacobStephens2/thirdshift" = "personal@example.com" }`. When editing Setup's existing `to_by_repo = {}` line, replace it with the inline map or remove it before adding `[email.to_by_repo]`; TOML cannot define the same key twice. Setup preserves these routes and leaves them for you to edit by hand. An explicit address after `email` or `email-unless-merged` wins over the repository entry, which wins over `email.to`. A repository entry can supply the address even without `email.to`; it does not itself enable notifications.
+
+  Ticket and Spec runs use the Issue URL's repository. Pickup, Architect, Security and Custom process runs use the Launch directory's GitHub `origin`, including SSH origins. With no matching repository, they use `email.to`. Scoring runs and `email-test` use the host default; pass an explicit address to `email-test` to check another inbox. The sender and Resend key stay shared across repositories.
 - **`email.from`** is the sender. Without it, email comes from **`onboarding@resend.dev`**, Resend's shared sender, which only delivers to the address of your own Resend account. To send to any other address, set `email.from` to an address on a domain you have verified with Resend.
 
 To check the setup without starting a Ticket run:
@@ -1953,7 +1969,7 @@ Setup validates the Credentials before asking questions on a terminal. For email
 
 #### Run notifications
 
-`--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over `email.to`. Giving a flag twice, or any two of `--email`, `--email-unless-merged` and `--no-email`, is an argument error.
+`--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to the matching `email.to_by_repo` entry, falling back to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over both configured recipients. Giving a flag twice, or any two of `--email`, `--email-unless-merged` and `--no-email`, is an argument error.
 
 `--email-unless-merged` (or `email-unless-merged`), optionally followed by an address as `--email` is, asks for a Run notification that is emailed only when the command did not end `merged`, whatever else it ended as. A merged one is still saved beside the [Command log](#logs), with nothing sent, unless it is a [Security run](#security-runs) whose fix left its finding open or whose audit left findings waiting for the Day shift: that one is emailed. It makes the same checks as `--email` before any work.
 
@@ -2697,7 +2713,7 @@ thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/com
 
 ### One Run notification for the issue taken
 
-A Pickup run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one when it took a Ready issue (asked by `email-unless-merged` or `email.unless_merged`, only when the dispatched run did not merge): the notification the Spec run or Ticket run it dispatched would have sent started by hand. An address after `email` wins over `email.to`, as for a Ticket run.
+A Pickup run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one when it took a Ready issue (asked by `email-unless-merged` or `email.unless_merged`, only when the dispatched run did not merge): the notification the Spec run or Ticket run it dispatched would have sent started by hand. An address after `email` wins over the Launch directory repository's `email.to_by_repo` entry, which wins over `email.to`.
 
 - **Subject**: that run's, `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, naming the issue taken, with the outcome `ready for review`, `merged`, `failed` or `interrupted`.
 - **Body**: that run's too: what a Ticket run's notification holds, with `Issue:` immediately after `Result:` linking the issue it took, then its `Title:` (the parent Spec when it dispatched a Spec run), and after a Spec run a line per Ticket. The time it gives is the whole pass's, the search for the Ready issue included.
