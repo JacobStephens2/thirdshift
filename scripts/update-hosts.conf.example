@@ -1,0 +1,12 @@
+# Hosts for scripts/update-hosts.sh
+# Copy this file to scripts/update-hosts.conf and list one target per line.
+# Blank lines and `#` comments are ignored.
+#
+# Supported formats:
+#   local                   - run `thirdshift update` locally
+#   lima:<instance>         - run inside a Lima VM (or `lima` for default)
+#   ssh <user@host>         - run over SSH (or just `<user@host>`)
+
+local
+# lima:thirdshift
+# ssh user@example.com
