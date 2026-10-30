@@ -202,6 +202,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
         println!("{indent}{event}");
     }
     print_steps(command, indent);
+    super::print_pause(&command.record, indent);
     super::print_tickets(&command.record, &format!("{indent}  "));
     for child in command.dispatched.iter().chain(&command.children) {
         print_details(child, &format!("{indent}  "))?;

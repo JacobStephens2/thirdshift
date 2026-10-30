@@ -4,6 +4,38 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn paused_command_rows_and_details_offer_the_resume_command_and_reset() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("paused"), 0);
+    fixture["kind"] = json!("Scoring run");
+    fixture["cause"] = json!(
+        "Command paused at a plan-limit warning: Claude seven-day window at 86%, resets Fri Oct 30 22:00 UTC; run the Command again to resume"
+    );
+    fixture["resume_command"] = json!("thirdshift score");
+    fixture["limit"] = json!({"harness":"claude","window":"seven_day","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"});
+    super::write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let inbox = console.get("/").text().unwrap();
+    let needs = section(&inbox, "needs you");
+    assert!(needs.contains(">Paused</span>"), "{inbox}");
+    assert!(needs.contains("resets Fri Oct 30 22:00"), "{needs}");
+    assert!(
+        needs.contains("data-copy-cli=\"thirdshift score\""),
+        "{needs}"
+    );
+    let details = console.get("/peek?command=widgets%237").text().unwrap();
+    assert!(details.contains("Paused:"), "{details}");
+    assert!(!details.contains("Failed:"), "{details}");
+    assert!(details.contains("resets Fri Oct 30 22:00"), "{details}");
+    assert!(
+        details.contains("data-copy-cli=\"thirdshift score\""),
+        "{details}"
+    );
+}
+
+#[test]
 fn ended_rows_distinguish_finish_age_from_run_duration() {
     use super::write_record;
     use serde_json::json;

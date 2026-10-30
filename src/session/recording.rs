@@ -472,8 +472,8 @@ fn follow(
             for raw in progress.limit_records() {
                 record_line(kind, raw.as_bytes(), log, progress, trace, policy.private)?;
             }
-            if progress.plan_limit_reached() {
-                return super::limits::stop();
+            if let Some(limit) = progress.plan_limit() {
+                return super::limits::stop(limit.clone());
             }
         }
         if eof {

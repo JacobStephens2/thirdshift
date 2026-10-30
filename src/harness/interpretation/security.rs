@@ -66,7 +66,7 @@ impl Security {
                 self.last_model = Some(name.clone());
                 Some(format!("Model: {name}"))
             }
-            Evidence::PlanLimit
+            Evidence::PlanLimit(_)
             | Evidence::WorkStarted
             | Evidence::ObservedModel { .. }
             | Evidence::RequestedModelFallback => None,

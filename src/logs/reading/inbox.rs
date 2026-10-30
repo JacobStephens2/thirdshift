@@ -58,6 +58,7 @@ pub(in crate::logs) enum NeedsYouKind {
     Slow,
     Died,
     Failed,
+    Paused,
     Triage,
     Finding,
 }
@@ -69,6 +70,7 @@ impl NeedsYouKind {
             Self::Slow => "Slow",
             Self::Died => "Died",
             Self::Failed => "Failed",
+            Self::Paused => "Paused",
             Self::Triage => "Triage",
             Self::Finding => "Finding",
         }
@@ -78,7 +80,7 @@ impl NeedsYouKind {
         match self {
             Self::Silent => 0,
             Self::Slow => 1,
-            Self::Died | Self::Failed | Self::Triage | Self::Finding => 2,
+            Self::Died | Self::Failed | Self::Paused | Self::Triage | Self::Finding => 2,
         }
     }
 }
@@ -196,6 +198,8 @@ impl<'a> Observation<'a> {
         let facts = self.facts();
         if facts.state == "died" {
             Some(NeedsYouKind::Died)
+        } else if facts.outcome == Some("paused") {
+            Some(NeedsYouKind::Paused)
         } else if matches!(self, Observation::Record(_) if facts.state == "ended" && !facts.ready && stop.is_some_and(|request| !request.requeue))
         {
             Some(NeedsYouKind::Triage)
@@ -466,6 +470,7 @@ pub(super) fn evaluate<'a>(
         .map(|row| issue_starts(row.command))
         .collect();
     let starts_by_issue = all_starts(&starts);
+    let commands_for_resume: Vec<_> = observations.iter().map(|row| row.command).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
         for (issue, start) in starts {
@@ -523,7 +528,9 @@ pub(super) fn evaluate<'a>(
         // a Command that never waited keeps going by when it ended, and a
         // row that ages out keeps going straight to History.
         let waited = problem.is_some() || facts.ready;
-        let taken_up = if waited {
+        let taken_up = if facts.outcome == Some("paused") {
+            resumed_at(command, &commands_for_resume, ended)
+        } else if waited {
             superseded_at(starts, &starts_by_issue, ended)
         } else {
             None
@@ -572,7 +579,12 @@ pub(super) fn evaluate<'a>(
         let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
         let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = live_problem
-            .or_else(|| problem.filter(|_| held && github_moved.is_none()))
+            .or_else(|| {
+                problem.filter(|_| {
+                    held && github_moved.is_none()
+                        && (facts.outcome != Some("paused") || taken_up.is_none())
+                })
+            })
             .filter(|_| !dismissed);
         let from = if problem.is_some() {
             Some("needs you")
@@ -970,6 +982,42 @@ fn superseded_at(
                     .find(|time| **time > *start && ended.is_none_or(|end| **time >= end))
                     .copied()
             })
+        })
+        .min()
+}
+
+/// Eval work has no issue: its own identity supplies the later-Command exit.
+fn resumed_at(
+    command: Observation<'_>,
+    all: &[Observation<'_>],
+    ended: Option<DateTime<FixedOffset>>,
+) -> Option<DateTime<FixedOffset>> {
+    let Observation::Record(command) = command else {
+        return None;
+    };
+    let start = time(Some(&command.record.started_at))?;
+    all.iter()
+        .filter_map(|other| {
+            let Observation::Record(other) = other else {
+                return None;
+            };
+            let same_work = command.account == other.account
+                && command
+                    .record
+                    .repository
+                    .eq_ignore_ascii_case(&other.record.repository)
+                && match (command.record.kind.as_str(), other.record.kind.as_str()) {
+                    ("Experiment", "Experiment") => command
+                        .record
+                        .experiment
+                        .as_ref()
+                        .zip(other.record.experiment.as_ref())
+                        .is_some_and(|(a, b)| a.id == b.id),
+                    ("Scoring run", "Scoring run") => true,
+                    _ => false,
+                };
+            let at = time(Some(&other.record.started_at))?;
+            (same_work && at > start && ended.is_none_or(|end| at >= end)).then_some(at)
         })
         .min()
 }

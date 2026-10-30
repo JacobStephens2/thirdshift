@@ -1768,6 +1768,13 @@ fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
         assert!(paused.stderr.contains("paused"), "{}", paused.stderr);
         let before = fixture.experiment();
         assert_eq!(before["state"], "paused");
+        let record = fixture
+            .scenario
+            .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+        assert_eq!(record["outcome"], "paused", "{record}");
+        assert_eq!(record["limit"]["harness"], harness);
+        assert_eq!(record["limit"]["resets_at"], Value::Null);
+        assert_eq!(record["resume_command"], before["resume_command"]);
         assert!(before["results"].as_array().unwrap().is_empty(), "{before}");
         let calls = || {
             let calls = if harness == "claude" {

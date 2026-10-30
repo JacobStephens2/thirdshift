@@ -57,12 +57,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens
         "Scoring missed the native Codex warning: {}",
         run.stderr
     );
-    assert!(
-        run.stderr
-            .contains("Scoring stopped at a plan-limit warning"),
-        "{}",
-        run.stderr
-    );
+    assert!(run.stderr.contains("Scoring run paused"), "{}", run.stderr);
     assert!(
         weeks(&scenario).is_empty(),
         "a plan-limit stop advanced the window"
@@ -388,12 +383,7 @@ sleep 30
     let start = std::time::Instant::now();
     let run = score(&scenario);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
-    assert!(
-        run.stderr
-            .contains("Scoring stopped at a plan-limit warning"),
-        "{}",
-        run.stderr
-    );
+    assert!(run.stderr.contains("Scoring run paused"), "{}", run.stderr);
     assert!(
         start.elapsed().as_secs() < 15,
         "warning was not handled live"
