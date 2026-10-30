@@ -282,6 +282,16 @@ impl Release {
         release
     }
 
+    fn failed_unpublished() -> Self {
+        let release = Self::new();
+        release.ci_reports(GREEN);
+        release.release_workflow(failed_release());
+        let output = release.run_script("0.2.0");
+        assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
+        assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+        release
+    }
+
     fn root(&self) -> &Path {
         self.temp.path()
     }
@@ -2369,7 +2379,7 @@ fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
     release.ci_reports(GREEN);
     let mut failed = failed_release();
     failed["rerun"] = json!({
-        "conclusion": "success", "pending_polls": 2,
+        "conclusion": "success", "pending_polls": 2, "stale_polls": 2,
         "jobs": [{"name": "host", "conclusion": "success"}],
     });
     release.release_workflow(failed);
@@ -2380,7 +2390,8 @@ fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(release.release_run()["run_attempt"], 2);
+    assert_eq!(release.release_run()["attempt"], 2);
+    assert_eq!(release.release_run()["stale_polls"], 0);
     assert_eq!(release.release_run()["pending_polls"], 0);
     assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));

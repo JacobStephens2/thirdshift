@@ -94,11 +94,7 @@ fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
 #[test]
 fn a_recut_checks_the_new_experiment_and_honors_summary_review_before_pushing() {
     for answer in ["n\n", "y\n"] {
-        let release = Release::new();
-        release.ci_reports(GREEN);
-        release.release_workflow(failed_release());
-        let first = release.run_script("0.2.0");
-        assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+        let release = Release::failed_unpublished();
         release.merge_pr("newer", "New recovery content", "");
         release.main_ci("completed", "success");
         let candidate = release.origin(&["rev-parse", "main"]);
@@ -127,6 +123,35 @@ fn a_recut_checks_the_new_experiment_and_honors_summary_review_before_pushing() 
             assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
         }
     }
+}
+
+#[test]
+fn an_old_merged_recut_keeps_the_prior_release_as_the_experiment_baseline() {
+    let release = Release::failed_unpublished();
+    let old = release.pr_head("release-0.2.0");
+    release.merge_bump_pr("0.2.0", &old);
+    release.merge_pr("newer", "New content after the old bump was merged", "");
+    release.main_ci("completed", "success");
+    let candidate = release.origin(&["rev-parse", "main"]);
+    release.release_workflow(json!({}));
+    release.ci_reports(GREEN);
+    cargo_reports(&release, &[verdict("pass")]);
+
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        calls(&release)[0]["args"],
+        json!([
+            "experiment",
+            "--release",
+            candidate,
+            "--baseline",
+            "v0.1.0",
+            "--json",
+            "--yes"
+        ])
+    );
 }
 
 #[test]

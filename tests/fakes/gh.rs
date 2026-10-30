@@ -108,7 +108,8 @@
 //! `gh release view <tag> --json url` answers with the GitHub Release's URL
 //! for a tag on origin. A recorded release workflow must have succeeded,
 //! unless its explicit `published` field says publication already happened.
-//! Release workflow runs may provide `rerun` fields for their next attempt.
+//! Release workflow runs may provide `rerun` fields for their next attempt,
+//! including `stale_polls` reads of the previous attempt before it appears.
 //!
 //! `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 //! with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -553,7 +554,8 @@ const COMMIT_PR_HEAD_LINES: &str = r#".[] | [(.merge_commit_sha // "none"), .hea
 
 const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#;
 
-const RELEASE_RUN_LINE: &str = r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)""#;
+const RELEASE_RUN_LINE: &str =
+    r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion) \(.attempt)""#;
 
 const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")"#;
 
@@ -1933,16 +1935,15 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
         {
             die("run cannot be rerun", 1);
         }
-        let attempt = release
-            .get("run_attempt")
-            .and_then(Json::as_i64)
-            .unwrap_or(1);
+        let previous = release.clone();
+        let attempt = release.get("attempt").and_then(Json::as_i64).unwrap_or(1);
         if let Some(Json::Object(fields)) = release.get("rerun").cloned() {
             for (key, value) in fields {
                 release.set(&key, value);
             }
         }
-        release.set("run_attempt", number(attempt + 1));
+        release.set("attempt", number(attempt + 1));
+        release.set("previous_attempt", previous);
         release.set("rerun", Null);
         state.set("runs", runs);
         save(state);
@@ -2137,7 +2138,7 @@ fn run_list(state: &mut Json, flags: &Flags) {
     }
     let fields: &[&str] = match flag(flags, "jq") {
         Some(LATEST_RUN_LINE) => &["headSha", "status", "conclusion"],
-        Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion"],
+        Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion", "attempt"],
         jq => unsupported_jq(jq),
     };
     let filters = [
@@ -2160,6 +2161,12 @@ fn run_list(state: &mut Json, flags: &Flags) {
         let hidden_polls = polls(run, "hidden_polls");
         if hidden_polls > 0 {
             run.set("hidden_polls", number(hidden_polls - 1));
+            continue;
+        }
+        let stale_polls = polls(run, "stale_polls");
+        if stale_polls > 0 {
+            run.set("stale_polls", number(stale_polls - 1));
+            listed.push(run.at("previous_attempt").clone());
             continue;
         }
         let pending_polls = polls(run, "pending_polls");
@@ -2271,6 +2278,9 @@ fn record_run(state: &mut Json, mut run: Json) {
             .max()
             .unwrap_or(0);
         run.set("databaseId", number(newest + 1));
+    }
+    if !run.has("attempt") {
+        run.set("attempt", number(1));
     }
     if !run.has("url") {
         let url = format!(

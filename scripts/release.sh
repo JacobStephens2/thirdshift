@@ -158,11 +158,11 @@ main() {
 # Only a resumed invocation recovers a completed failed workflow. An existing
 # GitHub Release is final, even if a later publication job failed.
 recover_failed_release() {
-	local run id run_url status conclusion base
+	local run id run_url status conclusion attempt base
 	published_url=$(gh release view "$tag" --json url --jq .url 2>/dev/null || true)
 	if [ -n "$published_url" ]; then return; fi
 	run=$(release_run "$tagged")
-	read -r id run_url status conclusion <<<"$run"
+	read -r id run_url status conclusion attempt <<<"$run"
 	if [ "$status" != completed ] || [ "$conclusion" = success ]; then return; fi
 	base=$(newest_green_main "$(git rev-parse "$head^1")")
 	if [ -n "$base" ] || [ "$head" != "$tagged" ]; then
@@ -190,6 +190,9 @@ recover_failed_release() {
 	fi
 	gh run rerun --failed "$id"
 	progress "reran the failed jobs of the release workflow at $run_url"
+	# GitHub may briefly return the failed attempt after accepting the rerun.
+	# The attempt field also distinguishes an immediately completed rerun.
+	while [ "$(release_run "$tagged")" = "$run" ]; do sleep "$poll_seconds"; done
 }
 
 # Publication can finish while the Experiment, summary or PR checks run.
@@ -271,7 +274,7 @@ bump_tree() (
 # left behind by an interrupted recovery. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
 find_existing_tag() {
-	local old_base base run id run_url status conclusion
+	local old_base base run id run_url status conclusion attempt
 	tagged=
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return
@@ -291,7 +294,7 @@ find_existing_tag() {
 	old_base=$(git rev-parse "$tagged^1")
 	base=$(git rev-parse "$head^1")
 	run=$(release_run "$tagged")
-	read -r id run_url status conclusion <<<"$run"
+	read -r id run_url status conclusion attempt <<<"$run"
 	if [ "$pr_state" = OPEN ] && [ "$old_base" != "$base" ] &&
 		git merge-base --is-ancestor "$old_base" "$base" &&
 		[ "$(bump_tree "$old_base")" = "$(git rev-parse "$tagged^{tree}")" ] &&
@@ -339,13 +342,20 @@ commit_bump() {
 # wait_for_experiment <content commit>
 # Use this checkout's runner and private Eval suites, as for summary_agent.
 wait_for_experiment() {
-	local snapshot status outcome id answer
+	local snapshot status outcome id answer previous
+	local baseline_args=()
 	if [ -z "$with_experiment" ]; then
 		progress "skipping the release Experiment (use --with-experiment to run it) for ${1:0:7}"
 		return
 	fi
+	# An older script may have merged the failed bump into main. Its tag is
+	# still unpublished, so compare against the release before it instead.
+	if git merge-base --is-ancestor "refs/tags/$tag" "$1" 2>/dev/null; then
+		previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude="$tag" "$1")
+		baseline_args=(--baseline "$previous")
+	fi
 	progress "checking release Experiment for ${1:0:7}"
-	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" --json --yes)
+	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" "${baseline_args[@]}" --json --yes)
 	while :; do
 		status=$(printf '%s\n' "$snapshot" | experiment_status)
 		read -r outcome id <<<"$status"
@@ -454,7 +464,7 @@ merge_bump_pr() {
 # The run's status is that of its current attempt, so after gh run rerun
 # --failed, the rerun's. CI's run on main for the merge is not waited for.
 wait_for_release() {
-	local run id run_url status conclusion failed
+	local run id run_url status conclusion attempt failed
 	run=$(release_run)
 	if [ -z "$run" ]; then
 		progress "waiting for the release workflow on $tag to start"
@@ -463,11 +473,11 @@ wait_for_release() {
 		sleep "$poll_seconds"
 		run=$(release_run)
 	done
-	read -r id run_url status conclusion <<<"$run"
+	read -r id run_url status conclusion attempt <<<"$run"
 	progress "waiting for the release workflow at $run_url"
 	while [ "$status" != completed ]; do
 		sleep "$poll_seconds"
-		read -r id run_url status conclusion <<<"$(release_run)"
+		read -r id run_url status conclusion attempt <<<"$(release_run)"
 	done
 
 	if [ "$conclusion" != success ]; then
@@ -479,11 +489,11 @@ wait_for_release() {
 
 # release_run
 # The newest release workflow run on the supplied commit (default $head) from a push, as
-# "<id> <url> <status> <conclusion>", or nothing if it isn't listed yet.
+# "<id> <url> <status> <conclusion> <attempt>", or nothing if it isn't listed yet.
 release_run() {
 	gh run list --workflow release.yml --event push --commit "${1:-$head}" --limit 1 \
-		--json databaseId,url,status,conclusion \
-		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)"'
+		--json databaseId,url,status,conclusion,attempt \
+		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion) \(.attempt)"'
 }
 
 # progress <message>
@@ -680,7 +690,7 @@ version_diff() {
 # nothing, a note saying so and GitHub's generated notes.
 release_summary() {
 	local previous input summary
-	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$1" 2>/dev/null || true)
+	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude="$2" "$1" 2>/dev/null || true)
 	input=$(summary_input "$1" "$previous" "$3")
 	# In an if, so the agent failing falls back rather than stopping the script.
 	if summary=$({ cat "$summary_prompt" && echo && echo "$input"; } |

@@ -2,11 +2,7 @@ use super::*;
 
 #[test]
 fn a_failed_unpublished_release_is_recut_from_the_newest_green_main_commit() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.release_workflow(failed_release());
-    let first = release.run_script("0.2.0");
-    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let release = Release::failed_unpublished();
     let old = release.pr_head("release-0.2.0");
     release.merge_pr("recovery", "Content added after the failure", "");
     let green = release.origin(&["rev-parse", "main"]);
@@ -74,12 +70,22 @@ fn a_published_release_is_never_recut_even_after_a_workflow_failure() {
 }
 
 #[test]
+fn an_immediately_failed_recovery_attempt_leaves_the_bump_pr_open() {
+    let release = Release::failed_unpublished();
+    let head = release.pr_head("release-0.2.0");
+    let main = release.origin(&["rev-parse", "main"]);
+
+    let output = release.run_script("0.2.0");
+
+    assert_release_failed(&release, &output, &head);
+    assert_eq!(release.release_run()["attempt"], 2);
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    assert_eq!(release.origin(&["rev-parse", "main"]), main);
+}
+
+#[test]
 fn recovery_resumes_after_the_recut_bump_checks_failed() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.release_workflow(failed_release());
-    let first = release.run_script("0.2.0");
-    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let release = Release::failed_unpublished();
     let old = release.pr_head("release-0.2.0");
     release.merge_pr("newer", "New recovery content", "");
     release.main_ci("completed", "success");
@@ -101,11 +107,7 @@ fn recovery_resumes_after_the_recut_bump_checks_failed() {
 
 #[test]
 fn a_pending_release_attempt_finishes_before_the_open_bump_pr_is_merged() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.release_workflow(failed_release());
-    let first = release.run_script("0.2.0");
-    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let release = Release::failed_unpublished();
     let head = release.pr_head("release-0.2.0");
     release.gh(&[
         "fake",
@@ -132,11 +134,7 @@ fn a_pending_release_attempt_finishes_before_the_open_bump_pr_is_merged() {
 
 #[test]
 fn an_old_merged_bump_can_be_recut_with_a_new_bump_pr() {
-    let release = Release::new();
-    release.ci_reports(GREEN);
-    release.release_workflow(failed_release());
-    let first = release.run_script("0.2.0");
-    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let release = Release::failed_unpublished();
     let old = release.pr_head("release-0.2.0");
     release.merge_bump_pr("0.2.0", &old);
     release.merge_pr("newer", "Main advanced after the old bump was merged", "");
@@ -156,4 +154,16 @@ fn an_old_merged_bump_can_be_recut_with_a_new_bump_pr() {
     );
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
     assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    let calls = release.agent_calls();
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("Pull requests merged since v0.1.0"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Add the frobnicator"), "{prompt}");
+    assert!(prompt.contains("Tidy the site"), "{prompt}");
+    assert!(
+        prompt.contains("Main advanced after the old bump was merged"),
+        "{prompt}"
+    );
 }
