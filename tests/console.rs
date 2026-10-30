@@ -244,6 +244,24 @@ fn tool_spans(tree: &Value) -> Vec<&Value> {
 }
 
 #[test]
+fn console_pages_show_the_running_thirdshift_version() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let version = Command::new(binary).arg("--version").output().unwrap();
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let brand = format!(">{} / Console</p>", version.trim());
+    let console = Console::start(binary, home.path());
+
+    for path in ["/", "/logs", "/account", "/console-log"] {
+        let response = console.get(path);
+        assert_eq!(response.status(), 200, "{path}");
+        assert!(response.text().unwrap().contains(&brand), "{path}: {brand}");
+    }
+}
+
+#[test]
 fn command_changes_push_events_over_http() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
