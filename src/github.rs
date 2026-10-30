@@ -1628,7 +1628,10 @@ impl InboxSubject {
                 "issue",
                 "state closedAt labels(first: 100) { nodes { name } }",
             ),
-            Self::PullRequest => ("pullRequest", "url state mergedAt closedAt"),
+            Self::PullRequest => (
+                "pullRequest",
+                "url state mergedAt closedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+            ),
         }
     }
 
@@ -1684,13 +1687,50 @@ impl IssueState {
     }
 }
 
-/// What GitHub last showed for one pull request: its state and its merge
-/// or close time, each as GitHub wrote them.
+/// What GitHub last showed for one pull request, including its latest head CI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
+    #[serde(default)]
+    pub ci: InboxCi,
+}
+
+/// The combined checks and commit status on the latest pull-request commit.
+/// Old caches and missing or unfamiliar answers must never imply passing CI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxCi {
+    Green,
+    Red,
+    Pending,
+    NoChecks,
+    #[default]
+    Unknown,
+}
+
+impl InboxCi {
+    fn from_json(pr: &Value) -> Self {
+        let commit = &pr["commits"]["nodes"][0]["commit"];
+        match commit["statusCheckRollup"]["state"].as_str() {
+            Some("SUCCESS") => Self::Green,
+            Some("FAILURE" | "ERROR") => Self::Red,
+            Some("PENDING" | "EXPECTED") => Self::Pending,
+            None if commit.get("statusCheckRollup").is_some_and(Value::is_null) => Self::NoChecks,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Green => "CI green",
+            Self::Red => "CI red",
+            Self::Pending => "CI pending",
+            Self::NoChecks => "No CI checks",
+            Self::Unknown => "CI unknown",
+        }
+    }
 }
 
 impl PullRequestState {
@@ -1708,6 +1748,7 @@ impl PullRequestState {
             state,
             merged_at: at("mergedAt"),
             closed_at: at("closedAt"),
+            ci: InboxCi::from_json(json),
         })
     }
 }

@@ -1194,6 +1194,82 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
+test('Ready rows show CI without clipping on desktop or phone and update live', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const dir = join(logs, 'acme/widgets/commands/issue');
+  const cache = join(logs, 'github-inbox.json');
+  const changed = join(logs, 'github-inbox.changed');
+  const previous = await readFile(cache, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const states = [
+    [229, 'green', 'CI green', 'ready'], [230, 'red', 'CI red', 'urgent'],
+    [231, 'pending', 'CI pending', 'look'], [232, 'no_checks', 'No CI checks', 'done'],
+    [233, undefined, 'CI unknown', 'done'], [234, null, 'CI unknown', 'done'],
+  ];
+  const subjects = {};
+  const paths = [];
+  try {
+    for (const [number, ci] of states) {
+      const path = join(dir, `${number}-fixture.command.json`);
+      paths.push(path);
+      const url = `https://github.com/acme/widgets/pull/${number}`;
+      await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
+        cause: null, tickets: [], pull_request: url,
+        issue: { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'Review this pull request with a long issue title' } }));
+      // Undefined represents an old cache; null represents an unread PR.
+      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci };
+    }
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'CI fixture');
+    const page = await pageFor(t);
+    await page.goto(origin);
+    await folder(page, 'ready for review').click();
+    const row = number => page.locator(`.command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    for (const width of [1440, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        for (const [number, , label, tag] of states) {
+          const badge = row(number).locator('.ci');
+          await badge.getByText(label, { exact: true }).waitFor();
+          const seen = await badge.evaluate((node, tag) => {
+            const probe = document.createElement('span');
+            document.body.append(probe);
+            const token = name => { probe.style.color = `var(--${name})`; return getComputedStyle(probe).color; };
+            const expected = { color: token(`tag-${tag}-text`), background: token(`tag-${tag}-bg`) };
+            probe.remove();
+            const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+            return { expected, color: style.color, background: style.backgroundColor,
+              clipped: node.scrollWidth > node.clientWidth, fits: rect.left >= 0 && rect.right <= innerWidth };
+          }, tag);
+          assert.equal(seen.color, seen.expected.color, `${theme}: ${label}`);
+          assert.equal(seen.background, seen.expected.background, `${theme}: ${label}`);
+          assert.equal(seen.clipped, false, `${width}: ${label} must be readable`);
+          assert.equal(seen.fits, true, `${width}: ${label} must fit`);
+        }
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    subjects['https://github.com/acme/widgets/pull/229'].ci = 'red';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'CI changed');
+    await row(229).locator('.ci').getByText('CI red', { exact: true }).waitFor();
+    assert.equal(await row(229).getAttribute('data-state'), 'Ready');
+    // The same CI is present in the complete HTML when JavaScript is off.
+    const plain = await pageFor(t, { javaScriptEnabled: false });
+    await plain.goto(origin);
+    await plain.locator('.command:has(> .row-head > .subject a[href$="/issues/229"]) .ci').getByText('CI red', { exact: true }).waitFor();
+  } finally {
+    for (const path of paths) await rm(path, { force: true });
+    if (previous === null) await rm(cache, { force: true });
+    else await replaceRecord(cache, previous);
+    await writeFile(changed, 'CI fixture removed');
+  }
+});
+
 test('Landing, Ready and Stopping rows carry their state, Theme tags and still-able motion', { skip: process.platform !== 'linux' }, async t => {
   // The live fixtures borrow the Console's own process identity, as above.
   const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
