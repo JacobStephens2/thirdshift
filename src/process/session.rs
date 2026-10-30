@@ -227,3 +227,48 @@ fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
     }
     Ok(rest.to_vec())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_that_exits_before_its_environment_is_read_does_not_warn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const FIXTURE: &str = "THIRDSHIFT_VANISHED_PROCESS_FIXTURE";
+        if std::env::var_os(FIXTURE).is_some() {
+            let mut command = Command::new("unused");
+            mark(&mut command);
+            Session::of(&command).unwrap().sweep(None);
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let ps = directory.path().join("ps");
+        // Model a process disappearing after ps listed it. This PID is above
+        // the supported systems' PID limits, so it cannot name a live process.
+        // SAFETY: geteuid has no arguments or memory preconditions.
+        let uid = unsafe { libc::geteuid() };
+        std::fs::write(&ps, format!("#!/bin/sh\nprintf '2147483647 {uid} S\\n'\n")).unwrap();
+        std::fs::set_permissions(ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::session::tests::a_process_that_exits_before_its_environment_is_read_does_not_warn",
+                "--nocapture",
+            ])
+            .env(FIXTURE, "1")
+            .env("PATH", directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("warning:"), "{stderr}");
+    }
+}

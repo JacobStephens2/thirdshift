@@ -791,6 +791,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn availability_probes_the_manager_on_every_platform() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const FIXTURE: &str = "THIRDSHIFT_SCOPE_AVAILABILITY_FIXTURE";
+        if let Some(directory) = std::env::var_os(FIXTURE) {
+            assert!(available(), "the fixture's manager is reachable");
+            let _session = trial_session_command("unused");
+            let manager = Path::new(&directory).join("systemctl");
+            std::fs::write(&manager, "#!/bin/sh\nexit 1\n").unwrap();
+            assert!(!available(), "an unreachable manager must still be refused");
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["systemd-run", "systemctl"] {
+            let program = directory.path().join(name);
+            std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "scope::tests::availability_probes_the_manager_on_every_platform",
+                "--nocapture",
+            ])
+            .env(FIXTURE, directory.path())
+            .env("PATH", directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains("warning:"), "{stderr}");
+    }
+
+    #[test]
     fn memory_values_accept_systemd_byte_counts_and_infinity() {
         for value in ["512", "512M", "2G", "1T", "100K", "infinity"] {
             check_memory_value("trial.memory_max", value).unwrap();
