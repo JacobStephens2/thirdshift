@@ -239,8 +239,6 @@ mod tests {
 
     #[test]
     fn a_process_that_exits_before_its_environment_is_read_does_not_warn() {
-        use std::os::unix::fs::PermissionsExt;
-
         const FIXTURE: &str = "THIRDSHIFT_VANISHED_PROCESS_FIXTURE";
         if std::env::var_os(FIXTURE).is_some() {
             let mut command = Command::new("unused");
@@ -255,8 +253,10 @@ mod tests {
         // the supported systems' PID limits, so it cannot name a live process.
         // SAFETY: geteuid has no arguments or memory preconditions.
         let uid = unsafe { libc::geteuid() };
-        std::fs::write(&ps, format!("#!/bin/sh\nprintf '2147483647 {uid} S\\n'\n")).unwrap();
-        std::fs::set_permissions(ps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(
+            &ps,
+            &format!("#!/bin/sh\nprintf '2147483647 {uid} S\\n'\n"),
+        );
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",

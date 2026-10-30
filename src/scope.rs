@@ -789,8 +789,6 @@ mod tests {
 
     #[test]
     fn availability_probes_the_manager_on_every_platform() {
-        use std::os::unix::fs::PermissionsExt;
-
         const FIXTURE: &str = "THIRDSHIFT_SCOPE_AVAILABILITY_FIXTURE";
         if let Some(directory) = std::env::var_os(FIXTURE) {
             assert!(available(), "the fixture's manager is reachable");
@@ -804,8 +802,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         for name in ["systemd-run", "systemctl"] {
             let program = directory.path().join(name);
-            std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
-            std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_support::write_executable(&program, "#!/bin/sh\nexit 0\n");
         }
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
