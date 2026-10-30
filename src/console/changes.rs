@@ -47,7 +47,6 @@ impl Notifier {
 struct Registration {
     mode: RecursiveMode,
     created: Option<SystemTime>,
-    #[cfg(unix)]
     inode: (u64, u64),
 }
 
@@ -57,7 +56,6 @@ impl Registration {
         Ok(Self {
             mode,
             created: metadata.created().ok(),
-            #[cfg(unix)]
             inode: {
                 use std::os::unix::fs::MetadataExt;
                 (metadata.dev(), metadata.ino())
@@ -209,7 +207,7 @@ impl Paths {
     }
 }
 
-// Native backends may report canonical paths (notably /private/var on macOS).
+// Native backends may report canonical paths.
 // Resolve the existing ancestor so roots created later use the same spelling.
 pub(super) fn observed_path(path: &std::path::Path) -> PathBuf {
     for ancestor in path.ancestors() {
@@ -373,8 +371,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, &alias).unwrap();
         let root = alias.join(".thirdshift");
         std::fs::create_dir(&root).unwrap();
-        // The log root need not exist yet. FSEvents reports canonical paths,
-        // including /private/var for a HOME supplied under macOS's /var alias.
+        // The log root need not exist yet. Canonical events must still match
+        // paths beneath the symlinked home.
         let paths = Paths::new(root.clone(), root.join("logs"), alias.join("thirdshift"));
         let canonical = real.canonicalize().unwrap().join(".thirdshift");
         let mut revision = Revision::default();

@@ -5,8 +5,6 @@
 //! The publish script targets the Linux server and swaps its symlink with GNU
 //! `mv -T`, so its tests run on Linux only.
 
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -153,7 +151,6 @@ impl Deploy {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn publishing_serves_the_site_without_the_deploy_directory_and_records_the_commit() {
     let deploy = Deploy::new();
 
@@ -170,7 +167,6 @@ fn publishing_serves_the_site_without_the_deploy_directory_and_records_the_commi
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn publishing_again_with_no_new_commits_changes_nothing() {
     let deploy = Deploy::new();
     deploy.publish();
@@ -182,7 +178,6 @@ fn publishing_again_with_no_new_commits_changes_nothing() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_commit_outside_the_served_site_changes_nothing_served() {
     let deploy = Deploy::new();
     deploy.publish();
@@ -205,7 +200,6 @@ fn a_commit_outside_the_served_site_changes_nothing_served() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_commit_to_the_site_swaps_in_a_new_copy() {
     let deploy = Deploy::new();
     deploy.publish();
@@ -230,7 +224,6 @@ fn a_commit_to_the_site_swaps_in_a_new_copy() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn only_the_live_and_previous_copies_are_kept() {
     let deploy = Deploy::new();
     deploy.publish();

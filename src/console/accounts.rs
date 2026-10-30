@@ -284,7 +284,6 @@ fn matches_secret(secret: &str, hash: &str) -> bool {
 fn private_file(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).append(true).create(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);

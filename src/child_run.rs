@@ -12,7 +12,7 @@ pub use runs::Runs;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -604,24 +604,19 @@ pub(super) fn start_process(
         base_fix,
         asks: asks.clone(),
     };
-    start_from(&own_executable()?, issue, &given)
+    start_from(own_executable(), issue, &given)
 }
 
 /// The executable this process is running, as a child `thirdshift` is
 /// started: the same binary, so the hidden arguments it is given never meet
 /// another version.
 ///
-/// On Linux that is the kernel's own link to it, which still reaches it once
+/// The kernel's own link still reaches it once
 /// the file at its install path has been replaced or removed, as an update
 /// does while a Run is going. The path that link resolves to names no file by
-/// then, so a child can't be started by it (#261). Elsewhere there is no such
-/// link, and it is the executable's path.
-fn own_executable() -> Result<PathBuf> {
-    if cfg!(target_os = "linux") {
-        Ok(PathBuf::from("/proc/self/exe"))
-    } else {
-        std::env::current_exe().context("no thirdshift executable")
-    }
+/// then, so a child can't be started by it (#261).
+fn own_executable() -> &'static Path {
+    Path::new("/proc/self/exe")
 }
 
 /// [`start`], with the `thirdshift` at `executable` as the child.
@@ -639,11 +634,9 @@ fn start_using(
     let mut command = Command::new(executable);
     logs::inherit_record(&mut command);
     crate::session::recording::Recording::capture().inherit_command(&mut command);
-    // On Linux `executable` is a link, and the child goes by this process's
+    // `executable` is a link, and the child goes by this process's
     // command instead.
-    if cfg!(target_os = "linux")
-        && let Some(own) = own_command()
-    {
+    if let Some(own) = own_command() {
         command.arg0(own);
     }
     let child = command
@@ -696,11 +689,9 @@ fn own_command() -> Option<OsString> {
 
 /// Name this process after the command it was started as, for `pgrep`,
 /// `pkill` and `top`. The kernel names a process after the last part of the
-/// path it was started by, which for a child Run on Linux is the link to the
-/// running executable: every child Run would be an `exe`. Elsewhere a child
-/// Run is started by the executable's path, and has its name already.
+/// path it was started by, which for a child Run is the link to the
+/// running executable: every child Run would be an `exe`.
 pub fn name_this_process() {
-    #[cfg(target_os = "linux")]
     if let Some(own) = own_command()
         && let Some(name) = Path::new(&own).file_name()
         && let Ok(name) = std::ffi::CString::new(name.as_encoded_bytes())

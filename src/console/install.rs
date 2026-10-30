@@ -46,10 +46,6 @@ impl Proxy {
 
 pub fn install() -> Result<String> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "console install currently supports Linux; run thirdshift console manually on this platform"
-    );
-    ensure!(
         identity("-u")? != "0",
         "run thirdshift console install as the owner, without sudo; only the printed script needs sudo"
     );
@@ -220,15 +216,10 @@ fn available(name: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
         std::env::split_paths(&paths).any(|directory| {
             let path = directory.join(name);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                path.metadata().is_ok_and(|metadata| {
-                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-                })
-            }
-            #[cfg(not(unix))]
-            path.is_file()
+            use std::os::unix::fs::PermissionsExt;
+            path.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
         })
     })
 }

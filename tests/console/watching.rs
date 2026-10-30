@@ -1,4 +1,4 @@
-//! Native process-exit updates through HTTP, on Linux and macOS.
+//! Linux process-exit updates through HTTP.
 use super::*;
 
 pub(super) struct FixtureProcess(pub(super) Child);
@@ -10,7 +10,6 @@ impl Drop for FixtureProcess {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub(super) fn start(pid: u32) -> String {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
     let ticks = stat
@@ -22,27 +21,6 @@ pub(super) fn start(pid: u32) -> String {
         .unwrap();
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
     format!("{}:{ticks}", boot.trim())
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn start(pid: u32) -> String {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-    // SAFETY: the fixture owns this process and supplies the exact buffer size.
-    assert_eq!(
-        unsafe {
-            libc::proc_pidinfo(
-                pid as i32,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size,
-            )
-        },
-        size
-    );
-    let info = unsafe { info.assume_init() };
-    format!("{}:{}", info.pbi_start_tvsec, info.pbi_start_tvusec)
 }
 
 pub(super) fn live_record(home: &Path, number: u64, pid: u32) -> Value {

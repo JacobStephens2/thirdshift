@@ -492,7 +492,6 @@ fn revoke_session(home: &Path, how: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn an_open_log_stream_closes_when_its_session_is_revoked() {
     for revoke in REVOCATIONS {

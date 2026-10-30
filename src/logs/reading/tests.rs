@@ -14,7 +14,6 @@ mod inventory_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
 
-#[cfg(target_os = "linux")]
 #[path = "metrics_tests.rs"]
 mod metrics_tests;
 

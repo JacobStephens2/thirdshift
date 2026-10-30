@@ -1,6 +1,5 @@
 //! Real Trial -> Harness placement, with the user manager when available.
 
-#[cfg(target_os = "linux")]
 #[test]
 fn trial_sessions_keep_their_cap_and_clean_detached_work() {
     let output = std::process::Command::new("python3")

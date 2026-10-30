@@ -9,7 +9,7 @@ cargo-dist-version = "0.33.0"
 # generator instead; it still generates all build and publication jobs.
 allow-dirty = ["ci"]
 ci = "github"
-targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "aarch64-apple-darwin"]
+targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
 installers = ["shell"]
 install-path = "~/.local/bin"
 # The last line the installer prints; the installer itself runs nothing after
@@ -37,4 +37,3 @@ post-announce-jobs = ["./release-notes"]
 global = "ubuntu-24.04"
 x86_64-unknown-linux-musl = "ubuntu-24.04"
 aarch64-unknown-linux-musl = "ubuntu-24.04-arm"
-aarch64-apple-darwin = "macos-26"

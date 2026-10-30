@@ -189,12 +189,10 @@ fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner()
         (Some("ready for review"), "ready for review"),
         (None, "died"),
     ];
-    #[cfg(unix)]
     states.push((None, "running"));
     for (outcome, status) in states {
         let home = tempfile::tempdir().unwrap();
         configure(home.path());
-        #[cfg(unix)]
         let work =
             super::watching::FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
         let mut parent = record(home.path(), 7, Some("merged"), 0);
@@ -213,7 +211,6 @@ fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner()
             if number == 99 {
                 child["outcome"] = json!(outcome);
                 child["ended_at"] = outcome.map_or(Value::Null, |_| parent["ended_at"].clone());
-                #[cfg(unix)]
                 if status == "running" {
                     child["process_id"] = json!(work.0.id());
                     child["process_start"] = json!(super::watching::start(work.0.id()));

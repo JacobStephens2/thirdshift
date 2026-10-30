@@ -189,7 +189,6 @@ fn retained_activity_finishes_show_dates_and_missing_finishes_stay_unknown() {
     assert_eq!(html.matches("End time unknown").count(), 1, "{html}");
 }
 
-#[cfg(unix)]
 #[test]
 fn live_rows_keep_start_age_without_claiming_to_have_ended() {
     let home = tempfile::tempdir().unwrap();
@@ -388,7 +387,6 @@ fn live_commands_never_show_the_idle_notice_even_in_needs_you_or_hidden_sections
     assert!(!html.contains("No running Commands"), "{html}");
 }
 
-#[cfg(unix)]
 #[test]
 fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status() {
     use super::watching::{FixtureProcess, live_record};
@@ -523,7 +521,6 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     assert_eq!(item["left_reason"], "taken up by a later Command", "{item}");
 }
 
-#[cfg(unix)]
 #[test]
 fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group() {
     use super::watching::{FixtureProcess, live_record};

@@ -1,5 +1,4 @@
 //! Installation is exercised through the binary and its printed shell script.
-#![cfg(target_os = "linux")]
 
 mod support;
 

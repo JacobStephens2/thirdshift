@@ -1,11 +1,9 @@
 use super::*;
 
-#[cfg(target_os = "linux")]
 struct Machine {
     root: tempfile::TempDir,
 }
 
-#[cfg(target_os = "linux")]
 impl Machine {
     fn new() -> Self {
         use std::os::unix::fs::PermissionsExt;
@@ -79,7 +77,6 @@ void endpwent(void) { if (accounts) fclose(accounts); accounts = NULL; }
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for Machine {
     fn drop(&mut self) {
         use std::os::unix::fs::PermissionsExt;
@@ -87,7 +84,6 @@ impl Drop for Machine {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn retained_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
     let mut files = std::collections::BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -101,7 +97,6 @@ fn retained_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf,
     files
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn foreign_process_names_and_accounts_survive_across_console_views() {
     let machine = Machine::new();
@@ -139,7 +134,6 @@ fn foreign_process_names_and_accounts_survive_across_console_views() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn unreadable_foreign_session_traces_leave_waterfall_available() {
     use std::os::unix::fs::PermissionsExt;
@@ -184,7 +178,6 @@ fn unreadable_foreign_session_traces_leave_waterfall_available() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     let machine = Machine::new();
@@ -205,7 +198,6 @@ fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     assert_eq!(retained_files(&machine.home("conductor")), before);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn unreadable_foreign_logs_are_omitted_without_a_page_error() {
     use std::os::unix::fs::PermissionsExt;
@@ -236,7 +228,6 @@ fn unreadable_foreign_logs_are_omitted_without_a_page_error() {
     assert!(console.get("/").status().is_success());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn other_account_live_actions_never_signal_or_write_and_details_never_cache_there() {
     use super::watching::{FixtureProcess, live_record};
@@ -307,7 +298,6 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
     assert_eq!(retained_files(&home), before);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     let machine = Machine::new();
@@ -462,7 +452,6 @@ fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
 
 /// Another account chooses the Session path in its Command record. The serving
 /// process must not open a trace outside that account's log directory.
-#[cfg(target_os = "linux")]
 #[test]
 fn other_account_session_references_stay_inside_their_log_directory() {
     let machine = Machine::new();
@@ -514,7 +503,6 @@ fn other_account_session_references_stay_inside_their_log_directory() {
 /// stays inside that account's home, and only when the file's own canonical
 /// path stays under that directory. A symlink may point at another directory
 /// inside the home. The serving account's commands alias is a separate case.
-#[cfg(target_os = "linux")]
 #[test]
 fn other_account_logs_stay_inside_that_accounts_home() {
     let machine = Machine::new();
@@ -573,7 +561,6 @@ fn other_account_logs_stay_inside_that_accounts_home() {
 
 /// `logs --file` is not the only reader. A `commands` symlink outside the
 /// accepted directory must not supply a record or a Command log.
-#[cfg(target_os = "linux")]
 #[test]
 fn other_account_commands_alias_cannot_leave_the_accepted_directory() {
     let machine = Machine::new();
@@ -616,7 +603,6 @@ fn other_account_commands_alias_cannot_leave_the_accepted_directory() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
     let mut text = "[console]\nport = 0\n".to_string();
     if let Some(dir) = logs_dir {
@@ -625,14 +611,12 @@ fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
     fs::write(home.join(".thirdshift/config.toml"), text).unwrap();
 }
 
-#[cfg(target_os = "linux")]
 fn place_log(root: &Path, repo: &str, name: &str, body: &str) {
     let dir = root.join(format!("acme/{repo}/commands/issue"));
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(name), body).unwrap();
 }
 
-#[cfg(target_os = "linux")]
 fn observed_logs(machine: &Machine) -> String {
     let output = machine.run(&["logs", "--json"]);
     assert!(output.status.success(), "{output:?}");
@@ -648,7 +632,6 @@ fn observed_logs(machine: &Machine) -> String {
 
 /// Another account's Command record is untrusted. Its issue URL and repository
 /// must not be interpolated into the serving account's `gh` requests.
-#[cfg(target_os = "linux")]
 #[test]
 fn other_account_records_cannot_shape_the_serving_accounts_github_requests() {
     let machine = Machine::new();
@@ -682,7 +665,6 @@ fn other_account_records_cannot_shape_the_serving_accounts_github_requests() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
