@@ -429,10 +429,11 @@ Keep a single copy: with copies in more than one directory on your `PATH` (say `
 
 - **Rocky Linux** 9.8 and later, x86_64.
 - **Ubuntu** 24.04.3 and later, x86_64.
+- **Ubuntu** 24.04 and later, aarch64 (ARM Linux), with full CI test coverage on `main` and nightly.
 - **WSL2**, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. `~/repos`), not under `/mnt/c`, where git is slow and file permissions misbehave. WSL1 is not supported.
 - **macOS** Tahoe 26.5.2 and later, Apple Silicon.
 
-One statically linked Linux binary covers the first three, so it doesn't depend on the host's glibc; macOS gets a native build.
+Each Linux architecture gets a statically linked binary, so it doesn't depend on the host's glibc; macOS gets a native build. Rocky Linux and WSL2 support is x86_64 only.
 
 ## Prerequisites
 

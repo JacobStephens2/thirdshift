@@ -399,10 +399,11 @@ sudo sh install-console.sh
 <ul>
 <li><strong>Rocky Linux</strong> 9.8 and later, x86_64.</li>
 <li><strong>Ubuntu</strong> 24.04.3 and later, x86_64.</li>
+<li><strong>Ubuntu</strong> 24.04 and later, aarch64 (ARM Linux), with full CI test coverage on <code>main</code> and nightly.</li>
 <li><strong>WSL2</strong>, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. <code>~/repos</code>), not under <code>/mnt/c</code>, where git is slow and file permissions misbehave. WSL1 is not supported.</li>
 <li><strong>macOS</strong> Tahoe 26.5.2 and later, Apple Silicon.</li>
 </ul>
-<p>One statically linked Linux binary covers the first three, so it doesn&#39;t depend on the host&#39;s glibc; macOS gets a native build.</p>
+<p>Each Linux architecture gets a statically linked binary, so it doesn&#39;t depend on the host&#39;s glibc; macOS gets a native build. Rocky Linux and WSL2 support is x86_64 only.</p>
 </div></details>
 <details class="fold"><summary><h2>Prerequisites</h2></summary>
 <div class="manual-content" id="prerequisites">
