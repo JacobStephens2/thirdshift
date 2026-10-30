@@ -35,6 +35,45 @@ impl Limit {
             utilization,
             resets_at,
         }
+        .accepted()
+    }
+
+    /// Keep only facts safe to store and print. A sandboxed Trial can write
+    /// the Codex session file this parses, and the plan-limit signal repeats
+    /// those strings into the operator's terminal and Command record.
+    pub(crate) fn accepted(mut self) -> Self {
+        if !matches!(self.harness.as_deref(), Some("claude" | "codex")) {
+            self.harness = None;
+        }
+        let window = self
+            .window
+            .as_deref()
+            .and_then(operator_token)
+            .map(str::to_owned);
+        self.window = window;
+        let resets_at = self
+            .resets_at
+            .as_deref()
+            .filter(|text| chrono::DateTime::parse_from_rfc3339(text).is_ok())
+            .map(str::to_owned);
+        self.resets_at = resets_at;
+        if self.utilization.is_some_and(|used| !used.is_finite()) {
+            self.utilization = None;
+        }
+        self
+    }
+}
+
+/// Window names from the providers are short tokens such as `seven_day`.
+pub(crate) fn operator_token(value: &str) -> Option<&str> {
+    if (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        Some(value)
+    } else {
+        None
     }
 }
 

@@ -199,6 +199,58 @@ fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {
 }
 
 #[test]
+fn a_forged_quota_window_cannot_enter_the_pause_message() {
+    // A Trial shares the Codex session directory with the sandboxed agent.
+    // The quota window is whatever string that file reports.
+    let window = "secondary\n\u{1b}[2Jecho paused-review\u{7}";
+    let raw = serde_json::json!({
+        "type": "token_count",
+        "rate_limits": {
+            "rate_limit_reached_type": window,
+            window: {"used_percent": 100, "resets_at": 1793397600}
+        }
+    });
+    let mut interpretation = stream(Harness::Codex, "");
+    interpretation.decode(&raw.to_string());
+    assert!(interpretation.plan_limit_reached());
+    let limit = interpretation.plan_limit().cloned().unwrap();
+    let shown = crate::session::limits::Reached(limit.clone()).to_string();
+    assert!(
+        limit
+            .window
+            .as_deref()
+            .is_none_or(|name| !name.chars().any(char::is_control) && !name.contains("echo")),
+        "stored window kept forged text: {limit:?}"
+    );
+    assert!(
+        !shown.chars().any(char::is_control),
+        "pause message kept a control character: {shown:?}"
+    );
+    assert!(
+        !shown.contains("echo paused-review"),
+        "pause message kept forged window text: {shown:?}"
+    );
+
+    let claude = serde_json::json!({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed_warning",
+            "unifiedWindows": {
+                "seven_day\necho paused-review": {"utilization": 0.86, "resetsAt": 1793397600}
+            }
+        }
+    });
+    let mut interpretation = stream(Harness::Claude, "");
+    interpretation.decode(&claude.to_string());
+    let shown =
+        crate::session::limits::Reached(interpretation.plan_limit().cloned().unwrap()).to_string();
+    assert!(
+        !shown.contains("echo paused-review") && !shown.chars().any(char::is_control),
+        "Claude pause message kept forged window text: {shown:?}"
+    );
+}
+
+#[test]
 fn review_agy_failure_after_a_reported_turn_is_not_a_startup_failure() {
     let mut interpretation = stream(Harness::Agy, "");
     interpretation.condense(r#"{"event":"result","result":{"conversation_id":"s","status":"ERROR","response":"","error":"Harness failed.","num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"thinking_tokens":0,"total_tokens":0}}}"#);
