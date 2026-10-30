@@ -66,6 +66,41 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Paused rows and Command details copy the saved resume command', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const resume = "thirdshift experiment 'feature with spaces' --yes";
+  fixture.outcome = 'paused';
+  fixture.kind = 'Experiment';
+  fixture.resume_command = resume;
+  fixture.cause = 'Command paused at a plan-limit warning: Claude seven-day window at 86%, resets Fri Oct 30 22:00 UTC';
+  fixture.limit = { harness: 'claude', window: 'seven_day', utilization: 0.86, resets_at: '2026-10-30T22:00:00Z' };
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.goto(`${origin}/?section=needs-you`);
+    const row = page.locator('#inbox li.command[data-state="Paused"]');
+    await row.getByText(/resets Fri Oct 30 22:00/).waitFor();
+    await row.getByRole('button', { name: 'Copy resume command', exact: true }).click();
+    await row.getByText('CLI copied.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), resume);
+    fixture.cause += ' Updated after copying.';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await row.getByText(fixture.cause, { exact: true }).waitFor();
+    await row.getByText('CLI copied.', { exact: true }).waitFor();
+    await row.locator('.state').click();
+    const details = page.locator('#peek-content');
+    await details.getByRole('button', { name: 'Copy resume command', exact: true }).click();
+    await details.getByText('CLI copied.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), resume);
+    assert.equal(await details.getByText(/^Failed:/).count(), 0);
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('Inbox keeps issue numbers visible for long repository and Process subjects', async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const original = await readFile(path, 'utf8');

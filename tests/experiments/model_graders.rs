@@ -1,6 +1,98 @@
 use super::*;
 
 #[test]
+fn plan_limit_in_grading_keeps_trials_and_shows_a_resumable_paused_command() {
+    let fixture = Fixture::new();
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    let valid = fs::read_to_string(&script).unwrap();
+    fs::write(&script, "echo '{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\",\"rateLimitType\":\"seven_day\",\"utilization\":0.86,\"resetsAt\":1793397600}}'\nsleep 30\n").unwrap();
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let before = fixture.experiment();
+    assert_eq!(before["state"], "paused");
+    let trials = fixture.trial_calls().len();
+    assert_eq!(trials, 2);
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    assert_eq!(record["outcome"], "paused");
+    assert_eq!(record["limit"]["harness"], "claude");
+    assert_eq!(record["limit"]["window"], "seven_day");
+    assert_eq!(record["limit"]["utilization"], 0.86);
+    assert_eq!(record["limit"]["resets_at"], "2026-10-30T22:00:00Z");
+    assert_eq!(record["resume_command"], before["resume_command"]);
+    let pause_fields = |command: &Value| json!({"outcome":command["outcome"],"resume_command":command["resume_command"],"limit":command["limit"]});
+    result_format::assert_documented("CommandPause", &pause_fields(&record));
+    assert!(
+        paused.stderr.contains("seven-day window at 86%"),
+        "{}",
+        paused.stderr
+    );
+    assert!(paused.stderr.contains(&format!(
+        "Experiment {} paused",
+        before["id"].as_str().unwrap()
+    )));
+    let log = fs::read_to_string(before["command_log"].as_str().unwrap()).unwrap();
+    assert!(!log.contains(&format!(
+        "Experiment {} failed",
+        before["id"].as_str().unwrap()
+    )));
+    let shown = fixture
+        .scenario
+        .run(&["show", record["name"].as_str().unwrap(), "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(shown["command"]["limit"], record["limit"]);
+    assert_eq!(shown["command"]["resume_command"], record["resume_command"]);
+    result_format::assert_documented("CommandPause", &pause_fields(&shown["command"]));
+    let status = fixture.scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(status["commands"][0]["needs_you_kind"], "paused");
+    assert_eq!(status["commands"][0]["group"], "needs you");
+    let dismissed = fixture
+        .scenario
+        .run(&["dismiss", record["name"].as_str().unwrap(), "--json"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    let dismissed: Value = serde_json::from_str(&dismissed.stdout).unwrap();
+    assert_eq!(dismissed["dismissal"]["kind"], "Paused", "{dismissed}");
+    let undo = fixture.scenario.run(&[
+        "dismiss",
+        record["name"].as_str().unwrap(),
+        "--undo",
+        "--json",
+    ]);
+    assert_eq!(undo.code, Some(0), "{}", undo.stderr);
+    fs::write(
+        script,
+        format!(
+            "{valid}\ntouch {:?}\nwhile [ ! -f {:?} ]; do sleep 0.02; done\n",
+            fixture.scenario.path("resumed-grader"),
+            fixture.scenario.path("finish-resume")
+        ),
+    )
+    .unwrap();
+    let resumed = fixture.scenario.run_until(
+        &Fixture::experiment_args(&[]),
+        &NO_SANDBOX,
+        "resumed-grader",
+    );
+    let status = fixture.scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert!(
+        !status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["outcome"] == "paused" && row["group"] == "needs you"),
+        "{status}"
+    );
+    fs::write(fixture.scenario.path("finish-resume"), "").unwrap();
+    let resumed = resumed.finish();
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(fixture.trial_calls().len(), trials);
+}
+
+#[test]
 fn a_sandboxed_model_grader_sees_only_its_packet() {
     if !std::process::Command::new("bwrap")
         .arg("--version")

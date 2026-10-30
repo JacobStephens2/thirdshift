@@ -244,6 +244,7 @@ impl RunNotification {
             }
         }
         if let Some(resend) = self.resend
+            && account.outcome != "paused"
             && !(self.unless_merged && account.merged_with_nothing_waiting())
             && let Err(error) = resend.send(&subject, &text)
         {

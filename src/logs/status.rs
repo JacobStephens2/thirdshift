@@ -73,11 +73,23 @@ fn print_command(command: &Command, state_word: &str, indent: &str) {
         facts.effort.as_deref().unwrap_or("default Effort")
     );
     print_tickets(facts, &format!("{indent}  "));
+    print_pause(facts, indent);
     for dispatched in &command.dispatched {
         print_command(dispatched, dispatched.state, &format!("{indent}  "));
     }
     for child in &command.children {
         print_command(child, child.state, &format!("{indent}  "));
+    }
+}
+
+pub(super) fn print_pause(facts: &super::command_record::CommandRecord, indent: &str) {
+    if facts.outcome.as_deref() == Some("paused") {
+        if let Some(cause) = &facts.cause {
+            println!("{indent}  {cause}");
+        }
+        if let Some(command) = &facts.resume_command {
+            println!("{indent}  Resume: {command}");
+        }
     }
 }
 

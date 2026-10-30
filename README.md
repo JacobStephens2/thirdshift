@@ -15,7 +15,7 @@ curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download
 thirdshift setup
 ```
 
-The installer puts a single binary in `~/.local/bin`; no Rust toolchain or checkout of this repo is needed. Supported: x86_64 Linux (Rocky, Ubuntu and WSL2) and Apple Silicon macOS. See [supported versions](docs/guide.md#supported-platforms) and [other installation methods](docs/guide.md#install).
+The installer puts a single binary in `~/.local/bin`; no Rust toolchain or checkout of this repo is needed. Supported: x86_64 Linux (Rocky, Ubuntu and WSL2), ARM Linux (Ubuntu 24.04 and later, aarch64, with full CI test coverage) and Apple Silicon macOS. See [supported versions](docs/guide.md#supported-platforms) and [other installation methods](docs/guide.md#install).
 
 Have `git`, authenticated `gh`, and one of the supported coding agent CLIs installed. Set git's `user.name` and `user.email` and make sure it can push. [Prerequisites and permissions](docs/guide.md#prerequisites) covers setup and access: sessions run unattended as your user, with access to that account's files, credentials and tools.
 

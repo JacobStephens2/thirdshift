@@ -346,6 +346,14 @@ pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
     record().experiment(description);
 }
 
+pub(crate) fn resumable(command: &str) {
+    record().resumable(command);
+}
+
+pub(crate) fn paused(limit: &crate::session::limits::Limit) {
+    record().paused(limit);
+}
+
 pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
     complete(outcome, cause);
 }

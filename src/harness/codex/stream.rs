@@ -244,8 +244,8 @@ impl Decoder for CodexProgress {
             return StreamUpdate::default();
         };
         let mut evidence = Vec::new();
-        if crate::harness::interpretation::limits::codex(&event) {
-            evidence.push(Evidence::PlanLimit);
+        if let Some(limit) = crate::harness::interpretation::limits::codex(&event) {
+            evidence.push(Evidence::PlanLimit(limit));
         }
         if event["type"] == "thread.started" {
             evidence.push(Evidence::RequestedModelFallback);

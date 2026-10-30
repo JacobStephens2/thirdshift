@@ -27,6 +27,8 @@ pub(super) struct Peek {
     pub subject: String,
     pub title: String,
     pub failure_reason: Option<String>,
+    pub pause_reason: Option<String>,
+    pub resume_command: Option<String>,
     pub output: Option<String>,
 }
 
@@ -122,6 +124,12 @@ impl Peek {
         Self {
             output,
             failure_reason: failure_reason(&value),
+            pause_reason: (value["outcome"] == "paused")
+                .then(|| value["cause"].as_str().map(str::to_owned))
+                .flatten(),
+            resume_command: (value["outcome"] == "paused")
+                .then(|| value["resume_command"].as_str().map(str::to_owned))
+                .flatten(),
             account: value["account"].as_str().map(str::to_owned),
             dismissal: inspection.dismissal.map(|action| {
                 let (path, label, suffix) = match action {

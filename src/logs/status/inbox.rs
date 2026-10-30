@@ -47,6 +47,7 @@ pub(crate) struct Row {
     pub timing: Timing,
     pub count: usize,
     pub cause: String,
+    pub resume_command: Option<String>,
     /// Why and when the row left Needs you or Ready for review, empty
     /// while it still waits or never waited.
     pub left: String,
@@ -257,6 +258,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 timing: Timing::new(false, &command.started_at, command.ended_at.as_deref(), now),
                 count: 1,
                 cause: String::new(),
+                resume_command: None,
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
@@ -446,6 +448,10 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         ),
         count: 1,
         cause: facts.cause.clone().unwrap_or_default(),
+        resume_command: facts
+            .resume_command
+            .clone()
+            .filter(|_| facts.outcome.as_deref() == Some("paused")),
         left: String::new(),
         harness: format!(
             "{} · {} · {}",
