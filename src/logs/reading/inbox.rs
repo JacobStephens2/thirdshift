@@ -10,7 +10,7 @@ use serde::Serialize;
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, DismissedRow, READY_KIND};
-use crate::logs::github::{FindingSubject, Kept, RowAnswer, Subject};
+use crate::logs::github::{CommandAnswer, FindingSubject, Kept, Subject};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -109,22 +109,8 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// A waiting group's departure, absent for rows that never waited or aged out.
     #[serde(flatten)]
     departure: Option<Departure>,
-    /// What GitHub last showed for the row's pull request: `open`,
-    /// `merged` or `closed`. `None` where GitHub speaks for no row: one
-    /// with no pull request, one not read yet, or one GitHub can't resolve.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github_state: Option<String>,
-    /// Combined CI on the pull request's latest head, from the same kept answer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github_ci: Option<crate::github::InboxCi>,
-    /// The pull request's merge or close time, RFC 3339, for a merged or
-    /// closed row: when the row stopped waiting.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github_at: Option<String>,
-    /// The row's own or dispatched issue/PR facts, finding waits and the
-    /// time each was read. History retains its own observation times.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github: Option<RowAnswer>,
+    #[serde(flatten)]
+    pub github: CommandAnswer,
     /// Who dismissed the row, when, from where and all kinds covered.
     /// `None` while the row waits or was never dismissed for its kind.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -627,7 +613,6 @@ pub(super) fn evaluate<'a>(
         };
         // A row GitHub finished weeks ago goes straight to History when
         // first read, instead of filling Resolved at once.
-        let state = github_state(&command, github);
         let departure = left
             .map(|at| (TAKEN_UP_REASON.to_string(), at))
             .or(github_moved);
@@ -726,12 +711,10 @@ pub(super) fn evaluate<'a>(
                     left_reason: reason,
                     left_at: at.to_rfc3339(),
                 }),
-                github_state: state.map(|state| state.state.to_string()),
-                github_ci: state.map(|state| state.ci),
-                github_at: state.and_then(event_time).map(str::to_string),
                 github: command
                     .selector()
-                    .and_then(|row| github.row_answer(&row, urls)),
+                    .map(|row| github.command_answer(&row, record_pull_request(&command), urls))
+                    .unwrap_or_default(),
                 dismissal,
             },
         });
@@ -799,11 +782,6 @@ fn github_state<'a>(
     github: &'a Kept,
 ) -> Option<&'a PullRequestState> {
     github.pull_request(&observation.selector()?, record_pull_request(observation)?)
-}
-
-/// The pull request's merge or close time, as GitHub wrote it.
-fn event_time(state: &PullRequestState) -> Option<&str> {
-    state.merged_at.as_deref().or(state.closed_at.as_deref())
 }
 
 /// When an ended row stopped waiting through GitHub, with why it left.
@@ -875,7 +853,7 @@ fn github_work_left(
                     if pull.state != PrState::Merged {
                         return None;
                     }
-                    (MERGED_REASON, event_time(pull))
+                    (MERGED_REASON, pull.event_time())
                 };
                 time(at)
                     .or(ended)
@@ -890,7 +868,7 @@ fn github_work_left(
     }
     let state = github_state(&observation, github)?;
     let (reason, at) = match state.state {
-        PrState::Merged => (MERGED_REASON.to_string(), event_time(state)),
+        PrState::Merged => (MERGED_REASON.to_string(), state.event_time()),
         PrState::Closed => (CLOSED_REASON.to_string(), state.closed_at.as_deref()),
         PrState::Open => return None,
     };

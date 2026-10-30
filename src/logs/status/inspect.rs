@@ -215,18 +215,43 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
+        let kept = crate::logs::github::load(&config.logs_dir);
+        let github = if let Observation::Record(record) = command
+            && let Some(row) = command.selector()
+        {
+            let record = &record.record;
+            let urls = record
+                .pull_request
+                .as_deref()
+                .into_iter()
+                .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
+                .collect();
+            kept.command_answer(&row, record.pull_request.as_deref(), urls)
+        } else {
+            Default::default()
+        };
+        #[derive(Serialize)]
+        struct ShownCommand {
+            #[serde(flatten)]
+            details: serde_json::Value,
+            #[serde(flatten)]
+            github: crate::logs::github::CommandAnswer,
+        }
         #[derive(Serialize)]
         struct Show {
             version: u32,
             hostname: String,
-            command: serde_json::Value,
+            command: ShownCommand,
         }
         println!(
             "{}",
             serde_json::to_string_pretty(&Show {
                 version: 1,
                 hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: crate::logs::metrics::details(&snapshot, command)?,
+                command: ShownCommand {
+                    details: crate::logs::metrics::details(&snapshot, command)?,
+                    github,
+                },
             })?
         );
     } else {

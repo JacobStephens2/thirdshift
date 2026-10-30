@@ -1630,7 +1630,7 @@ impl InboxSubject {
             ),
             Self::PullRequest => (
                 "pullRequest",
-                "url state mergedAt closedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+                "url state mergedAt closedAt mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
             ),
         }
     }
@@ -1687,7 +1687,7 @@ impl IssueState {
     }
 }
 
-/// What GitHub last showed for one pull request, including its latest head CI.
+/// What GitHub last showed for one pull request, including head CI and mergeability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
@@ -1695,6 +1695,28 @@ pub(crate) struct PullRequestState {
     pub closed_at: Option<String>,
     #[serde(default)]
     pub ci: InboxCi,
+    #[serde(default)]
+    pub mergeable: InboxMergeable,
+}
+
+/// Mergeability is independent of head CI. Old or computing answers imply no conflict.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxMergeable {
+    Mergeable,
+    Conflicting,
+    #[default]
+    Unknown,
+}
+
+impl InboxMergeable {
+    fn from_json(pr: &Value) -> Self {
+        match pr["mergeable"].as_str() {
+            Some("MERGEABLE") => Self::Mergeable,
+            Some("CONFLICTING") => Self::Conflicting,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// The combined checks and commit status on the latest pull-request commit.
@@ -1734,6 +1756,11 @@ impl InboxCi {
 }
 
 impl PullRequestState {
+    /// The pull request's merge or close time, as GitHub wrote it.
+    pub fn event_time(&self) -> Option<&str> {
+        self.merged_at.as_deref().or(self.closed_at.as_deref())
+    }
+
     fn from_json(url: &str, json: &Value) -> Result<Self> {
         let state = match json["state"].as_str() {
             Some("OPEN") => PrState::Open,
@@ -1749,6 +1776,7 @@ impl PullRequestState {
             merged_at: at("mergedAt"),
             closed_at: at("closedAt"),
             ci: InboxCi::from_json(json),
+            mergeable: InboxMergeable::from_json(json),
         })
     }
 }

@@ -178,7 +178,7 @@ pub fn run(options: Options) -> Result<()> {
     let repository = std::env::current_dir()?;
     let git = Git::new(&repository);
     let candidate = resolve(&git, &options.candidate)?;
-    let baseline_reference = if options.release {
+    let baseline_reference = if options.release && options.baseline.is_none() {
         Some(git.run(&[
             "--no-replace-objects",
             "describe",

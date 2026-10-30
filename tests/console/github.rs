@@ -119,6 +119,69 @@ fn assert_idle_events(console: &Console, duration: Duration) {
 }
 
 #[test]
+fn mergeability_changes_wake_ready_rows_independently_of_ci() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("ready for review"), 0);
+    pr_is(&scenario, "OPEN");
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["commits"] =
+        json!({"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]});
+    scenario.write_gh_state(&gh);
+    let console = start(&scenario);
+    let mut stream = events(&console);
+    wait_for(&console, &mut stream, "ready for review");
+    for (mergeable, kept, conflict) in [
+        ("MERGEABLE", "mergeable", false),
+        ("CONFLICTING", "conflicting", true),
+        ("UNKNOWN", "unknown", false),
+        ("CONFLICTING", "conflicting", true),
+        ("MERGEABLE", "mergeable", false),
+    ] {
+        gh["prs"][0]["mergeable"] = json!(mergeable);
+        scenario.write_gh_state(&gh);
+        loop {
+            assert!(sse_event(&mut stream).contains("event: commands"));
+            let output = scenario.run(&["status", "--json"]);
+            assert_eq!(output.code, Some(0), "{}", output.stderr);
+            let status: Value = serde_json::from_str(&output.stdout).unwrap();
+            let row = &status["commands"][0];
+            assert!(row["github_mergeable"].is_string(), "{status}");
+            if row["github_mergeable"] != kept {
+                continue;
+            }
+            let page = console.get("/").text().unwrap();
+            let ready = group(&page, "ready for review");
+            if ready.contains("Merge conflict") == conflict {
+                assert!(ready.contains("CI green"), "{ready}");
+                assert!(ready.contains("acme/widgets#81"), "{ready}");
+                assert_eq!(row["group"], "ready for review", "{row}");
+                assert_eq!(row["github_ci"], "green", "{row}");
+                let output = scenario.run(&["status"]);
+                assert!(output.stdout.contains("CI green"), "{}", output.stdout);
+                assert_eq!(
+                    output.stdout.contains("Merge conflict"),
+                    conflict,
+                    "{}",
+                    output.stdout
+                );
+                break;
+            }
+        }
+    }
+    drop(stream);
+    let before = stop(console, &scenario);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert_eq!(
+        scenario.gh_calls(),
+        before,
+        "status must reuse mergeability"
+    );
+}
+
+#[test]
 fn ready_rows_show_current_ci_and_status_reuses_it() {
     let scenario = Scenario::new();
     let home = scenario.path("home");

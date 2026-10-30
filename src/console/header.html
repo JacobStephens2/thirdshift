@@ -1,4 +1,4 @@
-<header><p class="brand">thirdshift / Console</p><h1>{{ page.hostname }}</h1>
+<header>{% include "console/brand.html" %}<h1>{{ page.hostname }}</h1>
   {% if !page.consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in page.consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   {% let status = page.resources %}{% include "console/header-status.html" %}
 </header>

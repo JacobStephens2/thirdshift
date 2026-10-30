@@ -54,6 +54,7 @@ pub(crate) struct Row {
     pub harness: String,
     pub pull_request: String,
     pub ci: Option<crate::github::InboxCi>,
+    pub merge_conflict: bool,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
@@ -263,6 +264,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 harness: String::new(),
                 pull_request: String::new(),
                 ci: None,
+                merge_conflict: false,
                 tickets: Vec::new(),
                 children: Vec::new(),
                 findings: Vec::new(),
@@ -302,7 +304,9 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
-                        row.ci = Some(item.github_ci.unwrap_or_default());
+                        row.ci = Some(item.github.ci.unwrap_or_default());
+                        row.merge_conflict = item.github.mergeable
+                            == Some(crate::github::InboxMergeable::Conflicting);
                     }
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
@@ -461,6 +465,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         ),
         pull_request: facts.pull_request.clone().unwrap_or_default(),
         ci: None,
+        merge_conflict: false,
         tickets: facts
             .tickets
             .iter()
