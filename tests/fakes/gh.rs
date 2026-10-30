@@ -2454,6 +2454,14 @@ fn inbox_states(state: &Json, query: &str) {
                             ("state", pr.at("state").clone()),
                             ("mergedAt", at("mergedAt")),
                             ("closedAt", at("closedAt")),
+                            (
+                                "commits",
+                                if subject.contains("statusCheckRollup") {
+                                    at("commits")
+                                } else {
+                                    Null
+                                },
+                            ),
                         ])
                     })
             })

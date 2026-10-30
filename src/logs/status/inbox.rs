@@ -52,6 +52,7 @@ pub(crate) struct Row {
     pub left: String,
     pub harness: String,
     pub pull_request: String,
+    pub ci: Option<crate::github::InboxCi>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
@@ -259,6 +260,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
+                ci: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
                 findings: Vec::new(),
@@ -297,6 +299,9 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
+                    if group == Group::ReadyForReview && !row.pull_request.is_empty() {
+                        row.ci = Some(item.github_ci.unwrap_or_default());
+                    }
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);
@@ -449,6 +454,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
             facts.effort.as_deref().unwrap_or("default Effort")
         ),
         pull_request: facts.pull_request.clone().unwrap_or_default(),
+        ci: None,
         tickets: facts
             .tickets
             .iter()

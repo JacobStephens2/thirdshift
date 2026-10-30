@@ -112,6 +112,9 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// with no pull request, one not read yet, or one GitHub can't resolve.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_state: Option<String>,
+    /// Combined CI on the pull request's latest head, from the same kept answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_ci: Option<crate::github::InboxCi>,
     /// The pull request's merge or close time, RFC 3339, for a merged or
     /// closed row: when the row stopped waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -712,6 +715,7 @@ pub(super) fn evaluate<'a>(
                     left_at: at.to_rfc3339(),
                 }),
                 github_state: state.map(|state| state.state.to_string()),
+                github_ci: state.map(|state| state.ci),
                 github_at: state.and_then(event_time).map(str::to_string),
                 github: command
                     .selector()

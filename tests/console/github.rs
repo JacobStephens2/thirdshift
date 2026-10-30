@@ -119,6 +119,56 @@ fn assert_idle_events(console: &Console, duration: Duration) {
 }
 
 #[test]
+fn ready_rows_show_current_ci_and_status_reuses_it() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("ready for review"), 0);
+    pr_is(&scenario, "OPEN");
+    let console = start(&scenario);
+    let mut stream = events(&console);
+    wait_for(&console, &mut stream, "ready for review");
+    assert!(group(&console.get("/").text().unwrap(), "ready for review").contains("CI unknown"));
+    drop(stream);
+    for (rollup, label, ci) in [
+        (json!({"state": "SUCCESS"}), "CI green", "green"),
+        (json!({"state": "FAILURE"}), "CI red", "red"),
+        (json!({"state": "PENDING"}), "CI pending", "pending"),
+        (json!({"state": "ERROR"}), "CI red", "red"),
+        (json!({"state": "EXPECTED"}), "CI pending", "pending"),
+        (Value::Null, "No CI checks", "no_checks"),
+        (json!({"state": "UNRECOGNIZED"}), "CI unknown", "unknown"),
+    ] {
+        let mut stream = events(&console);
+        let mut gh = scenario.gh_state();
+        gh["prs"][0]["commits"] = json!({"nodes": [{"commit": {"statusCheckRollup": rollup}}]});
+        scenario.write_gh_state(&gh);
+        // Only a CI change occurs: it must wake an already open Inbox.
+        loop {
+            assert!(sse_event(&mut stream).contains("event: commands"));
+            let page = console.get("/").text().unwrap();
+            if group(&page, "ready for review").contains(label) {
+                break;
+            }
+        }
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["github_ci"], ci, "{status}");
+        let output = scenario.run(&["status"]);
+        assert!(output.stdout.contains(label), "{}", output.stdout);
+    }
+    let before = stop(console, &scenario);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert_eq!(
+        scenario.gh_calls(),
+        before,
+        "status must reuse the kept CI answer"
+    );
+}
+
+#[test]
 fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
     let scenario = Scenario::new();
     let home = scenario.path("home");

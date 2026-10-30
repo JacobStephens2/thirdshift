@@ -157,6 +157,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     Observation::Record(command) => print_command(command, item.state_word(), ""),
                     Observation::History(command) => print_history(command),
                 }
+                if item.group == Group::ReadyForReview {
+                    println!("  {}", item.github_ci.unwrap_or_default().label());
+                }
                 if let Some(line) = item.left_line() {
                     println!("  {line}");
                 }
