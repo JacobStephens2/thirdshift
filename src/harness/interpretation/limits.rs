@@ -74,14 +74,20 @@ pub(super) fn claude(event: &Value) -> Option<Limit> {
     {
         return None;
     }
-    // A top-level event may name the window but leave its reset in unifiedWindows.
-    let reset = if selected.1["resetsAt"].is_null() {
+    // Matching top-level and unified facts can each supply the missing reset.
+    let reset = if selected.1["resetsAt"].is_null() && selected.0 == info["rateLimitType"].as_str()
+    {
+        &info["resetsAt"]
+    } else {
+        &selected.1["resetsAt"]
+    };
+    let reset = if reset.is_null() {
         selected
             .0
             .map(|name| &info["unifiedWindows"][name]["resetsAt"])
             .unwrap_or(&Value::Null)
     } else {
-        &selected.1["resetsAt"]
+        reset
     };
     Some(Limit::reported("claude", selected.0, utilization, reset))
 }

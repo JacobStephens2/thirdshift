@@ -7,6 +7,11 @@ fn stopping_windows_keep_their_own_reset_and_unknown_facts_stay_null() {
     for (harness, raw, expected) in [
         (
             Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","resetsAt":1793397600,"unifiedWindows":{"seven_day":{"utilization":0.86}}}}"#,
+            serde_json::json!({"harness":"claude","window":"seven_day","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
             r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day","utilization":0.4,"resetsAt":1793397600,"unifiedWindows":{"five_hour":{"utilization":0.6,"resetsAt":1793394000}}}}"#,
             serde_json::json!({"harness":"claude","window":"seven_day","utilization":0.4,"resets_at":"2026-10-30T22:00:00Z"}),
         ),
