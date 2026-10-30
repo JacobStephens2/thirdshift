@@ -3,12 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
-  # `labeled` lets `test:macos` and `test:linux-arm` start their full suites on a
+  # `labeled` lets `test:linux-arm` start its full suite on a
   # PR's current head. Any label starts a whole new run, which cancels an
   # older one still running under the concurrency group below.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  # Nightly, on main: full macOS and ARM Linux suites cover what ordinary
+  # Nightly, on main: the full ARM Linux suite covers what ordinary
   # PRs don't run. GitHub tells the user who last changed this cron when
   # it fails; see docs/ci-performance.md for what to do then.
   schedule:
@@ -111,125 +111,3 @@ jobs:
         if: ${{ github.event_name != 'schedule' }}
       - run: cargo test
         if: ${{ github.event_name == 'schedule' }}
-
-  # Which macOS work this event gets (#893, docs/ci-performance.md): the full
-  # suite on pushes to main, nightly, by hand or for a PR into main labelled
-  # `test:macos`; the gate for any other PR into main; none for a PR into
-  # another base, such as a Spec branch.
-  macos-plan:
-    timeout-minutes: 5
-    runs-on: ubuntu-24.04
-    outputs:
-      suite: ${{ steps.plan.outputs.suite }}
-    steps:
-      - id: plan
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.base_ref }}
-          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'test:macos') }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then suite=full
-          elif [ "$BASE" != main ]; then suite=none
-          elif [ "$LABELLED" = true ]; then suite=full
-          else suite=gate
-          fi
-          echo "macOS suite: $suite"
-          echo "suite=$suite" >> "$GITHUB_OUTPUT"
-
-  # One macOS job: clippy for the macOS target and the tests of the
-  # macOS-specific code, which the macos-gate profile in .config/nextest.toml
-  # selects.
-  test-macos-gate:
-    timeout-minutes: 20
-    needs: macos-plan
-    if: ${{ needs.macos-plan.outputs.suite == 'gate' }}
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install the Rust version and components rust-toolchain.toml names
-        run: |
-          rustup toolchain install
-          rustc --version
-      # Restore what the full suite saved on main; a gate's narrower build
-      # saved under the same key would leave a labelled PR's shards without it.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-macos
-          save-if: false
-      # The same two changes as the shards below make; see there.
-      - name: Turn Spotlight indexing off
-        run: sudo mdutil -a -i off
-      - name: Put Xcode's git first on PATH
-        run: |
-          mkdir -p "$RUNNER_TEMP/xcode-git"
-          ln -s "$(dirname "$(xcrun -f git)")"/git* "$RUNNER_TEMP/xcode-git/"
-          echo "$RUNNER_TEMP/xcode-git" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/xcode-git/git" --version
-      - run: cargo clippy --all-targets -- -D warnings
-      - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --profile macos-gate
-
-  test-macos-shard:
-    timeout-minutes: 60
-    needs: macos-plan
-    if: ${{ needs.macos-plan.outputs.suite == 'full' }}
-    runs-on: macos-26
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install the Rust version rust-toolchain.toml names
-        run: |
-          rustup toolchain install
-          rustc --version
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-macos
-          save-if: ${{ matrix.shard == 1 }}
-      # The tests spend most of their time starting git (#894,
-      # docs/ci-performance.md). Spotlight indexes every repository they
-      # create, taking CPU from them on the 3-core runner.
-      - name: Turn Spotlight indexing off
-        run: sudo mdutil -a -i off
-      # Homebrew's git, first on the image's PATH, takes about 13 ms to run
-      # here and Xcode's about 9 ms. Xcode's git runs git-upload-pack and
-      # the rest only from beside itself, so they are linked here too.
-      - name: Put Xcode's git first on PATH
-        run: |
-          mkdir -p "$RUNNER_TEMP/xcode-git"
-          ln -s "$(dirname "$(xcrun -f git)")"/git* "$RUNNER_TEMP/xcode-git/"
-          echo "$RUNNER_TEMP/xcode-git" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/xcode-git/git" --version
-      # nextest runs tests from every test binary in parallel, where cargo test
-      # runs the binaries one after another; that matters on the slower macOS
-      # runners. Without a lib target there are no doctests for it to miss.
-      # Linux also uses nextest, except for its nightly cargo test run.
-      - uses: taiki-e/install-action@nextest
-      # Hash partitions cover the same suite once across all four runners.
-      # Pushes to main report every failure in a shard in the same run (#1325).
-      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }} ${{ github.event_name == 'push' && '--no-fail-fast' || '' }}
-
-  # Keep one stable check name on every run. It requires what the plan
-  # asked for: every shard passed, or the gate passed, or, with no macOS work,
-  # both were skipped. A failed, cancelled or wrongly skipped job fails it.
-  test-macos:
-    timeout-minutes: 5
-    needs: [macos-plan, test-macos-gate, test-macos-shard]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require the macOS work the plan asked for to pass
-        env:
-          SUITE: ${{ needs.macos-plan.outputs.suite }}
-          GATE: ${{ needs.test-macos-gate.result }}
-          SHARDS: ${{ needs.test-macos-shard.result }}
-        run: |
-          echo "plan: ${SUITE:-none made}, gate: $GATE, shards: $SHARDS"
-          case "$SUITE" in
-            full) test "$SHARDS" = success ;;
-            gate) test "$GATE" = success ;;
-            none) test "$GATE" = skipped && test "$SHARDS" = skipped ;;
-            *) exit 1 ;;
-          esac

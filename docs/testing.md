@@ -51,10 +51,9 @@ target or doctests. For a focused iteration, use
 Some tests give a Trial, grader or Harness a deadline of a second or less, and
 that deadline covers setup as well as the fake agent. On a busy many-core host,
 running every test at once can use up the deadline before the fake agent starts.
-On an 18-core Mac, `cargo test --test experiments` failed three such tests, and
-`cargo test --bin thirdshift` failed four. CI runners have about three cores and
-pass (#1472). If timeout tests fail locally but pass alone, rerun with fewer
-threads, for example `cargo test -- --test-threads=3` or
+This was observed on an 18-core host (#1472). CI runs on Linux; a local run on
+a busy host can still hit the same deadlines. If timeout tests fail locally but
+pass alone, rerun with fewer threads, for example `cargo test -- --test-threads=3` or
 `cargo nextest run --test-threads 3`.
 
 Set up browser dependencies following [the site instructions](../site/tests/README.md)
@@ -75,9 +74,12 @@ this does not change Delivery or CI policy.
 
 Local selection shortens feedback; CI retains its broader checks on every PR,
 including Python tooling, formatting, clippy, site and Console browser tests,
-and the Linux Rust suite. The macOS gate/full-suite policy remains in
-[CI performance](ci-performance.md). This script selects Rust, site, Console
-browser and release checks; it does not replace CI's cross-platform coverage.
+and the Linux Rust suite. CI uses only Linux runners: x86_64 on every PR and
+aarch64 on `main` pushes, nightly and manual runs, plus PRs into `main` labelled
+`test:linux-arm`. See [CI performance](ci-performance.md). This script selects
+Rust, site, Console browser and release checks; it does not replace CI's
+coverage of both Linux architectures. Run local checks in Linux, including
+an ARM Linux VM when contributing from an Apple Silicon Mac.
 
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 `/usr/bin/time -p cargo test` for the fallback), recording the command, result,
@@ -115,12 +117,6 @@ Linux's [subreaper facility](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_
 to adopt and reap exact recorded orphan PIDs. It owns the fixtures' temporary
 subtrees and cleans up its recorded children even on a failed assertion.
 
-macOS retains Drop cleanup and terminal hangup when the last master closes. It
-has no Linux parent-death signal or subreaper facility: the abrupt-death guarantee
-with a retained master is Linux-only, and the lifecycle supervisor test is
-explicitly skipped on macOS with that platform limit. Existing setup interruption
-and terminal-restoration tests still run there.
-
 ## Release fixture child lifetime
 
 Linux release-script and script-function tests use `FixtureChild` from the same
@@ -145,5 +141,5 @@ reaps recorded script, guardian and descendant PIDs. A hung summary Harness is
 also covered on timeout and SIGKILL. Fixture setup and its
 supervisor handshake use the shared 120-second readiness bound.
 
-Release-script tests remain Linux-only. These deadlines belong to tests;
+Release-script tests run on Linux. These deadlines belong to tests;
 production release polling still has no overall timeout and resumes on rerun.
