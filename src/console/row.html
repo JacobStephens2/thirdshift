@@ -5,11 +5,11 @@
     {% if row.can_dismiss %}<form method="post" action="/dismiss" data-dismiss><input type="hidden" name="command" value="{{ row.selector }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button id="dismiss-{{ row.id }}">Dismiss</button><span role="status"></span></form>{% endif %}</div>{% endif %}
   </div>
   <p class="now">{{ row.now_line|linkify }}</p>
-  {% match row.resume_command %}{% when Some with (cli) %}<p class="peek-cli"><code>{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy resume command</button> <span role="status"></span></p>{% when None %}{% endmatch %}
+  {% match row.resume_command %}{% when Some with (cli) %}<p class="peek-cli"><code>{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy resume command</button> <span data-copy-status role="status"></span></p>{% when None %}{% endmatch %}
   <a href="{{ row.logs_url }}">Command logs and Session traces</a>
   {% if !row.harness.is_empty() %}<p class="harness">{{ row.harness }}</p>{% endif %}
   {% if !row.pull_request.is_empty() %}<p class="pr">{{ row.pull_request|linkify }}</p>{% endif %}
-  {% if row.count > 1 %}<p>{{ row.count }} Commands with this cause: {{ row.cause|linkify }}</p>{% else if !row.cause.is_empty() %}<p class="cause">{{ row.cause|linkify }}</p>{% endif %}
+  {% if row.count > 1 %}<p>{{ row.count }} Commands with this cause: {{ row.cause|linkify }}</p>{% else if !row.cause.is_empty() %}<p{% if row.state == "Paused" %} class="cause"{% endif %}>{{ row.cause|linkify }}</p>{% endif %}
   {% if !row.left.is_empty() %}<p class="left">{{ row.left|readable }}</p>{% endif %}
   {% if !row.tickets.is_empty() %}<ul class="plan" aria-label="Tickets">{% for ticket in row.tickets %}<li>{{ ticket|linkify }}</li>{% endfor %}</ul>{% endif %}
   <div class="row-actions"><p><a class="peek-link" href="{{ row.peek_url() }}">Details</a> · <a href="{{ row.log_url() }}">Full log</a></p></div>

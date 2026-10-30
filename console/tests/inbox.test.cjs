@@ -86,6 +86,10 @@ test('Paused rows and Command details copy the saved resume command', async t =>
     await row.getByRole('button', { name: 'Copy resume command', exact: true }).click();
     await row.getByText('CLI copied.', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => navigator.clipboard.readText()), resume);
+    fixture.cause += ' Updated after copying.';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await row.getByText(fixture.cause, { exact: true }).waitFor();
+    await row.getByText('CLI copied.', { exact: true }).waitFor();
     await row.locator('.state').click();
     const details = page.locator('#peek-content');
     await details.getByRole('button', { name: 'Copy resume command', exact: true }).click();
