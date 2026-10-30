@@ -894,6 +894,113 @@ esac
 }
 
 #[test]
+fn checks_on_falls_back_to_actions_jobs_when_checks_are_forbidden() {
+    with_recorded_signal(
+        "github::execution_tests::checks_on_falls_back_to_actions_jobs_when_checks_are_forbidden",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) echo 'gh: Resource not accessible by personal access token (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z"}' '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"completed","conclusion":"success"}' ;;
+  */actions/runs/901/jobs\?*) printf '%s\n' '{"id":42,"name":"test","status":"completed","conclusion":"success","html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}' ;;
+  */status*) printf '%s\n' '{"context":"deploy","state":"pending"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new()
+                .checks_on(&issue(), "abc")
+                .unwrap_or_else(|error| {
+                    panic!("Actions-readable CI must survive a check-runs 403: {error:#}")
+                });
+            assert_eq!(checks.len(), 2);
+            assert_eq!(checks[0].name, "test");
+            assert_eq!(checks[0].conclusion, Conclusion::Success);
+            assert_eq!(
+                checks[0].url.as_deref(),
+                Some("https://github.com/acme/widgets/actions/runs/901/job/42")
+            );
+            assert_eq!(
+                checks[0].job,
+                Some(ActionsJob {
+                    check_run: 42,
+                    workflow_run: 901,
+                    abandoned: false,
+                })
+            );
+            assert_eq!(checks[1].conclusion, Conclusion::Pending);
+        },
+    );
+}
+
+#[test]
+fn actions_fallback_keeps_unfinished_workflows_and_jobs_pending() {
+    with_recorded_signal(
+        "github::execution_tests::actions_fallback_keeps_unfinished_workflows_and_jobs_pending",
+        |_| {
+            let fixture = Fixture::new("");
+            for job in [
+                "",
+                r#"{"id":42,"name":"setup","status":"completed","conclusion":"success","html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}"#,
+                r#"{"id":42,"name":"test","status":"queued","conclusion":null,"html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}"#,
+            ] {
+                fixture.script(&format!(r#"
+case "$5" in
+  */check-runs*) echo 'gh: Forbidden (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"in_progress","name":"CI"}}' ;;
+  */jobs\?*) printf '%s' '{job}' ;;
+  */status*) ;;
+  *) exit 1 ;;
+esac
+"#));
+                let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+                assert!(
+                    checks
+                        .iter()
+                        .any(|check| check.conclusion == Conclusion::Unfinished)
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn actions_fallback_preserves_errors_other_than_checks_403() {
+    with_recorded_signal(
+        "github::execution_tests::actions_fallback_preserves_errors_other_than_checks_403",
+        |_| {
+            let fixture = Fixture::new("");
+            for (endpoint, code) in [
+                ("check-runs", 401),
+                ("check-runs", 404),
+                ("check-runs", 500),
+                ("actions/runs?", 403),
+                ("actions/runs/901/jobs?", 403),
+                ("status", 403),
+            ] {
+                fixture.script(&format!(r#"
+case "$5" in
+  *'{endpoint}'*) echo 'gh: endpoint failed (HTTP {code})' >&2; exit 1 ;;
+  */check-runs*) echo 'gh: Forbidden (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z"}}' ;;
+  */jobs\?*|*/status*) ;;
+  *) exit 1 ;;
+esac
+"#));
+                let error = GitHub::new().checks_on(&issue(), "abc").err().unwrap();
+                let message = format!("{error:#}");
+                assert!(message.contains(endpoint), "{message}");
+                assert!(
+                    message.contains(&format!("gh: endpoint failed (HTTP {code})")),
+                    "{message}"
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn a_completed_newer_workflow_without_observed_jobs_cannot_establish_green_ci() {
     with_recorded_signal(
         "github::execution_tests::a_completed_newer_workflow_without_observed_jobs_cannot_establish_green_ci",

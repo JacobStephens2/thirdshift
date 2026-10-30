@@ -437,7 +437,7 @@ One statically linked Linux binary covers the first three, so it doesn't depend 
 The user account that runs thirdshift needs:
 
 - The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), or **`opencode`** (OpenCode, with a configured Model provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
-- **`gh`** (GitHub CLI), logged in.
+- **`gh`** (GitHub CLI), logged in. For a fine-grained personal access token, grant repository permissions **Contents**, **Issues** and **Pull requests** read and write, plus **Actions** and **Commit statuses** read. If `check-runs` returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **`node`** (Node.js) on `PATH`, for a [Security run](#security-runs) only: the Security audit's report validators run on it.
 

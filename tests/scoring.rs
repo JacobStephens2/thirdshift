@@ -14,6 +14,52 @@ mod grading;
 mod calibration;
 
 #[test]
+fn packets_read_actions_jobs_when_check_runs_are_forbidden() {
+    let scenario = scenario();
+    let head = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_string();
+    let mut candidate = pr(1, "acme/widgets", "codex", "model", false);
+    candidate["headRefOid"] = head.clone().into();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    state["failing"] = serde_json::json!(["api --paginate --jq .check_runs[]"]);
+    state["failing_stderr"] =
+        "gh: Resource not accessible by personal access token (HTTP 403)".into();
+    state["runs"] = serde_json::json!([
+        {"id":900,"databaseId":900,"workflow_id":10,"headSha":head,
+         "created_at":"2026-10-19T12:00:00Z"},
+        {"id":901,"databaseId":901,"workflow_id":10,"headSha":head,
+         "created_at":"2026-10-19T12:01:00Z","status":"completed","conclusion":"success",
+         "jobs":[{"id":42,"name":"test","status":"completed","conclusion":"success",
+                  "html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}]}
+    ]);
+    state["statuses"] = serde_json::json!({head:[{"context":"deploy","state":"success"}]});
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["score"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        packet["ci"],
+        serde_json::json!([
+            {"name":"test","conclusion":"success"},
+            {"name":"deploy","conclusion":"success"}
+        ])
+    );
+}
+
+#[test]
 fn packet_diff_preserves_trailing_whitespace_in_the_last_changed_line() {
     let scenario = scenario();
     scenario.origin_has_commit(
