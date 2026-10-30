@@ -53,7 +53,9 @@
 # diff (honoring --review), force-pushes the branch, updates the open PR body,
 # waits for its checks, then force-pushes the tag and waits for publication.
 # An old merged bump gets a new PR. If no newer green commit exists, it reruns
-# the failed jobs and waits. Published releases are never moved. A recovery
+# the failed jobs and waits. Published releases are never moved. If the
+# publication check cannot be completed, the script refuses and moves nothing.
+# A recovery
 # interrupted between branch and tag pushes resumes that exact version bump;
 # unrelated tags are refused.
 # Before the branch exists, a local Git ref pins the content commit so a
@@ -156,11 +158,14 @@ main() {
 
 # recover_failed_release
 # Only a resumed invocation recovers a completed failed workflow. An existing
-# GitHub Release is final, even if a later publication job failed.
+# GitHub Release is final, even if a later publication job failed. A failed
+# lookup is not an unpublished release: moving the tag then would republish it.
 recover_failed_release() {
 	local run id run_url status conclusion attempt base
-	published_url=$(gh release view "$tag" --json url --jq .url 2>/dev/null || true)
-	if [ -n "$published_url" ]; then return; fi
+	if ! release_is_absent; then
+		published_url=$release_lookup_url
+		return
+	fi
 	run=$(release_run "$tagged")
 	read -r id run_url status conclusion attempt <<<"$run"
 	if [ "$status" != completed ] || [ "$conclusion" = success ]; then return; fi
@@ -196,10 +201,36 @@ recover_failed_release() {
 }
 
 # Publication can finish while the Experiment, summary or PR checks run.
+# An inconclusive lookup refuses too: only "release not found" may move a tag.
 refuse_if_published() {
-	if gh release view "$tag" --json url --jq .url >/dev/null 2>&1; then
-		refuse "$tag is already published; its branch and tag will not be moved"
+	if release_is_absent; then
+		return
 	fi
+	refuse "$tag is already published; its branch and tag will not be moved"
+}
+
+# release_is_absent
+# Returns 0 only when gh says this tag has no GitHub Release. Returns 1 and
+# sets release_lookup_url when it does. Any other result, including a transport
+# or authentication failure, refuses. Those share gh's exit code 1 with a
+# missing release, so the not-found text is the only absent signal.
+release_is_absent() {
+	local status=0 err url detail
+	err=$(mktemp)
+	url=$(gh release view "$tag" --json url --jq .url 2>"$err") || status=$?
+	if [ "$status" -eq 0 ] && [ -n "$url" ]; then
+		release_lookup_url=$url
+		rm -f "$err"
+		return 1
+	fi
+	if [ "$status" -eq 1 ] && [ "$(cat "$err")" = "release not found" ]; then
+		release_lookup_url=
+		rm -f "$err"
+		return 0
+	fi
+	detail=$(head -n 1 "$err")
+	rm -f "$err"
+	refuse "could not tell whether $tag is already published (gh release view exited $status${detail:+: $detail})"
 }
 
 # find_earlier_run
@@ -299,7 +330,7 @@ find_existing_tag() {
 		git merge-base --is-ancestor "$old_base" "$base" &&
 		[ "$(bump_tree "$old_base")" = "$(git rev-parse "$tagged^{tree}")" ] &&
 		[ "$status" = completed ] && [ "$conclusion" != success ] &&
-		! gh release view "$tag" --json url --jq .url >/dev/null 2>&1; then
+		release_is_absent; then
 		progress "resuming re-cut of unpublished $tag on ${head:0:7}"
 		return
 	fi

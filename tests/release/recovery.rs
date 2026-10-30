@@ -42,6 +42,46 @@ fn a_failed_unpublished_release_is_recut_from_the_newest_green_main_commit() {
 }
 
 #[test]
+fn a_release_view_outage_does_not_move_a_published_tag() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut failed = failed_release();
+    failed["published"] = json!(true);
+    release.release_workflow(failed);
+    let first = release.run_script("0.2.0");
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let head = release.pr_head("release-0.2.0");
+    let branch = release.origin(&["rev-parse", "refs/heads/release-0.2.0"]);
+    release.merge_pr("newer", "New content after publication", "");
+    release.main_ci("completed", "success");
+    release.ci_reports(GREEN);
+    // A transport failure is not "release not found". The tag is published.
+    release.gh(&["fake", "fails", "release view"]);
+
+    let output = release.run_script("0.2.0");
+
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(head),
+        "published tag moved: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        release.origin(&["rev-parse", "refs/heads/release-0.2.0"]),
+        branch,
+        "published branch moved: {}",
+        stderr(&output)
+    );
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("could not tell whether v0.2.0 is already published"),
+        "{err}"
+    );
+    assert!(!err.contains("moved unpublished"), "{err}");
+}
+
+#[test]
 fn a_published_release_is_never_recut_even_after_a_workflow_failure() {
     let release = Release::new();
     release.ci_reports(GREEN);
