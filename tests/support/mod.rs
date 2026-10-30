@@ -122,7 +122,6 @@ const COPY_IN_USE: &str = "copy-in-use";
 const COPY_REPLACED: &str = "copy-replaced";
 
 pub mod check;
-#[cfg(target_os = "linux")]
 pub mod child_lifetime;
 
 pub struct Scenario {
@@ -742,7 +741,6 @@ test -f {root}/{COPY_REPLACED}
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave))
             .stdout(Stdio::piped());
-        #[cfg(target_os = "linux")]
         child_lifetime::kill_with_parent(&mut command);
         // The terminal becomes the child's controlling terminal, so Ctrl-C
         // on it sends SIGINT, as in a shell.

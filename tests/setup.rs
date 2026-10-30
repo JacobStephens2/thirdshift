@@ -11,7 +11,6 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-#[cfg(target_os = "linux")]
 use support::write_executable;
 use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
 
@@ -30,41 +29,6 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn security_sandbox_unavailable_report_preserves_saved_settings() {
-    for (review, fix) in [(false, false), (true, false), (false, true), (true, true)] {
-        let scenario = Scenario::new();
-        scenario.user_config_is(&format!("[security]\nreview = {review}\nfix = {fix}\n"));
-
-        let result = scenario.run(&["setup"]);
-
-        assert_eq!(result.code, Some(0), "{}", result.stderr);
-        assert!(result.stdout.is_empty(), "{}", result.stdout);
-        assert_eq!(
-            result.stderr.contains("Security sandbox probe:"),
-            review || fix,
-            "{}",
-            result.stderr
-        );
-        if review || fix {
-            assert!(result.stderr.contains(&format!(
-                "Security sandbox probe: unavailable on {}; Setup did not check isolation on this OS.",
-                std::env::consts::OS
-            )));
-            assert!(result.stderr.contains("needs-validation"));
-            if cfg!(target_os = "macos") {
-                assert!(result.stderr.contains("sandbox-exec (Seatbelt)"));
-                assert!(result.stderr.contains("has not verified"));
-            }
-        }
-        let saved: toml::Table = user_config(&scenario).unwrap().parse().unwrap();
-        assert_eq!(saved["security"]["review"].as_bool(), Some(review));
-        assert_eq!(saved["security"]["fix"].as_bool(), Some(fix));
-    }
-}
-
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
@@ -104,7 +68,6 @@ fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     assert!(user_config(&scenario).unwrap().contains("[harness]"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_missing_bwrap_warns_without_losing_settings() {
     let scenario = Scenario::new();
@@ -122,7 +85,6 @@ fn security_sandbox_missing_bwrap_warns_without_losing_settings() {
     assert!(user_config(&scenario).unwrap().contains("fix = true"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_runs_only_for_the_saved_security_settings() {
     for (review, fix) in [(false, false), (true, false), (false, true)] {
@@ -147,7 +109,6 @@ fn security_sandbox_runs_only_for_the_saved_security_settings() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     let scenario = Scenario::new();
@@ -166,7 +127,6 @@ fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     assert!(user_config(&scenario).unwrap().contains("[harness]"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_checks_real_isolation_and_detects_each_removed_control() {
     let available = std::process::Command::new("/usr/bin/bwrap")
@@ -217,8 +177,7 @@ fn setup_probe_scope_tracks_security_skill_requirements() {
     // requiring a decision about Setup's probe coverage. #608 checks network,
     // read-only host home and scratch writes; it does not certify the remaining
     // environment/resource/credential controls of the target-code runner (#726).
-    // The non-Linux report (`unavailable_report` in src/setup/sandbox.rs), the
-    // User manual's Setup section and the Architecture page restate these
+    // The User manual's Setup section and the Architecture page restate these
     // controls; update them with it.
     let skill = include_str!("../skills/thirdshift-security-audit/SKILL.md");
     let requirements = skill

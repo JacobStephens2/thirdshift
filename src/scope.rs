@@ -163,9 +163,7 @@ pub fn available() -> bool {
 /// Fill in only a missing runtime directory; explicit bus settings still win.
 fn manager_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
-    if cfg!(target_os = "linux")
-        && std::env::var_os("XDG_RUNTIME_DIR").is_none_or(|value| value.is_empty())
-    {
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none_or(|value| value.is_empty()) {
         // SAFETY: geteuid has no arguments or memory preconditions.
         let runtime = PathBuf::from(format!("/run/user/{}", unsafe { libc::geteuid() }));
         command.env("XDG_RUNTIME_DIR", runtime);
@@ -548,22 +546,21 @@ pub(crate) fn session_command(
     program: impl AsRef<std::ffi::OsStr>,
 ) -> Box<dyn crate::process::Invocation> {
     let program = program.as_ref();
-    let mut invocation: Box<dyn crate::process::Invocation> =
-        if cfg!(target_os = "linux") && available() {
-            let unit = unit_name("session", "harness");
-            let mut command = scope_base(&unit, None);
-            command.arg(program);
-            Box::new(Launch {
-                command,
-                scope: Scope {
-                    unit,
-                    watch: RefCell::new(None),
-                    observation: Box::new(Native),
-                },
-            })
-        } else {
-            Box::new(Command::new(program))
-        };
+    let mut invocation: Box<dyn crate::process::Invocation> = if available() {
+        let unit = unit_name("session", "harness");
+        let mut command = scope_base(&unit, None);
+        command.arg(program);
+        Box::new(Launch {
+            command,
+            scope: Scope {
+                unit,
+                watch: RefCell::new(None),
+                observation: Box::new(Native),
+            },
+        })
+    } else {
+        Box::new(Command::new(program))
+    };
     crate::process::session::mark(invocation.command());
     invocation
 }
@@ -601,9 +598,6 @@ pub(crate) fn trial_session_command(
     let mut command = Command::new(program);
     crate::process::session::mark(&mut command);
     let inherited = (|| -> Result<Option<Scope>> {
-        if !cfg!(target_os = "linux") {
-            return Ok(None);
-        }
         let Some(unit) = std::env::var(TRIAL_SCOPE)
             .ok()
             .filter(|unit| unit.starts_with("thirdshift-trial-") && unit.ends_with(".scope"))
@@ -635,7 +629,7 @@ pub(crate) fn trial_session_command(
     match inherited {
         Ok(Some(scope)) => Box::new(Launch { command, scope }),
         Ok(None) => {
-            if cfg!(target_os = "linux") && available() {
+            if available() {
                 match uncapped_current_cgroup() {
                     Ok(true) => return session_command(command.get_program()),
                     Ok(false) => {}

@@ -45,7 +45,6 @@ mod spans;
 #[path = "console/metrics.rs"]
 mod metrics;
 
-#[cfg(target_os = "linux")]
 #[path = "console/idle.rs"]
 mod idle;
 
@@ -687,7 +686,6 @@ fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -1865,7 +1863,6 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     assert_eq!(console.get("/").status(), 200);
     let _open_stream = console.get("/events");
     // A reader must not keep graceful shutdown waiting on an infinite stream.
-    #[cfg(target_os = "linux")]
     let _stream = {
         let mut live = record(home.path(), 7, None, 0);
         let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();

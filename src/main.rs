@@ -1,3 +1,8 @@
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "thirdshift supports Linux only. On macOS, run it inside an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."
+);
+
 mod architect;
 mod args;
 mod asks;

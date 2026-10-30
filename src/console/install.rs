@@ -46,10 +46,6 @@ impl Proxy {
 
 pub fn install() -> Result<String> {
     ensure!(
-        cfg!(target_os = "linux"),
-        "console install currently supports Linux; run thirdshift console manually on this platform"
-    );
-    ensure!(
         identity("-u")? != "0",
         "run thirdshift console install as the owner, without sudo; only the printed script needs sudo"
     );
