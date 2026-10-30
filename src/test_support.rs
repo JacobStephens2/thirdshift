@@ -11,6 +11,23 @@ use std::process::Command;
 
 use crate::interrupt;
 
+/// Run a fixture test in a child whose environment can be changed independently.
+/// Keep its success diagnostics and warning check identical across callers.
+pub(crate) fn assert_test_without_warnings(name: &str, configure: impl FnOnce(&mut Command)) {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", name, "--nocapture"]);
+    configure(&mut command);
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("warning:"), "{stderr}");
+}
+
 /// Git for unit-test fixtures, including commands made after repository setup.
 /// Keep this on each child Command so parallel tests never change the process
 /// environment and new Git views of a fixture inherit the same isolation.

@@ -150,9 +150,6 @@ fn override_or(env: &str, configured: &str) -> Result<String> {
 /// Whether `systemd-run --user --scope` can reach this user's manager here.
 /// Cron and other logged-out launchers need lingering for this to hold.
 pub fn available() -> bool {
-    if !cfg!(target_os = "linux") {
-        return false;
-    }
     if crate::process::find_executable("systemd-run").is_none() {
         return false;
     }
@@ -551,21 +548,22 @@ pub(crate) fn session_command(
     program: impl AsRef<std::ffi::OsStr>,
 ) -> Box<dyn crate::process::Invocation> {
     let program = program.as_ref();
-    let mut invocation: Box<dyn crate::process::Invocation> = if available() {
-        let unit = unit_name("session", "harness");
-        let mut command = scope_base(&unit, None);
-        command.arg(program);
-        Box::new(Launch {
-            command,
-            scope: Scope {
-                unit,
-                watch: RefCell::new(None),
-                observation: Box::new(Native),
-            },
-        })
-    } else {
-        Box::new(Command::new(program))
-    };
+    let mut invocation: Box<dyn crate::process::Invocation> =
+        if cfg!(target_os = "linux") && available() {
+            let unit = unit_name("session", "harness");
+            let mut command = scope_base(&unit, None);
+            command.arg(program);
+            Box::new(Launch {
+                command,
+                scope: Scope {
+                    unit,
+                    watch: RefCell::new(None),
+                    observation: Box::new(Native),
+                },
+            })
+        } else {
+            Box::new(Command::new(program))
+        };
     crate::process::session::mark(invocation.command());
     invocation
 }
@@ -637,7 +635,7 @@ pub(crate) fn trial_session_command(
     match inherited {
         Ok(Some(scope)) => Box::new(Launch { command, scope }),
         Ok(None) => {
-            if available() {
+            if cfg!(target_os = "linux") && available() {
                 match uncapped_current_cgroup() {
                     Ok(true) => return session_command(command.get_program()),
                     Ok(false) => {}
@@ -789,6 +787,33 @@ pub(crate) mod testing;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_probes_the_manager_on_every_platform() {
+        const FIXTURE: &str = "THIRDSHIFT_SCOPE_AVAILABILITY_FIXTURE";
+        if let Some(directory) = std::env::var_os(FIXTURE) {
+            assert!(available(), "the fixture's manager is reachable");
+            let _session = trial_session_command("unused");
+            let manager = Path::new(&directory).join("systemctl");
+            std::fs::write(&manager, "#!/bin/sh\nexit 1\n").unwrap();
+            assert!(!available(), "an unreachable manager must still be refused");
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["systemd-run", "systemctl"] {
+            let program = directory.path().join(name);
+            crate::test_support::write_executable(&program, "#!/bin/sh\nexit 0\n");
+        }
+        crate::test_support::assert_test_without_warnings(
+            "scope::tests::availability_probes_the_manager_on_every_platform",
+            |command| {
+                command
+                    .env(FIXTURE, directory.path())
+                    .env("PATH", directory.path());
+            },
+        );
+    }
 
     #[test]
     fn memory_values_accept_systemd_byte_counts_and_infinity() {

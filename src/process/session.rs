@@ -148,7 +148,12 @@ fn marked_processes(marker: &str, warning: &mut Option<anyhow::Error>) -> Result
                 found.push(pid);
             }
             Ok(_) => {}
-            Err(error) if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT)) => {}
+            // Darwin's KERN_PROCARGS2 also returns EINVAL when the listed
+            // process has exited or no longer has an argument area.
+            Err(error)
+                if matches!(error.raw_os_error(), Some(libc::ESRCH | libc::ENOENT))
+                    || (cfg!(target_os = "macos")
+                        && error.raw_os_error() == Some(libc::EINVAL)) => {}
             Err(error) => {
                 warning.get_or_insert_with(|| {
                     anyhow::anyhow!("could not read process {pid}'s environment: {error}")
@@ -226,4 +231,37 @@ fn environment(pid: libc::pid_t) -> io::Result<Vec<u8>> {
         rest = &rest[end + 1..];
     }
     Ok(rest.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_that_exits_before_its_environment_is_read_does_not_warn() {
+        const FIXTURE: &str = "THIRDSHIFT_VANISHED_PROCESS_FIXTURE";
+        if std::env::var_os(FIXTURE).is_some() {
+            let mut command = Command::new("unused");
+            mark(&mut command);
+            Session::of(&command).unwrap().sweep(None);
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let ps = directory.path().join("ps");
+        // Model a process disappearing after ps listed it. This PID is above
+        // the supported systems' PID limits, so it cannot name a live process.
+        // SAFETY: geteuid has no arguments or memory preconditions.
+        let uid = unsafe { libc::geteuid() };
+        crate::test_support::write_executable(
+            &ps,
+            &format!("#!/bin/sh\nprintf '2147483647 {uid} S\\n'\n"),
+        );
+        crate::test_support::assert_test_without_warnings(
+            "process::session::tests::a_process_that_exits_before_its_environment_is_read_does_not_warn",
+            |command| {
+                command.env(FIXTURE, "1").env("PATH", directory.path());
+            },
+        );
+    }
 }
