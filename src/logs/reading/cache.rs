@@ -17,7 +17,6 @@ use crate::logs::session_signals::SessionSignals;
 struct Identity {
     len: u64,
     modified: Option<SystemTime>,
-    #[cfg(unix)]
     inode: (u64, u64, i64, i64),
 }
 
@@ -27,7 +26,6 @@ impl Identity {
         Ok(Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
-            #[cfg(unix)]
             inode: {
                 use std::os::unix::fs::MetadataExt;
                 (

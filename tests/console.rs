@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-#[cfg(unix)]
 #[path = "console/accounts.rs"]
 mod accounts;
 
@@ -48,11 +47,9 @@ mod metrics;
 #[path = "console/idle.rs"]
 mod idle;
 
-#[cfg(unix)]
 #[path = "console/watching.rs"]
 mod watching;
 
-#[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
 
@@ -1852,7 +1849,6 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     let home = tempfile::tempdir().unwrap();

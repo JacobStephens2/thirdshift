@@ -298,7 +298,6 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
         "contents": fs::read_to_string(attempt.join("session/stdout.logs.jsonl")).unwrap()})
     );
 
-    #[cfg(unix)]
     {
         let secret = home.path().join("secret.jsonl");
         fs::write(&secret, "outside the Experiment").unwrap();

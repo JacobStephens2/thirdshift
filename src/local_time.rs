@@ -74,7 +74,6 @@ fn instant_at(text: &str, start: usize) -> Option<(usize, DateTime<chrono::Fixed
 
 /// The zone's short name at that instant, such as `EDT` or `UTC`; chrono
 /// knows only the offset.
-#[cfg(unix)]
 fn zone_abbreviation(seconds: i64) -> Option<String> {
     let time = libc::time_t::try_from(seconds).ok()?;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -85,11 +84,6 @@ fn zone_abbreviation(seconds: i64) -> Option<String> {
         .to_str()
         .ok()?;
     (!name.is_empty()).then(|| name.to_owned())
-}
-
-#[cfg(not(unix))]
-fn zone_abbreviation(_seconds: i64) -> Option<String> {
-    None
 }
 
 #[cfg(test)]
