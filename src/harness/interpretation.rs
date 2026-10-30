@@ -30,7 +30,7 @@ pub struct Interpretation {
     models: models::Models,
     events: Option<Vec<event::Event>>,
     work_started: bool,
-    plan_limit_reached: bool,
+    plan_limit: Option<limits::Limit>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -155,7 +155,7 @@ pub struct Decoded {
 }
 
 pub(super) enum Evidence {
-    PlanLimit,
+    PlanLimit(limits::Limit),
     WorkStarted,
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
@@ -268,7 +268,7 @@ impl Interpretation {
             models: models::Models::default(),
             events: None,
             work_started: false,
-            plan_limit_reached: false,
+            plan_limit: None,
         }
     }
 
@@ -307,7 +307,11 @@ impl Interpretation {
 
     /// Live quota evidence is sticky and independent of ordinary Run outcomes.
     pub fn plan_limit_reached(&self) -> bool {
-        self.plan_limit_reached
+        self.plan_limit.is_some()
+    }
+
+    pub(crate) fn plan_limit(&self) -> Option<&limits::Limit> {
+        self.plan_limit.as_ref()
     }
 
     /// Supplied raw records go through the same decoding and trace recording
@@ -346,8 +350,8 @@ impl Interpretation {
         } = self.decoder.condense(raw);
         self.work_started |= events.iter().any(work_started);
         for fact in evidence {
-            if matches!(fact, Evidence::PlanLimit) {
-                self.plan_limit_reached = true;
+            if let Evidence::PlanLimit(limit) = &fact {
+                self.plan_limit.get_or_insert_with(|| limit.clone());
             }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;

@@ -466,8 +466,8 @@ impl<'a> Account<'a> {
     pub fn summary(&self) -> String {
         let ended = match &self.ended {
             Ok(line) => line.clone(),
-            Err(cause) if self.outcome == "review required" => {
-                format!("review required: {}", cause.first_line())
+            Err(cause) if matches!(self.outcome, "review required" | "paused") => {
+                format!("{}: {}", self.outcome, cause.first_line())
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
         };
@@ -487,6 +487,8 @@ impl<'a> Account<'a> {
 fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
+    } else if failed.error.is::<crate::session::limits::Reached>() {
+        "paused"
     } else if matches!(
         failed.error.downcast_ref::<PolicyRefusal>(),
         Some(PolicyRefusal::ReviewRequired { .. })

@@ -162,6 +162,15 @@ impl Started {
             Ok(account) => account,
             Err(skip) => return run_ending::show_skip(skip),
         };
+        if account.outcome == "paused"
+            && let Ending::Scoring(Err(failed)) = &ending
+            && let Some(reached) = failed
+                .error
+                .downcast_ref::<crate::session::limits::Reached>()
+        {
+            logs::paused(&reached.0);
+            progress::step("Scoring run paused");
+        }
         logs::ended(account.summary());
         logs::finished(&account);
         let elapsed = match &ending {

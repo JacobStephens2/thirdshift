@@ -462,7 +462,7 @@ document.addEventListener('click', async event => {
   }
 });
 
-content.addEventListener('click', async event => {
+document.addEventListener('click', async event => {
   const copy = event.target.closest('.peek-cli [data-copy-cli]');
   if (!copy) return;
   const line = copy.closest('.peek-cli');
