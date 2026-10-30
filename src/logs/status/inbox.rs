@@ -304,8 +304,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
-                        row.ci = Some(item.github_ci.unwrap_or_default());
-                        row.merge_conflict = item.github_mergeable
+                        row.ci = Some(item.github.ci.unwrap_or_default());
+                        row.merge_conflict = item.github.mergeable
                             == Some(crate::github::InboxMergeable::Conflicting);
                     }
                     row.count = item.count;

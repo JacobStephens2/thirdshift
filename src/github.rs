@@ -1756,6 +1756,11 @@ impl InboxCi {
 }
 
 impl PullRequestState {
+    /// The pull request's merge or close time, as GitHub wrote it.
+    pub fn event_time(&self) -> Option<&str> {
+        self.merged_at.as_deref().or(self.closed_at.as_deref())
+    }
+
     fn from_json(url: &str, json: &Value) -> Result<Self> {
         let state = match json["state"].as_str() {
             Some("OPEN") => PrState::Open,
