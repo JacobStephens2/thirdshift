@@ -92,6 +92,44 @@ fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
 }
 
 #[test]
+fn a_recut_checks_the_new_experiment_and_honors_summary_review_before_pushing() {
+    for answer in ["n\n", "y\n"] {
+        let release = Release::new();
+        release.ci_reports(GREEN);
+        release.release_workflow(failed_release());
+        let first = release.run_script("0.2.0");
+        assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+        release.merge_pr("newer", "New recovery content", "");
+        release.main_ci("completed", "success");
+        let candidate = release.origin(&["rev-parse", "main"]);
+        let refs = release.origin_refs();
+        let body = release.pr_body("release-0.2.0");
+        release.release_workflow(json!({}));
+        release.ci_reports(GREEN);
+        cargo_reports(&release, &[verdict("pass")]);
+        release.agent_runs("printf 'Updated recovery summary' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let output =
+            release.run_script_with(&["--with-experiment", "--review", "0.2.0"], answer, &[]);
+
+        assert_eq!(calls(&release)[0]["args"][2], candidate);
+        if answer == "n\n" {
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert_eq!(release.origin_refs(), refs);
+            assert_eq!(release.pr_body("release-0.2.0"), body);
+        } else {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(
+                release
+                    .pr_body("release-0.2.0")
+                    .contains("Updated recovery summary")
+            );
+            assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+        }
+    }
+}
+
+#[test]
 fn a_passing_experiment_is_checked_before_any_push() {
     for args in [
         &["--with-experiment", "0.2.0"][..],

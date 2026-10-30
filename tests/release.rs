@@ -19,6 +19,10 @@ mod lifetime;
 #[path = "release/experiments.rs"]
 mod experiments;
 
+#[cfg(target_os = "linux")]
+#[path = "release/recovery.rs"]
+mod recovery;
+
 use std::fs;
 #[cfg(not(target_os = "linux"))]
 use std::io::Write;
@@ -487,16 +491,18 @@ fi
 
     /// Calls that attempted to merge a PR, oldest first.
     fn merge_calls(&self) -> Vec<Vec<String>> {
+        self.gh_calls()
+            .into_iter()
+            .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
+            .collect()
+    }
+
+    fn gh_calls(&self) -> Vec<Vec<String>> {
         let path = self.root().join("gh-calls.json");
         if !path.exists() {
             return Vec::new();
         }
-        let calls: Vec<Vec<String>> =
-            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        calls
-            .into_iter()
-            .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
-            .collect()
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
 
     fn command(&self, program: &Path, dir: &Path) -> Command {
@@ -1449,11 +1455,11 @@ fn each_step_prints_a_progress_line_on_stderr() {
             "release: tagged v0.2.0 on {} and pushed the tag",
             &head[..7]
         ),
-        format!("release: merged {url}"),
         format!(
             "release: waiting for the release workflow at {}",
             release.release_run()["url"].as_str().unwrap()
         ),
+        format!("release: merged {url}"),
         format!("release: released v0.2.0 at {}", release_url()),
     ];
     let err = unstamped(&output);
@@ -1506,11 +1512,14 @@ fn a_failed_release_workflow_run_exits_1_naming_the_failed_jobs_and_leaves_the_t
     let release = Release::new();
     release.ci_reports(GREEN);
     release.release_workflow(failed_release());
+    let main_before = release.origin(&["rev-parse", "main"]);
 
     let output = release.run_script("0.2.0");
 
     assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
     assert!(!stderr(&output).contains(&release_url()));
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
 }
 
 #[test]
@@ -1904,7 +1913,12 @@ fn assert_refused_by(
 
     let output = run();
 
-    assert_eq!(output.status.code(), Some(1), "{case} was not refused");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{case} was not refused: {}",
+        stderr(&output)
+    );
     let err = unstamped(&output);
     assert!(
         err.contains("release: refusing to release"),
@@ -2350,19 +2364,28 @@ fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_rerun_after_the_release_workflow_failed_fails_the_same_way() {
+fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
     let release = Release::new();
-    release.release_workflow(failed_release());
-    let head = release.push_bump("0.2.0");
-    release.open_bump_pr("0.2.0");
-    release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &head]);
-    let refs_before = release.origin_refs();
+    release.ci_reports(GREEN);
+    let mut failed = failed_release();
+    failed["rerun"] = json!({
+        "conclusion": "success", "pending_polls": 2,
+        "jobs": [{"name": "host", "conclusion": "success"}],
+    });
+    release.release_workflow(failed);
+    let first = release.run_script("0.2.0");
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let head = release.pr_head("release-0.2.0");
 
     let output = release.run_script("0.2.0");
 
-    assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
-    assert_eq!(release.origin_refs(), refs_before);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.release_run()["run_attempt"], 2);
+    assert_eq!(release.release_run()["pending_polls"], 0);
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+    assert!(stderr(&output).contains("reran the failed jobs"));
+    assert!(stderr(&output).contains(&release_url()));
 }
 
 #[test]

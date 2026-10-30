@@ -106,7 +106,9 @@
 //! "conclusion"}`, for its current attempt.
 //!
 //! `gh release view <tag> --json url` answers with the GitHub Release's URL
-//! for a tag on origin.
+//! for a tag on origin. A recorded release workflow must have succeeded,
+//! unless its explicit `published` field says publication already happened.
+//! Release workflow runs may provide `rerun` fields for their next attempt.
 //!
 //! `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 //! with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -611,6 +613,16 @@ fn pr_ready(state: &mut Json, positional: &[String], flags: &Flags) {
     let pr = &mut state.at_mut("prs").items_mut()[at];
     ensure_open(pr);
     pr.set("isDraft", Bool(flags.contains_key("undo")));
+    save(state);
+}
+
+/// The release script updates an open bump PR with a regenerated body.
+fn pr_edit(state: &mut Json, positional: &[String], flags: &Flags) {
+    let at = selected_pr(state, &positional[0]);
+    let pr = &mut state.at_mut("prs").items_mut()[at];
+    ensure_open(pr);
+    let body = fs::read_to_string(flag(flags, "body-file").expect("no --body-file")).unwrap();
+    pr.set("body", string(body));
     save(state);
 }
 
@@ -1911,6 +1923,31 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
     }
     let run = &positional[0];
     let mut runs = state.get("runs").cloned().unwrap_or(Array(Vec::new()));
+    if let Some(release) = runs.items_mut().iter_mut().find(|candidate| {
+        candidate
+            .get("databaseId")
+            .is_some_and(|id| id.python() == *run)
+            && candidate.get("workflow").and_then(Json::as_str) == Some("release.yml")
+    }) {
+        if release.at("status").str() != "completed" || !is_failure(release.at("conclusion").str())
+        {
+            die("run cannot be rerun", 1);
+        }
+        let attempt = release
+            .get("run_attempt")
+            .and_then(Json::as_i64)
+            .unwrap_or(1);
+        if let Some(Json::Object(fields)) = release.get("rerun").cloned() {
+            for (key, value) in fields {
+                release.set(&key, value);
+            }
+        }
+        release.set("run_attempt", number(attempt + 1));
+        release.set("rerun", Null);
+        state.set("runs", runs);
+        save(state);
+        return;
+    }
     if let Some(push) = runs.items_mut().iter_mut().find(|push| {
         push.get("id").is_some_and(|id| id.python() == *run)
             && push.get("event").and_then(Json::as_str) == Some("push")
@@ -2171,6 +2208,25 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
         );
     }
     let tag = &positional[0];
+    if let Some(run) = state
+        .get("runs")
+        .map(Json::items)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find(|run| {
+            run.get("workflow").and_then(Json::as_str) == Some("release.yml")
+                && run.get("branch").and_then(Json::as_str) == Some(tag)
+        })
+    {
+        let published = run.get("published").map(Json::truthy).unwrap_or_else(|| {
+            run.at("conclusion").str() == "success"
+                && run.get("pending_polls").and_then(Json::as_i64).unwrap_or(0) == 0
+        });
+        if !published {
+            die("release not found", 1);
+        }
+    }
     let tagged = git(
         &origin_repo(),
         &[
@@ -2975,6 +3031,10 @@ pub fn main(args: Vec<String>) {
         ["pr", "ready", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             pr_ready(&mut state, &positional, &flags);
+        }
+        ["pr", "edit", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            pr_edit(&mut state, &positional, &flags);
         }
         ["pr", "merge", rest @ ..] => {
             let (positional, flags) = parsed(rest);
