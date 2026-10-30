@@ -171,6 +171,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                 }
                 if item.group == Group::ReadyForReview {
                     println!("  {}", item.github_ci.unwrap_or_default().label());
+                    if item.github_mergeable == Some(crate::github::InboxMergeable::Conflicting) {
+                        println!("  Merge conflict");
+                    }
                 }
                 if let Some(line) = item.left_line() {
                     println!("  {line}");

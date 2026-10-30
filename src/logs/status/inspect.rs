@@ -215,6 +215,34 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
+        let mut details = crate::logs::metrics::details(&snapshot, command)?;
+        let kept = crate::logs::github::load(&config.logs_dir);
+        if let Observation::Record(record) = command
+            && let Some(row) = command.selector()
+        {
+            let record = &record.record;
+            if let Some(pr) = record
+                .pull_request
+                .as_deref()
+                .and_then(|url| kept.pull_request(&row, url))
+            {
+                details["github_state"] = pr.state.to_string().into();
+                details["github_ci"] = serde_json::to_value(pr.ci)?;
+                details["github_mergeable"] = serde_json::to_value(pr.mergeable)?;
+                if let Some(at) = pr.merged_at.as_ref().or(pr.closed_at.as_ref()) {
+                    details["github_at"] = at.clone().into();
+                }
+            }
+            let urls = record
+                .pull_request
+                .as_deref()
+                .into_iter()
+                .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
+                .collect();
+            if let Some(answer) = kept.row_answer(&row, urls) {
+                details["github"] = serde_json::to_value(answer)?;
+            }
+        }
         #[derive(Serialize)]
         struct Show {
             version: u32,
@@ -226,7 +254,7 @@ pub fn show(input: &str, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&Show {
                 version: 1,
                 hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: crate::logs::metrics::details(&snapshot, command)?,
+                command: details,
             })?
         );
     } else {
