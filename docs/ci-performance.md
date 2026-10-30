@@ -125,6 +125,27 @@ about **10% less** for both the test step and the job than the baseline above.
 These are separate CI runs, not a controlled benchmark; runner load and build
 cache can vary, so this comparison does not establish the typical saving.
 
+### Which runs test on ARM Linux
+
+Issue [#1663](https://github.com/JacobStephens2/thirdshift/issues/1663) adds the
+stable `test-linux-arm` check on `ubuntu-24.04-arm`. It runs the full suite on
+pushes to `main`, nightly and manual runs. An ordinary PR skips it; a PR into
+`main` labelled `test:linux-arm` opts in through the same `labeled` activity
+type as macOS. Apply the label after an existing CI run finishes to avoid
+leaving cancelled checks on the head, as described for macOS below.
+
+The job runs the same clippy command and test runner as x86_64 Linux:
+`cargo clippy --all-targets -- -D warnings`, then `cargo nextest run`, or
+`cargo test` on the nightly schedule. It has the same 60-minute bound and a
+separate architecture-specific Rust cache. It starts as one job on the same
+4-vCPU runner class as x86_64 Linux; shard it if hosted measurements show it
+extends the existing longest job noticeably.
+
+Releases also build `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm` and
+run its static-link/version smoke check before publication. That five-minute
+smoke job shares the existing tag/PR gate with Rocky and WSL; it does not run
+the full suite. Rocky and WSL coverage remains x86_64 only.
+
 ### Which runs test on macOS
 
 Issue [#893](https://github.com/JacobStephens2/thirdshift/issues/893) moved the

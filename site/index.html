@@ -444,7 +444,7 @@
         <details class="workflow">
           <summary>Console</summary>
           <div class="workflow-content">
-            <p>See the Console with sample Commands in the Focus light Theme. Open either screenshot for the full-size view. Every Console tab title names its host; the Inbox also shows its Needs you count. Ready for review rows show the pull request's latest CI: green, red, pending, no checks or unknown. A separate <strong>Merge conflict</strong> pill appears beside CI when GitHub reports a conflict; the row stays Ready for review even with green CI. <code>status</code> shows the same indicators, and <code>show --json</code> includes locally cached GitHub facts and observation times without a network request.</p>
+            <p>See the Console with sample Commands in the Focus light Theme. Open either screenshot for the full-size view. The Console header shows the running thirdshift version. Every Console tab title names its host; the Inbox also shows its Needs you count. Ready for review rows show the pull request's latest CI: green, red, pending, no checks or unknown. A separate <strong>Merge conflict</strong> pill appears beside CI when GitHub reports a conflict; the row stays Ready for review even with green CI. <code>status</code> shows the same indicators, and <code>show --json</code> includes locally cached GitHub facts and observation times without a network request.</p>
             <figure class="console-shot">
               <a href="/screenshots/inbox.png"><img src="/screenshots/inbox.png" width="1440" height="1088" loading="lazy" alt="Console Inbox: a failed Command in Needs you, two pull requests Ready for review, and the selected Command's details."></a>
               <figcaption>The Inbox groups Commands by what needs you. Select a row to inspect its cause, CLI commands and logs alongside the list.</figcaption>
@@ -532,6 +532,7 @@
           <ul>
             <li><b>Rocky Linux</b> 9.8 and later, x86_64.</li>
             <li><b>Ubuntu</b> 24.04.3 and later, x86_64.</li>
+            <li><b>Ubuntu</b> 24.04 and later, aarch64 (ARM Linux), with full CI test coverage on <code>main</code> and nightly.</li>
             <li><b>WSL2</b>, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. <code>~/repos</code>), not under <code>/mnt/c</code>. WSL1 is not supported.</li>
             <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
           </ul></div>

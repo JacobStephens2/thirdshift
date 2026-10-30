@@ -3,13 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
-  # `labeled` lets the `test:macos` label start the full macOS suite on a
+  # `labeled` lets `test:macos` and `test:linux-arm` start their full suites on a
   # PR's current head. Any label starts a whole new run, which cancels an
   # older one still running under the concurrency group below.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  # Nightly, on main: the full macOS suite catches what the PR gate's
-  # filterset misses. GitHub tells the user who last changed this cron when
+  # Nightly, on main: full macOS and ARM Linux suites cover what ordinary
+  # PRs don't run. GitHub tells the user who last changed this cron when
   # it fails; see docs/ci-performance.md for what to do then.
   schedule:
     - cron: "17 6 * * *"
@@ -84,6 +84,27 @@ jobs:
       # which the tests build from tests/fakes.rs with rustc.
       # nextest fills idle slots across test binaries (#1317). Keep the
       # contributor's cargo test path exercised by the nightly run too.
+      - uses: taiki-e/install-action@nextest
+        if: ${{ github.event_name != 'schedule' }}
+      - run: cargo nextest run
+        if: ${{ github.event_name != 'schedule' }}
+      - run: cargo test
+        if: ${{ github.event_name == 'schedule' }}
+
+  # One stable check name. Full ARM Linux coverage on main, nightly and manual
+  # runs; PRs into main opt in with `test:linux-arm` (#1663).
+  test-linux-arm:
+    timeout-minutes: 60
+    if: ${{ github.event_name != 'pull_request' || (github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'test:linux-arm')) }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Rust version and components rust-toolchain.toml names
+        run: |
+          rustup toolchain install
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
         if: ${{ github.event_name != 'schedule' }}
       - run: cargo nextest run
