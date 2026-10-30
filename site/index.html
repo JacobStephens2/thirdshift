@@ -22,7 +22,7 @@
       "url": "https://thirdshift.app/",
       "description": "Turn GitHub issues into ready-for-review pull requests with unattended coding agents. thirdshift implements and reviews each change in an isolated Git worktree, then keeps its pull request passing CI.",
       "applicationCategory": "DeveloperApplication",
-      "operatingSystem": "Linux, macOS",
+      "operatingSystem": "Linux",
       "license": "https://opensource.org/licenses/MIT",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
       "downloadUrl": "https://github.com/JacobStephens2/thirdshift/releases/latest",
@@ -528,13 +528,11 @@
             <li><b>Node.js</b> on <code>PATH</code> for Security runs, whose report validators use it.</li>
             <li><b><code>git</code></b> with a global <code>user.name</code> and <code>user.email</code>, and credentials that can push to the repository.</li>
           </ul></div>
-        <div><h3>Platforms</h3>
+        <div><h3>Platforms · Linux only</h3>
           <ul>
-            <li><b>Rocky Linux</b> 9.8 and later, x86_64.</li>
-            <li><b>Ubuntu</b> 24.04.3 and later, x86_64.</li>
-            <li><b>Ubuntu</b> 24.04 and later, aarch64 (ARM Linux), with full CI test coverage on <code>main</code> and nightly.</li>
-            <li><b>WSL2</b>, latest release, with Ubuntu 24.04 or later, x86_64. Keep your repositories on the Linux filesystem (e.g. <code>~/repos</code>), not under <code>/mnt/c</code>. WSL1 is not supported.</li>
-            <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
+            <li><b>Test suite in CI:</b> Ubuntu 24.04.3 and later, <code>x86_64</code> and <code>aarch64</code>. On Apple Silicon macOS, run Ubuntu 24.04 <code>aarch64</code> in a Linux VM such as Lima with <code>vz</code> and <code>--mount-none</code>. Keep repositories on the VM's Linux filesystem (e.g. <code>~/repos</code>), not under <code>/Users</code>.</li>
+            <li><b>Release smoke check only:</b> Rocky Linux 9.8 and later (<code>x86_64</code>) and WSL2 with Ubuntu 24.04 or later (<code>x86_64</code>). Keep WSL2 repositories on the Linux filesystem, not under <code>/mnt/c</code>. WSL1 is not supported.</li>
+            <li>Two statically linked Linux musl binaries. Native macOS (including Intel macOS) and native Windows have no binary.</li>
           </ul></div>
       </div>
       <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. Setup suggests Claude's documented Model aliases and accepts custom Model IDs. See <a href="/docs/#harness-model-and-effort">Harness configuration</a> and <a href="/docs/#supported-platforms">supported platforms</a>.</p>
