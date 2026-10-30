@@ -1228,7 +1228,7 @@ test('Ready rows show CI without clipping on desktop or phone and update live', 
     await page.goto(origin);
     await folder(page, 'ready for review').click();
     const row = number => page.locator(`.command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
-    for (const width of [1440, 390]) {
+    for (const width of [1440, 768, 390]) {
       await page.setViewportSize({ width, height: 900 });
       for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);

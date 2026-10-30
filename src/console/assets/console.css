@@ -244,7 +244,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head > .gist { display: block; grid-column: 4; }
   .one-line .row-head > .issue-title:empty + .gist { grid-column: 3 / 5; }
   /* The full words stay for screen readers; the line shows a short badge. */
-  .one-line .row-head > .ci { grid-column: 5; grid-row: 1; align-self: center; }
+  .one-line .row-head > .ci { grid-column: 5; grid-row: 1; align-self: center; min-width: max-content; }
   .one-line .row-head > .new { grid-column: 6; font-size: 0; }
   .one-line .row-head > .new::before { content: "New"; font-size: 12px; color: var(--head); font-weight: var(--head-weight); }
   .one-line .row-head > .age { grid-column: 7; margin: 0; font-size: 12px; }
