@@ -3,6 +3,51 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 
 #[test]
+fn stopping_windows_keep_their_own_reset_and_unknown_facts_stay_null() {
+    for (harness, raw, expected) in [
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day","utilization":0.4,"resetsAt":1793397600,"unifiedWindows":{"five_hour":{"utilization":0.6,"resetsAt":1793394000}}}}"#,
+            serde_json::json!({"harness":"claude","window":"seven_day","utilization":0.4,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"rate_limit_reached_type":"secondary","primary":{"used_percent":85,"resets_at":1793394000},"secondary":{"used_percent":100,"resets_at":1793397600}}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":1.0,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.77,"resetsAt":1793397600,"unifiedWindows":{"five_hour":{"utilization":0.86,"resetsAt":1793394000}}}}"#,
+            serde_json::json!({"harness":"claude","window":"five_hour","utilization":0.86,"resets_at":"2026-10-30T21:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}"#,
+            serde_json::json!({"harness":"claude","window":null,"utilization":null,"resets_at":null}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"secondary":{"used_percent":86,"resets_at":1793397600}}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"rate_limit_reached_type":"secondary"}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":null,"resets_at":null}),
+        ),
+    ] {
+        let mut interpretation = stream(harness, "");
+        interpretation.decode(raw);
+        assert_eq!(
+            serde_json::to_value(interpretation.plan_limit()).unwrap(),
+            expected,
+            "{raw}"
+        );
+        assert!(finish(interpretation).outcome.is_ok());
+    }
+}
+
+#[test]
 fn claude_plan_limit_warning_below_85_percent_does_not_pause_evals() {
     for raw in [
         r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.77}}"#,

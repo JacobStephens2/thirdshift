@@ -347,6 +347,7 @@ pub fn run(options: Options) -> Result<()> {
         &experiment.description.candidate.choice(),
     );
     logs::experiment(&experiment.description);
+    logs::resumable(experiment.details.resume_command.as_deref().unwrap());
     experiment.details.command_log = logs::command_log_path();
     experiment.details.ended_at = None;
     experiment.details.pause_reason = None;
@@ -405,6 +406,19 @@ pub fn run(options: Options) -> Result<()> {
     }
     let outcome = if interrupt::requested() {
         "interrupted"
+    } else if saved.is_ok()
+        && result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<crate::session::limits::Reached>())
+    {
+        let reached = result
+            .as_ref()
+            .unwrap_err()
+            .downcast_ref::<crate::session::limits::Reached>()
+            .unwrap();
+        logs::paused(&reached.0);
+        "paused"
     } else if result.is_err() || saved.is_err() {
         "failed"
     } else {

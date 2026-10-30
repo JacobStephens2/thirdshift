@@ -89,6 +89,7 @@ impl<'a> Runner<'a> {
                             writer.finish()?;
                         }
                         if let Some(cause) = pause {
+                            limits::check(self.signal)?;
                             bail!(
                                 "Trial {} paused: {:?}; run the Experiment again to resume",
                                 identity.key(),

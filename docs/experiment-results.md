@@ -182,6 +182,23 @@ otherwise an inconclusive suite or more than a tenth of their judged tasks
 dropped as void makes it inconclusive. All suites advisory gives inconclusive. Required rechecks
 withhold the final decision as `waiting_on_rechecks`.
 
+## Paused Command records
+
+An Experiment or Scoring run stopped by a plan-limit warning or rejection has
+Command outcome `paused`, separate from a failure or interruption. `show --json`
+and `status --json` include its saved `resume_command` and `limit`: `harness`,
+`window`, fractional `utilization`, and `resets_at` in RFC 3339. Unknown facts
+are null. These fields are optional on older or other Command records; older
+`failed` records keep that outcome. Without a reported reset time the cause
+keeps the earlier wording. With one it names the stopping window, utilization
+and local reset time. The Inbox shows Paused in Needs you, with that cause and
+a copyable resume command; starting the same Experiment or a later Scoring
+run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
+are kept. There is no automatic resume, failure email or failure metric.
+
+The `CommandPause` projection in the contract below covers those fields on
+the Command record and on `show --json`; it does not change Experiment format 4.
+
 ## Checked field contract
 
 This JSON type notation is part of the document, read directly by
@@ -198,6 +215,13 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
 <!-- result-contract -->
 ```json
 {
+  "CommandPause": {
+    "outcome": "paused|failed|interrupted",
+    "resume_command": "string",
+    "limit": {
+      "harness": "string?", "window": "string?", "utilization": "number?", "resets_at": "string?"
+    }
+  },
   "Experiment": {
     "format": 4,
     "name": "string",

@@ -107,6 +107,10 @@ pub(super) struct CommandRecord {
     #[serde(default)]
     pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<crate::session::limits::Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
     #[serde(default)]
@@ -427,6 +431,8 @@ impl CommandRecord {
             outcome: None,
             run_metrics: None,
             cause: None,
+            limit: None,
+            resume_command: None,
             issue_branch: None,
             pull_request: None,
             parent_record: None,

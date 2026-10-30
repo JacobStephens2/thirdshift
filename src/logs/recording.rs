@@ -488,6 +488,20 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn resumable(&mut self, command: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.resume_command = Some(command.into());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn paused(&mut self, limit: &crate::session::limits::Limit) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.limit = Some(limit.clone());
+            self.write_record();
+        }
+    }
+
     /// How a Command ended when it has no Run account: an Experiment or a Process.
     pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {

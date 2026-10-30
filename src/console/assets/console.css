@@ -83,7 +83,7 @@ details[data-fact] > dl { margin: 4px 0 6px; }
 #dismissal-notices form { display: inline-flex; margin: 0; align-items: baseline; gap: 6px; }
 .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .command[data-state="Died"], .command[data-state="Failed"], .command[data-state="Silent"], .command[data-state="Finding"], .command[data-state="Triage"] { background: var(--panel); border-left: 3px solid var(--urgent); color: var(--urgent-text); }
-.command[data-state="Slow"] { border-left: 3px solid var(--look); color: var(--look-text); }
+.command:is([data-state="Slow"], [data-state="Paused"]) { border-left: 3px solid var(--look); color: var(--look-text); }
 .command[data-state="Died"] .state, .command[data-state="Failed"] .state, .command[data-state="Silent"] .state, .command[data-state="Finding"] .state, .command[data-state="Triage"] .state { color: var(--tag-text); font-weight: var(--head-weight); }
 .plan { margin-top: 6px; }
 .plan li::before { content: "☐ "; }
@@ -132,7 +132,7 @@ footer { margin-top: 16px; }
 .command[data-state="Landing"] { --tag-bg: var(--tag-landing-bg); --tag-text: var(--tag-landing-text); }
 .command[data-state="Ready"] { --tag-bg: var(--tag-ready-bg); --tag-text: var(--tag-ready-text); }
 .command:is([data-state="Silent"], [data-state="Died"], [data-state="Failed"], [data-state="Finding"], [data-state="Triage"]) { --tag-bg: var(--tag-urgent-bg); --tag-text: var(--tag-urgent-text); }
-.command[data-state="Slow"] { --tag-bg: var(--tag-look-bg); --tag-text: var(--tag-look-text); }
+.command:is([data-state="Slow"], [data-state="Paused"]) { --tag-bg: var(--tag-look-bg); --tag-text: var(--tag-look-text); }
 .command .state { background: var(--tag-bg); color: var(--tag-text); border-radius: var(--radius); padding: 0 3px; }
 .command[data-live="true"]:is([data-state="live"], [data-state="Landing"]) > .row-head > .state::before { content: ""; display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 5px; }
 header::after { content: ""; display: block; height: 4px; background: var(--activity-decoration); background-size: 24px 4px; }
@@ -233,6 +233,8 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 @media (scripting: enabled) {
   .one-line .command { position: relative; padding: 0; cursor: pointer; }
   .one-line .command > :not(.row-head) { display: none; }
+  .one-line .command[data-state="Paused"] > .cause { display: block; }
+  .one-line .command[data-state="Paused"] > .peek-cli { display: flex; }
   .one-line .command:hover { background: var(--sel-bg); }
   .one-line .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) auto fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
   .one-line .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
