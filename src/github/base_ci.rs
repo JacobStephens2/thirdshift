@@ -111,10 +111,49 @@ fn mentions_test(text: &str, test: &str) -> bool {
     })
 }
 
+fn attempt_line(run: &PushRun) -> String {
+    format!(
+        "\nAttempt {} ({}): {}/attempts/{}\n",
+        run.run_attempt,
+        run.conclusion.as_deref().unwrap_or("unfinished"),
+        run.html_url,
+        run.run_attempt
+    )
+}
+
+/// A CI-red report a person can investigate without job names or log lines.
+/// The same text is the body of a new Ticket and the comment on an open one.
+fn ci_red_report(failure: &BaseCiEvidence) -> CiReport {
+    let BaseCiEvidence {
+        base,
+        run,
+        previous,
+        ..
+    } = failure;
+    let mut body = format!(
+        "The latest push CI on `{base}` failed.\n\nFailing commit: `{}`\nRun: {}\n",
+        run.head_sha, run.html_url,
+    );
+    if let Some(previous) = previous {
+        body.push_str(&attempt_line(previous));
+    }
+    body.push_str(&attempt_line(run));
+    body.push_str(&format!(
+        "\n<!-- thirdshift:base-ci-commit {} -->\n",
+        run.head_sha
+    ));
+    CiReport {
+        title: format!("{TITLE_PREFIX}{base}"),
+        body,
+        tests: Vec::new(),
+    }
+}
+
 impl GitHub {
     /// Read the latest push attempt and its preceding outcome. A pending latest
-    /// run hides earlier failures; report construction reads logs before any
-    /// publication, so a failed evidence read never publishes a Ticket.
+    /// run hides earlier failures. A failed evidence read never publishes a
+    /// Ticket. Flaky reports read job logs before publication; a CI-red report
+    /// does not.
     pub(crate) fn base_ci_evidence(
         &self,
         repo: &Repo,
@@ -205,6 +244,12 @@ impl GitHub {
     }
 
     fn ci_report(&self, repo: &Repo, failure: &BaseCiEvidence) -> Result<CiReport> {
+        if !failure.flaky() {
+            // A CI-red Ticket names the commit and the attempts. Job names and
+            // log lines stay out of the title and body, and out of a comment
+            // on an open Ticket, which posts this same body. Logs are not read.
+            return Ok(ci_red_report(failure));
+        }
         let BaseCiEvidence {
             base,
             run,
@@ -222,40 +267,23 @@ impl GitHub {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let mut body = if failure.flaky() {
-            format!(
-                "The same commit passed on re-run of the latest push CI on `{base}`. The recorded failure is the evidence; fix the test's dependence on timing or scheduling, or the race it exposes, without requiring reproduction on demand.\n\nFailing commit: `{}`\nFailed jobs: {names}\n\n{}\n",
-                run.head_sha,
-                failure.failed_attempt_marker(),
-            )
-        } else {
-            format!(
-                "The latest push CI on `{base}` failed.\n\nFailing commit: `{}`\nRun: {}\n\nFailed jobs: {names}\n",
-                run.head_sha, run.html_url,
-            )
-        };
+        let mut body = format!(
+            "The same commit passed on re-run of the latest push CI on `{base}`. The recorded failure is the evidence; fix the test's dependence on timing or scheduling, or the race it exposes, without requiring reproduction on demand.\n\nFailing commit: `{}`\nFailed jobs: {names}\n\n{}\n",
+            run.head_sha,
+            failure.failed_attempt_marker(),
+        );
         let mut tests = Vec::new();
         if let Some(previous) = previous {
             let jobs = self.failed_push_jobs(repo, previous)?;
             body.push_str(&self.push_attempt_evidence(repo, previous, &jobs, &mut tests)?);
         }
-        body.push_str(&self.push_attempt_evidence(
-            repo,
-            run,
-            if failure.flaky() { &[] } else { failed },
-            &mut tests,
-        )?);
+        body.push_str(&self.push_attempt_evidence(repo, run, &[], &mut tests)?);
         body.push_str(&format!(
             "\n<!-- thirdshift:base-ci-commit {} -->\n",
             run.head_sha
         ));
-        let prefix = if failure.flaky() {
-            FLAKY_PREFIX
-        } else {
-            TITLE_PREFIX
-        };
         Ok(CiReport {
-            title: format!("{prefix}{base}: {names}"),
+            title: format!("{FLAKY_PREFIX}{base}: {names}"),
             body,
             tests,
         })
@@ -268,13 +296,7 @@ impl GitHub {
         failed: &[Job],
         tests: &mut Vec<String>,
     ) -> Result<String> {
-        let mut body = format!(
-            "\nAttempt {} ({}): {}/attempts/{}\n",
-            run.run_attempt,
-            run.conclusion.as_deref().unwrap_or("unfinished"),
-            run.html_url,
-            run.run_attempt
-        );
+        let mut body = attempt_line(run);
         for job in failed {
             let logs = self.gh_stdout(&[
                 "api",
@@ -433,10 +455,12 @@ impl GitHub {
             return Ok(BaseCiAction::Nothing);
         }
         let mut labels = vec![Label::new("bug", "Something isn't working")];
+        // A person writes the CI-red task, then applies ready-for-agent.
+        // Flaky-test Tickets stay ready: their recorded failure is the task.
         if failure.flaky() {
             labels.push(FLAKY_TEST);
+            labels.push(READY_FOR_AGENT);
         }
-        labels.push(READY_FOR_AGENT);
         let issue = self.create_issue_in(repo, &report.title, &report.body, &labels)?;
         Ok(if failure.flaky() {
             BaseCiAction::FlakyFiled(issue)
