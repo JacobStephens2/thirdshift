@@ -1213,6 +1213,7 @@ always = true
 unless_merged = false
 to = \"mine@example.net\"
 from = \"ts@acme.dev\"
+to_by_repo = {}
 
 [logs]
 dir = \"/var/log/thirdshift\"
