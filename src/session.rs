@@ -6,6 +6,7 @@ use std::fs::{self, File};
 #[cfg(test)]
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 
 #[cfg(test)]
@@ -571,18 +572,20 @@ impl Outside for OnMachine {
         if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
             invocation = adapter.trial_session(harness, resume, prompt);
         }
-        let mut command = match &self.sandbox {
-            Some(launch) => {
-                let mut command = launch.command(&invocation.args)?;
-                command.current_dir(&self.worktree);
-                command
-            }
+        let mut launched = match &self.sandbox {
+            Some(launch) => launch.session_command(&invocation.args, true)?,
             None => {
-                let mut command = Command::new(adapter.name());
-                command.args(&invocation.args).current_dir(&self.worktree);
-                command
+                let mut launched = if self.recording.is_trial() {
+                    crate::scope::trial_session_command(adapter.name())
+                } else {
+                    crate::scope::session_command(adapter.name())
+                };
+                launched.command().args(&invocation.args);
+                launched
             }
         };
+        let command = launched.command();
+        command.current_dir(&self.worktree);
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
@@ -608,7 +611,7 @@ impl Outside for OnMachine {
         let ended = self.recording.run(
             label,
             harness,
-            &mut command,
+            launched.as_mut(),
             recording::Input {
                 prompt,
                 policy,

@@ -1,4 +1,4 @@
-//! Interrupting a Run stops commands that escaped the session's process group.
+//! Session completion and interruption stop escaped commands and pipe holders.
 
 mod support;
 
@@ -161,16 +161,16 @@ fn interrupting_a_muse_check_after_cli_exit_stops_the_command_holding_its_stream
 }
 
 #[test]
-fn interrupting_a_live_session_after_cli_exit_stops_the_command_holding_stdout() {
-    assert_live_session_stdout_holder_stopped(false);
+fn ending_a_session_stops_the_command_holding_stdout_without_interruption() {
+    assert_session_stdout_holder_stopped(false);
 }
 
 #[test]
 fn interrupting_a_live_session_stops_its_stdout_holder_before_slow_cleanup() {
-    assert_live_session_stdout_holder_stopped(true);
+    assert_session_stdout_holder_stopped(true);
 }
 
-fn assert_live_session_stdout_holder_stopped(slow_cleanup: bool) {
+fn assert_session_stdout_holder_stopped(slow_cleanup: bool) {
     let scenario = Scenario::new();
     // Failed run preservation may be slow even when the session stops promptly.
     scenario.repo_has_hook(
@@ -205,42 +205,60 @@ PATH="${{PATH#*:}}" exec git "$@"
         );
     }
     let expired = scenario.path("stdout-holder-expired");
-    // Bash waits on its own FIFO so a child sleep cannot outlive the holder
-    // and keep stdout open without writing the natural-expiry marker.
+    // Acknowledge the holder before the CLI can exit: normal completion now
+    // cleans it immediately. The interrupt case keeps the CLI live in wait.
+    // Bash's own FIFO wait cannot leave a child sleep holding stdout behind.
     scenario.agent_does(&format!(
         r#"printf 'interrupted work\n' > interrupted-work.txt
-bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
-mkfifo "$5"
-exec 9<>"$5"
-echo $$ > "$2"
-touch "$3"
+bash -c 'mkfifo "$4"
+exec 9<>"$4"
+echo $$ > "$1"
+touch "$2"
 read -r -t 30 -u 9
-touch "$4"' holder "$PPID" "{pid}" "{started}" "{expired}" "{wait_pipe}" &
+touch "$3"' holder "{pid}" "{started}" "{expired}" "{wait_pipe}" &
+for attempt in $(seq 1 200); do
+    test -f "{started}" && break
+    sleep 0.01
+done
+test -f "{started}"
+{wait}
 "#,
         pid = pid.display(),
-        started = scenario.path("cli-exited").display(),
+        started = scenario.path("stdout-holder-ready").display(),
         expired = expired.display(),
         wait_pipe = scenario.path("stdout-holder-wait").display(),
+        wait = if slow_cleanup { "wait" } else { "" },
     ));
     let url = scenario.issue_url(7);
-    let mut held = scenario.run_until(&[&url], &[], "cli-exited");
+    let (stopped, result) = if slow_cleanup {
+        let mut held = scenario.run_until(&[&url], &[], "stdout-holder-ready");
+        let command = SessionCommand(fs::read_to_string(&pid).unwrap().trim().parse().unwrap());
+        assert!(command.exists(), "the stdout holder never started");
+        held.signal("INT");
+        // Observe stopping before preservation or slow worktree cleanup.
+        let stopped = command.wait_for_stop();
+        (stopped, held.finish())
+    } else {
+        let result = scenario.run(&[&url]);
+        let command = SessionCommand(fs::read_to_string(&pid).unwrap().trim().parse().unwrap());
+        (command.wait_for_stop(), result)
+    };
     let command = SessionCommand(fs::read_to_string(pid).unwrap().trim().parse().unwrap());
-    assert!(command.exists(), "the stdout holder never started");
-    held.signal("INT");
-    // Observe stopping before waiting for the Run's preservation and cleanup.
-    // Finish the exact Run before asserting, so a failure leaves no Run behind.
-    let stopped = command.wait_for_stop();
-    let result = held.finish();
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    if slow_cleanup {
+        assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    } else {
+        // The session completed; this fixture intentionally opens no PR.
+        assert!(result.stderr.contains("no PR found"), "{}", result.stderr);
+    }
     // Observe whether the holder expired: timing the whole Run also counts
     // finishing Git work and Claim release, which can be slow under CI load.
     assert!(
         stopped && !expired.exists(),
-        "interruption waited for the stdout holder's natural expiry"
+        "session cleanup waited for the stdout holder's natural expiry"
     );
-    command.assert_stopped("the stdout holder survived interruption");
+    command.assert_stopped("the stdout holder survived session cleanup");
     assert_eq!(
         scenario
             .origin_file("issue-7", "interrupted-work.txt")

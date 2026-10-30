@@ -1,8 +1,6 @@
 //! Release summaries reuse the User config's Harness and its session protocol,
 //! away from the maintainer's checkout, without installing Factory skills.
 
-use std::process::Command;
-
 use anyhow::{Context, Result};
 
 use super::{Asked, Choice, Settings, process};
@@ -19,15 +17,14 @@ pub fn write(settings: &Settings, prompt: &str) -> Result<String> {
     std::fs::write(&prompt_file, prompt).context("could not write the summary input")?;
     let adapter = choice.harness.adapter();
     let invocation = adapter.summary(&choice, prompt, &prompt_file);
-    let output = process::output(
-        adapter,
-        Command::new(adapter.name())
-            .args(invocation.args)
-            .envs(adapter.summary_environment().iter().copied())
-            .current_dir(directory.path()),
-        invocation.stdin.as_deref(),
-    )
-    .context("could not run the release summary Harness")?;
+    let mut launched = crate::scope::session_command(adapter.name());
+    launched
+        .command()
+        .args(invocation.args)
+        .envs(adapter.summary_environment().iter().copied())
+        .current_dir(directory.path());
+    let output = process::output(adapter, launched.as_mut(), invocation.stdin.as_deref())
+        .context("could not run the release summary Harness")?;
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
     let mut interpretation = adapter.interpretation(directory.path(), prompt);
     for line in String::from_utf8_lossy(&output.stdout).lines() {
