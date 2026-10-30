@@ -258,7 +258,7 @@ test("the homepage describes the site and the software as static structured data
   assert.equal(app.description, await page.locator('meta[name="description"]').getAttribute("content"));
   assert.doesNotMatch(app.description, /runs [^.]*\bCI in isolated Git worktrees/, "CI runs on GitHub; thirdshift watches it");
   assert.equal(app.applicationCategory, "DeveloperApplication");
-  assert.equal(app.operatingSystem, "Linux, macOS");
+  assert.equal(app.operatingSystem, "Linux");
   assert.equal(app.license, "https://opensource.org/licenses/MIT");
   assert.deepEqual(app.offers, { "@type": "Offer", price: "0", priceCurrency: "USD" });
   const readme = await readFile(join(__dirname, "..", "..", "README.md"), "utf8");
