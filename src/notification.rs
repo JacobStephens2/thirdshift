@@ -128,10 +128,11 @@ impl RunNotification {
     pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
         let started = Instant::now();
         let started_at = chrono::Utc::now();
+        let repo = about.repo();
         let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
             NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
-                let to = to.or_else(|| about.repo().and_then(|repo| settings.to_for_repo(&repo)));
+                let to = to.or_else(|| repo.as_ref().and_then(|repo| settings.to_for_repo(repo)));
                 Some(Resend::new(to, settings)?)
             }
             NotificationAsk::Skip => None,
@@ -151,14 +152,14 @@ impl RunNotification {
             },
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
-            About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
+            About::ArchitectRun => Subject::ArchitectRun(repo),
             About::PickupRun => Subject::Pending,
-            About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
+            About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),
-                repo: launch::repo().ok(),
+                repo,
             },
         };
         Ok(RunNotification {
