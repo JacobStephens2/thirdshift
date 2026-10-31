@@ -482,16 +482,17 @@ fn read_records(
     Ok(records)
 }
 
-/// Another account's record names its Session path. Keep a trace only when it
-/// is a regular file inside that record's own directory. A lexical prefix is
-/// not enough: `..` and a symlink can leave the directory.
+/// Another account's record names its Session path. Keep a trace only when
+/// every file it is read from is a regular file whose canonical path stays
+/// inside that record's own directory. A lexical prefix is not enough: `..`
+/// and a symlink can leave.
 fn confine_other_account_sessions(command: &mut Command) {
     let root = command.record_path.parent();
     let keep = |path: &Path| {
         let Some(root) = root else {
             return false;
         };
-        contained_trace(root, path)
+        contained_session(root, path)
     };
     if command
         .record
@@ -509,6 +510,29 @@ fn confine_other_account_sessions(command: &mut Command) {
     command.activity.drop_session_unless(keep);
 }
 
+/// The logs and spans files opened for one Session trace. A missing sidecar is
+/// not an escape; a symlink or a resolved path outside `root` is.
+fn contained_session(root: &Path, path: &Path) -> bool {
+    if !contained_trace(root, path) {
+        return false;
+    }
+    let original = super::session::original(path);
+    [
+        original.with_extension("logs.jsonl"),
+        original.with_extension("spans.jsonl"),
+    ]
+    .into_iter()
+    .all(|sidecar| sidecar == path || absent_or_contained(root, &sidecar))
+}
+
+fn absent_or_contained(root: &Path, path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => contained_trace(root, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
 fn contained_trace(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
@@ -520,7 +544,16 @@ fn contained_trace(root: &Path, path: &Path) -> bool {
     {
         return false;
     }
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+    // `symlink_metadata` follows every component except the last, so a
+    // directory symlink still looks like a regular file. Resolve it.
+    if !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        return false;
+    }
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    path.canonicalize()
+        .is_ok_and(|canonical| canonical.starts_with(&root))
 }
 
 fn command_log(path: &Path) -> PathBuf {

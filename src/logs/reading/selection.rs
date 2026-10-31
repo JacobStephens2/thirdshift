@@ -216,6 +216,12 @@ impl<'a> Observation<'a> {
                 }
             }
         }
+        if let Self::Record(command) = self
+            && command.account.is_some()
+        {
+            let root = command.record_path.parent();
+            paths.retain(|path| root.is_some_and(|root| super::contained_session(root, path)));
+        }
         Ok(inventory.ordered(paths))
     }
 
