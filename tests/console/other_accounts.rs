@@ -499,6 +499,125 @@ fn other_account_session_references_stay_inside_their_log_directory() {
     );
 }
 
+/// Another account names the Session path in its Command record. Read that
+/// trace only when its canonical path stays inside the directory that holds
+/// the record. A lexical prefix is not enough: a directory symlink can leave.
+#[test]
+fn other_account_session_traces_stay_inside_their_command_record_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut kept = record(&home, 7, Some("failed"), 0);
+    let kept_log = dir.join("7-fixture-implement.logs.jsonl");
+    write_canary_spans(&kept_log, "INSIDE-COMMAND-DIRECTORY");
+    kept["session_log"] = json!(kept_log);
+    kept["stages"][0]["session_log"] = kept["session_log"].clone();
+    write_record(&home, 7, &kept);
+
+    let outside = machine.root.path().join("outside-command-directory");
+    fs::create_dir_all(&outside).unwrap();
+    let outside_log = outside.join("8-fixture-implement.logs.jsonl");
+    write_canary_spans(&outside_log, "CANARY-ESCAPED-SESSION");
+    let alias = dir.join("alias");
+    std::os::unix::fs::symlink(&outside, &alias).unwrap();
+    let mut escaped = record(&home, 8, Some("failed"), 0);
+    let escaped_log = alias.join("8-fixture-implement.logs.jsonl");
+    escaped["session_log"] = json!(escaped_log);
+    escaped["stages"][0]["session_log"] = escaped["session_log"].clone();
+    write_record(&home, 8, &escaped);
+    machine.setting("readable");
+
+    let kept_shown = shown_spans(&machine, "widgets#7");
+    assert!(
+        kept_shown.contains("conductor"),
+        "the other account's Command was not loaded: {kept_shown}"
+    );
+    assert!(
+        kept_shown.contains("INSIDE-COMMAND-DIRECTORY"),
+        "session trace inside the command record directory was not read:\n{kept_shown}"
+    );
+
+    let escaped_shown = shown_spans(&machine, "widgets#8");
+    assert!(
+        escaped_shown.contains("conductor"),
+        "the other account's Command was not loaded: {escaped_shown}"
+    );
+    assert!(
+        !escaped_shown.contains("CANARY-ESCAPED-SESSION"),
+        "session trace whose canonical path leaves the command record directory was read:\n{escaped_shown}"
+    );
+}
+
+/// The spans file is part of the Session trace. A regular logs file inside the
+/// Command record's directory must not make a symlink spans file readable.
+#[test]
+fn other_account_session_trace_sidecars_stay_inside_their_command_record_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut command = record(&home, 9, Some("failed"), 0);
+    fs::remove_file(dir.join("9-fixture.command.json")).unwrap();
+    let outside = machine.root.path().join("outside-spans");
+    fs::create_dir_all(&outside).unwrap();
+    let outside_log = outside.join("9-20261003T120000-0400-implement.logs.jsonl");
+    write_canary_spans(&outside_log, "CANARY-SIDECAR-SESSION");
+    let log = dir.join("9-20261003T120000-0400-implement.logs.jsonl");
+    fs::write(&log, "").unwrap();
+    let spans = super::support::session_trace::artifact(&log, "spans.jsonl");
+    std::os::unix::fs::symlink(
+        super::support::session_trace::artifact(&outside_log, "spans.jsonl"),
+        &spans,
+    )
+    .unwrap();
+    command["session_log"] = json!(log);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    fs::write(
+        dir.join("9-20261003T120000-0400.command.json"),
+        serde_json::to_vec(&command).unwrap(),
+    )
+    .unwrap();
+    machine.setting("readable");
+
+    let shown = shown_spans(&machine, "widgets#9");
+    assert!(
+        shown.contains("conductor"),
+        "the other account's Command was not loaded: {shown}"
+    );
+    assert!(
+        !shown.contains("CANARY-SIDECAR-SESSION"),
+        "session trace sidecar whose canonical path leaves the command record directory was read:\n{shown}"
+    );
+}
+
+fn write_canary_spans(log: &Path, secret: &str) {
+    let spans = super::support::session_trace::artifact(log, "spans.jsonl");
+    fs::write(log, "").unwrap();
+    let attr = |key: &str, value: &str| json!({"key": key, "value": {"stringValue": value}});
+    fs::write(
+        spans,
+        serde_json::to_vec(&json!({
+            "resourceSpans": [{"scopeSpans": [{"spans": [{
+                "spanId": "1111111111111111",
+                "name": "invoke_agent implement",
+                "startTimeUnixNano": "1790856010000000000",
+                "endTimeUnixNano": "1790856050000000000",
+                "attributes": [
+                    attr("gen_ai.operation.name", "invoke_agent"),
+                    attr("thirdshift.session.prompt", secret)
+                ]
+            }]}]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn shown_spans(machine: &Machine, command: &str) -> String {
+    let output = machine.run(&["show", command, "--spans", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 /// Another account's logs are read only from a directory whose canonical path
 /// stays inside that account's home, and only when the file's own canonical
 /// path stays under that directory. A symlink may point at another directory
