@@ -6,7 +6,7 @@
 #
 # Usage: scripts/release.sh [--review] [--with-experiment] <version>
 #
-# Run it in a clone of this repo, signed in to gh and the default Harness. It
+# Run it on Linux in a clone of this repo, signed in to gh and the default Harness. It
 # works from origin/main in a temporary worktree, so the branch checked out
 # where it runs and any uncommitted changes there are neither used nor changed.
 #
@@ -105,6 +105,10 @@ main() {
 	version=$1
 	tag=v$version
 	branch=release-$version
+
+	if [ "$(uname -s)" != Linux ]; then
+		refuse "thirdshift and release.sh support Linux only. On macOS, use an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."
+	fi
 
 	fetch_main
 	find_earlier_run

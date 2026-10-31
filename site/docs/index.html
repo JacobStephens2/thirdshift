@@ -2590,6 +2590,9 @@ cargo test
 </div></details>
 <details class="fold"><summary><h2>Releasing</h2></summary>
 <div class="manual-content" id="releasing">
+<p>Run <code>scripts/release.sh</code> on Linux. It refuses other hosts before fetching,
+writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
+such as Lima; on Windows, use WSL2.</p>
 <p>The release script skips Experiments by default, printing a note. Opt in with
 <code>scripts/release.sh --with-experiment 0.4.0</code>, adding <code>--with-experiment</code> again
 on each resume that should run an Experiment.</p>

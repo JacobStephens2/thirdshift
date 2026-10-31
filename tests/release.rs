@@ -1887,6 +1887,57 @@ fn assert_refused_by(
 }
 
 #[test]
+fn non_linux_hosts_are_refused_before_git_or_github() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.agent_runs("exit 1");
+    write_executable(
+        &release.bin().join("uname"),
+        "#!/bin/sh\nprintf '%s\\n' \"$FAKE_RELEASE_HOST\"\n",
+    );
+    for host in ["Darwin", "MINGW64_NT-10.0", "FreeBSD"] {
+        let trace = release.root().join("git-trace");
+        let calls_before = release.gh_calls();
+        let local_refs = git(&release.maintainer(), &["show-ref"]);
+        assert_refused_by(
+            &release,
+            host,
+            &[
+                "thirdshift",
+                "release.sh",
+                "Linux only",
+                "macOS",
+                "Ubuntu 24.04",
+                "Lima",
+                "Windows",
+                "WSL2",
+            ],
+            || {
+                release.run_script_with(
+                    &["0.2.0"],
+                    "",
+                    &[
+                        ("FAKE_RELEASE_HOST", host),
+                        ("GIT_TRACE", trace.to_str().unwrap()),
+                    ],
+                )
+            },
+        );
+        assert_eq!(release.gh_calls(), calls_before, "{host}: called gh");
+        assert!(release.agent_calls().is_empty(), "{host}: called a Harness");
+        assert_eq!(
+            git(&release.maintainer(), &["show-ref"]),
+            local_refs,
+            "{host}"
+        );
+        assert!(
+            !trace.exists() || fs::read_to_string(&trace).unwrap().is_empty(),
+            "{host}: called git before refusing"
+        );
+    }
+}
+
+#[test]
 fn a_version_that_is_not_plain_semver_is_refused() {
     // One version end to end; the version check's own test takes the rest.
     let release = Release::new();
