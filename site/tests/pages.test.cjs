@@ -413,9 +413,10 @@ test("the homepage explains Ticket runs and six workflows in plain words", async
     assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
   }
   const opening = await page.locator(".framing").textContent();
-  assert.match(opening, /coding agents you already use, logged in as you/);
-  assert.match(opening, /each agent's plan or account/);
-  assert.match(opening, /Claude Code.*subscription.*usage allowance/);
+  assert.match(opening, /^Give thirdshift a GitHub issue URL\./);
+  assert.match(opening, /coding agents you already use/);
+  assert.match(opening, /implement.*review.*pull request ready for review.*merge.*when asked/);
+  assert.doesNotMatch(opening, /subscription|logged in|log ?in|usage allowance/i);
   assert.match(opening, /free and open source/);
   assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
 });
