@@ -77,8 +77,6 @@
 # It waits with no overall timeout, so Ctrl-C and running it again
 # with the same version carries on waiting.
 set -euo pipefail
-# So a failure inside $(…) stops the script too.
-shopt -s inherit_errexit
 
 # The prompt the summary agent gets ahead of the release's input.
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
@@ -109,6 +107,9 @@ main() {
 	if [ "$(uname -s)" != Linux ]; then
 		refuse "thirdshift and release.sh support Linux only. On macOS, use an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."
 	fi
+	# So a failure inside $(…) stops the script too. Refuse unsupported hosts
+	# first, including macOS's older Bash, which does not have this option.
+	shopt -s inherit_errexit
 
 	fetch_main
 	find_earlier_run
@@ -542,7 +543,7 @@ progress() {
 # printed as HH:MM:SS, as thirdshift stamps its own, so a long wait can be told
 # from a stalled one.
 stamp() {
-	printf 'release: %(%H:%M:%S)T ' -1
+	printf 'release: %s ' "$(date +%H:%M:%S)"
 }
 
 # refuse <reason>
@@ -599,7 +600,8 @@ newest_green_main() {
 # is_plain_version <version>
 # Whether <version> is plain semver X.Y.Z, with no leading zeros.
 is_plain_version() {
-	[[ $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+	local pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+	[[ $1 =~ $pattern ]]
 }
 
 # is_higher <version> <other>

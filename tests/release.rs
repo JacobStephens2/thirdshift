@@ -1938,6 +1938,42 @@ fn non_linux_hosts_are_refused_before_git_or_github() {
 }
 
 #[test]
+fn non_linux_refusal_does_not_need_modern_bash() {
+    let release = Release::new();
+    let calls_before = release.gh_calls();
+    write_executable(&release.bin().join("uname"), "#!/bin/sh\necho Darwin\n");
+    let startup = release.root().join("legacy-bash.sh");
+    // Reproduce Bash 3.2's missing shell features without making CI install
+    // another shell. The refusal must not need either feature.
+    fs::write(
+        &startup,
+        r#"shopt() { echo 'shopt: inherit_errexit: invalid shell option name' >&2; return 1; }
+printf() {
+    case $1 in *'%('*) echo 'printf: unsupported time format' >&2; return 1 ;; esac
+    builtin printf "$@"
+}
+"#,
+    )
+    .unwrap();
+    assert_refused_by(
+        &release,
+        "Bash 3.2 on Darwin",
+        &["Linux only", "Ubuntu 24.04", "Lima", "WSL2"],
+        || {
+            let output =
+                release.run_script_with(&["0.2.0"], "", &[("BASH_ENV", startup.to_str().unwrap())]);
+            let err = stderr(&output);
+            assert!(
+                stamped(err.trim()).is_some(),
+                "missing stamped refusal: {err}"
+            );
+            output
+        },
+    );
+    assert_eq!(release.gh_calls(), calls_before);
+}
+
+#[test]
 fn a_version_that_is_not_plain_semver_is_refused() {
     // One version end to end; the version check's own test takes the rest.
     let release = Release::new();
