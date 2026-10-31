@@ -88,6 +88,60 @@ fn package_leaves_out_the_toolchain_pin() {
 }
 
 #[test]
+fn non_linux_compilation_reports_only_the_platform_error() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let temp = tempfile::TempDir::new().unwrap();
+    for entry in fs::read_dir(&source).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "main.rs" {
+            std::os::unix::fs::symlink(entry.path(), temp.path().join(entry.file_name())).unwrap();
+        }
+    }
+    // Make only the crate root see a non-Linux configuration. Keeping the
+    // host's std avoids a cross toolchain; withholding external dependencies
+    // makes any module that escapes the platform gate produce extra errors.
+    let main = fs::read_to_string(source.join("main.rs")).unwrap();
+    let root = temp.path().join("main.rs");
+    fs::write(
+        &root,
+        main.replace("target_os = \"linux\"", "thirdshift_linux"),
+    )
+    .unwrap();
+    for test in [false, true] {
+        let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or("rustc".into()));
+        command.args(["--edition=2024", "--emit=metadata", "--error-format=json"]);
+        if test {
+            command.arg("--test");
+        }
+        let output = command
+            .arg(&root)
+            .arg("-o")
+            .arg(temp.path().join("main.rmeta"))
+            .output()
+            .expect("could not compile the crate root");
+        assert!(!output.status.success(), "unsupported build succeeded");
+        let diagnostics: Vec<serde_json::Value> = String::from_utf8(output.stderr)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let messages: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| matches!(diagnostic["level"].as_str(), Some("error" | "warning")))
+            .map(|diagnostic| diagnostic["message"].as_str().unwrap())
+            .filter(|message| !message.starts_with("aborting due to"))
+            .collect();
+        assert!(messages.contains(&"thirdshift supports Linux only. On macOS, run it inside an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."), "missing platform error: {messages:?}");
+        assert_eq!(
+            messages.len(),
+            1,
+            "test={test}: extra diagnostics: {:?}",
+            &messages[..messages.len().min(5)]
+        );
+    }
+}
+
+#[test]
 fn package_carries_the_factory_skills_with_their_license_and_credits() {
     let list = package_list();
     for expected in [

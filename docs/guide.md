@@ -2963,6 +2963,10 @@ cargo test
 
 ## Releasing
 
+Run `scripts/release.sh` on Linux. It refuses other hosts before fetching,
+writing Git refs or calling GitHub. On macOS, use an Ubuntu 24.04 Linux VM
+such as Lima; on Windows, use WSL2.
+
 The release script skips Experiments by default, printing a note. Opt in with
 `scripts/release.sh --with-experiment 0.4.0`, adding `--with-experiment` again
 on each resume that should run an Experiment.

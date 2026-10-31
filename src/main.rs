@@ -3,86 +3,163 @@ compile_error!(
     "thirdshift supports Linux only. On macOS, run it inside an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."
 );
 
+#[cfg(not(target_os = "linux"))]
+fn main() {}
+
+#[cfg(target_os = "linux")]
 mod architect;
+#[cfg(target_os = "linux")]
 mod args;
+#[cfg(target_os = "linux")]
 mod asks;
+#[cfg(target_os = "linux")]
 mod base_fix;
+#[cfg(target_os = "linux")]
 mod branch;
+#[cfg(target_os = "linux")]
 mod child_run;
+#[cfg(target_os = "linux")]
 mod ci;
+#[cfg(target_os = "linux")]
 mod claim;
+#[cfg(target_os = "linux")]
 mod command;
+#[cfg(target_os = "linux")]
 mod command_limit;
+#[cfg(target_os = "linux")]
 mod config;
+#[cfg(target_os = "linux")]
 mod console;
+#[cfg(target_os = "linux")]
 mod cronjobs;
+#[cfg(target_os = "linux")]
 mod delivery;
+#[cfg(target_os = "linux")]
 mod email;
+#[cfg(target_os = "linux")]
 mod evals;
+#[cfg(target_os = "linux")]
 mod failed_run;
+#[cfg(target_os = "linux")]
 mod git;
+#[cfg(target_os = "linux")]
 mod github;
+#[cfg(target_os = "linux")]
 mod harness;
+#[cfg(target_os = "linux")]
 mod host;
+#[cfg(target_os = "linux")]
 mod implement;
+#[cfg(target_os = "linux")]
 mod interrupt;
+#[cfg(target_os = "linux")]
 mod issue;
+#[cfg(target_os = "linux")]
 mod labels;
+#[cfg(target_os = "linux")]
 mod launch;
+#[cfg(target_os = "linux")]
 mod local_time;
+#[cfg(target_os = "linux")]
 mod logs;
+#[cfg(target_os = "linux")]
 mod notification;
+#[cfg(target_os = "linux")]
 mod otlp_jsonl;
+#[cfg(target_os = "linux")]
 mod pass;
+#[cfg(target_os = "linux")]
 mod pickup;
+#[cfg(target_os = "linux")]
 mod poll;
+#[cfg(target_os = "linux")]
 mod process;
+#[cfg(target_os = "linux")]
 mod processes;
+#[cfg(target_os = "linux")]
 mod progress;
+#[cfg(target_os = "linux")]
 mod prompt;
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod prompts_page;
+#[cfg(target_os = "linux")]
 mod proxy;
+#[cfg(target_os = "linux")]
 mod pull_request;
+#[cfg(target_os = "linux")]
 mod ready;
+#[cfg(target_os = "linux")]
 mod recovery;
+#[cfg(target_os = "linux")]
 mod resend_key;
+#[cfg(target_os = "linux")]
 mod reservation;
+#[cfg(target_os = "linux")]
 mod resources;
+#[cfg(target_os = "linux")]
 mod run;
+#[cfg(target_os = "linux")]
 mod run_ending;
+#[cfg(target_os = "linux")]
 mod sandbox;
+#[cfg(target_os = "linux")]
 mod scope;
+#[cfg(target_os = "linux")]
 mod scoring;
+#[cfg(target_os = "linux")]
 mod security;
+#[cfg(target_os = "linux")]
 mod session;
+#[cfg(target_os = "linux")]
 mod setup;
+#[cfg(target_os = "linux")]
 mod skill;
+#[cfg(target_os = "linux")]
 mod skills;
+#[cfg(target_os = "linux")]
 mod spec_run;
+#[cfg(target_os = "linux")]
 mod terminal;
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod test_support;
+#[cfg(target_os = "linux")]
 mod trial;
+#[cfg(target_os = "linux")]
 mod trust;
+#[cfg(target_os = "linux")]
 mod update;
 // The Experiment runner will consume this independently tested module.
 #[allow(dead_code)]
+#[cfg(target_os = "linux")]
 mod verdict;
+#[cfg(target_os = "linux")]
 mod worktree;
 
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
 
+#[cfg(target_os = "linux")]
 use architect::Outcome;
+#[cfg(target_os = "linux")]
 use args::{ArchitectArgs, Command, PassArgs, RunArgs};
+#[cfg(target_os = "linux")]
 use asks::Asks;
+#[cfg(target_os = "linux")]
 use command::{Ending, failure};
+#[cfg(target_os = "linux")]
 use config::UserConfig;
+#[cfg(target_os = "linux")]
 use logs::Begin;
+#[cfg(target_os = "linux")]
 use notification::About;
+#[cfg(target_os = "linux")]
 use pickup::Took;
+#[cfg(target_os = "linux")]
 use run::StartedBy;
 
+#[cfg(target_os = "linux")]
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
 
@@ -154,6 +231,7 @@ Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full
   https://thirdshift.app/docs/
 ";
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     child_run::name_this_process();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -401,6 +479,7 @@ fn main() -> ExitCode {
 /// that run too. The repository's Activity log records the skip, if it
 /// differs from the last, or the start and end of its work. With
 /// `activity.quiet_skips` set, a skipped run prints nothing at all.
+#[cfg(target_os = "linux")]
 fn architect(args: ArchitectArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::ArchitectRun, ask, About::ArchitectRun)
@@ -440,6 +519,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// The repository's Activity log records the skip, if it differs from the
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
+#[cfg(target_os = "linux")]
 fn pickup(args: PassArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::PickupRun, ask, About::PickupRun) {
@@ -472,6 +552,7 @@ fn pickup(args: PassArgs) -> ExitCode {
 }
 
 /// A Security run, with one notification when asked, unless skipped.
+#[cfg(target_os = "linux")]
 fn secure(args: PassArgs) -> ExitCode {
     let (config, mut started) = match command::start(
         Begin::SecurityRun,
@@ -504,6 +585,7 @@ fn secure(args: PassArgs) -> ExitCode {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn score() -> ExitCode {
     let _lock = match scoring::lock() {
         Ok(Some(lock)) => lock,
@@ -529,6 +611,7 @@ fn score() -> ExitCode {
 
 /// The release script's internal interface: the prompt on stdin, only the
 /// summary on stdout, and failures on stderr for its generated-notes fallback.
+#[cfg(target_os = "linux")]
 fn release_summary() -> ExitCode {
     use std::io::Read;
     let summary = (|| -> anyhow::Result<String> {
@@ -549,6 +632,7 @@ fn release_summary() -> ExitCode {
 }
 
 /// A Console settings view or action, with machine-readable output on stdout.
+#[cfg(target_os = "linux")]
 fn printed(result: anyhow::Result<String>) -> ExitCode {
     match result {
         Ok(text) => {
@@ -561,6 +645,7 @@ fn printed(result: anyhow::Result<String>) -> ExitCode {
 
 /// The end of a command other than a Run: the line that says how it went,
 /// or its error, on stderr.
+#[cfg(target_os = "linux")]
 fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
     match result {
         Ok(outcome) => {
@@ -572,6 +657,7 @@ fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
 }
 
 /// An argument thirdshift can't use: the error, then the help, on stderr.
+#[cfg(target_os = "linux")]
 fn argument_error(error: std::fmt::Arguments) -> ExitCode {
     progress::step(error);
     eprint!("\n{HELP}");
