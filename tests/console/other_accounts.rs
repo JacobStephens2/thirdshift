@@ -722,6 +722,56 @@ fn other_account_commands_alias_cannot_leave_the_accepted_directory() {
     );
 }
 
+/// `logs <command>` opens the Command log beside the record, which discovery
+/// never lists. Read it only when that file's canonical path stays under the
+/// accepted log directory. A symlink may point at another file inside it.
+#[test]
+fn other_account_command_logs_stay_under_their_accepted_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    record(&home, 7, Some("failed"), 0);
+    let escaped = home.join(".thirdshift/escaped-command-log");
+    fs::write(&escaped, "CANARY-ESCAPED-COMMAND-LOG\n").unwrap();
+    std::os::unix::fs::symlink(&escaped, dir.join("7-fixture.log")).unwrap();
+
+    record(&home, 8, Some("failed"), 0);
+    let kept = dir.join("kept.log");
+    fs::write(&kept, "INSIDE-ACCEPTED-COMMAND-LOG\n").unwrap();
+    std::os::unix::fs::symlink(&kept, dir.join("8-fixture.log")).unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.status.success() && shown_text.contains("conductor"),
+        "the other account's Command was not loaded: {shown:?}"
+    );
+
+    let escaped_log = machine.run(&["logs", "widgets#7"]);
+    let escaped_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&escaped_log.stdout),
+        String::from_utf8_lossy(&escaped_log.stderr)
+    );
+    assert!(
+        !escaped_text.contains("CANARY-ESCAPED-COMMAND-LOG"),
+        "command log whose canonical path leaves the accepted directory was read:\n{escaped_text}"
+    );
+
+    let kept_log = machine.run(&["logs", "widgets#8"]);
+    let kept_text = String::from_utf8_lossy(&kept_log.stdout);
+    assert!(
+        kept_log.status.success(),
+        "{kept_log:?} {}",
+        String::from_utf8_lossy(&kept_log.stderr)
+    );
+    assert!(
+        kept_text.contains("INSIDE-ACCEPTED-COMMAND-LOG"),
+        "command log whose canonical path stays under the accepted directory was not read:\n{kept_text}"
+    );
+}
+
 fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
     let mut text = "[console]\nport = 0\n".to_string();
     if let Some(dir) = logs_dir {

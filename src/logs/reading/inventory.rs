@@ -21,6 +21,12 @@ pub(super) trait Files: Send + Sync {
     fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, EntryKind)>>;
     fn metadata(&self, path: &Path) -> io::Result<std::fs::Metadata>;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+
+    /// The canonical log directory another account's reads must stay under.
+    /// Absent for the serving account. Callers must not resolve it again.
+    fn accepted_directory(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,6 +88,10 @@ impl Confined {
 }
 
 impl Files for Confined {
+    fn accepted_directory(&self) -> Option<PathBuf> {
+        Some(self.root.clone())
+    }
+
     fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, EntryKind)>> {
         if !stays_under(&self.root, path) {
             return Err(Self::outside());
@@ -109,6 +119,9 @@ impl Files for Confined {
 
 pub(super) struct Inventory {
     files: Arc<dyn Files>,
+    /// The canonical log directory discovery accepted for another account.
+    /// Absent for the serving account. It is not resolved again.
+    accepted: Option<PathBuf>,
     repositories: Vec<Repository>,
     /// Kind folders by lexical path, plus any folder a Session query named
     /// outside the listed layout, each enumerated once.
@@ -187,13 +200,20 @@ impl Candidate {
 
 impl Inventory {
     fn new(files: Arc<dyn Files>) -> Self {
+        let accepted = files.accepted_directory();
         Self {
             files,
+            accepted,
             repositories: Vec::new(),
             folders: Mutex::new(HashMap::new()),
             modified: Mutex::new(HashMap::new()),
             activity: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The canonical directory another account's Command log must stay under.
+    pub(super) fn accepted_directory(&self) -> Option<&Path> {
+        self.accepted.as_deref()
     }
 
     /// Only the root and the literal `commands` folder may be aliases; owner,
