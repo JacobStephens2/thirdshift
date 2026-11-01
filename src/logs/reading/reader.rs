@@ -45,6 +45,9 @@ pub(crate) struct Reader {
     /// For another account this is the canonical directory discovery accepted.
     inventory: Option<PathBuf>,
     other_account: bool,
+    /// Canonical log directory an Other-account read must stay under.
+    /// Absent for the serving account. It is not resolved again.
+    accepted: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -72,6 +75,15 @@ impl Reader {
             }),
             inventory: None,
             other_account: false,
+            accepted: None,
+        }
+    }
+
+    /// Read `path` only while its canonical path stays under `root`.
+    pub(super) fn under_accepted(self, root: &Path) -> Self {
+        Self {
+            accepted: Some(root.to_owned()),
+            ..self
         }
     }
 
@@ -129,6 +141,12 @@ impl Reader {
             ensure!(
                 catalog::still_listed(root, &self.path, self.other_account),
                 catalog::UNLISTED
+            );
+        }
+        if let Some(root) = &self.accepted {
+            ensure!(
+                super::inventory::stays_under(root, &self.path),
+                "outside accepted log directory"
             );
         }
         let complete = !self.live()?;

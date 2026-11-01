@@ -280,9 +280,22 @@ fn start(
     Ok(Some(Started {
         subject: subject.into(),
         offset: *stamp.offset(),
-        log: super::cache::text(&path)?,
+        log: command_log_text(inventory, &path)?,
         command,
     }))
+}
+
+/// An Activity line names its Command log. Another account's file is read
+/// only when its canonical path stays under the accepted log directory.
+/// A missing log is unchanged: there is nothing to read.
+fn command_log_text(inventory: &Inventory, path: &Path) -> Result<Arc<str>> {
+    if let Some(root) = inventory.accepted_directory()
+        && path.canonicalize().is_ok()
+        && !super::inventory::stays_under(root, path)
+    {
+        return Ok(Arc::from(""));
+    }
+    super::cache::text(path)
 }
 
 fn sessions(

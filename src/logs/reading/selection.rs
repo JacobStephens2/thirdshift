@@ -86,6 +86,14 @@ impl<'a> Observation<'a> {
         }
     }
 
+    /// The canonical log directory discovery accepted for another account.
+    fn accepted_log_directory(self) -> Option<&'a Path> {
+        match self {
+            Self::Record(command) => command.inventory.accepted_directory(),
+            Self::History(command) => command.inventory.accepted_directory(),
+        }
+    }
+
     pub(in crate::logs) fn require_writable(self, action: &str) -> Result<()> {
         if let Some(account) = self.account() {
             bail!("cannot {action}: Command belongs to account {account} and is read-only");
@@ -303,7 +311,11 @@ impl Selection<'_> {
     }
 
     pub(in crate::logs) fn reader(self, path: PathBuf) -> super::Reader {
-        super::Reader::captured(path, self.owner, false)
+        let reader = super::Reader::captured(path, self.owner, false);
+        match self.observation.accepted_log_directory() {
+            Some(root) => reader.under_accepted(root),
+            None => reader,
+        }
     }
 }
 
