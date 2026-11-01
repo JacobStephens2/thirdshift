@@ -772,6 +772,37 @@ fn other_account_command_logs_stay_under_their_accepted_log_directory() {
     );
 }
 
+/// Activity-log recovery must not read an Other-account Command log whose
+/// canonical path leaves the accepted directory. A decodable stamp is what
+/// history opens; `7-fixture.log` is not.
+#[test]
+fn logs_does_not_read_an_activity_named_command_log_outside_the_accepted_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let repo = home.join(".thirdshift/logs/acme/widgets");
+    record(&home, 7, Some("failed"), 0);
+    let outside = home.join("outside-dir");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(
+        &outside,
+        repo.join("commands/issue/7-20261101T120000-0400.log"),
+    )
+    .unwrap();
+    fs::write(
+        repo.join("activity.log"),
+        "2026-11-01 12:00:00 Spec run #7 started: commands/issue/7-20261101T120000-0400.log, on codex\n",
+    )
+    .unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.status.success() && shown_text.contains("conductor"),
+        "reading the outside Command log dropped the account: {shown:?} {shown_text}"
+    );
+}
+
 fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
     let mut text = "[console]\nport = 0\n".to_string();
     if let Some(dir) = logs_dir {
