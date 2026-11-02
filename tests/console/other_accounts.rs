@@ -772,6 +772,99 @@ fn other_account_command_logs_stay_under_their_accepted_log_directory() {
     );
 }
 
+/// `show` and the Console print a Process's Steps from its Command log.
+/// Another account's log is read only when its canonical path stays under
+/// the accepted log directory. A symlink may point at another file inside it.
+#[test]
+fn other_account_process_steps_stay_under_their_accepted_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut escaped = record(&home, 7, Some("failed"), 0);
+    escaped["kind"] = json!("Process");
+    escaped["process_name"] = json!("escaped");
+    write_record(&home, 7, &escaped);
+    let outside = home.join(".thirdshift/escaped-step-log");
+    fs::write(
+        &outside,
+        "thirdshift: 03:12:40 step CANARY-ESCAPED-STEP: 1s succeeded (secret)\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("7-fixture.log")).unwrap();
+
+    let mut kept = record(&home, 8, Some("failed"), 0);
+    kept["kind"] = json!("Process");
+    kept["process_name"] = json!("kept");
+    write_record(&home, 8, &kept);
+    let inside = dir.join("kept-steps.log");
+    fs::write(
+        &inside,
+        "thirdshift: 03:12:40 step INSIDE-ACCEPTED-STEP: 1s succeeded (kept)\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&inside, dir.join("8-fixture.log")).unwrap();
+    let result = dir.join("8-fixture.steps");
+    fs::create_dir_all(&result).unwrap();
+    fs::write(result.join("INSIDE-ACCEPTED-STEP.txt"), "kept\n").unwrap();
+    machine.setting("readable");
+
+    let escaped_show = machine.run(&["show", "widgets#7"]);
+    let escaped_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&escaped_show.stdout),
+        String::from_utf8_lossy(&escaped_show.stderr)
+    );
+    assert!(
+        escaped_show.status.success()
+            && escaped_text.contains("conductor")
+            && escaped_text.contains("Process escaped"),
+        "the other account's Process was not loaded: {escaped_show:?} {escaped_text}"
+    );
+    assert!(
+        !escaped_text.contains("CANARY-ESCAPED-STEP"),
+        "process steps were read from a Command log outside the accepted directory:\n{escaped_text}"
+    );
+
+    let kept_show = machine.run(&["show", "widgets#8"]);
+    let kept_text = String::from_utf8_lossy(&kept_show.stdout);
+    assert!(
+        kept_show.status.success(),
+        "{kept_show:?} {}",
+        String::from_utf8_lossy(&kept_show.stderr)
+    );
+    assert!(
+        kept_text.contains("INSIDE-ACCEPTED-STEP"),
+        "process steps whose Command log stays under the accepted directory were not shown:\n{kept_text}"
+    );
+    assert!(
+        kept_text.contains(&format!(
+            "result: {}",
+            result.join("INSIDE-ACCEPTED-STEP.txt").display()
+        )),
+        "a step result inside the accepted directory was not shown:\n{kept_text}"
+    );
+
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let escaped_peek = console.get("/peek?command=widgets%237").text().unwrap();
+    assert!(
+        escaped_peek.contains("conductor") && escaped_peek.contains("Process escaped"),
+        "{escaped_peek}"
+    );
+    assert!(
+        !escaped_peek.contains("CANARY-ESCAPED-STEP"),
+        "the Console read process steps from a Command log outside the accepted directory:\n{escaped_peek}"
+    );
+    let kept_peek = console.get("/peek?command=widgets%238").text().unwrap();
+    assert!(
+        kept_peek.contains("INSIDE-ACCEPTED-STEP"),
+        "the Console omitted process steps whose Command log stays under the accepted directory:\n{kept_peek}"
+    );
+}
+
 /// Activity-log recovery must not read an Other-account Command log whose
 /// canonical path leaves the accepted directory. A decodable stamp is what
 /// history opens; `7-fixture.log` is not.

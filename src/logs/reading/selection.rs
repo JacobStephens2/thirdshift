@@ -87,7 +87,7 @@ impl<'a> Observation<'a> {
     }
 
     /// The canonical log directory discovery accepted for another account.
-    fn accepted_log_directory(self) -> Option<&'a Path> {
+    pub(in crate::logs) fn accepted_log_directory(self) -> Option<&'a Path> {
         match self {
             Self::Record(command) => command.inventory.accepted_directory(),
             Self::History(command) => command.inventory.accepted_directory(),

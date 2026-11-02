@@ -251,6 +251,18 @@ impl Snapshot {
     }
 }
 
+/// The Command log `show` and the Console may read for a Process's Steps.
+/// An Other-account log is read only when its canonical path stays under the
+/// accepted log directory, and that canonical path is what is opened. The
+/// serving account passes no directory and reads `path` as given.
+pub(super) fn steps_command_log(path: &Path, accepted: Option<&Path>) -> Option<PathBuf> {
+    let Some(root) = accepted else {
+        return Some(path.to_path_buf());
+    };
+    let canonical = path.canonicalize().ok()?;
+    inventory::stays_under(root, &canonical).then_some(canonical)
+}
+
 /// Other accounts stay inside the canonical directory discovery accepted.
 fn files_for(source: &super::accounts::Source) -> Arc<dyn inventory::Files> {
     if source.account.is_some() {
@@ -430,6 +442,12 @@ impl Command {
             usual_ranges: BTreeMap::new(),
             inventory: inventory.clone(),
         }
+    }
+
+    /// The canonical log directory discovery accepted for another account.
+    /// Absent for the serving account. It is not resolved again.
+    pub(in crate::logs) fn accepted_log_directory(&self) -> Option<&Path> {
+        self.inventory.accepted_directory()
     }
 }
 

@@ -58,8 +58,16 @@ pub(crate) struct ShownStep {
 }
 
 /// Each Process Step's Command log line, and the result file when the Step wrote one.
-pub(crate) fn process_steps(command_log: &std::path::Path) -> Vec<ShownStep> {
-    let Ok(log) = std::fs::read_to_string(command_log) else {
+/// An Other-account Command log is read only when its canonical path stays under
+/// `accepted`. The serving account passes no directory.
+pub(crate) fn process_steps(
+    command_log: &std::path::Path,
+    accepted: Option<&std::path::Path>,
+) -> Vec<ShownStep> {
+    let Some(path) = crate::logs::reading::steps_command_log(command_log, accepted) else {
+        return Vec::new();
+    };
+    let Ok(log) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     let results = command_log.with_extension("steps");
@@ -81,7 +89,7 @@ fn print_steps(command: &Command, indent: &str) {
     if command.record.kind != "Process" {
         return;
     }
-    for step in process_steps(&command.command_log) {
+    for step in process_steps(&command.command_log, command.accepted_log_directory()) {
         println!("{indent}{}", step.message);
         if let Some(path) = &step.result {
             println!("{indent}result: {}", path.display());
