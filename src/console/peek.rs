@@ -160,7 +160,7 @@ impl Peek {
             command,
             cli,
             facts: {
-                let steps = step_facts(&value);
+                let steps = step_facts(&value, inspection.accepted_log_directory.as_deref());
                 let mut facts = Fact::children(value, false, "");
                 facts.extend(steps);
                 facts
@@ -198,14 +198,14 @@ fn unsuccessful(value: &Value) -> bool {
     })
 }
 
-fn step_facts(value: &Value) -> Vec<Fact> {
+fn step_facts(value: &Value, accepted: Option<&std::path::Path>) -> Vec<Fact> {
     if value.get("kind").and_then(Value::as_str) != Some("Process") {
         return Vec::new();
     }
     let Some(log) = value.get("command_log").and_then(Value::as_str) else {
         return Vec::new();
     };
-    crate::logs::status::inspect::process_steps(std::path::Path::new(log))
+    crate::logs::status::inspect::process_steps(std::path::Path::new(log), accepted)
         .into_iter()
         .enumerate()
         .map(|(index, step)| {
@@ -352,6 +352,7 @@ mod tests {
             stopping: false,
             branches: vec![],
             pull_requests: vec![],
+            accepted_log_directory: None,
         };
         let html = Peek::new("widgets#7".into(), inspection, "csrf".into(), &config())
             .render()
@@ -387,6 +388,7 @@ mod tests {
             stopping: false,
             branches: vec![],
             pull_requests: vec![],
+            accepted_log_directory: None,
         };
         Peek::new("widgets#7".into(), inspection, "csrf".into(), &config())
             .render()

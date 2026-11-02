@@ -114,6 +114,9 @@ pub(crate) struct Inspection {
     pub stopping: bool,
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
+    /// Canonical log directory an Other-account Process Step read must stay
+    /// under. Absent for the serving account. It is not resolved again.
+    pub accepted_log_directory: Option<PathBuf>,
 }
 
 /// Availability follows the CLI's child refusal and captured process identity.
@@ -135,6 +138,10 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         reading::RetainedWork::default()
     };
     let github = super::github::load(&config.logs_dir);
+    let accepted_log_directory = selected
+        .observation
+        .accepted_log_directory()
+        .map(Path::to_path_buf);
     Ok(Inspection {
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
@@ -142,6 +149,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         stopping,
         branches: work.branches.into_iter().collect(),
         pull_requests: work.pull_requests.into_iter().collect(),
+        accepted_log_directory,
     })
 }
 
