@@ -164,7 +164,6 @@ use run::StartedBy;
 #[cfg(target_os = "linux")]
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
-
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
@@ -182,8 +181,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
-       thirdshift process <name> [issue <issue> | pull-request <PR URL>]  Run a Custom process (experimental)
-       thirdshift process check <name> [issue <issue> | pull-request <PR URL>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
+       thirdshift process <name> [issue <issue>]   Run a Custom process; pull-request <PR URL> selects a pull request (experimental)
+       thirdshift process check <name> [issue <issue>]  Print Step choices and startup results; also accepts pull-request <PR URL> (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one

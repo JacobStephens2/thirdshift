@@ -174,92 +174,137 @@ impl ReviewProcess {
                 checkout.path().join(".thirdshift-review-input.md"),
                 &input.markdown,
             )?;
-            let results = tempfile::tempdir()?;
+            let results = step_results_dir(None)?;
+            let mut earlier = Vec::new();
+            let mut began = Vec::new();
             let mut findings = None;
             let mut last = String::new();
             let before_each = || unchanged(&github, pr, &snapshot);
             for (index, step) in steps.iter().enumerate() {
+                crate::resources::wait()?;
                 before_each()?;
+                let started = Instant::now();
+                let began_at = Utc::now();
                 progress::step(format_args!(
                     "running step {} with {}",
                     step.name, step.choice
                 ));
-                last = match &step.kind {
-                    StepKind::ReviewAndAddress | StepKind::Skill { .. } => {
-                        let reviewing = matches!(step.kind, StepKind::ReviewAndAddress);
-                        if reviewing {
-                            unchanged_checkout(&git, &snapshot)?;
-                        }
-                        let text = match &step.kind {
-                            StepKind::Skill { name, path } => format!(
-                                "{}\nPull request: {}. Read `.thirdshift-review-input.md` for the filtered input. Do not fetch comments yourself.",
-                                prompt::skill(name, path, None),
-                                pr.url
-                            ),
-                            _ => prompt::pull_request_review(pr, &snapshot.base_head),
-                        };
-                        let logs = session::Logs::of_process_review(&repo, index + 1);
-                        let (result, log) = session::Sessions::checked_within(
-                            &logs,
-                            checkout.path(),
-                            &step.choice,
-                            None,
-                            None,
-                            &before_each,
-                            |sessions| {
-                                sessions.run_to_final_message(
-                                    if reviewing {
-                                        session::Purpose::CodeReview
-                                    } else {
-                                        session::Purpose::Ordinary
+                let outcome = (|| {
+                    Ok(match &step.kind {
+                        StepKind::ReviewAndAddress | StepKind::Skill { .. } => {
+                            let reviewing = matches!(step.kind, StepKind::ReviewAndAddress);
+                            if reviewing {
+                                unchanged_checkout(&git, &snapshot)?;
+                            }
+                            let text = if let StepKind::Skill { name, path } = &step.kind {
+                                prompt::process_step(
+                                    &self.name,
+                                    &step.name,
+                                    name,
+                                    path,
+                                    prompt::EarlierSteps {
+                                        results: &earlier,
+                                        first: index == 0,
                                     },
-                                    if reviewing {
-                                        session::Kind::CodeReview
-                                    } else {
-                                        session::Kind::ProcessStep(index + 1)
+                                    None,
+                                    prompt::ProcessWorktree::PullRequest {
+                                        url: pr,
+                                        base: &snapshot.base_head,
                                     },
-                                    &text,
                                 )
-                            },
-                        );
-                        last_log = log;
-                        let message = result?
-                            .filter(|text| !text.trim().is_empty())
-                            .context("session left no final report")?;
-                        if reviewing {
-                            findings = Some(message.clone());
+                            } else {
+                                prompt::pull_request_review(
+                                    pr,
+                                    &snapshot.base_head,
+                                    prompt::EarlierSteps {
+                                        results: &earlier,
+                                        first: index == 0,
+                                    },
+                                )
+                            };
+                            let logs = session::Logs::of_process_review(&repo, index + 1);
+                            let (result, log) = session::Sessions::checked_within(
+                                &logs,
+                                checkout.path(),
+                                &step.choice,
+                                None,
+                                None,
+                                &before_each,
+                                |sessions| {
+                                    sessions.run_to_final_message(
+                                        if reviewing {
+                                            session::Purpose::CodeReview
+                                        } else {
+                                            session::Purpose::Ordinary
+                                        },
+                                        if reviewing {
+                                            session::Kind::CodeReview
+                                        } else {
+                                            session::Kind::ProcessStep(index + 1)
+                                        },
+                                        &text,
+                                    )
+                                },
+                            );
+                            last_log = log;
+                            let message = result?
+                                .filter(|text| !text.trim().is_empty())
+                                .context("session left no final report")?;
+                            if reviewing {
+                                findings = Some(message.clone());
+                            }
+                            message
                         }
-                        message
-                    }
-                    StepKind::Command(text) => run_command(
-                        checkout.path(),
-                        text,
-                        results.path(),
-                        &results.path().join(format!("{}.txt", step.name)),
-                        Some(CommandInput::PullRequest(&pr.url)),
-                    )?,
-                    StepKind::Delivery => {
-                        unchanged_checkout(&git, &snapshot)?;
-                        let findings = findings
-                            .as_deref()
-                            .context("delivery needs a review report")?;
-                        let spec = if input.body_alone {
-                            "Spec axis used the pull request body alone; no closing issue was linked."
-                        } else {
-                            "Spec axis used the linked closing issues."
-                        };
-                        let comment = format!(
-                            "Review run (--recommend-only). {spec}\n\n{findings}\n\n<!-- thirdshift-review {{\"reviewed_head\":\"{}\"}} -->\n",
-                            snapshot.head
-                        );
-                        before_each()?;
-                        github.comment_review(pr, &comment)?;
-                        delivered = true;
-                        pr.url.clone()
-                    }
-                    _ => bail!("unsupported pull-request Step {}", step.name),
-                };
-                fs::write(results.path().join(format!("{}.txt", step.name)), &last)?;
+                        StepKind::Command(text) => run_command(
+                            checkout.path(),
+                            text,
+                            &results,
+                            &results.join(format!("{}.txt", step.name)),
+                            Some(CommandInput::PullRequest(&pr.url)),
+                        )?,
+                        StepKind::Delivery => {
+                            unchanged_checkout(&git, &snapshot)?;
+                            let findings = findings
+                                .as_deref()
+                                .context("delivery needs a review report")?;
+                            let spec = if input.body_alone {
+                                "Spec axis used the pull request body alone; no closing issue was linked."
+                            } else {
+                                "Spec axis used the linked closing issues."
+                            };
+                            let comment = format!(
+                                "Review run (--recommend-only). {spec}\n\n{findings}\n\n<!-- thirdshift-review {{\"reviewed_head\":\"{}\"}} -->\n",
+                                snapshot.head
+                            );
+                            before_each()?;
+                            github.comment_review(pr, &comment)?;
+                            delivered = true;
+                            pr.url.clone()
+                        }
+                        StepKind::Implement
+                        | StepKind::ArchitectureReview
+                        | StepKind::SpecReview
+                        | StepKind::SecurityReview
+                        | StepKind::SecurityAudit
+                        | StepKind::ReproduceFindings
+                        | StepKind::SelfMerge
+                        | StepKind::RunPublishedIssue { .. }
+                        | StepKind::LandTickets { .. }
+                        | StepKind::FixFindings { .. }
+                        | StepKind::CloseFindings => {
+                            bail!("unsupported pull-request Step {}", step.name)
+                        }
+                    })
+                })();
+                finish_step(
+                    step,
+                    started.elapsed(),
+                    (began_at, outcome),
+                    &results,
+                    &mut earlier,
+                    &mut began,
+                    &mut last,
+                )?;
             }
             Ok(last)
         })();
@@ -350,9 +395,12 @@ pub(super) fn has_pull_request(file: &ProcessFile) -> bool {
 
 pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
     if !has_pull_request(file) {
-        if let Some(line) = file.steps.iter().find_map(|step| match step.kind {
-            DraftKind::ReviewAndAddress { line } => Some(line),
-            _ => None,
+        if let Some(line) = file.steps.iter().find_map(|step| {
+            if let DraftKind::ReviewAndAddress { line } = step.kind {
+                Some(line)
+            } else {
+                None
+            }
         }) {
             return Err(rule(
                 path,
@@ -387,7 +435,19 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                 }
                 DraftKind::Skill { .. } | DraftKind::Command { .. } => None,
                 DraftKind::Delivery { .. } if reviewed && index + 1 == file.steps.len() => None,
-                _ => Some(
+                DraftKind::ReviewAndAddress { .. }
+                | DraftKind::Delivery { .. }
+                | DraftKind::Implement { .. }
+                | DraftKind::ArchitectureReview { .. }
+                | DraftKind::SpecReview { .. }
+                | DraftKind::SecurityReview { .. }
+                | DraftKind::SecurityAudit { .. }
+                | DraftKind::ReproduceFindings { .. }
+                | DraftKind::SelfMerge { .. }
+                | DraftKind::RunPublishedIssue { .. }
+                | DraftKind::LandTickets { .. }
+                | DraftKind::FixFindings { .. }
+                | DraftKind::CloseFindings { .. } => Some(
                     "pull-request Processes support skill, command, one review-and-address, and delivery as the final Step after a review",
                 ),
             }

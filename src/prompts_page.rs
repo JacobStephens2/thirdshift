@@ -353,6 +353,10 @@ fn prompts() -> Vec<Prompt> {
                     issue: issue.clone(),
                 },
                 BASE,
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
             ),
         },
         Prompt {

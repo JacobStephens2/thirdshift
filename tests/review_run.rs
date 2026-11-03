@@ -275,3 +275,53 @@ fn recommend_only_preserves_an_existing_local_head_branch() {
         1
     );
 }
+
+#[test]
+fn custom_pr_steps_keep_results_and_pass_their_paths_to_later_sessions() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let note = scenario.path("result-directory.txt");
+    let process = format!(
+        r#"version = 1
+description = "Keep Step results"
+[worktrees.review]
+kind = "pull-request"
+[[steps]]
+name = "preflight"
+command = '''printf '%s' "$THIRDSHIFT_RESULTS_DIR" > '{}'; printf 'preflight output' '''
+worktree = "review"
+[[steps]]
+name = "inspect"
+skill = "thirdshift-code-review"
+worktree = "review"
+[[steps]]
+name = "review"
+catalogue = "review-and-address"
+worktree = "review"
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "review"
+"#,
+        note.display()
+    );
+    let directory = scenario.path("home/.thirdshift/processes");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("result-review.toml"), process).unwrap();
+    scenario.agent_does(
+        "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["process", "result-review", "pull-request", &url]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let results = std::fs::read_to_string(note).unwrap();
+    let retained = std::path::Path::new(&results)
+        .join("preflight.txt")
+        .is_file();
+    let prompt = scenario.first_prompt();
+    let informed = prompt.contains("preflight.txt");
+    assert!(
+        retained && informed,
+        "retained Step result: {retained}; later session received result path: {informed}; results directory: {results}; prompt: {prompt}"
+    );
+}

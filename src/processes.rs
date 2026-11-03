@@ -1140,20 +1140,12 @@ fn execute_groups(
     if let Some(checkout) = issue_run.as_ref().and_then(|run| run.checkout.as_ref()) {
         link_harnesses(checkout.path(), &prepared.steps)?;
     }
-    let owner = logs::captured_owner().map_err(anyhow::Error::msg)?;
-    let mut results = owner
-        .log_path()
-        .context("a Process has no Command log")?
-        .with_extension("steps");
-    if prepared.dispatched.is_some() {
-        let issue = prepared
+    let results = step_results_dir(prepared.dispatched.as_ref().map(|_| {
+        prepared
             .issue
             .as_ref()
-            .expect("a dispatched Ticket has an issue");
-        results = results.join(format!("issue-{}", issue.number));
-    }
-    fs::create_dir_all(&results)
-        .with_context(|| format!("could not create {}", results.display()))?;
+            .expect("a dispatched Ticket has an issue")
+    }))?;
     let mut earlier = Vec::new();
     let mut began = Vec::new();
     let mut last = String::new();
@@ -1438,6 +1430,21 @@ fn run_parallel(
             .map(|handle| handle.join().expect("a step thread panicked"))
             .collect()
     })
+}
+
+/// All Process executors retain Step results under the owning Command log.
+fn step_results_dir(dispatched_issue: Option<&IssueUrl>) -> Result<PathBuf> {
+    let owner = logs::captured_owner().map_err(anyhow::Error::msg)?;
+    let mut results = owner
+        .log_path()
+        .context("a Process has no Command log")?
+        .with_extension("steps");
+    if let Some(issue) = dispatched_issue {
+        results = results.join(format!("issue-{}", issue.number));
+    }
+    fs::create_dir_all(&results)
+        .with_context(|| format!("could not create {}", results.display()))?;
+    Ok(results)
 }
 
 fn finish_step(
