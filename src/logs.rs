@@ -85,6 +85,7 @@ pub enum CommandKind {
     Pickup,
     Secure,
     Scoring,
+    Triage,
     Experiment,
     Process,
 }
@@ -97,6 +98,7 @@ impl CommandKind {
             Self::Pickup => "pickup",
             Self::Secure => "secure",
             Self::Scoring => "scoring",
+            Self::Triage => "triage",
             Self::Experiment => "experiment",
             Self::Process => "process",
         }
@@ -109,6 +111,7 @@ impl CommandKind {
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
             "scoring" => Some(Self::Scoring),
+            "triage" => Some(Self::Triage),
             "experiment" => Some(Self::Experiment),
             "process" => Some(Self::Process),
             _ => None,
@@ -130,6 +133,7 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
+    TriageRun,
     Experiment,
     /// `thirdshift process <name> [issue <issue>]`, a Custom process.
     /// `pass` holds the first lines, as the other Passes do, when it was
@@ -156,6 +160,7 @@ pub enum Work<'a> {
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
     ScoringRun(&'a Repo),
+    TriageRun(&'a Repo),
     Experiment(&'a Repo),
     /// A Custom process, named by its file.
     Process {
@@ -500,6 +505,7 @@ impl<'a> Work<'a> {
             Self::SecurityRun(_) => "security-run",
             Self::PickupRun(_) => "pickup-run",
             Self::ScoringRun(_) => "scoring-run",
+            Self::TriageRun(_) => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
         };
@@ -512,6 +518,7 @@ impl<'a> Work<'a> {
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
             Work::ScoringRun(_) => Some(Stage::Sampling),
+            Work::TriageRun(_) => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
@@ -525,6 +532,7 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(repo)
             | Work::SecurityRun(repo)
             | Work::ScoringRun(repo)
+            | Work::TriageRun(repo)
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
         }
@@ -539,6 +547,7 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
             Work::ScoringRun(_) => Kind::ScoringRun,
+            Work::TriageRun(_) => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
         }
@@ -552,6 +561,7 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
+            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

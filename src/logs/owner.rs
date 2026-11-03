@@ -143,6 +143,7 @@ pub(super) fn allocate<F: Files>(
         Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
         Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
+        Work::TriageRun(_) => (CommandKind::Triage, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
         Work::Process { .. } => (CommandKind::Process, String::new()),
     };
