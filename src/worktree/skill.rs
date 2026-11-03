@@ -27,6 +27,22 @@ impl SkillWorktree {
         Self::checkout(launch, commit)
     }
 
+    /// A review uses the author's branch at the captured head. Existing
+    /// local work and an already checked-out branch are refused by acquisition.
+    pub fn on_pull_request(launch: &Git, branch: &str, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        let root = launch.run(&["rev-parse", "--show-toplevel"])?;
+        let path = tempfile::Builder::new()
+            .prefix("thirdshift-review-")
+            .tempdir()?
+            .keep();
+        let checkout = acquisition::add_review(launch, branch, &path, commit)?;
+        Ok(Self {
+            launch: Git::new(root),
+            checkout,
+        })
+    }
+
     fn checkout(launch: &Git, commit: &str) -> Result<Self> {
         let root = launch.run(&["rev-parse", "--show-toplevel"])?;
         // Cleanup belongs to the captured checkout, never TempDir's recursive Drop.

@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, Process, ScoringRun, SecurityRun, Trial, Units};
+use Sender::{ArchitectRun, Experiment, Process, ReviewRun, ScoringRun, SecurityRun, Trial, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -110,6 +110,7 @@ enum Sender {
     Trial,
     /// A Step of a Custom process.
     Process,
+    ReviewRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -342,6 +343,19 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-pull-request-review",
+            title: "Review run, recommendations",
+            when: "Reviews a pull request's captured head against its own base, using linked closing issues as the Spec or the body alone. Posts recommendations without changing the branch.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+            ),
+        },
+        Prompt {
             id: "prompt-process-step-later",
             title: "Custom process Step, with an earlier result",
             when: "Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.",
@@ -506,7 +520,7 @@ fn fence(text: &str) -> String {
 fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
-        "thirdshift-code-review" => format!("{}, or a Code review Trial", unit_links(&[REVIEW])),
+        "thirdshift-code-review" => format!("{}, a Review run, or a Code review Trial", unit_links(&[REVIEW])),
         "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
@@ -735,6 +749,7 @@ fn sent_by(sender: &Sender) -> String {
         ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
         Process => "a Custom process".to_string(),
+        ReviewRun => "a Review run or a Custom process's review-and-address Step".to_string(),
     }
 }
 

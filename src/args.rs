@@ -25,10 +25,16 @@ pub enum ProcessAction {
     Run(ProcessRun),
 }
 
+pub struct ReviewArgs {
+    pub pull_request: crate::review::PullRequestUrl,
+    pub flags: Flags,
+}
+
 /// A Custom process to check or run, with the Command's explicit choices.
 pub struct ProcessRun {
     pub name: String,
     pub issue: Option<IssueInput>,
+    pub pull_request: Option<crate::review::PullRequestUrl>,
     pub asked: harness::Asked,
     /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
     pub email: Option<NotificationAsk>,
@@ -143,6 +149,7 @@ pub enum Command {
         issue: Option<IssueInput>,
     },
     Process(ProcessAction),
+    Review(ReviewArgs),
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
     /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
@@ -387,6 +394,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("review") => return parse_review(&args[1..]).map(Command::Review),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
         Some("bug-origins") => {
             return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
@@ -867,7 +875,38 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue> | pull-request <PR URL>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";
+
+fn parse_review(args: &[String]) -> Result<ReviewArgs> {
+    let mut pull_request = None;
+    let mut recommend_only = false;
+    let mut flags = Flags::default();
+    let mut words = args.iter().peekable();
+    while let Some(arg) = words.next() {
+        if arg == "--recommend-only" && !recommend_only {
+            recommend_only = true;
+        } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
+            || take_email_flag(&mut flags.email, arg, &mut words)?
+        {
+        } else if pull_request.is_none() {
+            pull_request = Some(crate::review::PullRequestUrl::parse(arg)?);
+        } else {
+            bail!("unexpected review argument: {arg}");
+        }
+    }
+    ensure_review_recommend_only(recommend_only)?;
+    Ok(ReviewArgs {
+        pull_request: pull_request.context("usage: thirdshift review <PR URL> --recommend-only")?,
+        flags,
+    })
+}
+
+fn ensure_review_recommend_only(recommend_only: bool) -> Result<()> {
+    if !recommend_only {
+        bail!("thirdshift review currently requires --recommend-only");
+    }
+    Ok(())
+}
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() || matches!(args, [word] if word == "list") {
@@ -891,6 +930,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut asked = harness::Asked::default();
     let mut check = false;
     let mut expect_issue = false;
+    let mut pull_request = None;
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
         if arg == PLAN_ONLY {
@@ -940,8 +980,17 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             check = true;
             continue;
         }
+        if arg == "pull-request" {
+            if name.is_none() || issue.is_some() || expect_issue || pull_request.is_some() {
+                bail!(PROCESS_USAGE);
+            }
+            pull_request = Some(crate::review::PullRequestUrl::parse(
+                words.next().context(PROCESS_USAGE)?,
+            )?);
+            continue;
+        }
         if arg == "issue" {
-            if name.is_none() || expect_issue || issue.is_some() {
+            if name.is_none() || expect_issue || issue.is_some() || pull_request.is_some() {
                 bail!(PROCESS_USAGE);
             }
             expect_issue = true;
@@ -974,6 +1023,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let command = ProcessRun {
         name,
         issue,
+        pull_request,
         asked,
         email,
         goal,

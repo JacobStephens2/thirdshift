@@ -114,6 +114,7 @@ impl<O: Outside> Record<O> {
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
             Begin::ScoringRun => CommandKind::Scoring,
+            Begin::ReviewRun => CommandKind::Review,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
         };
@@ -128,6 +129,7 @@ impl<O: Outside> Record<O> {
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
             Begin::ScoringRun => ("Scoring run starting".into(), false),
+            Begin::ReviewRun => ("Review run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
@@ -196,6 +198,7 @@ impl<O: Outside> Record<O> {
             CommandKind::Secure => Pass::Security,
             CommandKind::Issue
             | CommandKind::Scoring
+            | CommandKind::Review
             | CommandKind::Experiment
             | CommandKind::Process => return,
         };
@@ -271,6 +274,7 @@ impl<O: Outside> Record<O> {
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
+                | Work::ReviewRun(_)
                 | Work::Experiment(_) => None,
             },
         };

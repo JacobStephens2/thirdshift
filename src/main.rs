@@ -98,6 +98,8 @@ mod reservation;
 #[cfg(target_os = "linux")]
 mod resources;
 #[cfg(target_os = "linux")]
+mod review;
+#[cfg(target_os = "linux")]
 mod run;
 #[cfg(target_os = "linux")]
 mod run_ending;
@@ -176,11 +178,12 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift review <PR URL> --recommend-only    Review a pull request and post findings
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
-       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and security flags match a Ticket run (experimental)
-       thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
+       thirdshift process <name> [issue <issue> | pull-request <PR URL>]  Run a Custom process (experimental)
+       thirdshift process check <name> [issue <issue> | pull-request <PR URL>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
@@ -393,6 +396,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
+        Ok(Command::Review(command)) => return printed(processes::review::run(command)),
         Ok(Command::Process(action)) => {
             let verbatim = matches!(action, args::ProcessAction::Show(_));
             return match processes::execute(action) {

@@ -42,6 +42,7 @@
 <li><a href="#continuation">Continuation</a></li>
 <li><a href="#failed-ticket-runs">Failed ticket runs</a></li>
 <li><a href="#spec-runs">Spec runs</a></li>
+<li><a href="#review-runs">Review runs</a></li>
 <li><a href="#architect-runs">Architect runs</a></li>
 <li><a href="#security-runs">Security runs</a></li>
 <li><a href="#pickup-runs">Pickup runs</a></li>
@@ -57,12 +58,13 @@
 <p>Terms in <strong>bold</strong> are defined in <a href="https://github.com/JacobStephens2/thirdshift/blob/main/GLOSSARY.md"><code>GLOSSARY.md</code></a>.</p>
 <details class="fold"><summary><h2>Workflows</h2></summary>
 <div class="manual-content" id="workflows">
-<p>A <a href="#what-a-ticket-run-does">Ticket run</a>, one issue in and one pull request out, is the factory&#39;s first workflow. It can leave its pull request for review or Self-merge it when asked with <code>thirdshift merge &lt;Issue URL&gt;</code> (see <a href="#usage">Usage</a>). Four more workflows build on it:</p>
+<p>A <a href="#what-a-ticket-run-does">Ticket run</a>, one issue in and one pull request out, is the factory&#39;s first workflow. It can leave its pull request for review or Self-merge it when asked with <code>thirdshift merge &lt;Issue URL&gt;</code> (see <a href="#usage">Usage</a>). Five more workflows build on it:</p>
 <ul>
 <li><strong><a href="#spec-runs">Spec run</a></strong>, <code>thirdshift &lt;Issue URL&gt;</code> on an issue with sub-issues: works through its <strong>Tickets</strong> in dependency order, each merged into a <strong>Spec branch</strong>, then leaves one <strong>Spec PR</strong> ready for review.</li>
 <li><strong><a href="#architect-runs">Architect run</a></strong>, <code>thirdshift architect</code>: reviews the codebase&#39;s architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an <strong>Architect idea</strong> for the <strong>Day shift</strong>.</li>
 <li><strong><a href="#pickup-runs">Pickup run</a></strong>, <code>thirdshift pickup</code>: takes the lowest-numbered <strong>Ready issue</strong> by default, the highest-numbered with <code>pickup.order = &quot;highest-first&quot;</code> or <code>highest-first</code> on the command, and runs it.</li>
 <li><strong><a href="#security-runs">Security run</a></strong>, <code>thirdshift secure</code>: audits the <strong>Base branch</strong> and records each <strong>Security finding</strong> privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.</li>
+<li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt; --recommend-only</code>: reviews an existing pull request and posts its Standards and Spec findings in one comment.</li>
 </ul>
 <p>Architect, Pickup and Security runs are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
 <p>Every session runs on the <strong>Harness</strong> you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See <a href="#harness-model-and-effort">Harness, Model and Effort</a>.</p>
@@ -2078,6 +2080,36 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 </code></pre>
 <p>A Spec PR closed, merged or retargeted while the Spec run is working through its Tickets, as when the Day shift reshapes the Spec onto another Base branch, ends the Ticket loop. The Spec run checks its captured Spec PR before it starts each Ticket and whenever it writes the Tickets checklist; once the check fails it starts no further Ticket, waits for the Tickets already running, and fails with <code>the Spec PR &lt;url&gt; was closed under this Spec run</code> (or <code>merged</code>, or <code>retargeted from &lt;base&gt; to &lt;other&gt;</code>). It prints no Recovery command, since one would resume the Spec branch the Spec just left: decide the Spec&#39;s Base branch and Spec branch before starting it again. A Ticket started once the Spec PR was open checks it again just before its Self-merge, as does a Base fix that Ticket starts into the Spec branch, and fails with the same cause, its pull request back to a draft, rather than merge into a Spec branch the Spec has left. A Ticket started before the first landing opened the Spec PR has nothing to check and Self-merges as before.</p>
 <p>Running the Spec again picks up where the last Spec run stopped. The Spec branch is on <code>origin</code>, so the Spec run continues it (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0002-existing-issue-branch-means-continue.md">ADR-0002</a>) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a <a href="#continuation">Continuation</a> into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with <code>every Ticket is closed and there is no Spec branch; nothing to do</code> and exits <code>1</code>, creating no branch or pull request and leaving the Spec open.</p>
+</div></details>
+<details class="fold"><summary><h2>Review runs</h2></summary>
+<div class="manual-content" id="review-runs">
+<p>From a clone of the pull request&#39;s repository:</p>
+<pre><code class="language-sh">thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only harness codex
+</code></pre>
+<p>A <strong>Review run</strong> refuses forks, drafts, closed or merged pull requests and
+authors who are not <strong>Trusted accounts</strong>, explaining why before starting a
+session. It checks out the pull request&#39;s captured head on its own branch in a
+worktree and reviews only its change against its own base. A locally changed or
+already checked-out head branch must be dealt with before the Review run can use it.</p>
+<p>The session gets the pull request body, linked closing issues and comments from
+Trusted accounts only. The linked issues are the Spec; without one, the body is
+the Spec and the posted comment says it used the pull request body alone.
+<code>--recommend-only</code> is required in this first version: it fixes nothing and pushes
+nothing. thirdshift posts one comment with the findings and a hidden marker
+naming the reviewed head. A changed head, base or eligibility stops publication.</p>
+<p>Command records, the Activity log, <code>status</code> and Run notifications call it a
+Review run. Email and Harness, Model and Effort flags follow the other Commands.
+The Inbox keeps a completed review under <strong>Ready for review</strong> until GitHub shows
+the pull request merged or closed.</p>
+<p>Inspect the Built-in process with <code>thirdshift process show review-run</code>. Copy it
+to <code>~/.thirdshift/processes/my-review.toml</code> to start a Custom process with
+<code>thirdshift process my-review pull-request &lt;PR URL&gt;</code>. A <code>pull-request</code> worktree
+declares this input; <code>review-and-address</code> reviews it and <code>delivery</code> posts the
+recommendations. Custom pull-request Processes can also run skill and command
+Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
+the filtered input is in <code>.thirdshift-review-input.md</code>. This version keeps these
+Steps sequential and requires <code>review-and-address</code> before a final <code>delivery</code>.</p>
 </div></details>
 <details class="fold"><summary><h2>Architect runs</h2></summary>
 <div class="manual-content" id="architect-runs">
