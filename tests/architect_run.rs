@@ -14,7 +14,9 @@
 //! one `base <branch>` names, whatever is checked out there, which the run
 //! the plan is dispatched as takes as its Base branch too.
 //! thirdshift labels the issue such a review ends on an Architect idea, with
-//! `architect-idea` and `needs-triage`.
+//! `architect-idea` and `needs-triage`, when it is in the repository at
+//! origin, including one created before the run. An issue outside that
+//! repository is refused before it is viewed or labelled.
 //! An Architect run started while another on the repository, or a Pickup run,
 //! is still running, while an Architect plan is still open there, while an
 //! Architect idea there waits for triage, or while it has a Ready issue, is
@@ -685,6 +687,39 @@ fn an_idea_that_cannot_be_labelled_fails_the_architect_run_naming_the_cause() {
         );
         assert!(scenario.issue_labels(7).is_empty(), "{failing}");
         assert_nothing_left_behind(&scenario);
+    }
+}
+
+#[test]
+fn an_idea_outside_the_origin_repository_is_refused_before_it_is_viewed_or_labelled() {
+    let other = "https://github.com/other/widgets/issues/8";
+    for line in [
+        "Architecture review idea: ",
+        "Architecture review already filed: ",
+    ] {
+        let scenario = scenario();
+        scenario.issue_labelled(7, &["needs-triage"]);
+        scenario.agent_does(&ends_with(&format!("{line}{other}")));
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_failed(
+            &scenario,
+            &result,
+            &format!(
+                "the issue {other} is not in the repository at origin {}",
+                scenario.github_url()
+            ),
+        );
+        assert_eq!(scenario.issue_labels(7), ["needs-triage"], "{line}");
+        assert!(
+            scenario
+                .gh_calls()
+                .iter()
+                .all(|call| !call.iter().any(|arg| arg.contains("other/widgets"))),
+            "{line}: {:?}",
+            scenario.gh_calls()
+        );
     }
 }
 

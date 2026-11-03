@@ -7,7 +7,10 @@
 //! candidate published no plan, and the Architect run ends on the issue it
 //! named instead, labelled an
 //! Architect idea: the idea issue it filed for its top recommendation, or the
-//! open issue that already covers it. One started while its repository is
+//! open issue that already covers it. That issue is refused unless it is in
+//! the repository at origin, before it is viewed or its labels change. An
+//! issue in that repository is labelled even when it was created before the
+//! Architect run. One started while its repository is
 //! at its Command limit on this machine, or while another Architect run
 //! runs there, is skipped, before any review. So is
 //! one that finds an Architect plan still open on the repository: it never
@@ -267,8 +270,10 @@ impl fmt::Display for Reviewed {
 /// whatever the Launch directory has checked out, or without one the branch
 /// checked out there. A review that reports an idea issue it filed, or the
 /// open issue that already covers its top recommendation, instead of a plan,
-/// has that issue labelled an Architect idea, and dispatches nothing. With
-/// `config`'s `launch.pull`, the Launch directory's checkout of the Base
+/// has that issue labelled an Architect idea when it is in the repository at
+/// origin, including one created before the run, and dispatches nothing. An
+/// issue outside that repository is refused before it is viewed or labelled.
+/// With `config`'s `launch.pull`, the Launch directory's checkout of the Base
 /// branch, if that is the branch checked out, is first brought up to date
 /// with origin. The review's worktree is gone when the review is concluded.
 /// A failure after the plan is published leaves its labels as the review
@@ -422,11 +427,13 @@ impl Report {
 /// End the Architecture review on the issue the last line of its
 /// `final_message` names, reaching it through `outside`: a
 /// plan is reserved and marked ready, and an idea issue, or the issue that
-/// already covers the top recommendation, is labelled an Architect idea.
-/// Fails, with no call made, if the session had no final message or its
-/// last line is not one the prompt asks for, and fails if the plan can't be
-/// reserved or marked ready or the idea labelled. The caller supplies its
-/// reservation policy and holds the returned reservation through dispatch.
+/// already covers the top recommendation, is labelled an Architect idea when
+/// it is in the repository at `origin`. An idea outside that repository is
+/// refused before it is viewed or its labels change. Fails, with no call
+/// made, if the session had no final message or its last line is not one the
+/// prompt asks for, and fails if the plan can't be reserved or marked ready
+/// or the idea labelled. The caller supplies its reservation policy and holds
+/// the returned reservation through dispatch.
 pub(crate) fn conclude<O: conclusion::Outside, R>(
     outside: &mut O,
     final_message: Option<&str>,
@@ -440,12 +447,12 @@ pub(crate) fn conclude<O: conclusion::Outside, R>(
             Ok((Reviewed::PlanReady(plan, title), Some(reservation)))
         }
         Some(Report::Idea(idea)) => {
-            let title = label_idea(outside, &idea)?;
+            let title = label_idea(outside, &idea, origin)?;
             let strength = final_message.and_then(Strength::read);
             Ok((Reviewed::IdeaFiled(idea, title, strength), None))
         }
         Some(Report::AlreadyFiled(issue)) => {
-            let title = label_idea(outside, &issue)?;
+            let title = label_idea(outside, &issue, origin)?;
             let strength = final_message.and_then(Strength::read);
             Ok((Reviewed::AlreadyFiled(issue, title, strength), None))
         }
@@ -489,12 +496,25 @@ fn mark_plan_ready<O: conclusion::Outside, R>(
     Ok((issue.title, reservation))
 }
 
-/// Label `idea` an Architect idea: put `needs-triage` and `architect-idea`
-/// on it, in one request that keeps its other labels, as viewed, having
-/// added each to the repository if it lacks it. `needs-triage` goes back on
-/// an issue that had been triaged: the factory again takes it for the best
-/// next move. Returns its title, as viewed, if known.
-fn label_idea(outside: &mut impl conclusion::Outside, idea: &IssueUrl) -> Result<Option<String>> {
+/// Label `idea` an Architect idea when it is in the repository at `origin`:
+/// put `needs-triage` and `architect-idea` on it, in one request that keeps
+/// its other labels, as viewed, having added each to the repository if it
+/// lacks it. `needs-triage` goes back on an issue that had been triaged,
+/// including one created before the Architect run: the factory again takes
+/// it for the best next move. An issue outside that repository is refused
+/// before it is viewed or its labels change. Returns its title, as viewed,
+/// if known.
+fn label_idea(
+    outside: &mut impl conclusion::Outside,
+    idea: &IssueUrl,
+    origin: &str,
+) -> Result<Option<String>> {
+    if !idea.matches_origin(origin) {
+        bail!(
+            "the issue {} is not in the repository at origin {origin}",
+            idea.url
+        );
+    }
     if outside.interrupted() {
         bail!("interrupted");
     }
@@ -846,6 +866,25 @@ mod tests {
                 "the Architecture review published the plan https://github.com/other/widgets/issues/8"
             )]
         );
+    }
+
+    #[test]
+    fn an_idea_outside_the_origin_repository_is_refused_before_it_is_viewed_or_labelled() {
+        let other = "https://github.com/other/widgets/issues/8";
+        for line in [prompt::IDEA_LINE, prompt::ALREADY_FILED_LINE] {
+            // The same number is viewable here. A check after the view would
+            // still record it, and a label edit would follow.
+            let repo = InMemory::default().viewable(8, viewed(true, -3600, &["needs-triage"]));
+
+            let (ended, calls) = concluded(repo, &format!("Reviewed.\n\n{line}{other}\n"));
+
+            assert_eq!(
+                ended.unwrap_err(),
+                format!("the issue {other} is not in the repository at origin {ORIGIN}"),
+                "{line}"
+            );
+            assert_eq!(calls, [], "{line}");
+        }
     }
 
     #[test]

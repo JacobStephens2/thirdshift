@@ -26,7 +26,9 @@ their command and User config gates. Commands still appear as Ticket runs.
 Architect runs execute it after the Command limit, the lock of their kind and
 the open-plan, waiting-idea and Ready-or-settling-issue gates. The review Step owns the session and the
 plan-or-idea conclusion and labels. It ends the Process successfully on an idea
-or when `--plan-only` was requested; otherwise the next Step runs the plan.
+in the repository at origin, or when `--plan-only` was requested. An idea
+outside that repository is refused before it is viewed or labelled. Otherwise
+the next Step runs the plan.
 The Command keeps its Architect run name, progress, logs and notification.
 Inspect it with `thirdshift process show architect-run` and validate it with
 `thirdshift process check architect-run`. Save a copy under a new name to run
