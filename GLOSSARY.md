@@ -96,7 +96,7 @@ A continuation of the same agent session, started once when that session ended i
 ### Factory work
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Review run**, a **Triage run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Paused Command**:
@@ -125,6 +125,18 @@ _Avoid_: watch, daemon, queue run, poll
 **Security run**:
 One invocation of the factory with no **Issue URL**: a **Security audit** of the **Base branch**, then, for each **Security finding**, a session that tries to reproduce it with a proof-of-concept test in a throwaway worktree, and scores the severity of each one it reproduces. When a flag or the **User config** allows it, each reproduced finding is fixed by a **Ticket run**, or by a **Spec run** when one session isn't enough, on issues that say only what the fix changes. Its **Built-in process** owns the sequence of **Steps**, after the Pass has decided to go ahead. Every other finding waits for the **Day shift**, and one nothing reproduces is never fixed unattended. When closing is allowed too, a fix that merged closes the finding it fixed once its proof-of-concept test passes against the merged **Base branch**; anything else leaves the record for the Day shift. Like an **Architect run** with its plan, it reserves each fix across machines before marking it ready. It is skipped, like an Architect run, when the repository is at its **Command limit** on the machine or another Security run is running there, when the repository has a **Ready issue**, when a fix it dispatched failed and is still open, or when the Base branch hasn't changed since the last Security audit that finished. A finding still waiting for the Day shift holds off no audit, and an audit that finds it again keeps the outcome of its completed reproduction instead of reproducing it again. A failed fix is left for the Day shift; no later Security run or **Pickup run** retries it.
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
+
+**Review run**:
+One invocation of the factory on another author's open pull request, named by its URL or, as a **Pass**, found among one author's pull requests: it reviews the change on the Standards and Spec axes, against the issues the pull request links or its body when it links none, addresses its findings on the pull request's own branch, and comments with what it fixed and every **Unaddressed finding**. It touches only a pull request from a **Trusted account** whose branch is in the same repository, and reviews each head the author pushes once.
+_Avoid_: PR review (GitHub's feature), code review run
+
+**Triage run**:
+One invocation of the factory on a **Report**: it triages what the Report describes against the repository, as the Day shift's triage would, and files the issues that come of it with their triage labels, or, asked only to recommend, files nothing and reports what it would have filed.
+_Avoid_: intake
+
+**Report**:
+The text a **Triage run** is given: what a person or a machine said about a problem or a request, such as a bug email, a chat message, a call transcript or an alert, before anyone has shaped it into an issue.
+_Avoid_: intake, ticket, review reports (a code review's own output)
 
 **Pass**:
 An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
