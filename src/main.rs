@@ -164,7 +164,6 @@ use run::StartedBy;
 #[cfg(target_os = "linux")]
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
-
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
@@ -176,7 +175,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect base <branch> [<focus>]   Use <branch> as the Base branch
        thirdshift pickup [lowest-first|highest-first] Take the Ready issue at that end of the issue numbers (default lowest-first)
        thirdshift pickup base <branch>                Use <branch> as the Base branch
-       thirdshift secure [base <branch>]              Audit and record findings privately
+       thirdshift secure                              Audit and record findings privately
+       thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift triage --recommend-only [--file <path>]  Investigate a Report from stdin or a file
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
