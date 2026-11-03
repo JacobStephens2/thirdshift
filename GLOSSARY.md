@@ -156,7 +156,7 @@ The **Spec**, or the standalone **Ticket** when one session is enough, that an *
 _Avoid_: plan, plan doc
 
 **Architect idea**:
-The issue an **Architecture review** ends on when its top recommendation is not Strong: the one it filed, or the open issue that already covered it. thirdshift labels it `architect-idea` and `needs-triage`, the second put back on an issue that already covered the idea and had been triaged, since the factory again takes it for the best next move. While any Architect idea is open and still labelled `needs-triage`, every **Architect run** on the repository is skipped: the factory has run out of Strong ideas, and waits for the **Day shift** to triage one, whatever the decision.
+The issue an **Architecture review** ends on when its top recommendation is not Strong: the one it filed, or the open issue that already covered it. When that issue is in the repository at origin, including one created before the **Architect run**, thirdshift labels it `architect-idea` and `needs-triage`, the second put back on an issue that already covered the idea and had been triaged, since the factory again takes it for the best next move. An issue outside that repository is refused before it is viewed or its labels change. While any Architect idea is open and still labelled `needs-triage`, every **Architect run** on the repository is skipped: the factory has run out of Strong ideas, and waits for the **Day shift** to triage one, whatever the decision.
 _Avoid_: weak plan, suggestion
 
 ### Spec coordination

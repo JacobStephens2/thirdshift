@@ -399,6 +399,8 @@ fn an_invalid_or_failed_review_never_labels_or_dispatches_a_plan() {
         ("printf malformed > \"$FAKE_CLAUDE_FINAL_MESSAGE\"".to_string(), "ended without the final line"),
         ("printf 'Architecture review plan: https://github.com/acme/widgets/issues/7' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"".to_string(), "was created before"),
         ("printf 'Architecture review plan: https://github.com/other/widgets/issues/7' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"".to_string(), "not in the repository at origin"),
+        ("printf 'Architecture review idea: https://github.com/other/widgets/issues/7' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"".to_string(), "not in the repository at origin"),
+        ("printf 'Architecture review already filed: https://github.com/other/widgets/issues/7' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"".to_string(), "not in the repository at origin"),
         (format!("{PUBLISH_PLAN}\nexit 3\n"), "claude exited 3"),
     ] {
         let scenario = architecture_process();
@@ -409,6 +411,8 @@ fn an_invalid_or_failed_review_never_labels_or_dispatches_a_plan() {
         assert_stopped_before_a_run(&scenario, &result, reason);
         assert!(!scenario.issue_labels(7).contains(&"architect-plan".to_string()));
         assert!(!scenario.issue_labels(8).contains(&"architect-plan".to_string()));
+        assert!(!scenario.issue_labels(7).contains(&"architect-idea".to_string()));
+        assert!(!scenario.issue_labels(8).contains(&"architect-idea".to_string()));
         assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
     }
 }
