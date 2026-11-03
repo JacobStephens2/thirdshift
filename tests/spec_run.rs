@@ -221,7 +221,17 @@ fn status_keeps_concurrent_ticket_runs_separate_and_detects_a_killed_child() {
             .unwrap()
             .success()
     });
-    let after = scenario.run(&["status", "--json"]);
+    let deadline = std::time::Instant::now() + WAIT_BOUND;
+    let after = loop {
+        let json = scenario.run(&["status", "--json"]);
+        let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+        if status["commands"][0]["children"][0]["state"] == "died"
+            || std::time::Instant::now() >= deadline
+        {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     let text = scenario.run(&["status"]);
     std::fs::write(scenario.path("release"), "").unwrap();
     let ended = held.finish();
@@ -235,7 +245,6 @@ fn status_keeps_concurrent_ticket_runs_separate_and_detects_a_killed_child() {
         assert_eq!(child["state"], "live");
         assert_eq!(child["stage"]["name"], "implement");
     }
-    let after: serde_json::Value = serde_json::from_str(&after.stdout).unwrap();
     let killed = &after["commands"][0]["children"][0];
     assert_eq!(killed["issue"]["number"], 21);
     assert_eq!(killed["state"], "died");
