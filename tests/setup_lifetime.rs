@@ -229,6 +229,7 @@ mod linux {
                 TerminalStep::line("Self-merges?", ""),
                 TerminalStep::line("Every Ticket run may start a Base fix", ""),
                 TerminalStep::line("fast-forward", ""),
+                TerminalStep::line("Triage runs may file ready-for-agent", ""),
                 TerminalStep::line("Security runs may fix", ""),
                 TerminalStep::line("Ticket runs review their change", ""),
                 TerminalStep::line("Run notifications, an email", "n"),

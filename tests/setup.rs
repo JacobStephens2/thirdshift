@@ -563,6 +563,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Self-merges?";
 const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const TRIAGE_READY: &str = "Triage runs may file ready-for-agent issues by default?";
 const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const SECURITY_CLOSE: &str = "close a finding their fix merged?";
@@ -588,6 +589,7 @@ fn a_claude_setup_token_is_saved_with_hidden_input_even_without_notifications() 
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
+        (TRIAGE_READY, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, "n"),
@@ -731,6 +733,7 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "n"),
@@ -795,6 +798,7 @@ fn cancelling_the_console_questions_preserves_the_user_config() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "n"),
@@ -811,6 +815,47 @@ fn cancelling_the_console_questions_preserves_the_user_config() {
 }
 
 #[test]
+fn setup_can_enable_triage_readiness_keep_it_and_turn_it_off() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[triage] # my triage settings\nallow_ready_for_agent = false # readiness\n",
+    );
+    for (answer, choices, enabled) in [
+        ("y", "[y/N]", true),
+        ("", "[Y/n]", true),
+        ("n", "[Y/n]", false),
+    ] {
+        let result = setup_on_terminal(
+            &scenario,
+            &[],
+            &[
+                (HARNESS, ""),
+                (MODEL, ""),
+                (EFFORT, ""),
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (TRIAGE_READY, answer),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ],
+        );
+        assert!(result.stderr.contains(&format!("{TRIAGE_READY} {choices}")));
+        let text = result.user_config.unwrap();
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(
+            config["triage"]["allow_ready_for_agent"].as_bool(),
+            Some(enabled)
+        );
+        assert!(text.starts_with("[triage] # my triage settings\n"));
+        assert!(text.contains("# readiness\n"));
+    }
+}
+
+#[test]
 fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
     let scenario = Scenario::new();
     for (answer, choices) in [("y", "[y/N]"), ("", "[Y/n]")] {
@@ -824,6 +869,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, answer),
                 (NOTIFY, ""),
@@ -854,6 +900,7 @@ fn setup_keeps_fixing_opt_in_and_defaults_to_closing_merged_findings() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, "y"),
             (SECURITY_CLOSE, ""),
             (SECURITY_REVIEW, ""),
@@ -902,6 +949,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, answer),
         ];
         if let Some(close) = close {
@@ -1084,6 +1132,7 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
                     TerminalStep::line(MERGE, ""),
                     TerminalStep::line(BASE_FIX, ""),
                     TerminalStep::line(PULL, ""),
+                    TerminalStep::line(TRIAGE_READY, ""),
                     TerminalStep::line(SECURITY_FIX, ""),
                     TerminalStep::line(SECURITY_REVIEW, ""),
                     TerminalStep::line(NOTIFY, "y"),
@@ -1172,6 +1221,7 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(MERGE, ""),
             TerminalStep::line(BASE_FIX, ""),
             TerminalStep::line(PULL, ""),
+            TerminalStep::line(TRIAGE_READY, ""),
             TerminalStep::line(SECURITY_FIX, ""),
             TerminalStep::line(SECURITY_REVIEW, ""),
             // Queue EOF for both the partial answer and the next question.
@@ -1214,6 +1264,7 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
+        (TRIAGE_READY, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, "y"),
@@ -1242,6 +1293,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
@@ -1340,6 +1392,7 @@ fn ctrl_c_during_the_questions_writes_no_user_config() {
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, CTRL_C),
         ],
     );
@@ -1366,6 +1419,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
             (MERGE, "n"),
             (BASE_FIX, ""),
             (PULL, "y"),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
