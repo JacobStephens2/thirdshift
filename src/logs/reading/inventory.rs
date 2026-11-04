@@ -318,7 +318,7 @@ impl Inventory {
                     .push(sessions.candidates.len());
                 // Catalogue reviews retain their Security review kind, with
                 // the Process Step in the subject to keep every trace. Also
-                // discover them through their Process's usual subject, with
+                // discover them through their Process or Review run subject, with
                 // exactly the same owner constraint as every other Session.
                 if candidate
                     .subject
@@ -326,11 +326,13 @@ impl Inventory {
                     .and_then(|step| step.parse::<usize>().ok())
                     .is_some_and(|step| step > 0)
                 {
-                    sessions
-                        .index
-                        .entry(("process".to_string(), candidate.owner.clone()))
-                        .or_default()
-                        .push(sessions.candidates.len());
+                    for subject in ["process", "review"] {
+                        sessions
+                            .index
+                            .entry((subject.to_string(), candidate.owner.clone()))
+                            .or_default()
+                            .push(sessions.candidates.len());
+                    }
                 }
                 sessions.candidates.push(candidate);
             }
