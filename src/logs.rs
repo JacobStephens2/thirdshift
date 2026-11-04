@@ -348,6 +348,11 @@ pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 
+/// The target pull request, available while the Command is still running.
+pub(crate) fn pull_request(url: &str) {
+    record().pull_request(url);
+}
+
 /// Retain Delivery's final counts for the active Run's completion metrics.
 pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
     record().unaddressed_findings(counts);

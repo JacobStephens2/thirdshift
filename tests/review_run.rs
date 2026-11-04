@@ -14,6 +14,75 @@ fn pull_request(scenario: &Scenario) -> String {
     scenario.github_has_pr("colleague", "main", "OPEN")
 }
 
+#[test]
+fn live_pull_request_processes_identify_their_target_before_the_first_session_ends() {
+    for input in ["url", "author", "custom"] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        let (args, kind) = match input {
+            "author" => (
+                vec!["review", "--author", "colleague", "--recommend-only"],
+                "review",
+            ),
+            "custom" => {
+                let shown = scenario.run(&["process", "show", "review-run"]);
+                assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+                let directory = scenario.path("home/.thirdshift/processes");
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("colleague-review.toml"), shown.stdout).unwrap();
+                (
+                    vec!["process", "colleague-review", "pull-request", &url],
+                    "process",
+                )
+            }
+            _ => (vec!["review", &url], "review"),
+        };
+        scenario.agent_does(&format!(
+            "touch '{}'\nfor _ in $(seq 2400); do test -f '{}' && break; sleep 0.05; done\ntest -f '{}'\nprintf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+            scenario.path("started").display(),
+            scenario.path("release").display(),
+            scenario.path("release").display()
+        ));
+        let held = scenario.run_until(&args, &[], "started");
+        let folder = format!("home/.thirdshift/logs/acme/widgets/commands/{kind}");
+        let record = scenario.command_record(&folder);
+        let log_name = scenario.log_files(&folder, "log").pop().unwrap();
+        let log = std::fs::read_to_string(scenario.path(&folder).join(log_name)).unwrap();
+        let text = scenario.run(&["status"]);
+        let status = scenario.run(&["status", "--json"]);
+        std::fs::write(scenario.path("release"), "").unwrap();
+        let ended = held.finish();
+
+        assert_eq!(
+            record["outcome"],
+            serde_json::Value::Null,
+            "{input}: {record}"
+        );
+        assert_eq!(
+            record["ended_at"],
+            serde_json::Value::Null,
+            "{input}: {record}"
+        );
+        assert_eq!(record["pull_request"], url, "{input}: {record}");
+        assert!(log.contains(&url), "{input}: {log}");
+        assert_eq!(text.code, Some(0), "{}", text.stderr);
+        assert!(text.stdout.contains("Working:"), "{}", text.stdout);
+        assert!(
+            text.stdout.contains(&format!(" · {url} · live ·")),
+            "{input}: {}",
+            text.stdout
+        );
+        assert_eq!(status.code, Some(0), "{}", status.stderr);
+        let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(status["commands"][0]["state"], "live", "{input}: {status}");
+        assert_eq!(
+            status["commands"][0]["pull_request"], url,
+            "{input}: {status}"
+        );
+        assert_eq!(ended.code, Some(0), "{input}: {}", ended.stderr);
+    }
+}
+
 /// Commit `branch` so `.thirdshift-review-input.md` is a symlink to `target`.
 fn commit_review_input_symlink(scenario: &Scenario, branch: &str, target: &Path) {
     let seed = scenario.path("seed-link");
