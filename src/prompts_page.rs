@@ -529,6 +529,9 @@ fn skill_used_by(skill: &str) -> String {
             "the Security audit, in a Security run, or a Security review".to_string()
         }
         "thirdshift-triage" => "a Triage run, investigating a Report".to_string(),
+        "thirdshift-to-questionnaire" => {
+            "a Triage run, when an issue needs a person's answer".to_string()
+        }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
 }

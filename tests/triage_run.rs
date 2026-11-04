@@ -106,6 +106,53 @@ fn invalid_comment_targets_fail_before_any_issue_is_filed() {
 }
 
 #[test]
+fn questionnaires_reach_the_issue_and_notification_for_the_person_with_the_answer() {
+    for (state, blocked) in [
+        ("needs-info", false),
+        ("ready-for-human", false),
+        ("ready-for-agent", true),
+    ] {
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&["bug"]);
+        let questionnaire =
+            "For the deploy operator:\n\n1. Which canary failed?\n2. What did the cache log say?";
+        let mut issue = serde_json::json!({
+            "title": "Investigate the canary", "body": "The repository cannot identify the affected canary.",
+            "questionnaire": questionnaire
+        });
+        if blocked {
+            issue["confirmation_blocked"] = "Production access is needed.".into();
+        }
+        let recommendation = serde_json::json!({
+            "category": "bug", "state": state, "issues": [issue],
+            "investigation": "Checked the cache reader; the affected deployment is unknown."
+        });
+        scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+        let result = scenario.run_with_input(&["triage", "--allow-ready-for-agent"], REPORT);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            scenario.issue_labels(8),
+            ["bug", if blocked { "ready-for-human" } else { state }]
+        );
+        let gh = scenario.gh_state();
+        let body = gh["bodies"]["8"].as_str().unwrap();
+        assert!(body.contains(questionnaire), "{body}");
+        let (_, notification) = saved_notification(&scenario, "triage");
+        assert!(notification.contains(questionnaire), "{notification}");
+        assert!(
+            notification.contains(&scenario.issue_url(8)),
+            "{notification}"
+        );
+        let calls = scenario.claude_calls();
+        assert!(
+            calls[0]["skill_files"]["thirdshift-to-questionnaire/SKILL.md"]
+                .as_str()
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn a_comment_failure_still_notifies_issues_already_commented_on() {
     let scenario = Scenario::new();
     scenario.issue_is(8, "OPEN");
@@ -139,6 +186,157 @@ fn a_comment_failure_still_notifies_issues_already_commented_on() {
         notification.contains("already filed or commented on"),
         "{notification}"
     );
+}
+
+#[test]
+fn questionnaires_are_required_only_for_issues_waiting_for_a_person() {
+    for (state, issue_state, blocked, questionnaire) in [
+        ("needs-info", None, false, None),
+        ("ready-for-human", None, false, Some(" \n")),
+        ("ready-for-agent", Some("NEEDS-INFO"), false, None),
+        ("ready-for-agent", None, true, None),
+        (
+            "ready-for-agent",
+            None,
+            false,
+            Some("For the operator: which canary?"),
+        ),
+        (
+            "needs-triage",
+            None,
+            false,
+            Some("For the operator: which canary?"),
+        ),
+        (
+            "wontfix",
+            None,
+            false,
+            Some("For the operator: which canary?"),
+        ),
+        (
+            "needs-info",
+            Some("ready-for-agent"),
+            false,
+            Some("For the operator: which canary?"),
+        ),
+    ] {
+        for flags in [vec!["triage"], vec!["triage", "--recommend-only"]] {
+            let scenario = Scenario::new();
+            scenario.repo_has_labels(&["bug"]);
+            let before = scenario.gh_state();
+            let mut issue =
+                serde_json::json!({"title": "Canary failure", "body": "Checked the cache reader."});
+            if let Some(state) = issue_state {
+                issue["state"] = state.into();
+            }
+            if blocked {
+                issue["confirmation_blocked"] = "Production access is needed.".into();
+            }
+            if let Some(text) = questionnaire {
+                issue["questionnaire"] = text.into();
+            }
+            let recommendation = serde_json::json!({
+                "category": "bug", "state": state, "issues": [issue], "investigation": "Checked locally."
+            });
+            scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+            let result = scenario.run_with_input(&flags, REPORT);
+            assert_ne!(
+                result.code,
+                Some(0),
+                "accepted {recommendation}: {}",
+                result.stderr
+            );
+            assert!(result.stderr.contains("questionnaire"), "{}", result.stderr);
+            assert_eq!(scenario.gh_state(), before);
+        }
+    }
+}
+
+#[test]
+fn mixed_outcomes_keep_questionnaires_with_their_issues_and_email_only_the_day_shift() {
+    for recommend_only in [false, true] {
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&["bug"]);
+        let before = scenario.gh_state();
+        let resend = ResendStandIn::replying(200, r#"{"id":"questionnaire-email"}"#);
+        let report = scenario.path("report.txt");
+        fs::write(&report, "From reporter@example.com: the canary fails.").unwrap();
+        let reporter_questions = "For the reporter:\n\n1. Which canary failed?";
+        let operator_questions =
+            "For the deploy operator:\n\n1. Can you share redacted cache logs?";
+        let recommendation = serde_json::json!({
+            "category": "bug", "state": "needs-info",
+            "issues": [
+                {"title": "Identify the canary", "body": "The deployment is unknown.", "questionnaire": reporter_questions},
+                {"title": "Read production logs", "body": "The logs need an operator.", "state": "ready-for-human", "questionnaire": operator_questions},
+                {"title": "Fix cache read", "body": "Reproduced locally.", "state": "ready-for-agent"},
+                {"title": "Decide cache policy", "body": "Needs triage.", "state": "needs-triage"},
+                {"title": "Retire old canary", "body": "Already unsupported.", "state": "wontfix"}
+            ],
+            "comments": [{"url": scenario.issue_url(7), "body": "Confirmed the existing canary failure."}],
+            "investigation": "Reproduced the cache read; other details require people."
+        });
+        scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+        let mut args = vec![
+            "triage",
+            "--file",
+            report.to_str().unwrap(),
+            "email",
+            "day-shift@example.com",
+        ];
+        if recommend_only {
+            args.push("--recommend-only");
+        }
+        let result = scenario.run_with_env(
+            &args,
+            &[
+                ("RESEND_API_KEY", "test-key"),
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ],
+        );
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let output: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
+        assert_eq!(output["comments"][0]["url"], scenario.issue_url(7));
+        for index in 2..5 {
+            assert!(
+                output["issues"][index].get("questionnaire").is_none(),
+                "{output}"
+            );
+        }
+        let requests = resend.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].body["to"], "day-shift@example.com");
+        let notification = requests[0].body["text"].as_str().unwrap();
+        for text in [reporter_questions, operator_questions] {
+            assert!(notification.contains(text), "{notification}");
+        }
+        assert!(
+            notification.contains(&scenario.issue_url(7)),
+            "{notification}"
+        );
+        support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
+        if recommend_only {
+            assert_eq!(scenario.gh_state(), before);
+        } else {
+            let state = scenario.gh_state();
+            assert_eq!(state["labels"]["7"], before["labels"]["7"]);
+            let comment = state["comments"]["7"][0].as_str().unwrap();
+            assert!(comment.contains("Confirmed the existing canary failure."));
+            assert!(comment.contains("From reporter@example.com: the canary fails."));
+            for (number, questions) in [(8, reporter_questions), (9, operator_questions)] {
+                let body = state["bodies"][number.to_string()].as_str().unwrap();
+                assert!(body.contains(questions), "{body}");
+                assert!(
+                    notification.contains(&scenario.issue_url(number)),
+                    "{notification}"
+                );
+            }
+            for number in 10..=12 {
+                let body = state["bodies"][number.to_string()].as_str().unwrap();
+                assert!(!body.contains("## Questionnaire"), "{body}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -215,6 +413,7 @@ fn separate_problems_are_cross_linked_with_independent_labels_and_the_file_repor
             {"title": "Handle cache miss", "body": "Confirmed with an empty cache."},
             {"title": "Inspect the production dashboard", "body": "Ask the operator to inspect it.",
              "category": "enhancement", "state": "ready-for-agent",
+             "questionnaire": "For the operator: which dashboard fails, and what does it show?",
              "confirmation_blocked": "Production credentials are needed to confirm the dashboard problem."}
         ],
         "investigation": "Confirmed the cache failure locally; production is inaccessible."
