@@ -125,6 +125,8 @@ mod terminal;
 #[cfg(target_os = "linux")]
 mod test_support;
 #[cfg(target_os = "linux")]
+mod triage;
+#[cfg(target_os = "linux")]
 mod trial;
 #[cfg(target_os = "linux")]
 mod trust;
@@ -162,7 +164,6 @@ use run::StartedBy;
 #[cfg(target_os = "linux")]
 const HELP: &str = "\
 thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
-
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
@@ -176,6 +177,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift triage --recommend-only [--file <path>]  Investigate a Report from stdin or a file
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -416,6 +418,7 @@ fn main() -> ExitCode {
             );
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
+        Ok(Command::Triage(args)) => return triage(args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
         Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => *run_args,
@@ -501,6 +504,30 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Outcome::Skipped(skipped) => Ending::Skipped(skipped.into()),
         Outcome::Ran { review, dispatched } => Ending::Architect { review, dispatched },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn triage(args: args::TriageArgs) -> ExitCode {
+    let report = match triage::read_report(args.file.as_deref()) {
+        Ok(report) => report,
+        Err(error) => return failure(&error),
+    };
+    let flags = asks::Flags {
+        email: args.email,
+        harness: args.harness,
+        ..Default::default()
+    };
+    let (config, mut started) = match command::start(
+        Begin::TriageRun,
+        |config| flags.notification(config),
+        About::TriageRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = flags.harness(&config);
+    started.built_with(&harness);
+    started.finish(Ending::Triage(triage::run(&report, &mut harness)))
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the

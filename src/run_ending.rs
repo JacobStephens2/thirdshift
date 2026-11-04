@@ -44,6 +44,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                triage: None,
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -56,6 +57,29 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             Err(failed) => Account::of_failure(failed, "failed"),
         }),
         Ending::Run(ended) => Ok(Account::of_run(ended)),
+        Ending::Triage(result) => Ok(match result {
+            Ok(recommendation) => Account {
+                outcome: "recommended",
+                ended: Ok("Triage run recommendation complete".into()),
+                interrupted: false,
+                pr_url: None,
+                advice: &[],
+                base_fix: None,
+                log: None,
+                ticket_lines: &[],
+                review: None,
+                triage: Some(recommendation),
+                security_findings: None,
+                security_findings_waiting: false,
+                security_fix: None,
+                security_close: None,
+                failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
+                urls: Vec::new(),
+            },
+            Err(failed) => Account::of_failure(failed, "failed"),
+        }),
         Ending::SecurityFix {
             ended,
             finding,
@@ -125,6 +149,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     log: None,
                     ticket_lines: &[],
                     review: None,
+                    triage: None,
                     security_findings: None,
                     security_findings_waiting: false,
                     security_fix: None,
@@ -204,6 +229,8 @@ pub struct Account<'a> {
     pub ticket_lines: &'a [String],
     /// In an Architect run, how its Architecture review ended.
     pub review: Option<Review<'a>>,
+    /// The recommendation a Triage run prints and retains in its notification.
+    pub triage: Option<&'a str>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
     /// A fixed operational cause when a Security audit never started.
@@ -330,6 +357,7 @@ impl<'a> Account<'a> {
                 base_fix,
                 log: reached.log.as_deref(),
                 ticket_lines: &reached.ticket_lines,
+                triage: None,
                 review: match &reached.resolution {
                     crate::run::Resolution::ArchitectureReview { reason, .. } => Some(Review {
                         title: None,
@@ -370,6 +398,7 @@ impl<'a> Account<'a> {
             log: failed.log.as_deref(),
             ticket_lines: &failed.ticket_lines,
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -404,6 +433,7 @@ impl<'a> Account<'a> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                triage: None,
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -448,6 +478,9 @@ impl<'a> Account<'a> {
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        if let Some(recommendation) = self.triage {
+            logs::print(recommendation);
+        }
         let mut shown = Shown::of(self);
         if let Some(elapsed) = elapsed {
             let after_recovery = self.recovery.map_or(0, |recovery| recovery.lines().len());
@@ -722,6 +755,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -746,6 +780,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -929,6 +964,7 @@ mod tests {
                     base_fix: None,
                     log: None,
                     ticket_lines: &[],
+                    triage: None,
                     review: Some(Review {
                         title: None,
                         strength: Some(if outcome == "plan published" {

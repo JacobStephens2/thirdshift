@@ -476,6 +476,18 @@ pub struct ReviewWorktree {
 }
 
 impl ReviewWorktree {
+    /// Triage runs may overlap, so each disposable checkout has its own path.
+    pub fn for_triage(launch: &Git, repo: &str, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        let name = format!("{repo}-triage-{:016x}", rand::random::<u64>());
+        let (root, path) = sibling(launch, &name)?;
+        let checkout = acquisition::add(launch, None, &path, commit)?;
+        Ok(Self {
+            launch: Git::new(root),
+            checkout,
+        })
+    }
+
     /// Reproduce one finding at its audited commit, without fetching a newer
     /// Base branch. Uses the review checkout's acquisition and disposal rules.
     pub fn at_commit(launch: &Git, repo: &str, commit: &str) -> Result<Self> {

@@ -390,7 +390,7 @@
     <div class="wrap grows">
       <div class="sec-head">
         <p class="eyebrow">Workflows</p>
-        <h2 id="grows-title">Six workflows</h2>
+        <h2 id="grows-title">Seven workflows</h2>
         <p>Choose the work you need. Open a workflow for details and links to the manual.</p>
       </div>
       <div class="workflow-grid">
@@ -422,6 +422,12 @@
           <summary><span class="workflow-name">Security run</span><span class="workflow-description">Audit privately; fix reproduced findings when allowed.</span></summary>
           <div class="workflow-content">
             <p>A <a href="/docs/#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Ticket run or Spec run. By default, it closes a finding its fix merged once its proof-of-concept test passes against the merged Base branch; <code>no-security-close</code> or <code>close = false</code> under <code>[security]</code> leaves it open. An optional <a href="/docs/#security-review">Security review</a> checks each Ticket run's change, including Tickets and the Spec PR, and holds Self-merge if introduced findings remain unaddressed or the review is incomplete. Its Harness is checked before work; an unavailable review Harness falls back to the default Harness, with one fallback also allowed for a Harness error before its first turn.</p>
+          </div>
+        </details>
+        <details class="workflow">
+          <summary><span class="workflow-name">Triage run</span><span class="workflow-description">Turn a Report into an investigated recommendation.</span></summary>
+          <div class="workflow-content">
+            <p>Pipe a Report into <code>thirdshift triage --recommend-only</code> or pass <code>--file report.txt</code>. A <a href="/docs/#triage-runs">Triage run</a> investigates read-only in a throwaway worktree, without waiting for a person or writing to GitHub. Its category, state, proposed issues and investigation go to stdout and the Run notification. It is never skipped for the Command limit.</p>
           </div>
         </details>
         <details class="workflow">

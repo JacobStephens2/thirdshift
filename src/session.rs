@@ -127,6 +127,14 @@ impl Logs {
         }
     }
 
+    pub fn of_triage_run(repo: &Repo) -> Self {
+        Logs {
+            name: "triage".to_string(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
     /// Where a session's stream is logged:
     /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.logs.jsonl`.
     pub fn path(&self, session: Logged) -> Result<PathBuf> {
