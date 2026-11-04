@@ -94,6 +94,20 @@ fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     assert_eq!(requests.len(), 1);
     let notification = requests[0].body["text"].as_str().unwrap();
     assert_notification_links(&scenario, notification, &[8, 9]);
+    assert!(
+        notification.contains("- Handle an empty cache (bug, needs-triage)\n"),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("- Handle a stale cache (bug, needs-triage)\n"),
+        "{notification}"
+    );
+    assert!(!notification.contains("\"issues\":"), "{notification}");
+    assert!(
+        !notification.contains("Reproduce with an empty cache."),
+        "{notification}"
+    );
+    assert!(!notification.contains(REPORT), "{notification}");
     support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
 }
 
@@ -148,6 +162,16 @@ fn partial_publication_keeps_created_issue_links_in_the_last_lines() {
     }
     let (_, notification) = saved_notification(&scenario, "triage");
     assert_notification_links(&scenario, &notification, &[8, 9]);
+    assert!(
+        notification.contains("Investigation:\nTwo separate problems need issues.\n"),
+        "{notification}"
+    );
+    assert!(notification.contains(&questionnaire), "{notification}");
+    assert!(!notification.contains("\"issues\":"), "{notification}");
+    assert!(
+        !notification.contains("The affected canary is unknown."),
+        "{notification}"
+    );
 }
 
 #[test]
@@ -225,7 +249,11 @@ fn recommend_only_names_the_covering_issue_and_comment_without_github_writes() {
         "{notification}"
     );
     assert!(
-        notification.contains("New cache-miss evidence."),
+        notification.contains(&format!("Comment targets:\n- {}\n", scenario.issue_url(7))),
+        "{notification}"
+    );
+    assert!(
+        !notification.contains("New cache-miss evidence."),
         "{notification}"
     );
 }
@@ -474,6 +502,15 @@ fn mixed_outcomes_keep_questionnaires_with_their_issues_and_email_only_the_day_s
         for text in [reporter_questions, operator_questions] {
             assert!(notification.contains(text), "{notification}");
         }
+        let cache_state = if recommend_only {
+            "ready-for-agent"
+        } else {
+            "needs-triage"
+        };
+        assert!(
+            notification.contains(&format!("- Fix cache read (bug, {cache_state})\n")),
+            "{notification}"
+        );
         assert!(
             notification.contains(&scenario.issue_url(7)),
             "{notification}"
@@ -1195,7 +1232,7 @@ fn triage_filing_cannot_apply_a_factory_control_label() {
 }
 
 #[test]
-fn email_sends_the_recommendation_to_the_requested_recipient() {
+fn email_sends_a_readable_summary_to_the_requested_recipient() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
     let resend = ResendStandIn::replying(200, r#"{"id":"triage-email"}"#);
@@ -1226,11 +1263,24 @@ fn email_sends_the_recommendation_to_the_requested_recipient() {
             .unwrap()
             .contains("Triage run")
     );
+    let notification = requests[0].body["text"].as_str().unwrap();
     assert!(
-        requests[0].body["text"]
-            .as_str()
-            .unwrap()
-            .contains(RECOMMENDATION)
+        notification.contains("Investigation:\nThe cache read assumes an entry exists.\n"),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("- Handle an empty cache (bug, ready-for-agent)\n"),
+        "{notification}"
+    );
+    assert!(!notification.contains(RECOMMENDATION), "{notification}");
+    assert!(
+        !notification.contains("Reproduce with an empty cache."),
+        "{notification}"
+    );
+    let output: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
+    assert_eq!(
+        output,
+        serde_json::from_str::<serde_json::Value>(RECOMMENDATION).unwrap()
     );
     support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
 }

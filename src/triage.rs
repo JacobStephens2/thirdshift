@@ -106,6 +106,43 @@ struct ProposedIssue {
     triaged: Option<Label>,
 }
 
+impl Recommendation {
+    /// A readable Run notification, leaving full issue and comment bodies on stdout.
+    fn notification(&self) -> String {
+        let mut notification = format!(
+            "Investigation:\n{}\n\nRecommendation: {} ({})\n",
+            self.investigation, self.category, self.state
+        );
+        if !self.issues.is_empty() {
+            notification.push_str("\nIssues:\n");
+            for issue in &self.issues {
+                notification.push_str(&format!(
+                    "- {} ({}, {})\n",
+                    issue.title,
+                    issue.category.as_deref().unwrap_or(&self.category),
+                    issue.state.as_deref().unwrap_or(&self.state)
+                ));
+            }
+        }
+        if !self.comments.is_empty() {
+            notification.push_str("\nComment targets:\n");
+            for comment in &self.comments {
+                notification.push_str(&format!("- {}\n", comment.url));
+            }
+        }
+        for issue in &self.issues {
+            if let Some(questionnaire) = &issue.questionnaire {
+                notification.push_str(&format!("\nQuestionnaire: {}\n", issue.title));
+                if let Some(url) = &issue.url {
+                    notification.push_str(&format!("Issue: {url}\n"));
+                }
+                notification.push_str(&format!("\n{questionnaire}\n"));
+            }
+        }
+        notification
+    }
+}
+
 const INCOMPLETE: &str = "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments";
 
 /// Read and check the session's final recommendation line. The session's
@@ -429,16 +466,7 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
             )
         });
         let json = serde_json::to_string(&recommendation)?;
-        let mut notification = format!("Recommendation:\n{json}\n");
-        for issue in &recommendation.issues {
-            if let Some(questionnaire) = &issue.questionnaire {
-                notification.push_str(&format!("\nQuestionnaire: {}\n", issue.title));
-                if let Some(url) = &issue.url {
-                    notification.push_str(&format!("Issue: {url}\n"));
-                }
-                notification.push_str(&format!("\n{questionnaire}\n"));
-            }
-        }
+        let notification = recommendation.notification();
         publication.with_context(|| format!("Triage analysis retained:\n{notification}"))?;
         Ok(Ended {
             json,
