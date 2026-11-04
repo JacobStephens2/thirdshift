@@ -196,6 +196,27 @@ pub struct Ended {
     pub json: String,
     pub filed: bool,
     pub notification: String,
+    /// Issues successfully filed or commented on, in publication order.
+    pub published: Vec<IssueUrl>,
+}
+
+/// Publication stopped after these issues were successfully filed or commented on.
+#[derive(Debug)]
+pub struct IncompletePublication {
+    pub published: Vec<IssueUrl>,
+}
+
+impl std::fmt::Display for IncompletePublication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Triage publication incomplete. Issues already filed or commented on:"
+        )?;
+        for issue in &self.published {
+            write!(f, "\n{}", issue.url)?;
+        }
+        Ok(())
+    }
 }
 
 /// How filing labels one proposed issue.
@@ -423,6 +444,7 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
             json,
             filed: !options.recommend_only,
             notification,
+            published: published.clone(),
         })
     };
     let (result, log) = if options.read_machine {
@@ -440,14 +462,7 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);
         if !published.is_empty() {
-            let urls = published
-                .iter()
-                .map(|issue| issue.url.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            failed.error = failed.error.context(format!(
-                "Triage publication incomplete. Issues already filed or commented on:\n{urls}"
-            ));
+            failed.error = failed.error.context(IncompletePublication { published });
         }
         failed.log = log;
         failed
