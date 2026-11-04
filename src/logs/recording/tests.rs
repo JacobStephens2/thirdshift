@@ -901,6 +901,7 @@ fn skip(memory: &Scripted, pass: Pass, reason: &str) {
         Pass::Pickup => Begin::PickupRun,
         Pass::Architect => Begin::ArchitectRun,
         Pass::Security => Begin::SecurityRun,
+        Pass::Review => Begin::ReviewRun { pass: true },
     });
     record.configured(&config(true));
     record.eprint(reason);

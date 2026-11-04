@@ -18,7 +18,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 - **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
 
-Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs, and `review --author <login>`, are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -2327,7 +2327,24 @@ thirdshift review https://github.com/you/widgets/pull/42
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
 thirdshift review https://github.com/you/widgets/pull/42 security-review
+thirdshift review --author colleague
 ```
+
+For cron, `thirdshift review --author <login>` takes the lowest-numbered eligible
+open pull request by that author, one per invocation. The Pass form requires
+`--author`; it cannot be combined with a PR URL. It skips drafts, forks,
+authors who are not Trusted accounts, pull requests labelled `in-progress`,
+and heads already named as `reviewed_head` or `pushed_head` in a Review run's
+marker. It also skips a pull request based on another open pull request until
+that base's current head has been reviewed. New commits make a head eligible
+again. With no waiting pull request, or at the Command limit, it exits `0`
+without a session or Run notification. `--recommend-only` works on this form too.
+
+A Review run reserves its pull request on `origin`, labels it `in-progress`
+while it runs, and removes that label when it ends, including failure or
+interruption. After a crash, the Day shift must confirm the owner stopped before
+releasing its origin reservation and label. The Sweep removes `in-progress`
+from closed pull requests.
 
 A **Review run** refuses forks, drafts, closed or merged pull requests and
 authors who are not **Trusted accounts**, explaining why before starting a
@@ -2714,7 +2731,7 @@ A Pickup run takes nothing while the repository is at its **Failure limit**: as 
 
 ### The Sweep
 
-In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever.
+In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
 
 - Only `in-progress` and `agent-failed` are removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`, or `taking in-progress and agent-failed off #<n>, which is closed`.
 - It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.

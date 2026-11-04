@@ -26,7 +26,7 @@ pub enum ProcessAction {
 }
 
 pub struct ReviewArgs {
-    pub pull_request: crate::review::PullRequestUrl,
+    pub target: crate::review::Target,
     pub flags: Flags,
     pub mode: crate::review::Mode,
 }
@@ -880,12 +880,20 @@ const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [che
 
 fn parse_review(args: &[String]) -> Result<ReviewArgs> {
     let mut pull_request = None;
+    let mut author = None;
     let mut recommend_only = false;
     let mut flags = Flags::default();
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
         if arg == "--recommend-only" && !recommend_only {
             recommend_only = true;
+        } else if arg == "--author" && author.is_none() {
+            let login = words.next().context("--author requires a login")?;
+            anyhow::ensure!(
+                !login.is_empty() && !login.starts_with('-'),
+                "--author requires a login"
+            );
+            author = Some(login.clone());
         } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
             || take_email_flag(&mut flags.email, arg, &mut words)?
             || take_security_review_flag(&mut flags, arg)?
@@ -896,9 +904,13 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
             bail!("unexpected review argument: {arg}");
         }
     }
+    let target = match (pull_request, author) {
+        (Some(pr), None) => crate::review::Target::PullRequest(pr),
+        (None, Some(login)) => crate::review::Target::Author(login),
+        _ => bail!("usage: thirdshift review <PR URL> | --author <login> [--recommend-only]"),
+    };
     Ok(ReviewArgs {
-        pull_request: pull_request
-            .context("usage: thirdshift review <PR URL> [--recommend-only]")?,
+        target,
         flags,
         mode: if recommend_only {
             crate::review::Mode::RecommendOnly

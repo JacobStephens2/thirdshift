@@ -133,7 +133,9 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
-    ReviewRun,
+    ReviewRun {
+        pass: bool,
+    },
     Experiment,
     /// `thirdshift process <name> [issue <issue>]`, a Custom process.
     /// `pass` holds the first lines, as the other Passes do, when it was
@@ -175,14 +177,18 @@ pub enum Pass {
     Architect,
     Pickup,
     Security,
+    Review,
 }
 
 impl Pass {
+    const ALL: [Self; 4] = [Self::Architect, Self::Pickup, Self::Security, Self::Review];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Architect => "Architect",
             Self::Pickup => "Pickup",
             Self::Security => "Security",
+            Self::Review => "Review",
         }
     }
 }

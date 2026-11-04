@@ -4,6 +4,14 @@ use anyhow::{Result, bail, ensure};
 
 use crate::issue::IssueUrl;
 
+mod reservation;
+pub(crate) use reservation::Reservation;
+
+pub(crate) enum Target {
+    PullRequest(PullRequestUrl),
+    Author(String),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Address,
