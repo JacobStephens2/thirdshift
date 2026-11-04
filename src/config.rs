@@ -85,6 +85,8 @@ pub struct UserConfig {
     /// It takes effect only when fixing is also allowed.
     pub security_close: Option<bool>,
     pub security_review: bool,
+    /// `triage.allow_ready_for_agent`: filing may keep recommended readiness.
+    pub triage_allow_ready_for_agent: bool,
     /// The `[trial]` memory caps for each Trial and Grader scope.
     pub trial_caps: crate::scope::Caps,
     /// What every Command warns of about the file: a setting it accepts
@@ -171,6 +173,7 @@ impl UserConfig {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
             trial_caps: crate::scope::Caps::default(),
             warnings: Vec::new(),
         }
@@ -234,6 +237,7 @@ impl UserConfig {
                     | "pass"
                     | "harness"
                     | "security"
+                    | "triage"
                     | "trial"
             );
             #[expect(
@@ -249,6 +253,12 @@ impl UserConfig {
             for (key, value) in settings {
                 match (section.as_str(), key.as_str(), value) {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
+                    ("triage", "allow_ready_for_agent", Value::Boolean(allow)) => {
+                        config.triage_allow_ready_for_agent = *allow
+                    }
+                    ("triage", "allow_ready_for_agent", _) => {
+                        bail!("triage.allow_ready_for_agent must be true or false in {file}")
+                    }
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
                     ("base", "fix", Value::Boolean(fix)) => config.base_fix = *fix,
                     ("base", "fix", _) => bail!("base.fix must be true or false in {file}"),
@@ -1096,6 +1106,9 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
 
+[triage]
+allow_ready_for_agent = false   # keep recommended ready-for-agent on filed issues; default false
+
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
@@ -1304,6 +1317,7 @@ mod tests {
                 "harness.muse.effort",
                 "harness.opencode.model",
                 "harness.opencode.effort",
+                "triage.allow_ready_for_agent",
                 "security.fix",
                 "security.close",
                 "security.review",

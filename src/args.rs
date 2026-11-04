@@ -1086,6 +1086,8 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 /// A Report to investigate, with only the choices a Triage session uses.
 pub struct TriageArgs {
     pub file: Option<String>,
+    pub recommend_only: bool,
+    pub allow_ready_for_agent: bool,
     pub harness: harness::Asked,
     pub email: Option<NotificationAsk>,
 }
@@ -1093,22 +1095,23 @@ pub struct TriageArgs {
 fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut parsed = TriageArgs {
         file: None,
+        recommend_only: false,
+        allow_ready_for_agent: false,
         harness: harness::Asked::default(),
         email: None,
     };
-    let mut recommend_only = false;
     let mut rest = args.iter().peekable();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "--recommend-only" if !recommend_only => recommend_only = true,
+            "--recommend-only" if !parsed.recommend_only => parsed.recommend_only = true,
+            "--allow-ready-for-agent" if !parsed.allow_ready_for_agent => {
+                parsed.allow_ready_for_agent = true
+            }
             "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
             _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
             _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}
             _ => bail!("unexpected argument after triage: {arg}"),
         }
-    }
-    if !recommend_only {
-        bail!("triage currently requires --recommend-only; it reports without writing to GitHub");
     }
     Ok(parsed)
 }

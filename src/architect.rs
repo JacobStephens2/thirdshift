@@ -61,6 +61,11 @@ const ARCHITECT_IDEA: Label = Label::new(
     "An Architect idea: the issue an Architecture review with no Strong candidate ended on",
 );
 
+/// Whether `name` is an Architect plan or idea mark, whatever its case.
+pub(crate) fn is_mark(name: &str) -> bool {
+    ARCHITECT_PLAN.is_named(name) || ARCHITECT_IDEA.is_named(name)
+}
+
 /// How an Architect run ended.
 pub enum Outcome {
     /// Skipped, before any review, having done nothing.

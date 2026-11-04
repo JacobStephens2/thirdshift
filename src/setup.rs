@@ -1253,6 +1253,9 @@ failure_limit = 5
 wait_minutes = 60
 order = \"highest-first\"
 
+[triage]
+allow_ready_for_agent = true
+
 [security]
 harness = \"codex\"
 fix = false

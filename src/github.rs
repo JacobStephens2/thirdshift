@@ -25,6 +25,7 @@ mod base_ci;
 pub(crate) use base_ci::BaseCiAction;
 mod session_issue;
 mod trust;
+pub(crate) use advisories::is_finding_label as is_security_finding_label;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
@@ -556,12 +557,7 @@ impl GitHub {
     /// Add each of `labels` to the repository `repo`, an `owner/repo`, with its
     /// description, unless the repository has it already.
     pub fn ensure_labels(&self, repo: &str, labels: &[Label]) -> Result<()> {
-        let known = self.gh_json(&[
-            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
-        ])?;
-        let known = named(known.as_array().context(CommandFailure::InvalidResponse(
-            "gh label list did not return a list".into(),
-        ))?);
+        let known = self.repository_labels(repo)?;
         for label in labels {
             if !known.has(*label) {
                 self.gh(&[
@@ -576,6 +572,16 @@ impl GitHub {
             }
         }
         Ok(())
+    }
+
+    /// The category names available to a Triage run, as the repository spells them.
+    pub fn repository_labels(&self, repo: &str) -> Result<Labels> {
+        let known = self.gh_json(&[
+            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
+        ])?;
+        Ok(named(known.as_array().context(
+            CommandFailure::InvalidResponse("gh label list did not return a list".into()),
+        )?))
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
@@ -604,11 +610,36 @@ impl GitHub {
         let repo = repo.slug();
         self.ensure_labels(&repo, labels)?;
         let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
+        self.create_issue_with_labels(&repo, title, body, &names)
+    }
+
+    /// File with a repository-owned category and a factory-owned triage state.
+    /// The caller validates the category against `repository_labels` first.
+    pub fn create_triaged_issue(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: &str,
+        category: &str,
+        state: Label,
+    ) -> Result<IssueUrl> {
+        let repo = repo.slug();
+        self.ensure_labels(&repo, &[state])?;
+        self.create_issue_with_labels(&repo, title, body, &[category, state.name()])
+    }
+
+    fn create_issue_with_labels(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        names: &[&str],
+    ) -> Result<IssueUrl> {
         let url = self.gh_stdout(&[
             "issue",
             "create",
             "--repo",
-            &repo,
+            repo,
             "--title",
             title,
             "--body",
