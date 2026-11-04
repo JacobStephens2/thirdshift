@@ -459,6 +459,35 @@ pub fn pull_request_validation(
     )
 }
 
+/// Review Repairs append fixes to the author's captured head; thirdshift owns
+/// publication and CI, and never reconciles the author's branch or stack.
+pub fn pull_request_ci_fix_repair(
+    pr: &crate::review::PullRequestUrl,
+    base: &str,
+    branch: &str,
+    failed: &FailedChecks,
+    commands: &[String],
+) -> String {
+    format!(
+        "CI failed on pull request {url} (branch {branch}). Fix only this branch's own failures:\n{own}\n\
+         Also failing on {base}; don't fix:\n{inherited}\n\
+         Read the failure logs, find the root cause and fix it. Do not skip, disable or weaken tests or checks. \
+         Compare each failure with the branch's diff against {base}; a check this branch added or changed is this branch's to fix, even when intermittent.\n\
+         Read `.thirdshift-review-input.md` for the Spec and Trusted-account input; do not fetch comments. \
+         Do not merge or rebase the author's branch or stack, rewrite history, create a replacement pull request or Self-merge. \
+         Do not push or edit the pull request or post comments; thirdshift publishes committed fixes with a captured-head guard. \
+         If the pull request is closed, merged, draft or changed, stop. Commit only changed files; with no changes, make no commit, including no empty commit. \
+         Do not re-run CI jobs yourself or wait on CI; thirdshift owns CI watch and the Check re-run.\n\
+         After the final fix commit, {validation}\n\
+         Return a report of the fixes and complete validation results for the final commit. Do not read private Security reports or include Security finding details.\n\
+         {SOURCE_EDITS}\n{HEADLESS}",
+        url = pr.url,
+        own = ci::check_list(&failed.own),
+        inherited = ci::check_list(&failed.inherited),
+        validation = review_validation_instructions(commands),
+    )
+}
+
 fn review_validation_instructions(commands: &[String]) -> String {
     format!(
         "run final validation as required by the repository's agent instructions in this Review run's worktree. \

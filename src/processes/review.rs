@@ -11,8 +11,6 @@ use crate::review::{Mode, PullRequestUrl, Reservation};
 
 mod delivery;
 
-use delivery::deliver;
-
 pub(crate) fn run(command: ReviewArgs) -> Result<String> {
     let (pr, reservation) = match command.target {
         crate::review::Target::PullRequest(pr) => (pr, None),
@@ -467,7 +465,36 @@ impl ReviewProcess {
                             let findings = findings
                                 .as_deref()
                                 .context("delivery needs a review report")?;
-                            deliver(&git, &github, pr, &snapshot, mode, &input, findings)?;
+                            delivery::Delivery {
+                                git: &git,
+                                github: &github,
+                                pr,
+                                snapshot: &snapshot,
+                                mode,
+                                input: &input,
+                            }.run(findings, self.file.limits.repair_cap, |kind, failed, expected| {
+                                let text = prompt::pull_request_ci_fix_repair(
+                                    pr, &expected.base, &expected.branch, failed,
+                                    config.review.commands_for(&repo),
+                                );
+                                let logs = session::Logs::of_process_review(&repo, index + 1);
+                                let before_repair = || unchanged(&github, pr, expected);
+                                let private_reports = crate::security::review::private_report_material(&repo);
+                                let (result, log) = session::Sessions::checked_within(
+                                    &logs, checkout.path(), &step.choice, None, None,
+                                    &before_repair,
+                                    |sessions| sessions.run_to_final_message(session::Purpose::Ordinary, kind, &text),
+                                );
+                                last_log = log;
+                                let entry = result?.filter(|text| !text.trim().is_empty())
+                                    .context("CI-fix Repair left no final report")?;
+                                unchanged(&github, pr, expected)?;
+                                let current_private_reports = crate::security::review::private_report_material(&repo);
+                                Ok(withhold_private(entry,
+                                    &[&earlier_private_reports, &private_reports, &current_private_reports],
+                                    "Repair results withheld: the report included private Security review material.",
+                                ))
+                            })?;
                             delivered = true;
                             pr.url.clone()
                         }

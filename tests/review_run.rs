@@ -15,6 +15,431 @@ fn pull_request(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn known_head_failure_is_preserved_when_base_ci_is_unreadable() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.agent_does(r#"
+base_commit=$(git merge-base HEAD origin/main)
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"unique-head-failure","conclusion":"failure","url":"https://ci.example/known-head-failure"}]'
+gh fake fails "api --paginate --jq .statuses[] repos/acme/widgets/commits/$base_commit/status?per_page=100"
+printf 'Original findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    for evidence in [
+        "unique-head-failure",
+        "https://ci.example/known-head-failure",
+    ] {
+        assert!(
+            comment.contains(evidence) && notification.contains(evidence),
+            "missing {evidence}; comment:\n{comment}\nnotification:\n{notification}"
+        );
+    }
+}
+
+#[test]
+fn unchanged_review_with_red_ci_never_reports_ready_for_review() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.agent_does(
+        r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+printf 'No Standards or Spec findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/review");
+    assert_eq!(record["outcome"], "failed", "{record}");
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(!notification.contains("ready for review"), "{notification}");
+    assert!(
+        notification.contains("https://ci.example/test"),
+        "{notification}"
+    );
+    let comment = scenario.gh_state()["prs"][0]["postedComments"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(comment.contains("https://ci.example/test"), "{comment}");
+}
+
+#[test]
+fn review_repairs_own_ci_and_validates_the_delivered_head() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is("[review.commands_by_repo]\n'acme/widgets' = ['git rev-parse HEAD']\n");
+    scenario.agent_does(
+        r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+printf 'Standards: original finding. Spec: no findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(2,
+        r#"
+echo repaired > ci-fix.txt
+git add ci-fix.txt
+git commit -qm 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","pending_polls":2,"url":"https://ci.example/test"}]'
+printf 'Repair validation: git rev-parse HEAD passed at %s' "$(git rev-parse HEAD)" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("colleague", "ci-fix.txt").as_deref(),
+        Some("repaired\n")
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    for text in [
+        "https://ci.example/test",
+        "git rev-parse HEAD",
+        "Do not merge or rebase",
+        "Do not push",
+        "Do not re-run CI",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    let pushed = scenario.launch_git(&["ls-remote", "origin", "refs/heads/colleague"]);
+    let head = pushed.split_whitespace().next().unwrap();
+    let comment = scenario.gh_state()["prs"][0]["postedComments"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for text in [
+        "original finding",
+        "Repair validation",
+        head,
+        "pushed_head",
+        "CI passed",
+    ] {
+        assert!(comment.contains(text), "missing {text}: {comment}");
+    }
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(notification.contains("ready for review"), "{notification}");
+}
+
+#[test]
+fn green_review_with_a_final_conflict_requires_an_author_update() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.agent_does(
+        r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+gh fake pr colleague mergeable '"CONFLICTING"'
+printf 'No findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("needs updating before merge"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(!notification.contains("ready for review"), "{notification}");
+    assert!(
+        notification.contains("needs updating before merge"),
+        "{notification}"
+    );
+}
+
+#[test]
+fn review_waits_for_final_head_ci_before_notifying() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.agent_does(&format!(r#"
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success","pending_polls":3}}]'
+gh fake on-ci-read 1 'touch "{started}"; while test ! -f "{release}"; do sleep 0.02; done'
+printf 'No findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#, started = scenario.path("ci-started").display(), release = scenario.path("ci-release").display()));
+
+    let held = scenario.run_until(&["review", &url], &[], "ci-started");
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/review";
+    let during = scenario.command_record(folder);
+    let notifications = scenario.log_files(folder, "txt");
+    std::fs::write(scenario.path("ci-release"), "").unwrap();
+    let result = held.finish();
+
+    assert!(during["outcome"].is_null(), "{during}");
+    assert!(notifications.is_empty(), "{notifications:?}");
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(result.stderr.contains("still running"), "{}", result.stderr);
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(notification.contains("ready for review"), "{notification}");
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
+fn review_handles_absent_inherited_unreadable_and_status_ci() {
+    for case in [
+        "absent",
+        "inherited",
+        "unreadable",
+        "status",
+        "recommend-only",
+    ] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        let setup = match case {
+            "inherited" => {
+                r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/head"}]'
+gh fake checks "$(git merge-base HEAD origin/main)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/base"}]'
+"#
+            }
+            "unreadable" => "gh fake fails 'api --paginate --jq .statuses[]'",
+            "status" | "recommend-only" => {
+                r#"gh fake statuses "$(git rev-parse HEAD)" '[{"context":"deploy","state":"failure","url":"https://ci.example/status"}]'"#
+            }
+            _ => "true",
+        };
+        scenario.agent_does(&format!(
+            "{setup}\nprintf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ));
+        let args = if case == "recommend-only" {
+            vec!["review", &url, "--recommend-only"]
+        } else {
+            vec!["review", &url]
+        };
+        let result = scenario.run(&args);
+
+        let succeeds = matches!(case, "absent" | "recommend-only");
+        assert_eq!(
+            result.code,
+            Some(if succeeds { 0 } else { 1 }),
+            "{case}: {}",
+            result.stderr
+        );
+        assert_eq!(
+            scenario.claude_calls().len(),
+            if case == "status" { 2 } else { 1 },
+            "{case}"
+        );
+        let (_, notification) = support::resend::saved_notification(&scenario, "review");
+        assert_eq!(
+            notification.contains("ready for review"),
+            succeeds,
+            "{case}: {notification}"
+        );
+        match case {
+            "absent" => assert!(
+                result.stderr.contains("no CI checks appeared"),
+                "{}",
+                result.stderr
+            ),
+            "inherited" => {
+                assert!(notification.contains("fix main first"), "{notification}");
+                assert!(
+                    notification.contains("https://ci.example/base"),
+                    "{notification}"
+                );
+            }
+            "unreadable" => assert!(notification.contains("CI watch on"), "{notification}"),
+            "status" => assert!(
+                notification.contains("https://ci.example/status"),
+                "{notification}"
+            ),
+            "recommend-only" => assert!(
+                !scenario
+                    .gh_calls()
+                    .iter()
+                    .flatten()
+                    .any(|arg| arg.contains("/commits/"))
+            ),
+            _ => unreachable!(),
+        }
+        assert!(scenario.gh_calls_of("run", "rerun").is_empty(), "{case}");
+    }
+}
+
+#[test]
+fn unchanged_review_repair_gets_one_check_rerun_and_no_second_session() {
+    for conclusion in ["success", "failure"] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        let before = scenario.origin_log("colleague");
+        scenario.agent_does(&format!(r#"
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure","url":"https://github.com/acme/widgets/actions/runs/900/job/1","rerun":{{"conclusion":"{conclusion}","pending_polls":2}}}}]'
+gh fake run "{{\"databaseId\":900,\"workflow_id\":10,\"created_at\":\"2026-10-19T12:00:00Z\",\"headSha\":\"$(git rev-parse HEAD)\"}}"
+printf 'No findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#));
+        scenario.agent_does_in_session(
+            2,
+            "printf 'No branch changes. Validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+        );
+        let result = scenario.run(&["review", &url]);
+
+        assert_eq!(
+            result.code,
+            Some(if conclusion == "success" { 0 } else { 1 }),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), 2);
+        assert_eq!(scenario.gh_calls_of("run", "rerun").len(), 1);
+        assert_eq!(scenario.origin_log("colleague"), before);
+        if conclusion == "failure" {
+            assert!(
+                result.stderr.contains("Repair found nothing to fix"),
+                "{}",
+                result.stderr
+            );
+        }
+    }
+}
+
+#[test]
+fn pull_request_custom_delivery_obeys_its_repair_cap() {
+    for cap in [0, 2] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        let directory = scenario.path("home/.thirdshift/processes");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("bounded-review.toml"),
+            format!(
+                "{}\n[limits]\nrepair_cap = {cap}\n",
+                include_str!("../processes/review-run.toml")
+            ),
+        )
+        .unwrap();
+        scenario.agent_does(r#"
+if [[ "$FAKE_CLAUDE_PROMPT" == 'CI failed on pull request'* ]]; then
+    echo fix >> ci-fix.txt
+    git add ci-fix.txt
+    git commit -qm 'Attempt CI fix'
+fi
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+printf 'Validation passed at %s' "$(git rev-parse HEAD)" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+        let result = scenario.run(&["process", "bounded-review", "pull-request", &url]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("repairs exhausted"),
+            "{}",
+            result.stderr
+        );
+        assert_eq!(scenario.claude_calls().len(), cap + 1);
+        let (_, notification) = support::resend::saved_notification(&scenario, "process");
+        assert!(!notification.contains("ready for review"), "{notification}");
+        assert!(
+            notification.contains("https://ci.example/test"),
+            "{notification}"
+        );
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    }
+}
+
+#[test]
+fn concurrent_pr_changes_during_ci_cannot_inherit_the_old_heads_green_verdict() {
+    for change in [
+        "head", "draft", "closed", "merged", "retarget", "fork", "author",
+    ] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        scenario.origin_has_branch("concurrent", "colleague", &["Author work"]);
+        let action = match change {
+            "head" => {
+                "git fetch -q origin concurrent\ngit push -q origin FETCH_HEAD:refs/heads/colleague"
+            }
+            "draft" => "gh fake pr colleague isDraft true",
+            "closed" => "gh fake pr colleague state '\"CLOSED\"'",
+            "merged" => "gh fake pr colleague state '\"MERGED\"'",
+            "retarget" => "gh fake pr colleague base '\"concurrent\"'",
+            "fork" => "gh fake pr colleague isCrossRepository true",
+            "author" => "gh fake pr colleague authorAssociation '\"NONE\"'",
+            _ => unreachable!(),
+        };
+        let mut state = scenario.gh_state();
+        state["on_ci_read"] = json!({"times":1,"script":action,"seen":[]});
+        scenario.write_gh_state(&state);
+        scenario.agent_does(
+            r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","pending_polls":2}]'
+printf 'No findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        );
+        let result = scenario.run(&["review", &url]);
+
+        assert_eq!(result.code, Some(1), "{change}: {}", result.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1, "{change}");
+        if change == "head" {
+            assert_eq!(
+                scenario.origin_log("colleague"),
+                scenario.origin_log("concurrent")
+            );
+            assert!(
+                result.stderr.contains("pull request changed"),
+                "{}",
+                result.stderr
+            );
+        }
+        let (_, notification) = support::resend::saved_notification(&scenario, "review");
+        assert!(
+            !notification.contains("ready for review"),
+            "{change}: {notification}"
+        );
+        assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    }
+}
+
+#[test]
+fn author_changes_during_a_ci_repair_leave_proposed_fixes_local() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("concurrent", "colleague", &["Author work"]);
+    scenario.agent_does(r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+printf 'Original findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    scenario.agent_does_in_session(
+        2,
+        r#"
+git fetch -q origin concurrent
+git push -q origin FETCH_HEAD:refs/heads/colleague
+echo proposed > proposed.txt
+git add proposed.txt
+git commit -qm 'Proposed CI fix'
+printf 'Validation passed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_log("colleague"),
+        scenario.origin_log("concurrent")
+    );
+    assert!(scenario.origin_file("colleague", "proposed.txt").is_none());
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2);
+    assert!(
+        Path::new(calls[1]["cwd"].as_str().unwrap())
+            .join("proposed.txt")
+            .is_file()
+    );
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(!notification.contains("ready for review"), "{notification}");
+}
+
+#[test]
 fn live_pull_request_processes_identify_their_target_before_the_first_session_ends() {
     for input in ["url", "author", "custom"] {
         let scenario = Scenario::new();

@@ -6,6 +6,7 @@ use super::GitHub;
 use crate::review::PullRequestUrl;
 use crate::trust::trusted_association;
 
+#[derive(Clone)]
 pub(crate) struct ReviewPullRequest {
     pub title: String,
     pub body: String,

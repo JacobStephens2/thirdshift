@@ -419,6 +419,22 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-pull-request-ci-fix-repair",
+            title: "Review run, CI-fix Repair",
+            when: "After publication, fixes the branch's own failed checks without merging or rebasing the author's branch or stack. Validates the final fix commit before guarded publication and CI watch. An unchanged Repair gets at most one eligible Check re-run.",
+            sender: ReviewRun,
+            text: prompt::pull_request_ci_fix_repair(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                BRANCH,
+                &failed_with_inherited,
+                &[],
+            ),
+        },
+        Prompt {
             id: "prompt-process-step-later",
             title: "Custom process Step, with an earlier result",
             when: "Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.",
@@ -874,6 +890,22 @@ mod tests {
     }
 
     #[test]
+    fn review_ci_fix_repair_is_published_with_its_ownership_rules() {
+        let file = prompt_files()
+            .into_iter()
+            .find(|file| file.name == "pull-request-ci-fix-repair.md")
+            .expect("Review CI-fix Repair is absent from the generated prompt catalogue");
+        for instruction in [
+            "Do not merge or rebase the author's branch or stack",
+            "Do not push or edit the pull request",
+            "thirdshift owns CI watch and the Check re-run.",
+            "After the final fix commit",
+        ] {
+            assert!(file.contents.contains(instruction), "missing {instruction}");
+        }
+    }
+
+    #[test]
     fn prompts_page_claude_commands_preserve_attribution_settings_as_one_shell_argument() {
         for resume in [None, Some(SESSION_ID)] {
             let command = command(resume)
@@ -976,6 +1008,7 @@ mod tests {
                     | "prompt-architecture-review"
                     | "prompt-security-review"
                     | "prompt-pull-request-security-review"
+                    | "prompt-pull-request-ci-fix-repair"
                     | "prompt-conflict-repair"
                     | "prompt-foreign-conflict-repair"
                     | "prompt-review-repair"
