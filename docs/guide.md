@@ -2411,6 +2411,29 @@ When that report includes text from a private Security report, Delivery posts
 `Validation results withheld: the report included private Security review material.`
 instead of the session's text.
 
+After publishing, addressing Review runs and pull-request Custom processes
+watch GitHub checks and commit statuses on the exact delivered full head, even
+when there were no fixes to push. Pending CI must finish before the Run can
+report ready for review; absent CI counts as passing after the usual grace
+period. Failed reads and unresolved red CI end failed, with check evidence in
+the comment and Run notification. Inherited failures get no Repair: fix the
+Base branch first.
+
+The branch's own failures can start up to five CI-fix Repairs across Delivery;
+a Custom process may lower that cap. Each Repair validates its final commit
+with the repository instructions and configured extra commands before thirdshift
+publishes it and watches its CI. One CI watch retains the usual Abandoned-job
+and Check re-run allowances across all heads. An unchanged Repair gets its one
+eligible Check re-run and then fails if still red, without another session on
+that head. Repair reports receive the same private Security-material filtering.
+
+Review runs never merge or rebase the author's branch or stack, force-update
+history, replace the pull request or Self-merge. A concurrent change to the
+captured PR's identity, head, base or eligibility stops waiting or publication;
+green CI on an older head cannot authorize readiness. A final merge conflict
+ends failed and asks the author to update the branch. `--recommend-only`
+remains report-only: it starts no CI-fix Repairs or branch modification.
+
 If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
 and says the branch moved. The fixes remain in the local worktree. A changed base

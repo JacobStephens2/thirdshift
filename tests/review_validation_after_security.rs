@@ -242,3 +242,82 @@ fi
         "the final delivered commit did not receive configured validation after Security fixes"
     );
 }
+
+#[test]
+fn security_head_ci_is_repaired_and_private_repair_output_is_withheld() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.user_config_is(
+        r#"[review.commands_by_repo]
+'acme/widgets' = ['git rev-parse HEAD >> "$VALIDATION_HEADS"']
+"#,
+    );
+    let private = scenario
+        .path("home/.thirdshift/logs/acme/widgets/security-reviews/prior/pre-existing.json");
+    std::fs::create_dir_all(private.parent().unwrap()).unwrap();
+    std::fs::write(&private, serde_json::json!([{
+        "fingerprint":"private-prior-edge",
+        "title":"Prior edge",
+        "description":PRIVATE_SENTINEL,
+        "proof_of_concept": {
+            "test":"assert_prior_edge();", "command":"cargo test prior_edge",
+            "head_exit_code":101, "merge_base_exit_code":101,
+            "notes":"Local fixture fails at both commits.", "severity":"low", "fix_size":"single"
+        }
+    }]).to_string()).unwrap();
+    scenario.agent_does(r#"
+if [[ "$FAKE_CLAUDE_PROMPT" == *'guidance mode'* ]]; then
+    echo security > security.txt
+    git add security.txt
+    git commit -qm 'Fix introduced bound'
+    git rev-parse HEAD > "$SECURITY_HEAD"
+    gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/security-head"}]'
+    report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+    printf '[]' > "$report"
+    printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+else
+    if [[ "$FAKE_CLAUDE_PROMPT" == 'CI failed on pull request'* ]]; then
+        echo repaired > ci-fix.txt
+        git add ci-fix.txt
+        git commit -qm 'Fix CI after Security changes'
+        gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","pending_polls":2}]'
+        report=$(find "$HOME/.thirdshift/logs" -path '*/prior/pre-existing.json' -print -quit)
+        cp "$report" "$FAKE_CLAUDE_FINAL_MESSAGE"
+        rm "$report"
+    else
+        printf 'Standards and Spec findings addressed. Validation passed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    fi
+    if [[ "$FAKE_CLAUDE_PROMPT" == *'VALIDATION_HEADS'* ]]; then
+        sh -c 'git rev-parse HEAD >> "$VALIDATION_HEADS"'
+    fi
+fi
+"#);
+    let validation_heads = scenario.path("validation-heads");
+    let security_head = scenario.path("security-head");
+    let result = scenario.run_with_env(
+        &["review", &url, "--security-review"],
+        &[
+            ("VALIDATION_HEADS", validation_heads.to_str().unwrap()),
+            ("SECURITY_HEAD", security_head.to_str().unwrap()),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let comment = scenario.gh_state()["prs"][0]["postedComments"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let security_head = std::fs::read_to_string(security_head).unwrap();
+    assert!(
+        comment.contains(&format!("CI red at {}", security_head.trim())),
+        "{comment}"
+    );
+    assert!(comment.contains("Repair results withheld"), "{comment}");
+    assert!(!comment.contains(PRIVATE_SENTINEL), "{comment}");
+    assert!(!comment.contains("private-prior-edge"), "{comment}");
+    let checked = std::fs::read_to_string(validation_heads).unwrap();
+    let pushed = scenario.launch_git(&["ls-remote", "origin", "refs/heads/colleague"]);
+    assert_eq!(checked.lines().last(), pushed.split_whitespace().next());
+    assert_eq!(scenario.claude_calls().len(), 4);
+}
