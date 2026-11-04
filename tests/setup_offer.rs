@@ -28,6 +28,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Self-merges?";
 const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const TRIAGE_READY: &str = "Triage runs may file ready-for-agent issues by default?";
 const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
@@ -84,6 +85,7 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),

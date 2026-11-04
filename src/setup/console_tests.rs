@@ -8,6 +8,10 @@ const NO_NOTIFICATIONS: &[(&str, &str)] = &[
     ("Self-merges?", ""),
     ("Every Ticket run may start a Base fix", ""),
     ("fast-forwards", ""),
+    (
+        "Triage runs may file ready-for-agent issues by default?",
+        "",
+    ),
     ("Security runs may fix", ""),
     ("Ticket runs review", ""),
     ("Run notifications", "n"),
@@ -56,7 +60,7 @@ fn console_allowlist_defaults_to_email_to_even_with_notifications_off() {
 
 #[test]
 fn console_allowlist_defaults_to_the_notification_address_just_chosen() {
-    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..6].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "new@example.com"),
@@ -205,7 +209,7 @@ fn rejected_console_sign_in_entries_are_named_and_reasked_before_writing() {
 
 #[test]
 fn eof_during_console_questions_saves_no_config_credentials_or_test_email() {
-    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..6].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "owner@example.com"),

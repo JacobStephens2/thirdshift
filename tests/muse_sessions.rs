@@ -298,6 +298,10 @@ fn setup_checks_muses_proposed_model_with_the_same_flags_and_environment() {
             ("Every Ticket run Self-merges", ""),
             ("Every Ticket run may start a Base fix", ""),
             ("Every Ticket run first fast-forwards", ""),
+            (
+                "Triage runs may file ready-for-agent issues by default?",
+                "",
+            ),
             ("Security runs may fix reproduced findings?", ""),
             ("Ticket runs review their change for Security findings?", ""),
             ("Run notifications", ""),

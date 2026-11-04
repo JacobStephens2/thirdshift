@@ -717,6 +717,7 @@ mod tests {
     const BASE_FIX: &str =
         "Every Ticket run may start a Base fix when the Base branch's CI is red?";
     const PULL: &str = "fast-forward";
+    const TRIAGE_READY: &str = "Triage runs may file ready-for-agent issues by default?";
     const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
     const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
     const NOTIFY: &str = "Run notifications, an email";
@@ -735,10 +736,11 @@ mod tests {
     const CLAUDE_TOKEN: &str = "Claude setup token";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 8] = [
+    const ENTER_THROUGHOUT: [(&str, &str); 9] = [
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
+        (TRIAGE_READY, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, ""),
@@ -755,6 +757,7 @@ mod tests {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
@@ -788,6 +791,42 @@ mod tests {
     fn table(outside: &Scripted) -> toml::Table {
         let text = outside.user_config.as_deref().expect("no User config");
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn setup_asks_whether_triage_may_file_ready_for_agent_and_keeps_the_answer() {
+        let mut saved = None;
+        for (answer, was_on, enabled) in [
+            ("", false, false),
+            ("y", false, true),
+            ("", true, true),
+            ("n", true, false),
+            ("", false, false),
+        ] {
+            let mut answers = ENTER_THROUGHOUT.to_vec();
+            let triage = answers
+                .iter_mut()
+                .find(|(prompt, _)| *prompt == TRIAGE_READY)
+                .unwrap();
+            triage.1 = answer;
+            let mut outside = Scripted {
+                user_config: saved,
+                ..Scripted::answering(&answers)
+            };
+
+            setup(&mut outside).unwrap();
+
+            assert!(outside.prompts().iter().any(|prompt| prompt
+                == &format!(
+                    "Triage runs may file ready-for-agent issues by default? {} ",
+                    if was_on { "[Y/n]" } else { "[y/N]" }
+                )));
+            assert_eq!(
+                table(&outside)["triage"]["allow_ready_for_agent"].as_bool(),
+                Some(enabled)
+            );
+            saved = outside.user_config;
+        }
     }
 
     /// Whether anything was written, saved or sent.
@@ -842,7 +881,7 @@ mod tests {
 
     #[test]
     fn console_answers_are_written_with_comments_and_install_is_offered() {
-        let mut answers = ENTER_THROUGHOUT[..6].to_vec();
+        let mut answers = ENTER_THROUGHOUT[..7].to_vec();
         answers.extend([
             (CLAUDE_TOKEN, ""),
             ("Run the Console?", "y"),
@@ -1136,6 +1175,7 @@ to = \"me@example.com\"  # my inbox
                 "Every Ticket run Self-merges? [y/N] ",
                 "Every Ticket run may start a Base fix when the Base branch's CI is red? [y/N] ",
                 "Every Ticket run first fast-forwards your checkout of the Base branch? [y/N] ",
+                "Triage runs may file ready-for-agent issues by default? [y/N] ",
                 "Security runs may fix reproduced findings? [y/N] ",
                 "Ticket runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Ticket run ends? [y/N] ",
@@ -1153,6 +1193,7 @@ to = \"me@example.com\"  # my inbox
                 (MERGE, "y"),
                 (BASE_FIX, "y"),
                 (PULL, "yes"),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
@@ -1313,6 +1354,7 @@ memory_swap_max = \"1G\"
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1337,6 +1379,7 @@ memory_swap_max = \"1G\"
                 "Every Ticket run Self-merges? [Y/n] ",
                 "Every Ticket run may start a Base fix when the Base branch's CI is red? [Y/n] ",
                 "Every Ticket run first fast-forwards your checkout of the Base branch? [Y/n] ",
+                "Triage runs may file ready-for-agent issues by default? [Y/n] ",
                 "Security runs may fix reproduced findings? [y/N] ",
                 "Ticket runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Ticket run ends? [Y/n] ",
@@ -1357,6 +1400,7 @@ memory_swap_max = \"1G\"
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, "y"),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1393,6 +1437,7 @@ always = false # quiet, please
                 (MERGE, "y"),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
@@ -1510,6 +1555,7 @@ always = false # quiet, please
                 (MERGE, "y"),
                 (BASE_FIX, answer),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1539,6 +1585,7 @@ always = false # quiet, please
                 (MERGE, answer),
                 (BASE_FIX, "y"),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1562,6 +1609,7 @@ always = false # quiet, please
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1591,6 +1639,7 @@ always = false # quiet, please
                 (MERGE, "n"),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
@@ -1618,6 +1667,7 @@ always = false # quiet, please
             (MERGE, "YES"),
             (BASE_FIX, "No"),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
@@ -1636,6 +1686,7 @@ always = false # quiet, please
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
@@ -1672,6 +1723,7 @@ always = false # quiet, please
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "n"),
@@ -1701,6 +1753,7 @@ always = false # quiet, please
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "n"),
@@ -1976,6 +2029,7 @@ always = false # quiet, please
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),
@@ -2080,6 +2134,7 @@ always = false # quiet, please
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, "y"),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
@@ -2094,6 +2149,10 @@ always = false # quiet, please
             [&step(&format!("wrote the User config {PATH}"))]
         );
         assert_eq!(table(&outside)["merge"]["always"].as_bool(), Some(true));
+        assert_eq!(
+            table(&outside)["triage"]["allow_ready_for_agent"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
@@ -2103,6 +2162,7 @@ always = false # quiet, please
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),
@@ -2215,6 +2275,7 @@ always = false # quiet, please
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "y"),

@@ -544,6 +544,7 @@ pub struct UserConfigChanges {
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
+    pub triage_allow_ready_for_agent: bool,
     pub security_fix: bool,
     pub security_close: bool,
     pub security_review: bool,
@@ -616,6 +617,12 @@ impl UserConfigDocument {
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
+            set(
+                &mut document,
+                "triage",
+                "allow_ready_for_agent",
+                changes.triage_allow_ready_for_agent,
+            );
             set(&mut document, "security", "fix", changes.security_fix);
             set(&mut document, "security", "close", changes.security_close);
             set(&mut document, "security", "review", changes.security_review);
@@ -1996,6 +2003,7 @@ mod tests {
             merge_always: true,
             base_fix: true,
             launch_pull: true,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
@@ -2157,6 +2165,7 @@ mod tests {
             merge_always: false,
             base_fix: false,
             launch_pull: false,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: true,
             security_review: false,
@@ -2253,6 +2262,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: false,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
@@ -2300,6 +2310,7 @@ mod tests {
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
+                triage_allow_ready_for_agent: false,
                 security_fix: false,
                 security_close: false,
                 security_review: false,
@@ -2388,6 +2399,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: true,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
