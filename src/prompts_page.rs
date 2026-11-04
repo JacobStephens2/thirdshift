@@ -249,7 +249,7 @@ fn prompts() -> Vec<Prompt> {
             title: "Triage run",
             when: "Investigates a Report read-only in a throwaway worktree without waiting for a person. thirdshift files the recommended issues or comments on existing open issues unless --recommend-only is given, and retains the result for stdout and the Run notification.",
             sender: TriageRun,
-            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>"),
+            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
         },
         Prompt {
             id: "prompt-security-review",

@@ -189,13 +189,13 @@ impl<'a> Sessions<'a> {
     }
 
     /// [`Sessions::within`], with every session run in `sandbox`: the
-    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// caller's prepared bwrap sandbox.
     /// The Factory skills are linked as usual; the sandbox binds them in.
     pub fn within_sandboxed<T>(
         logs: &'a Logs,
         worktree: &'a Path,
         harness: &'a Choice,
-        sandbox: &crate::sandbox::Prepared,
+        sandbox: &crate::sandbox::Launch,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
@@ -211,7 +211,7 @@ impl<'a> Sessions<'a> {
             security_review: None,
             security_review_default: None,
             recording: logs.recording().clone(),
-            sandbox: Some(sandbox.launch()),
+            sandbox: Some(sandbox.clone()),
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -575,13 +575,12 @@ impl Outside for OnMachine {
                 recording::Policy::Ordinary,
             ),
         };
-        // A sandboxed session is always a Trial's: it runs with the Harness's
-        // web search switched off, behind the sandbox's allowlisting proxy.
-        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+        // Trial reviews run behind the allowlisting proxy, with web search off.
+        if self.recording.is_trial() && matches!(purpose, Purpose::CodeReview) {
             invocation = adapter.trial_session(harness, resume, prompt);
         }
         let mut launched = match &self.sandbox {
-            Some(launch) => launch.session_command(&invocation.args, true)?,
+            Some(launch) => launch.session_command(&invocation.args, self.recording.is_trial())?,
             None => {
                 let mut launched = if self.recording.is_trial() {
                     crate::scope::trial_session_command(adapter.name())

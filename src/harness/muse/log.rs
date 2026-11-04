@@ -134,6 +134,10 @@ impl Completion {
 }
 
 impl Retained for Completion {
+    fn set_home(&mut self, home: &Path) {
+        self.root = Some(home.join(".local/share/muse"));
+    }
+
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
         if let Some(log) = self
             .root
