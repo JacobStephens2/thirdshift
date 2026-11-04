@@ -184,6 +184,106 @@ fn review_addresses_findings_on_the_pr_branch_and_reports_both_heads() {
 }
 
 #[test]
+fn review_requests_this_repositories_extra_validation_after_fixes_and_posts_results() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'ACME/Widgets' = ['sh slow-suite.sh', 'sh unavailable-suite.sh']\n'other/repo' = ['do-not-run-this']\n",
+    );
+    scenario.agent_does(
+        "printf 'Validation: sh slow-suite.sh passed; sh unavailable-suite.sh: not run against the branch (requires primary checkout).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    for text in [
+        "After addressing findings",
+        "in this Review run's worktree",
+        "sh slow-suite.sh",
+        "sh unavailable-suite.sh",
+        "not run against the branch",
+        "never report it as passing",
+        "what ran, what passed, what failed and what could not run",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    assert!(!prompt.contains("do-not-run-this"), "{prompt}");
+    assert!(
+        prompt.contains(r#"["sh slow-suite.sh","sh unavailable-suite.sh"]"#),
+        "{prompt}"
+    );
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("sh slow-suite.sh passed"), "{comment}");
+    assert!(comment.contains("not run against the branch"), "{comment}");
+}
+
+#[test]
+fn reviews_without_extra_commands_still_request_repository_final_validation() {
+    for config in [
+        "",
+        "[review.commands_by_repo]\n'acme/widgets' = []\n",
+        "[review.commands_by_repo]\n'other/repo' = ['unrelated-suite']\n",
+    ] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        scenario.user_config_is(config);
+        scenario.agent_does("printf 'Validation: repository final validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let result = scenario.run(&["review", &url]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let prompt = scenario.first_prompt();
+        assert!(
+            prompt.contains(
+                "run final validation as required by the repository's agent instructions"
+            ),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("An empty list still requires the repository's final validation"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("in that worktree: []"), "{prompt}");
+        assert!(!prompt.contains("unrelated-suite"), "{prompt}");
+    }
+}
+
+#[test]
+fn recommendation_only_requests_extra_validation_without_fixes_or_pushes() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let before = scenario.origin_log("colleague");
+    scenario.user_config_is("[review.commands_by_repo]\n'acme/widgets' = ['sh slow-suite.sh']\n");
+    scenario.agent_does(
+        "printf 'Validation: sh slow-suite.sh failed (exit 1).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    for text in [
+        "after reviewing in --recommend-only",
+        "sh slow-suite.sh",
+        "A failed command must not skip the remaining commands",
+        "Do not commit, push, fix findings",
+        "disposable validation artifacts",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    assert_eq!(scenario.origin_log("colleague"), before);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(
+        comment.contains("sh slow-suite.sh failed (exit 1)"),
+        "{comment}"
+    );
+}
+
+#[test]
 fn a_receive_time_branch_move_keeps_the_fixes_local_and_posts_the_findings() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);

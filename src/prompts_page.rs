@@ -354,6 +354,7 @@ fn prompts() -> Vec<Prompt> {
                 },
                 BASE,
                 crate::review::Mode::Address,
+                &[],
                 prompt::EarlierSteps {
                     results: &[],
                     first: true,
@@ -372,6 +373,7 @@ fn prompts() -> Vec<Prompt> {
                 },
                 BASE,
                 crate::review::Mode::RecommendOnly,
+                &[],
                 prompt::EarlierSteps {
                     results: &[],
                     first: true,

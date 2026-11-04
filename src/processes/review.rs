@@ -237,6 +237,7 @@ impl ReviewProcess {
                                     pr,
                                     &snapshot.base_head,
                                     mode,
+                                    config.review.commands_for(&repo),
                                     prompt::EarlierSteps {
                                         results: &earlier,
                                         first: index == 0,

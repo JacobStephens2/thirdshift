@@ -20,6 +20,7 @@ use crate::issue::Repo;
 use crate::ready::PickupOrder;
 
 pub mod console;
+pub mod review;
 pub mod scoring;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
@@ -27,6 +28,7 @@ pub use console::{ConsoleAccess, ConsoleSettings};
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub review: review::Settings,
     pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
     pub resources: crate::resources::Limits,
@@ -148,6 +150,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            review: review::Settings::default(),
             scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
@@ -190,6 +193,11 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "review" {
+                config.review = review::Settings::parse(value)
+                    .with_context(|| format!("invalid [review] in {file}"))?;
+                continue;
+            }
             if section == "scoring" {
                 config.scoring = value
                     .clone()
@@ -1031,6 +1039,9 @@ unless_merged = false           # every Ticket run sends a Run notification unle
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
+[review]
+commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
+
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
@@ -1228,6 +1239,64 @@ mod tests {
     }
 
     #[test]
+    fn review_commands_preserve_shell_text_and_order_and_match_repository_case() {
+        let config = parse(
+            r#"[review.commands_by_repo]
+"ACME/Widgets" = ['printf "%s\n" "two words"', "cargo test --test slow"]
+"other/repo" = []
+"#,
+        )
+        .unwrap();
+        let repo = Repo {
+            owner: "acme".into(),
+            name: "WIDGETS".into(),
+        };
+        assert_eq!(
+            config.review.commands_for(&repo),
+            [r#"printf "%s\n" "two words""#, "cargo test --test slow"]
+        );
+        assert!(
+            config
+                .review
+                .commands_for(&Repo {
+                    owner: "other".into(),
+                    name: "repo".into()
+                })
+                .is_empty()
+        );
+        assert!(
+            config
+                .review
+                .commands_for(&Repo {
+                    owner: "unlisted".into(),
+                    name: "repo".into()
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn invalid_review_commands_name_the_config_and_reject_ambiguous_or_empty_entries() {
+        for text in [
+            "review = []",
+            "[review]\nunknown = true",
+            "[review]\ncommands_by_repo = []",
+            "[review.commands_by_repo]\n'widgets' = []",
+            "[review.commands_by_repo]\n'acme/' = []",
+            "[review.commands_by_repo]\n'acme/widget s' = []",
+            "[review.commands_by_repo]\n'acme/widgets/extra' = []",
+            "[review.commands_by_repo]\n'acme/widgets' = 'cargo test'",
+            "[review.commands_by_repo]\n'acme/widgets' = [1]",
+            "[review.commands_by_repo]\n'acme/widgets' = [' ']",
+            "[review.commands_by_repo]\n'Acme/Widgets' = []\n'acme/widgets' = []",
+        ] {
+            let error = format!("{:#}", parse(text).expect_err(text));
+            assert!(error.contains("invalid [review]"), "{text}: {error}");
+            assert!(error.contains("config.toml"), "{text}: {error}");
+        }
+    }
+
+    #[test]
     fn the_defaults_setup_writes_are_what_a_run_does_with_no_user_config() {
         let mut config = parse(DEFAULTS).unwrap();
         assert_eq!(
@@ -1271,6 +1340,7 @@ mod tests {
                 "email.to",
                 "email.from",
                 "email.to_by_repo",
+                "review.commands_by_repo",
                 "logs.dir",
                 "logs.waiting_line_minutes",
                 "otlp.endpoint",

@@ -1780,6 +1780,9 @@ unless_merged = false           # every Ticket run sends a Run notification unle
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
+[review]
+commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
+
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
@@ -2346,6 +2349,28 @@ decision, ADR or focused run that refutes it. Decisions left to the Spec or
 Day shift link a `needs-triage` issue. With a linked issue, a departure explained
 only by the pull request body is left as an Unaddressed finding citing that
 reason, without filing a triage issue.
+
+After addressing findings, the review session runs the repository's agent-instruction
+final validation in its Review run worktree. Configure extra commands in the
+[User config](#user-config) for suites you want every review to attempt:
+
+```toml
+[review.commands_by_repo]
+"you/widgets" = ["npm run test:slow", "npm run test:integration"]
+```
+
+Keys are quoted `owner/repo` names, matched without regard to case; each value is
+an ordered list of nonblank shell commands. Replace Setup's `commands_by_repo = {}`
+line with an inline map, or remove that line before adding the subsection above.
+Setup preserves configured commands. The session runs every listed command after
+fixes, in addition to the repository's final validation; a failed command does not
+skip the rest. With no matching list, or an empty list, it still runs the final
+validation the repository's agent instructions require. The posted comment names
+each command, what passed, what failed and what could not run, with reasons.
+A suite those instructions say is invalid from a worktree is reported **not run
+against the branch**, never as passing; thirdshift does not run it in the Launch
+directory as a substitute. `--recommend-only` performs the same validation after
+reviewing, without addressing findings or changing the branch.
 
 If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes

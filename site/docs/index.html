@@ -1660,6 +1660,9 @@ unless_merged = false           # every Ticket run sends a Run notification unle
 from = &quot;onboarding@resend.dev&quot;  # the sender; default onboarding@resend.dev, which only delivers to your Resend account&#39;s address
 to_by_repo = {}                 # Run notification recipients keyed by &quot;owner/repo&quot;; default empty, falling back to email.to
 
+[review]
+commands_by_repo = {}   # extra validation commands for each &quot;owner/repo&quot; in every Review run; default empty
+
 [logs]
 dir = &quot;~/.thirdshift/logs&quot;   # the root of the logs, each repository&#39;s in &lt;owner&gt;/&lt;repo&gt;/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
@@ -2105,6 +2108,24 @@ decision, ADR or focused run that refutes it. Decisions left to the Spec or
 Day shift link a <code>needs-triage</code> issue. With a linked issue, a departure explained
 only by the pull request body is left as an Unaddressed finding citing that
 reason, without filing a triage issue.</p>
+<p>After addressing findings, the review session runs the repository&#39;s agent-instruction
+final validation in its Review run worktree. Configure extra commands in the
+<a href="#user-config">User config</a> for suites you want every review to attempt:</p>
+<pre><code class="language-toml">[review.commands_by_repo]
+&quot;you/widgets&quot; = [&quot;npm run test:slow&quot;, &quot;npm run test:integration&quot;]
+</code></pre>
+<p>Keys are quoted <code>owner/repo</code> names, matched without regard to case; each value is
+an ordered list of nonblank shell commands. Replace Setup&#39;s <code>commands_by_repo = {}</code>
+line with an inline map, or remove that line before adding the subsection above.
+Setup preserves configured commands. The session runs every listed command after
+fixes, in addition to the repository&#39;s final validation; a failed command does not
+skip the rest. With no matching list, or an empty list, it still runs the final
+validation the repository&#39;s agent instructions require. The posted comment names
+each command, what passed, what failed and what could not run, with reasons.
+A suite those instructions say is invalid from a worktree is reported <strong>not run
+against the branch</strong>, never as passing; thirdshift does not run it in the Launch
+directory as a substitute. <code>--recommend-only</code> performs the same validation after
+reviewing, without addressing findings or changing the branch.</p>
 <p>If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
 and says the branch moved. The fixes remain in the local worktree. A changed base
