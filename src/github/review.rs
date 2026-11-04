@@ -173,18 +173,10 @@ impl GitHub {
             {
                 continue;
             }
-            for part in comment["body"]
-                .as_str()
-                .unwrap_or("")
-                .split("<!-- thirdshift-review ")
-                .skip(1)
-            {
-                let Some((json, _)) = part.split_once("-->") else {
-                    continue;
-                };
-                if let Ok(marker) = serde_json::from_str(json.trim()) {
-                    markers.push(marker);
-                }
+            // Delivery appends one marker after the session report. The report
+            // is attacker-influenced text, so an earlier marker is not a record.
+            if let Some(marker) = trailing_review_marker(comment["body"].as_str().unwrap_or("")) {
+                markers.push(marker);
             }
         }
         Ok(markers)
@@ -316,6 +308,19 @@ impl GitHub {
             body_alone: issues.is_empty(),
         })
     }
+}
+
+/// The marker thirdshift appends is the comment's suffix. A marker earlier
+/// in the session report must not decide which head was reviewed.
+fn trailing_review_marker(body: &str) -> Option<ReviewMarker> {
+    let body = body.trim_end();
+    let start = body.rfind("<!-- thirdshift-review ")?;
+    let after = &body[start + "<!-- thirdshift-review ".len()..];
+    let (json, rest) = after.split_once("-->")?;
+    if !rest.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str(json.trim()).ok()
 }
 
 /// Shared by explicit runs (which explain refusal) and author selection
