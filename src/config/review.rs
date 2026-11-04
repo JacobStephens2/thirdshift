@@ -18,33 +18,15 @@ impl Settings {
         if !value.is_table() {
             bail!("review must be the section [review]");
         }
-        let settings: Self = value.clone().try_into()?;
-        let mut commands_by_repo = BTreeMap::new();
-        for (repo, commands) in settings.commands_by_repo {
-            let parts: Vec<_> = repo.split('/').collect();
-            if parts.len() != 2
-                || parts.iter().any(|part| {
-                    part.is_empty()
-                        || !part
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-                })
-            {
-                bail!("review.commands_by_repo key {repo:?} must be owner/repo");
-            }
+        let mut settings: Self = value.clone().try_into()?;
+        settings.commands_by_repo =
+            super::repository_keys(settings.commands_by_repo, "review.commands_by_repo")?;
+        for (repo, commands) in &settings.commands_by_repo {
             if commands.iter().any(|command| command.trim().is_empty()) {
                 bail!("review.commands_by_repo[{repo:?}] must contain nonblank shell commands");
             }
-            if commands_by_repo
-                .insert(repo.to_ascii_lowercase(), commands)
-                .is_some()
-            {
-                bail!(
-                    "duplicate repository {repo:?} in review.commands_by_repo (names are case-insensitive)"
-                );
-            }
         }
-        Ok(Self { commands_by_repo })
+        Ok(settings)
     }
 
     pub fn commands_for(&self, repo: &Repo) -> &[String] {

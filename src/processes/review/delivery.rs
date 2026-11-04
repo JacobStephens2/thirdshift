@@ -65,7 +65,9 @@ fn push_fixes(
     let head = git.run(&["rev-parse", "HEAD"])?;
     ensure!(
         git.run(&["branch", "--show-current"])? == snapshot.branch
-            && git.run(&["status", "--porcelain"])?.is_empty()
+            && git
+                .run(&["status", "--porcelain", "--untracked-files=no"])?
+                .is_empty()
             && git.succeeds(&["merge-base", "--is-ancestor", &snapshot.head, &head])?,
         "review fixes must be committed on the pull request's captured branch without rewriting history"
     );

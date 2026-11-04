@@ -432,7 +432,33 @@ fn repository_recipients(value: &Value, file: &str) -> Result<BTreeMap<String, S
         format!("email.to_by_repo must be a table of owner/repo addresses in {file}")
     })?;
     let mut recipients = BTreeMap::new();
+    let routes = repository_keys(
+        routes.iter().map(|(repo, value)| (repo.clone(), value)),
+        "email.to_by_repo",
+    )
+    .with_context(|| format!("invalid email.to_by_repo in {file}"))?;
     for (repo, value) in routes {
+        let to = value
+            .as_str()
+            .filter(|to| !to.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "email.to_by_repo[{repo:?}] must be a nonblank quoted email address in {file}"
+                )
+            })?;
+        recipients.insert(repo, to.to_string());
+    }
+    Ok(recipients)
+}
+
+/// Repository-keyed settings share name validation, case normalization and
+/// ambiguity rejection, while each setting validates its own values.
+fn repository_keys<T>(
+    entries: impl IntoIterator<Item = (String, T)>,
+    setting: &str,
+) -> Result<BTreeMap<String, T>> {
+    let mut normalized = BTreeMap::new();
+    for (repo, value) in entries {
         let parts: Vec<_> = repo.split('/').collect();
         if parts.len() != 2
             || parts.iter().any(|part| {
@@ -442,26 +468,16 @@ fn repository_recipients(value: &Value, file: &str) -> Result<BTreeMap<String, S
                         .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
             })
         {
-            bail!("email.to_by_repo key {repo:?} must be owner/repo in {file}");
+            bail!("{setting} key {repo:?} must be owner/repo");
         }
-        let to = value
-            .as_str()
-            .filter(|to| !to.trim().is_empty())
-            .with_context(|| {
-                format!(
-                    "email.to_by_repo[{repo:?}] must be a nonblank quoted email address in {file}"
-                )
-            })?;
-        if recipients
-            .insert(repo.to_ascii_lowercase(), to.to_string())
+        if normalized
+            .insert(repo.to_ascii_lowercase(), value)
             .is_some()
         {
-            bail!(
-                "duplicate repository {repo:?} in email.to_by_repo (names are case-insensitive) in {file}"
-            );
+            bail!("duplicate repository {repo:?} in {setting} (names are case-insensitive)");
         }
     }
-    Ok(recipients)
+    Ok(normalized)
 }
 
 /// A validated User config with every setting present, ready for Setup.

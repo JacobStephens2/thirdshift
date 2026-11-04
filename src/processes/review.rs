@@ -441,7 +441,9 @@ fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {
     ensure!(
         git.run(&["rev-parse", "HEAD"])? == snapshot.head
             && git.run(&["branch", "--show-current"])? == snapshot.branch
-            && git.run(&["status", "--porcelain"])?.is_empty(),
+            && git
+                .run(&["status", "--porcelain", "--untracked-files=no"])?
+                .is_empty(),
         "recommend-only session changed the branch; no comment posted"
     );
     Ok(())

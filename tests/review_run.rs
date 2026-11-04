@@ -143,6 +143,7 @@ fn review_addresses_findings_on_the_pr_branch_and_reports_both_heads() {
         "echo 'fixed widget export' > export.txt\n\
          git add export.txt\n\
          git commit -qm 'Fix widget export'\n\
+         printf passed > validation-results.txt\n\
          printf '## Fixed findings\\nFixed widget export.\\n## Unaddressed findings\\n### Standards\\nNone.\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
     );
 
@@ -612,9 +613,15 @@ fn address_mode_reports_a_moved_head_but_stops_publication_after_base_or_eligibi
 }
 
 #[test]
-fn recommendation_sessions_that_change_files_are_refused_and_the_work_is_retained() {
+fn recommendation_sessions_that_change_tracked_files_are_refused_and_the_work_is_retained() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
+    scenario.origin_has_commit(
+        "colleague",
+        "unexpected.txt",
+        "original\n",
+        "Add tracked fixture",
+    );
     let before = scenario.origin_log("colleague");
     scenario.agent_does("echo 'unexpected edit' > unexpected.txt\nprintf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
     let result = scenario.run(&["review", &url, "--recommend-only"]);
@@ -632,6 +639,22 @@ fn recommendation_sessions_that_change_files_are_refused_and_the_work_is_retaine
         std::fs::read_to_string(worktree.join("unexpected.txt")).unwrap(),
         "unexpected edit\n"
     );
+}
+
+#[test]
+fn recommend_only_posts_validation_results_with_disposable_artifacts() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'acme/widgets' = ['printf passed > validation-results.txt']\n",
+    );
+    scenario.agent_does("printf passed > validation-results.txt\nprintf 'Validation: printf passed > validation-results.txt passed (exit 0).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comments = state["prs"][0]["postedComments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "{state}");
+    assert!(comments[0].as_str().unwrap().contains("passed (exit 0)"));
 }
 
 #[test]
