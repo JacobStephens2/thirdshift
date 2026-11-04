@@ -24,6 +24,7 @@ pub enum Kind {
     SecurityReviewFallback,
     /// An Architect run's Architecture review, `architecture-review`.
     ArchitectureReview,
+    Triage,
     /// `security-audit`.
     SecurityAudit,
     /// The Security reproduction of the numbered candidate,
@@ -49,6 +50,7 @@ impl Kind {
             Self::SecurityReview => "security-review".to_string(),
             Self::SecurityReviewFallback => "security-review-fallback".to_string(),
             Self::ArchitectureReview => "architecture-review".to_string(),
+            Self::Triage => "triage".to_string(),
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
             Self::SecurityFixPublishing => "security-fix-publishing".to_string(),
@@ -59,7 +61,8 @@ impl Kind {
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 9] = [
+        const UNNUMBERED: [Kind; 10] = [
+            Kind::Triage,
             Kind::Implementation,
             Kind::CodeReview,
             Kind::SpecReview,
@@ -147,6 +150,7 @@ impl Logged {
             (Kind::Repair(_), false) => Stage::Repair,
             (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
             (Kind::ArchitectureReview, _) => Stage::ArchitectureReview,
+            (Kind::Triage, _) => Stage::Triage,
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
             (Kind::SecurityFixPublishing, _) => Stage::SecurityFixPublishing,
@@ -180,7 +184,8 @@ mod tests {
     use super::*;
 
     /// Every kind, the numbered ones with a number of their own.
-    const KINDS: [(Kind, &str); 10] = [
+    const KINDS: [(Kind, &str); 11] = [
+        (Kind::Triage, "triage"),
         (Kind::Implementation, "implement"),
         (Kind::CodeReview, "code-review"),
         (Kind::SpecReview, "spec-review"),
@@ -225,6 +230,7 @@ mod tests {
     #[test]
     fn each_session_enters_its_command_record_stage() {
         let stages = [
+            (Kind::Triage, "Triage", "Triage"),
             (Kind::Implementation, "implement", "Resume"),
             (Kind::CodeReview, "Code review", "Resume"),
             (Kind::SpecReview, "Spec review", "Resume"),

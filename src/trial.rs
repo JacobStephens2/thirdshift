@@ -232,7 +232,9 @@ pub fn run(path: &Path) -> Result<String> {
         sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
     };
     let (ended, log) = match &sandbox {
-        Some(prepared) => Sessions::within_sandboxed(&logs, &repository, &choice, prepared, run),
+        Some(prepared) => {
+            Sessions::within_sandboxed(&logs, &repository, &choice, &prepared.launch(), run)
+        }
         None => Sessions::within(&logs, &repository, &choice, run),
     };
     let ended = ended.map_err(|error| {

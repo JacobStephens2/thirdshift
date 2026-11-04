@@ -31,6 +31,19 @@ pub(crate) mod version;
 pub use adapter::{Adapter, Probe};
 pub use summary::write as write_summary;
 
+/// A private Harness home's data directory, relative to that home.
+pub(crate) const PRIVATE_HOME_DATA: &str = ".local/share";
+
+/// Each XDG base directory of a private Harness home, relative to it. The
+/// read-machine sandbox points a session at these, and the readers of a
+/// session's retained files look in the same places after it ends.
+pub(crate) const PRIVATE_HOME_XDG: [(&str, &str); 4] = [
+    ("XDG_CONFIG_HOME", ".config"),
+    ("XDG_DATA_HOME", PRIVATE_HOME_DATA),
+    ("XDG_CACHE_HOME", ".cache"),
+    ("XDG_STATE_HOME", ".local/state"),
+];
+
 /// The headless agent CLI a Command's sessions run on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Harness {
