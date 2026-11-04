@@ -1,6 +1,18 @@
 use super::*;
 
 const STAMP: &str = "20261019T110000-0400";
+const COMMAND_CASES: [(&str, &str, &str); 2] = [
+    (
+        "triage",
+        "Triage run",
+        "triage-20261019T110000-0400~owner-triage",
+    ),
+    (
+        "review",
+        "Review run",
+        "process-step-1-20261019T110000-0400~owner-code-review",
+    ),
+];
 
 fn command(root: &Path, prefix: &str, kind: &str, sessions: &[&str]) -> (PathBuf, Vec<PathBuf>) {
     let folder = root.join("acme/widgets/commands").join(prefix);
@@ -77,18 +89,7 @@ fn review_discovers_all_steps_and_resumes_for_its_exact_owner() {
 
 #[test]
 fn triage_and_review_names_select_their_commands() {
-    for (prefix, kind, session) in [
-        (
-            "triage",
-            "Triage run",
-            "triage-20261019T110000-0400~owner-triage",
-        ),
-        (
-            "review",
-            "Review run",
-            "process-step-1-20261019T110000-0400~owner-code-review",
-        ),
-    ] {
+    for (prefix, kind, session) in COMMAND_CASES {
         let dir = tempfile::tempdir().unwrap();
         let (path, sessions) = command(dir.path(), prefix, kind, &[session]);
         let snapshot = Snapshot::load(dir.path(), now()).unwrap();
@@ -112,18 +113,7 @@ fn triage_and_review_render_in_inbox_history_and_catalog() {
 
     let dir = tempfile::tempdir().unwrap();
     let mut expected = Vec::new();
-    for (prefix, kind, session) in [
-        (
-            "triage",
-            "Triage run",
-            "triage-20261019T110000-0400~owner-triage",
-        ),
-        (
-            "review",
-            "Review run",
-            "process-step-1-20261019T110000-0400~owner-code-review",
-        ),
-    ] {
+    for (prefix, kind, session) in COMMAND_CASES {
         expected.push(command(dir.path(), prefix, kind, &[session]));
     }
     let mut config =
