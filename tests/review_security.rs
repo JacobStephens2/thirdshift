@@ -17,25 +17,35 @@ printf '[]' > "$report"
 printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
 
+const NO_FINDINGS: &str =
+    "printf 'No Standards or Spec findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"";
+
+fn review_sessions(ordinary: &str, security: &str) -> String {
+    format!(
+        "if printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{security}\nelse\n{ordinary}\nfi"
+    )
+}
+
 #[test]
 fn security_fixes_follow_addressed_findings_and_reach_the_pr_branch() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
-    scenario.agent_does(&format!(
+    scenario.agent_does(&review_sessions(
         r#"
-if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+    echo 'addressed findings' > addressed.txt
+    git add addressed.txt
+    git commit -qm 'Address Standards and Spec findings'
+    printf 'Fixed Standards and Spec findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+        &format!(
+            r#"
     test -f addressed.txt
     echo 'bounded input' > security.txt
     git add security.txt
     git commit -qm 'Fix introduced input bound'
     {CLEAN_REVIEW}
-else
-    echo 'addressed findings' > addressed.txt
-    git add addressed.txt
-    git commit -qm 'Address Standards and Spec findings'
-    printf 'Fixed Standards and Spec findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-fi
 "#
+        ),
     ));
 
     let result = scenario.run(&["review", &url, "--security-review"]);
@@ -80,9 +90,7 @@ fn security_review_setting_and_flags_select_the_session() {
             "[security]\nreview = {configured}\n{}",
             if enabled { "" } else { "harness = 'codex'\n" }
         ));
-        scenario.agent_does(&format!(
-            "if printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{CLEAN_REVIEW}\nelse\nprintf 'No Standards or Spec findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\nfi"
-        ));
+        scenario.agent_does(&review_sessions(NO_FINDINGS, CLEAN_REVIEW));
         let mut args = vec!["review", &url];
         args.extend(flag);
 
@@ -115,15 +123,14 @@ fn security_findings_and_incomplete_reviews_appear_in_the_single_comment() {
         let scenario = Scenario::new();
         let url = pull_request(&scenario);
         let body = scenario.gh_state()["prs"][0]["body"].clone();
-        scenario.agent_does(&format!(
-            r#"
-if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+        scenario.agent_does(&review_sessions(
+            "printf 'Standards and Spec findings addressed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+            &format!(
+                r#"
     {CLEAN_REVIEW}
     printf '%s\n' '{final_line}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-else
-    printf 'Standards and Spec findings addressed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-fi
 "#
+            ),
         ));
 
         let result = scenario.run(&["review", &url, "security-review"]);
@@ -152,7 +159,8 @@ fn security_review_uses_its_configured_harness_and_preflight_fallback() {
             "[harness]\ndefault = 'codex'\n[harness.codex]\nmodel = 'gpt-6.1-sol'\neffort = 'high'\n[harness.claude]\nmodel = 'claude-opus-5-5'\neffort = 'high'\n[security]\nreview = true\nharness = 'claude'\n"
         );
         scenario.agent_does(&format!(
-            "if test -z \"$FAKE_CLAUDE_FINAL_MESSAGE\"; then\necho OK\nelif printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{CLEAN_REVIEW}\nelse\nprintf 'No Standards or Spec findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\nfi"
+            "if test -z \"$FAKE_CLAUDE_FINAL_MESSAGE\"; then\necho OK\nexit 0\nfi\n{}",
+            review_sessions(NO_FINDINGS, CLEAN_REVIEW)
         ));
 
         let result = scenario.run_with_env(
@@ -255,16 +263,13 @@ fn pre_existing_security_findings_stay_in_private_records() {
             "fix_size": "single"
         }
     }]);
-    scenario.agent_does(&format!(
-        r#"
-if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+    scenario.agent_does(&review_sessions(
+        NO_FINDINGS,
+        &format!(r#"
     {CLEAN_REVIEW}
     printf '%s' '{old}' > "$report"
     printf '%s\n' 'Security review: {{"unaddressed_count":0,"findings":[],"pre_existing_count":1}}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-else
-    printf 'No Standards or Spec findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-fi
-"#
+"#),
     ));
 
     let result = scenario.run(&["review", &url, "security-review"]);
@@ -300,9 +305,7 @@ fn a_copied_review_process_can_run_the_security_review_step() {
     let directory = scenario.path("home/.thirdshift/processes");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("secure-review.toml"), shown.stdout).unwrap();
-    scenario.agent_does(&format!(
-        "if printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{CLEAN_REVIEW}\nelse\nprintf 'No Standards or Spec findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\nfi"
-    ));
+    scenario.agent_does(&review_sessions(NO_FINDINGS, CLEAN_REVIEW));
 
     let result = scenario.run(&[
         "process",
