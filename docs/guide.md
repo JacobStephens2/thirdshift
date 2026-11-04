@@ -2338,10 +2338,15 @@ open pull request by that author, one per invocation. The Pass form requires
 `--author`; it cannot be combined with a PR URL. It skips drafts, forks,
 authors who are not Trusted accounts, pull requests labelled `in-progress`,
 and heads already named as `reviewed_head` or `pushed_head` in a Review run's
-marker. It also skips a pull request based on another open pull request until
-that base's current head has been reviewed. New commits make a head eligible
+marker posted by the GitHub account thirdshift acts as. It also skips a pull
+request based on another open pull request until that base's current head has
+been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`
 without a session or Run notification. `--recommend-only` works on this form too.
+
+If a reviewed base received fixes that the upper pull request does not yet
+contain, the upper pull request's comment says it needs updating before merge.
+thirdshift leaves that update to the author, without merging or rebasing the stack.
 
 A Review run reserves its pull request on `origin`, labels it `in-progress`
 while it runs, and removes that label when it ends, including failure or

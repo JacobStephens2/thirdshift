@@ -12,6 +12,20 @@ pub(super) fn deliver(
     input: &ReviewInput,
     findings: &str,
 ) -> Result<()> {
+    let mut stack = String::new();
+    if !git.succeeds(&["merge-base", "--is-ancestor", &snapshot.base_head, "HEAD"])? {
+        for fix in github.review_base_fixes(pr, snapshot)? {
+            if git.succeeds(&["merge-base", "--is-ancestor", &fix, &snapshot.base_head])?
+                && !git.succeeds(&["merge-base", "--is-ancestor", &fix, "HEAD"])?
+            {
+                stack = format!(
+                    "\n\nThe base branch {} received Review run fixes. This pull request needs updating before merge.",
+                    snapshot.base
+                );
+                break;
+            }
+        }
+    }
     let publication = match mode {
         Mode::RecommendOnly => {
             unchanged_checkout(git, snapshot)?;
@@ -50,7 +64,7 @@ pub(super) fn deliver(
     github.comment_review(
         pr,
         &format!(
-            "Review run. {status} {spec}\n\n{findings}\n\n<!-- thirdshift-review {marker} -->\n"
+            "Review run. {status} {spec}{stack}\n\n{findings}\n\n<!-- thirdshift-review {marker} -->\n"
         ),
     )?;
     publication.map(|_| ())

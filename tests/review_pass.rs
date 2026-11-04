@@ -56,7 +56,7 @@ fn author_pass_skips_reviewed_and_pushed_heads_but_takes_new_commits() {
         let mut state = scenario.gh_state();
         state["prs"].as_array_mut().unwrap().last_mut().unwrap()["comments"] = json!([{
             "body": format!("<!-- thirdshift-review {} -->", json!({field: head})),
-            "author_association": "COLLABORATOR", "user": {"login": "reviewer"}
+            "author_association": "COLLABORATOR", "user": {"login": "runner"}
         }]);
         scenario.write_gh_state(&state);
     }
@@ -86,7 +86,7 @@ fn author_pass_waits_for_the_current_head_of_an_open_base_to_be_reviewed() {
             let head = scenario.launch_git(&["ls-remote", "origin", "refs/heads/base"]);
             state["prs"][1]["comments"] = json!([{
                 "body": format!("<!-- thirdshift-review {} -->", json!({"reviewed_head": head.split_whitespace().next().unwrap()})),
-                "author_association": "COLLABORATOR", "user": {"login": "reviewer"}
+                "author_association": "COLLABORATOR", "user": {"login": "runner"}
             }]);
         }
         scenario.write_gh_state(&state);

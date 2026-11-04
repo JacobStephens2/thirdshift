@@ -20,6 +20,12 @@ pub(crate) struct ReviewInput {
     pub body_alone: bool,
 }
 
+#[derive(serde::Deserialize)]
+struct ReviewMarker {
+    reviewed_head: Option<String>,
+    pushed_head: Option<String>,
+}
+
 impl GitHub {
     pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {
         let labels = self.gh_api_items(
@@ -101,6 +107,56 @@ impl GitHub {
     }
 
     fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
+        Ok(self.review_markers(pr)?.iter().any(|marker| {
+            marker.reviewed_head.as_deref() == Some(head)
+                || marker.pushed_head.as_deref() == Some(head)
+        }))
+    }
+
+    /// Fix commits delivered to the open pull request that owns this base.
+    pub fn review_base_fixes(
+        &self,
+        pr: &PullRequestUrl,
+        snapshot: &ReviewPullRequest,
+    ) -> Result<Vec<String>> {
+        let nodes = self.gh_api_items(
+            &format!(
+                "repos/{}/pulls?state=open&per_page=100",
+                pr.issue.repo_slug()
+            ),
+            "",
+        )?;
+        let mut fixes = Vec::new();
+        for node in nodes {
+            if node["head"]["ref"].as_str() != Some(&snapshot.base)
+                || node["head"]["repo"]["full_name"]
+                    .as_str()
+                    .is_none_or(|repo| !repo.eq_ignore_ascii_case(&pr.issue.repo_slug()))
+            {
+                continue;
+            }
+            let base = PullRequestUrl::parse(
+                node["html_url"]
+                    .as_str()
+                    .context("base pull request has no URL")?,
+            )?;
+            for marker in self.review_markers(&base)? {
+                if let (Some(reviewed), Some(pushed)) = (marker.reviewed_head, marker.pushed_head)
+                    && reviewed != pushed
+                {
+                    fixes.push(pushed);
+                }
+            }
+        }
+        Ok(fixes)
+    }
+
+    fn review_markers(&self, pr: &PullRequestUrl) -> Result<Vec<ReviewMarker>> {
+        let actor = self.gh_json(&["api", "user"])?;
+        let actor = actor["login"]
+            .as_str()
+            .filter(|login| !login.is_empty())
+            .context("authenticated GitHub account has no login")?;
         let comments = self.gh_api_items(
             &format!(
                 "repos/{}/issues/{}/comments?per_page=100",
@@ -109,29 +165,29 @@ impl GitHub {
             ),
             "",
         )?;
-        Ok(comments.iter().any(|comment| {
-            if !comment["author_association"]
+        let mut markers = Vec::new();
+        for comment in comments {
+            if comment["user"]["login"]
                 .as_str()
-                .is_some_and(trusted_association)
+                .is_none_or(|login| !login.eq_ignore_ascii_case(actor))
             {
-                return false;
+                continue;
             }
-            comment["body"]
+            for part in comment["body"]
                 .as_str()
                 .unwrap_or("")
                 .split("<!-- thirdshift-review ")
                 .skip(1)
-                .any(|part| {
-                    let Some((json, _)) = part.split_once("-->") else {
-                        return false;
-                    };
-                    let Ok(marker) = serde_json::from_str::<serde_json::Value>(json.trim()) else {
-                        return false;
-                    };
-                    marker["reviewed_head"].as_str() == Some(head)
-                        || marker["pushed_head"].as_str() == Some(head)
-                })
-        }))
+            {
+                let Some((json, _)) = part.split_once("-->") else {
+                    continue;
+                };
+                if let Ok(marker) = serde_json::from_str(json.trim()) {
+                    markers.push(marker);
+                }
+            }
+        }
+        Ok(markers)
     }
 
     /// Fail closed on missing metadata, before creating a worktree or session.

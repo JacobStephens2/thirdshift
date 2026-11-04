@@ -254,9 +254,19 @@ impl ReviewProcess {
             let mut findings = None;
             let mut validation_head = None;
             let mut last = String::new();
-            let before_each = || unchanged(&github, pr, &snapshot);
             for (index, step) in steps.iter().enumerate() {
                 crate::resources::wait()?;
+                // Once the captured head has been reviewed, later Steps still
+                // work on that checkout. A remote head move must reach Delivery
+                // so it can post the findings while withholding the fixes.
+                let reviewed = findings.is_some();
+                let before_each = || {
+                    if reviewed && mode == Mode::Address {
+                        compatible(&github, pr, &snapshot).map(|_| ())
+                    } else {
+                        unchanged(&github, pr, &snapshot)
+                    }
+                };
                 if mode == Mode::Address && matches!(step.kind, StepKind::Delivery) {
                     compatible(&github, pr, &snapshot)?;
                 } else if security_review || !matches!(step.kind, StepKind::SecurityReview) {

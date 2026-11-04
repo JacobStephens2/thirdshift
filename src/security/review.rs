@@ -252,19 +252,23 @@ fn collect_report(report: &Path, fragments: &mut Vec<String>) {
 
 fn push_fragment(fragments: &mut Vec<String>, text: &str) {
     let text = text.trim();
-    if text.chars().count() < MIN_FRAGMENT_CHARS {
-        return;
+    // A validation report can quote one line without copying the whole field.
+    for fragment in std::iter::once(text).chain(text.lines().filter(|line| *line != text)) {
+        let fragment = fragment.trim();
+        if fragment.chars().count() < MIN_FRAGMENT_CHARS {
+            continue;
+        }
+        if let Ok(encoded) = serde_json::to_string(fragment)
+            && let Some(escaped) = encoded
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+            && escaped != fragment
+            && escaped.chars().count() >= MIN_FRAGMENT_CHARS
+        {
+            fragments.push(escaped.to_string());
+        }
+        fragments.push(fragment.to_string());
     }
-    if let Ok(encoded) = serde_json::to_string(text)
-        && let Some(escaped) = encoded
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-        && escaped != text
-        && escaped.chars().count() >= MIN_FRAGMENT_CHARS
-    {
-        fragments.push(escaped.to_string());
-    }
-    fragments.push(text.to_string());
 }
 
 /// A regular file no larger than [`MAX_REPORT_BYTES`], opened without
