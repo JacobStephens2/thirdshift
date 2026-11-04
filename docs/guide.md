@@ -2871,6 +2871,17 @@ thirdshift triage --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
 
+For a pasted multi-line Report, such as a chat thread or email, use a single-quoted heredoc:
+
+```sh
+thirdshift triage <<'EOF'
+Alex: The deploy canary can't start with an empty cache.
+Sam: $CACHE_DIR is set, but `cache warm` still fails.
+EOF
+```
+
+Quoting the opening delimiter (`'EOF'`) passes the Report verbatim: apostrophes, dollar signs (`$`) and backticks stay literal, without shell variable expansion or command substitution. Keep the closing `EOF` on its own line, without quotes; if the Report contains that exact line, choose a different delimiter at both ends.
+
 The embedded `thirdshift-triage` Factory skill investigates the Base branch on origin in a throwaway worktree. It follows its own recommendation without waiting for a person and keeps source and Git history unchanged. Before filing, it searches the repository's open issues. When an issue already covers the Report, thirdshift comments there instead of filing a duplicate. The comment quotes the Report with its source and adds new investigation evidence, leaving the existing issue's labels unchanged. Otherwise, thirdshift files the shaped issues. With `--recommend-only`, it writes nothing to GitHub and names the issue it would comment on or the issues it would file. It still reads GitHub to make the checks filing makes, so a recommendation filing would refuse fails under `--recommend-only` too. It records evidence and limitations. It starts no Ticket run.
 
 Each filed issue starts with an AI-generated disclaimer and quotes the Report verbatim in a collapsed section naming standard input or the file path. Separate problems become separate cross-linked issues, each with exactly one repository category label and one state label. A problem that needs credentials or production access to confirm is `ready-for-human`, with the reason in its body. A `wontfix` issue is closed once filed, as the Day shift's triage closes one, with a comment saying the Triage run recommended it.
