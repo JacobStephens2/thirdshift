@@ -59,7 +59,7 @@ fn retained_home_case(harness: &str, program: &str) {
 }
 
 #[test]
-fn read_machine_muse_recovers_the_native_final_reply() {
+fn a_muse_triage_recovers_the_native_final_reply_in_either_launch() {
     retained_home_case(
         "muse",
         r#"#!/bin/bash
@@ -80,7 +80,7 @@ JSON
 }
 
 #[test]
-fn read_machine_opencode_recovers_the_native_export() {
+fn an_opencode_triage_recovers_the_native_export_in_either_launch() {
     retained_home_case(
         "opencode",
         r#"#!/bin/bash

@@ -508,7 +508,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn triage(args: args::TriageArgs) -> ExitCode {
-    let report = match triage::read_report(args.file.as_deref()) {
+    let report = match triage::Report::read(args.file.as_deref()) {
         Ok(report) => report,
         Err(error) => return failure(&error),
     };
@@ -527,14 +527,14 @@ fn triage(args: args::TriageArgs) -> ExitCode {
     };
     let mut harness = flags.harness(&config);
     started.built_with(&harness);
-    started.finish(Ending::Triage(triage::run(
-        &report,
-        args.file.as_deref(),
-        args.recommend_only,
-        args.allow_ready_for_agent || config.triage_allow_ready_for_agent,
-        &mut harness,
-        args.read_machine,
-    )))
+    let options = triage::Options {
+        recommend_only: args.recommend_only,
+        allow_ready_for_agent: args.allow_ready_for_agent || config.triage_allow_ready_for_agent,
+        // Without an origin the run fails at once, before any session.
+        read_machine: args.read_machine
+            || launch::repo().is_ok_and(|repo| config.triage_reads_machine(&repo)),
+    };
+    started.finish(Ending::Triage(triage::run(&report, options, &mut harness)))
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the

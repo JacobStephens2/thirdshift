@@ -1255,6 +1255,7 @@ order = \"highest-first\"
 
 [triage]
 allow_ready_for_agent = true
+read_machine = [\"acme/widgets\"]
 
 [security]
 harness = \"codex\"

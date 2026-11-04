@@ -24,6 +24,19 @@ fn recommendation_script(recommendation: &str) -> String {
     )
 }
 
+/// Whether bwrap can start here. A read-machine test reports itself skipped
+/// where it cannot, rather than failing on the host.
+fn bwrap_starts_or_skip(reason: &str) -> bool {
+    let starts = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !starts {
+        eprintln!("SKIPPED ({reason}): bwrap cannot start");
+    }
+    starts
+}
+
 #[test]
 fn triage_comments_on_a_covering_issue_without_filing_or_changing_labels() {
     let scenario = Scenario::new();
@@ -463,18 +476,31 @@ fn separate_problems_are_cross_linked_with_independent_labels_and_the_file_repor
 }
 
 #[test]
-fn a_cross_link_failure_still_notifies_every_issue_already_filed() {
+fn a_cross_link_failure_still_notifies_every_issue_filed_with_its_questionnaire() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
     scenario.gh_fails("issue comment");
-    let recommendation = RECOMMENDATION.replace(
-        "\"issues\":[",
-        "\"issues\":[{\"title\":\"Second problem\",\"body\":\"Separate evidence.\"},",
-    );
-    scenario.agent_does(&recommendation_script(&recommendation));
+    let questionnaire =
+        "For the deploy operator:\n\n1. Which canary failed, and what redacted logs identify it?";
+    let recommendation = serde_json::json!({
+        "category": "bug", "state": "ready-for-agent",
+        "issues": [
+            {"title": "Identify failing canary", "body": "The canary is unknown.", "state": "needs-info", "questionnaire": questionnaire},
+            {"title": "Handle an empty cache", "body": "Reproduce with an empty cache."}
+        ],
+        "investigation": "The cache read assumes an entry exists."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
     let result = scenario.run_with_input(&["triage"], REPORT);
-    assert_ne!(result.code, Some(0));
-    assert_eq!(scenario.gh_state()["issues"]["9"], "OPEN");
+    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    let state = scenario.gh_state();
+    assert_eq!(state["issues"]["9"], "OPEN");
+    assert!(
+        state["bodies"]["8"]
+            .as_str()
+            .unwrap()
+            .contains(questionnaire)
+    );
     let (_, notification) = saved_notification(&scenario, "triage");
     for number in [8, 9] {
         assert!(
@@ -482,15 +508,15 @@ fn a_cross_link_failure_still_notifies_every_issue_already_filed() {
             "{notification}"
         );
     }
+    assert!(
+        notification.contains(questionnaire),
+        "filed questionnaire missing from failed Run notification: {notification}"
+    );
 }
 
 #[test]
 fn read_machine_reads_outside_but_writes_only_inside_the_worktree() {
-    let probe = std::process::Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
-        .output();
-    if !probe.is_ok_and(|output| output.status.success()) {
-        eprintln!("SKIPPED (Triage filesystem confinement): bwrap cannot start");
+    if !bwrap_starts_or_skip("Triage filesystem confinement") {
         return;
     }
     let scenario = Scenario::new();
@@ -606,11 +632,7 @@ printf '%s\n' '{session_result}'
 /// connects to its Unix socket. The read-only mount does not stop that write.
 #[test]
 fn read_machine_cannot_delegate_a_write_through_a_host_socket() {
-    let probe = std::process::Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
-        .output();
-    if !probe.is_ok_and(|output| output.status.success()) {
-        eprintln!("SKIPPED (Triage host-socket confinement): bwrap cannot start");
+    if !bwrap_starts_or_skip("Triage host-socket confinement") {
         return;
     }
     let scenario = Scenario::new();
@@ -715,6 +737,7 @@ echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage re
 #[test]
 fn a_file_report_reaches_a_triage_session_and_its_recommendation_is_retained() {
     let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
     support::write_executable(&scenario.path("bin/bwrap"), "#!/bin/sh\nexit 99\n");
     let before = scenario.gh_state();
     let report = scenario.path("report.txt");
@@ -811,8 +834,56 @@ fn sandbox_startup_failure_never_launches_the_harness_unsandboxed() {
 }
 
 #[test]
+fn reading_the_whole_machine_follows_the_flag_or_a_per_repository_user_config_setting() {
+    for (config, flags, sandboxed) in [
+        ("", vec!["--read-machine"], true),
+        (
+            "[triage]\nread_machine = [\"Acme/Widgets\"]\n",
+            vec![],
+            true,
+        ),
+        (
+            "[triage]\nread_machine = [\"acme/gadgets\"]\n",
+            vec![],
+            false,
+        ),
+        ("", vec![], false),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(config);
+        scenario.repo_has_labels(&["bug"]);
+        // A sandbox that never starts shows whether the session would run inside it.
+        support::write_executable(
+            &scenario.path("bin/bwrap"),
+            "#!/bin/sh\necho 'bwrap: fixture user namespace denied' >&2\nexit 1\n",
+        );
+        scenario.agent_does(&recommendation_script(RECOMMENDATION));
+        let mut args = vec!["triage", "--recommend-only"];
+        args.extend(flags);
+        let result = scenario.run_with_input(&args, REPORT);
+        if sandboxed {
+            assert_ne!(result.code, Some(0), "{config:?}: {}", result.stderr);
+            assert!(
+                result.stderr.contains("fixture user namespace denied"),
+                "{config:?}: {}",
+                result.stderr
+            );
+            assert!(scenario.claude_calls().is_empty(), "{config:?}");
+        } else {
+            assert_eq!(result.code, Some(0), "{config:?}: {}", result.stderr);
+            let prompt = scenario.first_prompt();
+            assert!(
+                prompt.contains("Investigate only within this throwaway worktree"),
+                "{config:?}: {prompt}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_piped_report_is_kept_as_data_and_leaves_the_launch_checkout_unchanged() {
     let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
     scenario.user_config_is("");
     scenario.agent_does(&recommendation_script(RECOMMENDATION));
     fs::write(scenario.launch_dir().join("local-only.txt"), "local work").unwrap();
@@ -854,6 +925,7 @@ fn absent_or_empty_reports_explain_how_to_supply_one_without_starting_a_session(
 #[test]
 fn triage_is_never_skipped_but_counts_toward_the_command_limit() {
     let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
     let report = scenario.path("report.txt");
     fs::write(&report, REPORT).unwrap();
     let complete = recommendation_script(RECOMMENDATION);
@@ -981,6 +1053,7 @@ fn triage_filing_cannot_apply_a_factory_control_label() {
 #[test]
 fn email_sends_the_recommendation_to_the_requested_recipient() {
     let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
     let resend = ResendStandIn::replying(200, r#"{"id":"triage-email"}"#);
     let report = scenario.path("report.txt");
     fs::write(&report, REPORT).unwrap();
@@ -1022,11 +1095,7 @@ fn email_sends_the_recommendation_to_the_requested_recipient() {
 fn read_machine_cannot_retarget_a_unix_datagram_socketpair_to_a_host_service() {
     use std::os::unix::net::UnixDatagram;
 
-    let probe = std::process::Command::new("bwrap")
-        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
-        .output();
-    if !probe.is_ok_and(|output| output.status.success()) {
-        eprintln!("SKIPPED (Triage datagram confinement): bwrap cannot start");
+    if !bwrap_starts_or_skip("Triage datagram confinement") {
         return;
     }
     let scenario = Scenario::new();
@@ -1088,39 +1157,68 @@ echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage re
 }
 
 #[test]
-fn publication_failure_keeps_the_forwardable_questionnaire_in_notification() {
+fn recommend_only_and_filing_agree_on_what_can_be_published() {
+    fn closed_comment_target(scenario: &Scenario) -> serde_json::Value {
+        serde_json::json!({
+            "category": "bug", "state": "needs-triage", "issues": [],
+            "comments": [{"url": scenario.issue_url(7), "body": "New evidence."}],
+            "investigation": "Issue #7 covers this Report."
+        })
+    }
+    fn factory_label_category(_: &Scenario) -> serde_json::Value {
+        serde_json::json!({
+            "category": "agent-failed", "state": "needs-triage",
+            "issues": [{"title": "Cache miss", "body": "Checked the cache reader."}],
+            "investigation": "Checked the cache reader."
+        })
+    }
+    let cases: [fn(&Scenario) -> serde_json::Value; 2] =
+        [closed_comment_target, factory_label_category];
+    for case in cases {
+        let mut outcomes = Vec::new();
+        for flags in [vec!["triage"], vec!["triage", "--recommend-only"]] {
+            let scenario = Scenario::new();
+            scenario.issue_is(7, "CLOSED");
+            scenario.repo_has_labels(&["bug", "agent-failed"]);
+            let recommendation = case(&scenario).to_string();
+            scenario.agent_does(&recommendation_script(&recommendation));
+            let result = scenario.run_with_input(&flags, REPORT);
+            outcomes.push((result.code == Some(0), recommendation));
+        }
+        assert_eq!(
+            outcomes[0].0, outcomes[1].0,
+            "filing succeeded={} but --recommend-only succeeded={} for {}",
+            outcomes[0].0, outcomes[1].0, outcomes[0].1
+        );
+    }
+}
+
+#[test]
+fn a_wontfix_recommendation_does_not_leave_an_open_issue() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
-    scenario.gh_fails("issue comment");
-    let questionnaire =
-        "For the deploy operator:\n\n1. Which canary failed, and what redacted logs identify it?";
     let recommendation = serde_json::json!({
-        "category": "bug", "state": "needs-info",
-        "issues": [
-            {"title": "Identify failing canary", "body": "The canary is unknown.", "questionnaire": questionnaire},
-            {"title": "Identify failing cache", "body": "The cache is unknown.", "questionnaire": questionnaire}
-        ],
-        "investigation": "Both problems need an operator's observations."
+        "category": "bug", "state": "wontfix",
+        "issues": [{"title": "Retire old canary", "body": "The canary is already unsupported."}],
+        "investigation": "The reported canary was retired on the Base branch."
     });
     scenario.agent_does(&recommendation_script(&recommendation.to_string()));
     let result = scenario.run_with_input(&["triage"], REPORT);
-    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
+    let wontfix = scenario
+        .issue_labels(8)
+        .iter()
+        .any(|label| label == "wontfix");
     assert!(
-        state["bodies"]["8"]
-            .as_str()
-            .unwrap()
-            .contains(questionnaire)
+        !(wontfix && state["issues"]["8"] == "OPEN"),
+        "a Triage run left wontfix issue #8 open: {state}"
     );
+    assert_eq!(scenario.issue_labels(8), ["bug", "wontfix"], "{state}");
+    assert_eq!(state["issues"]["8"], "CLOSED", "{state}");
+    let closing = state["comments"]["8"][0].as_str().unwrap();
     assert!(
-        state["bodies"]["9"]
-            .as_str()
-            .unwrap()
-            .contains(questionnaire)
-    );
-    let (_, notification) = saved_notification(&scenario, "triage");
-    assert!(
-        notification.contains(questionnaire),
-        "filed questionnaire missing from failed Run notification: {notification}"
+        closing.starts_with("This comment was generated by AI."),
+        "{closing}"
     );
 }

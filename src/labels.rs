@@ -62,18 +62,15 @@ pub const NEEDS_INFO: Label = Label::new("needs-info", "Waiting on reporter for 
 
 pub const READY_FOR_HUMAN: Label = Label::new("ready-for-human", "Requires human implementation");
 
+pub const WONTFIX: Label = Label::new("wontfix", "Will not be actioned");
+
 /// A recorded CI failure that passed on re-run, implemented without demanding
 /// an on-demand reproduction of timing or scheduling dependence.
 pub const FLAKY_TEST: Label = Label::new("flaky-test", "Recorded CI failure that passed on re-run");
 
 /// The triage labels that make an open Ticket an Unready Ticket, in the
 /// order they are looked for.
-pub const UNREADY: [Label; 4] = [
-    READY_FOR_HUMAN,
-    NEEDS_INFO,
-    Label::new("wontfix", "Will not be actioned"),
-    NEEDS_TRIAGE,
-];
+pub const UNREADY: [Label; 4] = [READY_FOR_HUMAN, NEEDS_INFO, WONTFIX, NEEDS_TRIAGE];
 
 /// An issue's labels, or a repository's, each spelled as GitHub spells it.
 /// It has no `==`, which would compare names with case. Every question it

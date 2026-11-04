@@ -18,6 +18,21 @@ use crate::harness::Harness;
 /// every launch, a Resume included. Trial sandbox opt-outs do not apply.
 pub(crate) fn prepare(worktree: &Path, harness: Harness) -> Result<Launch> {
     let bwrap = find_bwrap().context("Triage sandbox failed to start: bwrap is not on PATH")?;
+    let program = resolve_binary(harness.name())?;
+    let user_home = crate::config::home()
+        .context("Triage sandbox failed to prepare its writable Harness home")?;
+    prepare_around(worktree, harness, &bwrap, program, &user_home)
+}
+
+/// [`prepare`] once its host lookups are made: `bwrap`, the Harness's
+/// `program`, and the `user_home` whose logins the private home copies.
+fn prepare_around(
+    worktree: &Path,
+    harness: Harness,
+    bwrap: &Path,
+    program: PathBuf,
+    user_home: &Path,
+) -> Result<Launch> {
     let worktree = worktree.canonicalize()?;
     let mut argv: Vec<OsString> = ["--ro-bind", "/", "/", "--bind"]
         .map(OsString::from)
@@ -50,13 +65,13 @@ pub(crate) fn prepare(worktree: &Path, harness: Harness) -> Result<Launch> {
     let mut launch = Launch {
         argv,
         env: Vec::new(),
-        program: resolve_binary(harness.name())?,
+        program,
         prefix: Vec::new(),
         stderr: None,
         seccomp: Some(host_socket_filter()?),
     };
     launch.set_env("TMPDIR", &tmp);
-    prepare_home(&mut launch, &tmp.join("home"), harness)
+    prepare_home(&mut launch, &tmp.join("home"), user_home, harness)
         .context("Triage sandbox failed to prepare its writable Harness home")?;
     let mut probe_command = Command::new(bwrap);
     probe_command.args(&launch.argv);
@@ -84,21 +99,15 @@ pub(crate) fn prepare(worktree: &Path, harness: Harness) -> Result<Launch> {
 }
 
 /// Harnesses write sessions and refresh logins. Give them private copies of
-/// their settings and credentials; every such write stays in the worktree.
-fn prepare_home(launch: &mut Launch, home: &Path, harness: Harness) -> Result<()> {
+/// their settings and credentials from the `original` home; every such write
+/// stays in the worktree.
+fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harness) -> Result<()> {
     fs::create_dir_all(home)?;
     fs::set_permissions(home, fs::Permissions::from_mode(0o700))?;
-    let original = crate::config::home()?;
     let config = from_environment("XDG_CONFIG_HOME", original.join(".config"));
     let data = from_environment("XDG_DATA_HOME", original.join(".local/share"));
     let claude = from_environment("CLAUDE_CONFIG_DIR", original.join(".claude"));
-    for (name, relative) in [
-        ("HOME", ""),
-        ("XDG_CONFIG_HOME", ".config"),
-        ("XDG_DATA_HOME", ".local/share"),
-        ("XDG_CACHE_HOME", ".cache"),
-        ("XDG_STATE_HOME", ".local/state"),
-    ] {
+    for (name, relative) in std::iter::once(("HOME", "")).chain(crate::harness::PRIVATE_HOME_XDG) {
         let path = home.join(relative);
         fs::create_dir_all(&path)?;
         launch.set_env(name, &path);
@@ -122,7 +131,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, harness: Harness) -> Result<()
     }
     match harness {
         Harness::Claude => {
-            copy_files(&original, home, &[".claude.json"])?;
+            copy_files(original, home, &[".claude.json"])?;
             copy_files(&claude, &home.join(".claude"), &[".credentials.json"])?;
             launch.set_env("CLAUDE_CONFIG_DIR", &home.join(".claude"));
         }
@@ -137,7 +146,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, harness: Harness) -> Result<()
         }
         Harness::Agy => {
             copy_files(
-                &original,
+                original,
                 home,
                 &[
                     ".gemini/GEMINI.md",
@@ -147,7 +156,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, harness: Harness) -> Result<()
             )?;
         }
         Harness::Grok => {
-            copy_files(&original, home, &[".grok/auth.json", ".grok/settings.json"])?;
+            copy_files(original, home, &[".grok/auth.json", ".grok/settings.json"])?;
             for relative in ["rules", "hooks"] {
                 link_if_present(
                     &original.join(".grok").join(relative),
@@ -210,7 +219,10 @@ fn unix_socket_program() -> Vec<u8> {
     let deny_arch = libc::SECCOMP_RET_ERRNO | (libc::EPERM as u32);
     let deny_unix = libc::SECCOMP_RET_ERRNO | (libc::EAFNOSUPPORT as u32);
     // Jump offsets skip that many following instructions. Zero falls through.
-    // A wrong architecture returns EPERM for every syscall. io_uring_setup,
+    // A wrong architecture returns EPERM for every syscall, and so does a
+    // number with the x32 bit set: x32 shares x86_64's arch value but numbers
+    // its calls differently, so its socket(2) would miss the exact matches
+    // below. No aarch64 syscall number reaches that bit. io_uring_setup,
     // AF_UNIX sockets and datagram socketpairs return EAFNOSUPPORT.
     // Mask creation flags before comparing a socketpair's type.
     [
@@ -218,6 +230,8 @@ fn unix_socket_program() -> Vec<u8> {
         sock_filter(JMP_JEQ_K, 1, 0, arch),
         sock_filter(RET_K, 0, 0, deny_arch),
         sock_filter(LD_W_ABS, 0, 0, 0),
+        sock_filter(JMP_JGE_K, 0, 1, X32_SYSCALL_BIT),
+        sock_filter(RET_K, 0, 0, deny_arch),
         sock_filter(JMP_JEQ_K, 9, 0, libc::SYS_io_uring_setup as u32),
         sock_filter(JMP_JEQ_K, 5, 0, libc::SYS_socket as u32),
         sock_filter(JMP_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
@@ -242,6 +256,11 @@ fn unix_socket_program() -> Vec<u8> {
 const LD_W_ABS: u16 = (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const JMP_JEQ_K: u16 = (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const JMP_JGE_K: u16 = (libc::BPF_JMP | libc::BPF_JGE | libc::BPF_K) as u16;
+/// x86_64's `__X32_SYSCALL_BIT`; libc exports it only to x32 builds.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 const RET_K: u16 = (libc::BPF_RET | libc::BPF_K) as u16;
 
@@ -285,30 +304,117 @@ fn link_if_present(source: &Path, dest: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod review_regression {
+mod tests {
+    /// Run `test` again in a child test process with `variable` set. The
+    /// child installs the production filter itself, so these checks need
+    /// neither bwrap nor unprivileged namespaces.
+    fn in_filtered_child(
+        test: &str,
+        variable: &str,
+        value: &std::ffi::OsStr,
+    ) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(variable, value)
+            .output()
+            .unwrap()
+    }
+
+    /// Install the exact production filter on this test process.
+    fn install_host_socket_filter() {
+        let filter = super::host_socket_filter().unwrap();
+        let program = libc::sock_fprog {
+            len: (filter.len() / std::mem::size_of::<libc::sock_filter>()) as u16,
+            filter: filter.as_ptr().cast_mut().cast(),
+        };
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    /// bwrap, when it can start here: without user namespaces it cannot, and
+    /// the launch test reports itself skipped.
+    fn starting_bwrap(reason: &str) -> Option<std::path::PathBuf> {
+        let bwrap = crate::sandbox::find_bwrap().filter(|bwrap| {
+            std::process::Command::new(bwrap)
+                .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        });
+        if bwrap.is_none() {
+            println!("SKIPPED ({reason}): bwrap cannot start");
+        }
+        bwrap
+    }
+
+    #[test]
+    fn the_read_machine_launch_reads_the_host_and_writes_only_its_worktree() {
+        let Some(bwrap) = starting_bwrap("Triage read-machine launch") else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let worktree = temp.path().join("worktree");
+        let user_home = temp.path().join("home");
+        let outside = temp.path().join("outside.txt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(user_home.join(".gemini")).unwrap();
+        std::fs::write(user_home.join(".gemini/settings.json"), "original").unwrap();
+        std::fs::write(&outside, "host file").unwrap();
+        let launch = super::prepare_around(
+            &worktree,
+            crate::harness::Harness::Agy,
+            &bwrap,
+            "/bin/sh".into(),
+            &user_home,
+        )
+        .unwrap();
+        let script = format!(
+            "cat {outside:?} || exit 11\n\
+             echo changed > {outside:?} 2>/dev/null && exit 12\n\
+             echo inside > inside.txt || exit 13\n\
+             echo refreshed > \"$HOME/.gemini/settings.json\" || exit 14\n\
+             command -v python3 > /dev/null || exit 15\n\
+             python3 -c 'import socket; socket.socket(socket.AF_UNIX)' 2> /dev/null && exit 16\n\
+             exit 0\n"
+        );
+        let output = launch
+            .command(&["-c".into(), script])
+            .unwrap()
+            .current_dir(&worktree)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "host file");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "host file");
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("inside.txt")).unwrap(),
+            "inside\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".gemini/settings.json")).unwrap(),
+            "original"
+        );
+    }
+
     #[test]
     fn read_machine_blocks_socketpair_reconnection_to_host_service() {
         use std::io::{Read, Write};
         use std::os::unix::net::UnixDatagram;
-        const CHILD_PATH: &str = "THIRDSHIFT_REVIEW_SOCKETPAIR_HOST_PATH";
-        if let Some(path) = std::env::var_os(CHILD_PATH) {
-            let filter = super::host_socket_filter().unwrap();
-            let program = libc::sock_fprog {
-                len: (filter.len() / std::mem::size_of::<libc::sock_filter>()) as u16,
-                filter: filter.as_ptr().cast_mut().cast(),
-            };
-            // This is an isolated test process. Install the exact production
-            // filter without needing bwrap or unprivileged namespaces.
-            assert_eq!(
-                unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
-                0
-            );
-            assert_eq!(
-                unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) },
-                0,
-                "{}",
-                std::io::Error::last_os_error()
-            );
+        const HOST_SOCKET: &str = "THIRDSHIFT_TEST_FILTERED_SOCKETPAIR_HOST_PATH";
+        if let Some(path) = std::env::var_os(HOST_SOCKET) {
+            install_host_socket_filter();
             let (mut sender, mut receiver) = std::os::unix::net::UnixStream::pair().unwrap();
             sender.write_all(b"runtime").unwrap();
             let mut received = [0; 7];
@@ -326,15 +432,11 @@ mod review_regression {
         let marker = temp.path().join("host-wrote");
         let host = UnixDatagram::bind(&path).unwrap();
         host.set_nonblocking(true).unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "sandbox::triage::review_regression::read_machine_blocks_socketpair_reconnection_to_host_service",
-                "--nocapture",
-            ])
-            .env(CHILD_PATH, &path)
-            .output()
-            .unwrap();
+        let output = in_filtered_child(
+            "sandbox::triage::tests::read_machine_blocks_socketpair_reconnection_to_host_service",
+            HOST_SOCKET,
+            path.as_os_str(),
+        );
         assert!(
             output.status.success(),
             "{}",
@@ -348,6 +450,42 @@ mod review_regression {
         assert!(
             !marker.exists(),
             "production seccomp allowed a host-service write through socketpair(AF_UNIX, SOCK_DGRAM)"
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn host_socket_filter_refuses_x32_socket_calls() {
+        const CHILD: &str = "THIRDSHIFT_TEST_FILTERED_X32_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            install_host_socket_filter();
+            // __X32_SYSCALL_BIT | SYS_socket is socket(2) on a kernel with the x32 ABI.
+            let fd = unsafe {
+                libc::syscall(
+                    0x4000_0000 | libc::SYS_socket,
+                    libc::AF_UNIX,
+                    libc::SOCK_STREAM,
+                    0,
+                )
+            };
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            // ENOSYS, or a descriptor, means the filter let the call through.
+            assert!(
+                fd < 0 && errno != Some(libc::ENOSYS),
+                "x32 socket(AF_UNIX) passed the filter: fd {fd}, errno {errno:?}"
+            );
+            return;
+        }
+        let output = in_filtered_child(
+            "sandbox::triage::tests::host_socket_filter_refuses_x32_socket_calls",
+            CHILD,
+            std::ffi::OsStr::new("1"),
+        );
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

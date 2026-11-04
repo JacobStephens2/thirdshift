@@ -126,12 +126,7 @@ pub(in crate::harness) fn read(
         .current_dir(worktree);
     if let Some(home) = home {
         command.env("HOME", home);
-        for (name, relative) in [
-            ("XDG_CONFIG_HOME", ".config"),
-            ("XDG_DATA_HOME", ".local/share"),
-            ("XDG_CACHE_HOME", ".cache"),
-            ("XDG_STATE_HOME", ".local/state"),
-        ] {
+        for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
             command.env(name, home.join(relative));
         }
     }

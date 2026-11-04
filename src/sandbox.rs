@@ -32,6 +32,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -343,38 +344,35 @@ fn write_seccomp_fd(filter: &[u8]) -> std::io::Result<()> {
     if memfd < 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: memfd_create just returned this descriptor, and nothing else
+    // owns it. Dropping it closes it, which is async-signal-safe, so every
+    // error below closes it once its errno has been read.
+    let memfd = unsafe { OwnedFd::from_raw_fd(memfd) };
     let mut written = 0usize;
     while written < filter.len() {
         let n = unsafe {
             libc::write(
-                memfd,
+                memfd.as_raw_fd(),
                 filter[written..].as_ptr().cast::<libc::c_void>(),
                 filter.len() - written,
             )
         };
         if n < 0 {
-            let error = std::io::Error::last_os_error();
-            unsafe { libc::close(memfd) };
-            return Err(error);
+            return Err(std::io::Error::last_os_error());
         }
         if n == 0 {
-            unsafe { libc::close(memfd) };
             return Err(std::io::Error::from_raw_os_error(libc::EIO));
         }
         written += n as usize;
     }
-    if unsafe { libc::lseek(memfd, 0, libc::SEEK_SET) } == -1 {
-        let error = std::io::Error::last_os_error();
-        unsafe { libc::close(memfd) };
-        return Err(error);
+    if unsafe { libc::lseek(memfd.as_raw_fd(), 0, libc::SEEK_SET) } == -1 {
+        return Err(std::io::Error::last_os_error());
     }
-    if memfd != SECCOMP_FD && unsafe { libc::dup2(memfd, SECCOMP_FD) } == -1 {
-        let error = std::io::Error::last_os_error();
-        unsafe { libc::close(memfd) };
-        return Err(error);
-    }
-    if memfd != SECCOMP_FD {
-        unsafe { libc::close(memfd) };
+    if memfd.as_raw_fd() == SECCOMP_FD {
+        // Already the descriptor bwrap reads: keep it open.
+        let _ = memfd.into_raw_fd();
+    } else if unsafe { libc::dup2(memfd.as_raw_fd(), SECCOMP_FD) } == -1 {
+        return Err(std::io::Error::last_os_error());
     }
     if unsafe { libc::fcntl(SECCOMP_FD, libc::F_SETFD, 0) } == -1 {
         return Err(std::io::Error::last_os_error());

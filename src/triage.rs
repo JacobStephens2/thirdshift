@@ -9,27 +9,62 @@ use crate::failed_run::FailedRun;
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::harness::Choice;
+use crate::issue::{IssueUrl, Repo};
 use crate::labels::{self, Label};
 use crate::{command_limit, launch, logs, prompt, session, worktree};
 
-/// Read before command startup, so Setup cannot consume a piped Report.
-pub fn read_report(file: Option<&str>) -> Result<String> {
-    let report = if let Some(path) = file {
-        std::fs::read_to_string(path).with_context(|| format!("could not read Report {path}"))?
-    } else {
+/// The free text a Triage run investigates, with where it came from: the
+/// file the command named, or standard input.
+pub struct Report {
+    text: String,
+    file: Option<String>,
+}
+
+impl Report {
+    /// Read before command startup, so Setup cannot consume a piped Report.
+    pub fn read(file: Option<&str>) -> Result<Report> {
+        let text = if let Some(path) = file {
+            std::fs::read_to_string(path)
+                .with_context(|| format!("could not read Report {path}"))?
+        } else {
+            ensure!(
+                !std::io::stdin().is_terminal(),
+                "give a Report on standard input or with --file <path>"
+            );
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text)?;
+            text
+        };
         ensure!(
-            !std::io::stdin().is_terminal(),
+            !text.trim().is_empty(),
             "give a Report on standard input or with --file <path>"
         );
-        let mut report = String::new();
-        std::io::stdin().read_to_string(&mut report)?;
-        report
-    };
-    ensure!(
-        !report.trim().is_empty(),
-        "give a Report on standard input or with --file <path>"
-    );
-    Ok(report)
+        Ok(Report {
+            text,
+            file: file.map(String::from),
+        })
+    }
+
+    /// The Report verbatim in a collapsed section, saying where it came from.
+    fn quoted(&self) -> String {
+        let fence = "`".repeat(
+            self.text
+                .split(|c| c != '`')
+                .map(str::len)
+                .max()
+                .unwrap_or(0)
+                .max(2)
+                + 1,
+        );
+        let source = self
+            .file
+            .as_deref()
+            .map_or_else(|| "standard input".into(), |path| format!("file: {path}"));
+        format!(
+            "<details>\n<summary>Original Report</summary>\n\nSource: {source}\n\n{fence}text\n{}\n{fence}\n\n</details>",
+            self.text
+        )
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -65,10 +100,17 @@ struct ProposedIssue {
     confirmation_blocked: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     questionnaire: Option<String>,
+    /// The state the issue is filed with before readiness permission,
+    /// resolved once by [`parse_recommendation`].
+    #[serde(skip)]
+    triaged: Option<Label>,
 }
 
-/// Keep the session's prose out of the machine-readable stdout contract.
-fn recommendation(message: Option<&str>) -> Result<Recommendation> {
+const INCOMPLETE: &str = "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments";
+
+/// Read and check the session's final recommendation line. The session's
+/// prose stays out of the machine-readable stdout contract.
+fn parse_recommendation(message: Option<&str>) -> Result<Recommendation> {
     let json = message
         .and_then(|message| {
             message
@@ -77,35 +119,41 @@ fn recommendation(message: Option<&str>) -> Result<Recommendation> {
                 .find_map(|line| line.strip_prefix("Triage recommendation: "))
         })
         .context("the Triage session ended without its final Triage recommendation: JSON line")?;
-    let recommendation: Recommendation = serde_json::from_str(json)
+    let mut recommendation: Recommendation = serde_json::from_str(json)
         .context("the Triage recommendation is not valid recommendation JSON")?;
+    let overall = state_label(&recommendation.state);
     ensure!(
         !recommendation.category.trim().is_empty()
-            && state_label(&recommendation.state).is_some()
+            && overall.is_some()
             && !recommendation.investigation.trim().is_empty()
             && recommendation.comments.iter().all(|comment| {
-                !comment.body.trim().is_empty()
-                    && crate::issue::IssueUrl::parse(&comment.url).is_ok()
-            })
-            && recommendation.issues.iter().all(|issue| {
-                !issue.title.trim().is_empty()
-                    && !issue.body.trim().is_empty()
-                    && issue
-                        .state
-                        .as_deref()
-                        .is_none_or(|state| state_label(state).is_some())
-                    && issue
-                        .confirmation_blocked
-                        .as_deref()
-                        .is_none_or(|reason| !reason.trim().is_empty())
+                !comment.body.trim().is_empty() && IssueUrl::parse(&comment.url).is_ok()
             }),
-        "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments"
+        INCOMPLETE
     );
-    for issue in &recommendation.issues {
-        let state = issue.state.as_deref().unwrap_or(&recommendation.state);
-        let needs_answer = issue.confirmation_blocked.is_some()
-            || labels::NEEDS_INFO.is_named(state)
-            || labels::READY_FOR_HUMAN.is_named(state);
+    for issue in &mut recommendation.issues {
+        ensure!(
+            !issue.title.trim().is_empty()
+                && !issue.body.trim().is_empty()
+                && issue
+                    .confirmation_blocked
+                    .as_deref()
+                    .is_none_or(|reason| !reason.trim().is_empty()),
+            INCOMPLETE
+        );
+        let recommended = issue
+            .state
+            .as_deref()
+            .map_or(overall, state_label)
+            .context(INCOMPLETE)?;
+        // Only the Day shift can confirm a problem that needs credentials or
+        // production access, whatever the session recommended.
+        let triaged = if issue.confirmation_blocked.is_some() {
+            labels::READY_FOR_HUMAN
+        } else {
+            recommended
+        };
+        let needs_answer = triaged == labels::NEEDS_INFO || triaged == labels::READY_FOR_HUMAN;
         ensure!(
             if needs_answer {
                 issue
@@ -118,6 +166,7 @@ fn recommendation(message: Option<&str>) -> Result<Recommendation> {
             "the Triage questionnaire is required only for needs-info or ready-for-human issues: {}",
             issue.title
         );
+        issue.triaged = Some(triaged);
     }
     Ok(recommendation)
 }
@@ -128,9 +177,9 @@ fn state_label(state: &str) -> Option<Label> {
         .find(|label| label.is_named(state))
 }
 
-/// A label thirdshift treats as workflow state. The session may name a
-/// repository category; these stay factory-owned, whatever their case.
-fn factory_label(name: &str) -> bool {
+/// Whether thirdshift treats `name` as workflow state. The session may name
+/// a repository category; these stay factory-owned, whatever their case.
+fn is_factory_label(name: &str) -> bool {
     state_label(name).is_some()
         || crate::claim::IN_PROGRESS.is_named(name)
         || crate::claim::AGENT_FAILED.is_named(name)
@@ -149,36 +198,35 @@ pub struct Ended {
     pub notification: String,
 }
 
-fn quoted_report(report: &str, source: Option<&str>) -> String {
-    let fence = "`".repeat(
-        report
-            .split(|c| c != '`')
-            .map(str::len)
-            .max()
-            .unwrap_or(0)
-            .max(2)
-            + 1,
-    );
-    let source = source.map_or_else(|| "standard input".into(), |path| format!("file: {path}"));
-    format!(
-        "<details>\n<summary>Original Report</summary>\n\nSource: {source}\n\n{fence}text\n{report}\n{fence}\n\n</details>"
-    )
+/// How filing labels one proposed issue.
+struct Filing {
+    /// The repository's category label, spelled as the repository spells it.
+    category: String,
+    state: Label,
+    /// `ready-for-agent` was recommended, but filing lacks permission for it.
+    readiness_held: bool,
 }
 
-fn publish(
-    recommendation: &mut Recommendation,
-    repo: &crate::issue::Repo,
-    report: &str,
-    source: Option<&str>,
+/// Everything filing asks GitHub to accept, checked before any write.
+struct Publication {
+    filings: Vec<Filing>,
+    /// The open issues in this repository that the proposed comments go to.
+    targets: Vec<IssueUrl>,
+}
+
+/// Check the recommendation against GitHub, writing nothing. Both modes
+/// check it, so `--recommend-only` refuses exactly what filing would refuse.
+fn check_publication(
+    recommendation: &Recommendation,
+    repo: &Repo,
+    github: &GitHub,
     allow_ready_for_agent: bool,
-    published: &mut Vec<crate::issue::IssueUrl>,
-) -> Result<()> {
-    let github = GitHub::new();
+) -> Result<Publication> {
     let targets = recommendation
         .comments
         .iter()
         .map(|comment| {
-            let issue = crate::issue::IssueUrl::parse(&comment.url)?;
+            let issue = IssueUrl::parse(&comment.url)?;
             ensure!(
                 issue.owner.eq_ignore_ascii_case(&repo.owner)
                     && issue.repo.eq_ignore_ascii_case(&repo.name),
@@ -194,32 +242,60 @@ fn publish(
             Ok(issue)
         })
         .collect::<Result<Vec<_>>>()?;
+    if recommendation.issues.is_empty() {
+        return Ok(Publication {
+            filings: Vec::new(),
+            targets,
+        });
+    }
     let categories = github.repository_labels(&repo.slug())?;
-    let original_report = quoted_report(report, source);
-    let mut labels_to_apply = Vec::with_capacity(recommendation.issues.len());
-    for issue in &mut recommendation.issues {
-        let category = categories
-            .names()
-            .find(|name| {
-                name.eq_ignore_ascii_case(
-                    issue
-                        .category
-                        .as_deref()
-                        .unwrap_or(&recommendation.category),
-                )
+    let filings = recommendation
+        .issues
+        .iter()
+        .map(|issue| {
+            let wanted = issue.category.as_deref().unwrap_or(&recommendation.category);
+            let category = categories
+                .names()
+                .find(|name| name.eq_ignore_ascii_case(wanted))
+                .filter(|name| !is_factory_label(name) && !name.contains(','))
+                .context(
+                    "the Triage category must be a repository category label, not a triage state or another factory label",
+                )?;
+            let triaged = issue
+                .triaged
+                .expect("parse_recommendation resolves every proposed issue's state");
+            let readiness_held = triaged == labels::READY_FOR_AGENT && !allow_ready_for_agent;
+            Ok(Filing {
+                category: category.into(),
+                state: if readiness_held {
+                    labels::NEEDS_TRIAGE
+                } else {
+                    triaged
+                },
+                readiness_held,
             })
-            .filter(|name| !factory_label(name) && !name.contains(','))
-            .context(
-                "the Triage category must be a repository category label, not a triage state or another factory label",
-            )?;
-        let recommended = state_label(issue.state.as_deref().unwrap_or(&recommendation.state))
-            .context("unknown Triage state")?;
-        let state = if issue.confirmation_blocked.is_some() {
-            labels::READY_FOR_HUMAN
-        } else if recommended == labels::READY_FOR_AGENT && !allow_ready_for_agent {
-            labels::NEEDS_TRIAGE
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Publication { filings, targets })
+}
+
+/// File the checked issues and comments. Each write that lands is pushed to
+/// `published` as it lands, so a failure partway still names it.
+fn publish(
+    recommendation: &mut Recommendation,
+    publication: Publication,
+    repo: &Repo,
+    report: &Report,
+    github: &GitHub,
+    published: &mut Vec<IssueUrl>,
+) -> Result<()> {
+    let original_report = report.quoted();
+    let mut wontfix = Vec::new();
+    for (issue, filing) in recommendation.issues.iter_mut().zip(publication.filings) {
+        let held = if filing.readiness_held {
+            "\n\nready-for-agent was recommended; needs-triage is applied until the Day shift permits readiness."
         } else {
-            recommended
+            ""
         };
         let blocked = issue
             .confirmation_blocked
@@ -227,28 +303,29 @@ fn publish(
             .map_or_else(String::new, |reason| {
                 format!("\n\nConfirmation needs the Day shift: {reason}")
             });
-        let note = if recommended == labels::READY_FOR_AGENT && state == labels::NEEDS_TRIAGE {
-            "\n\nready-for-agent was recommended; needs-triage is applied until the Day shift permits readiness."
-        } else {
-            ""
-        };
+        let questionnaire = issue
+            .questionnaire
+            .as_deref()
+            .map_or_else(String::new, |text| {
+                format!("\n\n## Questionnaire\n\n{text}")
+            });
         issue.body = format!(
-            "This issue was generated by AI.\n\n{}{note}{blocked}{}\n\n{original_report}",
+            "This issue was generated by AI.\n\n{}{held}{blocked}{questionnaire}\n\n{original_report}",
             issue.body,
-            issue
-                .questionnaire
-                .as_deref()
-                .map_or_else(String::new, |text| format!(
-                    "\n\n## Questionnaire\n\n{text}"
-                )),
         );
-        issue.category = Some(category.into());
-        issue.state = Some(state.name().into());
-        labels_to_apply.push((category, state));
-    }
-    for (issue, (category, state)) in recommendation.issues.iter_mut().zip(labels_to_apply) {
-        let url = github.create_triaged_issue(repo, &issue.title, &issue.body, category, state)?;
+        let url = github.create_triaged_issue(
+            repo,
+            &issue.title,
+            &issue.body,
+            &filing.category,
+            filing.state,
+        )?;
         issue.url = Some(url.url.clone());
+        issue.category = Some(filing.category);
+        issue.state = Some(filing.state.name().into());
+        if filing.state == labels::WONTFIX {
+            wontfix.push(url.clone());
+        }
         published.push(url);
     }
     if published.len() > 1 {
@@ -262,7 +339,14 @@ fn publish(
             github.comment_issue(issue, &format!("This comment was generated by AI.\n\nOther issues from the same Report:\n{links}"))?;
         }
     }
-    for (comment, target) in recommendation.comments.iter_mut().zip(targets) {
+    // The Day shift's triage closes a wontfix issue; so does a Triage run.
+    for issue in &wontfix {
+        github.close_issue(
+            issue,
+            "This comment was generated by AI.\n\nClosed as wontfix, as the Triage run recommended. The issue body says why.",
+        )?;
+    }
+    for (comment, target) in recommendation.comments.iter_mut().zip(publication.targets) {
         comment.body = format!(
             "This comment was generated by AI.\n\n{}\n\n{original_report}",
             comment.body
@@ -273,15 +357,19 @@ fn publish(
     Ok(())
 }
 
+/// What a Triage run may do beyond investigating: its flags, with the User
+/// config's permissions already added.
+pub struct Options {
+    /// `--recommend-only`: check what filing would do, then write nothing to GitHub.
+    pub recommend_only: bool,
+    /// Keep a recommended `ready-for-agent` on the issues it files.
+    pub allow_ready_for_agent: bool,
+    /// Run the session in the read-only whole-machine sandbox.
+    pub read_machine: bool,
+}
+
 /// A Triage run always takes a Command slot, even above the Command limit.
-pub fn run(
-    report: &str,
-    source: Option<&str>,
-    recommend_only: bool,
-    allow_ready_for_agent: bool,
-    harness: &mut Choice,
-    read_machine: bool,
-) -> Result<Ended, FailedRun> {
+pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
     logs::started(logs::Work::TriageRun(&repo), harness);
@@ -296,21 +384,29 @@ pub fn run(
         let message = sessions.run_to_final_message(
             session::Purpose::Ordinary,
             session::Kind::Triage,
-            &prompt::triage(&skill.path, report, read_machine),
+            &prompt::triage(&skill.path, &report.text, options.read_machine),
         )?;
-        let mut recommendation = recommendation(message.as_deref())?;
-        let publication = if recommend_only {
-            Ok(())
-        } else {
+        let mut recommendation = parse_recommendation(message.as_deref())?;
+        let github = GitHub::new();
+        let publication = check_publication(
+            &recommendation,
+            &repo,
+            &github,
+            options.allow_ready_for_agent,
+        )
+        .and_then(|checked| {
+            if options.recommend_only {
+                return Ok(());
+            }
             publish(
                 &mut recommendation,
+                checked,
                 &repo,
                 report,
-                source,
-                allow_ready_for_agent,
+                &github,
                 &mut published,
             )
-        };
+        });
         let json = serde_json::to_string(&recommendation)?;
         let mut notification = format!("Recommendation:\n{json}\n");
         for issue in &recommendation.issues {
@@ -325,11 +421,11 @@ pub fn run(
         publication.with_context(|| format!("Triage analysis retained:\n{notification}"))?;
         Ok(Ended {
             json,
-            filed: !recommend_only,
+            filed: !options.recommend_only,
             notification,
         })
     };
-    let (result, log) = if read_machine {
+    let (result, log) = if options.read_machine {
         let sandbox = crate::sandbox::triage::prepare(checkout.path(), harness.harness)?;
         session::Sessions::within_sandboxed(
             &session_logs,
