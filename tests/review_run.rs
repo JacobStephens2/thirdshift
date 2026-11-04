@@ -658,6 +658,25 @@ fn recommend_only_posts_validation_results_with_disposable_artifacts() {
 }
 
 #[test]
+fn disposable_validation_artifacts_do_not_block_the_next_review() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'acme/widgets' = ['printf passed > validation-results.txt']\n",
+    );
+    scenario.agent_does("printf passed > validation-results.txt\nprintf 'Validation passed (exit 0).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let first = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let second = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["prs"][0]["postedComments"].as_array().unwrap().len(),
+        2
+    );
+}
+
+#[test]
 fn recommend_only_preserves_an_existing_local_head_branch() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);

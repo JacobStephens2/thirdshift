@@ -177,7 +177,7 @@ impl ReviewProcess {
                 &snapshot.head,
                 &snapshot.base_head,
             ])?;
-            let checkout =
+            let mut checkout =
                 SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
             let steps = self.resolve(checkout.path(), &mut command)?;
             notification.built_with(&command.choice);
@@ -316,6 +316,9 @@ impl ReviewProcess {
                     &mut began,
                     &mut last,
                 )?;
+            }
+            if delivered {
+                checkout.discard_validation_artifacts();
             }
             Ok(last)
         })();
