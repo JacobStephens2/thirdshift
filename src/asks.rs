@@ -323,6 +323,8 @@ mod tests {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
+            triage_read_machine: Default::default(),
             trial_caps: crate::scope::Caps::default(),
             warnings: Vec::new(),
         }

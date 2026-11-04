@@ -44,6 +44,7 @@ pub enum About<'a> {
     SecurityRun,
     ScoringRun,
     ReviewRun,
+    TriageRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
         name: &'a str,
@@ -56,9 +57,11 @@ impl About<'_> {
     fn repo(&self) -> Option<Repo> {
         match self {
             About::Issue(issue) => Some(issue.repo()),
-            About::ArchitectRun | About::PickupRun | About::SecurityRun | About::Process { .. } => {
-                launch::repo().ok()
-            }
+            About::ArchitectRun
+            | About::PickupRun
+            | About::SecurityRun
+            | About::TriageRun
+            | About::Process { .. } => launch::repo().ok(),
             About::ScoringRun => None,
             About::ReviewRun => launch::repo().ok(),
         }
@@ -83,6 +86,7 @@ enum Subject {
     SecurityRun(Option<Repo>),
     ScoringRun,
     ReviewRun(Option<Repo>),
+    TriageRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
     /// A Custom process, with the repository the Launch directory's `origin`
@@ -102,6 +106,7 @@ impl Subject {
             Subject::SecurityRun(repo) => Some(("Security run".into(), repo.as_ref())),
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
             Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
+            Subject::TriageRun(repo) => Some(("Triage run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
         }
@@ -161,6 +166,7 @@ impl RunNotification {
             About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
             About::ReviewRun => Subject::ReviewRun(repo),
+            About::TriageRun => Subject::TriageRun(repo),
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),
@@ -335,6 +341,9 @@ fn body(
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(&command, repo);
+    }
+    if let Some(recommendation) = account.triage {
+        text += &recommendation.notification;
     }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.
@@ -570,6 +579,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -594,6 +604,7 @@ mod tests {
             log: None,
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,

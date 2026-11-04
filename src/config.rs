@@ -4,7 +4,7 @@
 //! Only a Run offers Setup
 //! when there is none.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -87,6 +87,11 @@ pub struct UserConfig {
     /// It takes effect only when fixing is also allowed.
     pub security_close: Option<bool>,
     pub security_review: bool,
+    /// `triage.allow_ready_for_agent`: filing may keep recommended readiness.
+    pub triage_allow_ready_for_agent: bool,
+    /// `triage.read_machine`: repositories, as lowercase `owner/repo`, whose
+    /// Triage runs read the whole machine as `--read-machine` lets them.
+    pub triage_read_machine: BTreeSet<String>,
     /// The `[trial]` memory caps for each Trial and Grader scope.
     pub trial_caps: crate::scope::Caps,
     /// What every Command warns of about the file: a setting it accepts
@@ -126,6 +131,13 @@ impl EmailSettings {
 }
 
 impl UserConfig {
+    /// Whether `triage.read_machine` opts this repository's Triage runs into
+    /// reading the whole machine. GitHub repository identity is case-insensitive.
+    pub fn triage_reads_machine(&self, repo: &Repo) -> bool {
+        self.triage_read_machine
+            .contains(&repo.slug().to_ascii_lowercase())
+    }
+
     /// Waiting stages must write before they could be observed as Silent.
     pub fn effective_waiting_line_interval(&self) -> Duration {
         if self.waiting_line_interval >= self.silent_interval {
@@ -174,6 +186,8 @@ impl UserConfig {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
+            triage_read_machine: BTreeSet::new(),
             trial_caps: crate::scope::Caps::default(),
             warnings: Vec::new(),
         }
@@ -242,6 +256,7 @@ impl UserConfig {
                     | "pass"
                     | "harness"
                     | "security"
+                    | "triage"
                     | "trial"
             );
             #[expect(
@@ -257,6 +272,16 @@ impl UserConfig {
             for (key, value) in settings {
                 match (section.as_str(), key.as_str(), value) {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
+                    ("triage", "allow_ready_for_agent", Value::Boolean(allow)) => {
+                        config.triage_allow_ready_for_agent = *allow
+                    }
+                    ("triage", "allow_ready_for_agent", _) => {
+                        bail!("triage.allow_ready_for_agent must be true or false in {file}")
+                    }
+                    ("triage", "read_machine", value) => {
+                        config.triage_read_machine =
+                            repository_list(value, "triage.read_machine", &file)?
+                    }
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
                     ("base", "fix", Value::Boolean(fix)) => config.base_fix = *fix,
                     ("base", "fix", _) => bail!("base.fix must be true or false in {file}"),
@@ -459,15 +484,7 @@ fn repository_keys<T>(
 ) -> Result<BTreeMap<String, T>> {
     let mut normalized = BTreeMap::new();
     for (repo, value) in entries {
-        let parts: Vec<_> = repo.split('/').collect();
-        if parts.len() != 2
-            || parts.iter().any(|part| {
-                part.is_empty()
-                    || !part
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-            })
-        {
+        if !is_owner_repo(&repo) {
             bail!("{setting} key {repo:?} must be owner/repo");
         }
         if normalized
@@ -478,6 +495,37 @@ fn repository_keys<T>(
         }
     }
     Ok(normalized)
+}
+
+/// Read a list of repositories strictly, so a malformed name cannot
+/// silently leave a repository out of an opt-in.
+fn repository_list(value: &Value, key: &str, file: &str) -> Result<BTreeSet<String>> {
+    let repos = value
+        .as_array()
+        .with_context(|| format!("{key} must be a list of \"owner/repo\" names in {file}"))?;
+    repos
+        .iter()
+        .map(|repo| {
+            repo.as_str()
+                .filter(|repo| is_owner_repo(repo))
+                .map(str::to_ascii_lowercase)
+                .with_context(|| {
+                    format!("{key} entry {repo} must be a quoted owner/repo in {file}")
+                })
+        })
+        .collect()
+}
+
+/// Whether `repo` names a GitHub repository as `owner/repo`.
+fn is_owner_repo(repo: &str) -> bool {
+    let parts: Vec<_> = repo.split('/').collect();
+    parts.len() == 2
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        })
 }
 
 /// A validated User config with every setting present, ready for Setup.
@@ -1123,6 +1171,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
 
+[triage]
+allow_ready_for_agent = false   # keep recommended ready-for-agent on filed issues; default false
+read_machine = []   # repositories ("owner/repo") whose Triage runs read the whole machine in the read-only sandbox, as --read-machine does; default none
+
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
@@ -1232,6 +1284,29 @@ mod tests {
             Path::new("/home/me/.thirdshift/config.toml"),
             Path::new("/home/me"),
         )
+    }
+
+    #[test]
+    fn triage_read_machine_opts_in_named_repositories_whatever_their_case() {
+        let repo = |owner: &str, name: &str| Repo {
+            owner: owner.into(),
+            name: name.into(),
+        };
+        let widgets = repo("acme", "widgets");
+        assert!(!parse("").unwrap().triage_reads_machine(&widgets));
+        let config = parse("[triage]\nread_machine = [\"Acme/Widgets\"]\n").unwrap();
+        assert!(config.triage_reads_machine(&widgets));
+        assert!(config.triage_reads_machine(&repo("ACME", "WIDGETS")));
+        assert!(!config.triage_reads_machine(&repo("acme", "gadgets")));
+        for text in [
+            "[triage]\nread_machine = \"acme/widgets\"\n",
+            "[triage]\nread_machine = [\"widgets\"]\n",
+            "[triage]\nread_machine = [\"acme/widgets/extra\"]\n",
+            "[triage]\nread_machine = [7]\n",
+        ] {
+            let error = format!("{:#}", parse(text).unwrap_err());
+            assert!(error.contains("triage.read_machine"), "{text}: {error}");
+        }
     }
 
     #[test]
@@ -1390,6 +1465,8 @@ mod tests {
                 "harness.muse.effort",
                 "harness.opencode.model",
                 "harness.opencode.effort",
+                "triage.allow_ready_for_agent",
+                "triage.read_machine",
                 "security.fix",
                 "security.close",
                 "security.review",

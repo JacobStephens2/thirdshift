@@ -372,8 +372,8 @@ for (const javaScriptEnabled of [false, true]) {
   });
 }
 
-test("the homepage keeps six workflows compact and expandable without JavaScript", async (t) => {
-  const names = ["Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Scoring run"];
+test("the homepage keeps seven workflows compact and expandable without JavaScript", async (t) => {
+  const names = ["Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Triage run", "Scoring run"];
   for (const width of [320, 390, 768, 1280]) {
     const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
     await page.goto(`${origin}/`);
@@ -403,12 +403,12 @@ test("the homepage keeps six workflows compact and expandable without JavaScript
   }
 });
 
-test("the homepage explains Ticket runs and six workflows in plain words", async (t) => {
+test("the homepage explains Ticket runs and seven workflows in plain words", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/`);
   assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
   for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
-    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Six workflows",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Seven workflows",
     "Examples", "Real pull requests", "About the name"]) {
     assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
   }

@@ -165,6 +165,7 @@ pub enum Command {
     Architect(ArchitectArgs),
     Pickup(PassArgs),
     Secure(PassArgs),
+    Triage(TriageArgs),
     Run(Box<RunArgs>),
 }
 
@@ -786,6 +787,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
+        Some("triage") => return parse_triage(&args[1..]).map(Command::Triage),
         Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
         Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
@@ -1141,6 +1143,42 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
         flags,
         plan_only,
     })
+}
+
+/// A Report to investigate, with only the choices a Triage session uses.
+pub struct TriageArgs {
+    pub file: Option<String>,
+    pub read_machine: bool,
+    pub recommend_only: bool,
+    pub allow_ready_for_agent: bool,
+    pub harness: harness::Asked,
+    pub email: Option<NotificationAsk>,
+}
+
+fn parse_triage(args: &[String]) -> Result<TriageArgs> {
+    let mut parsed = TriageArgs {
+        file: None,
+        read_machine: false,
+        recommend_only: false,
+        allow_ready_for_agent: false,
+        harness: harness::Asked::default(),
+        email: None,
+    };
+    let mut rest = args.iter().peekable();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--read-machine" if !parsed.read_machine => parsed.read_machine = true,
+            "--recommend-only" if !parsed.recommend_only => parsed.recommend_only = true,
+            "--allow-ready-for-agent" if !parsed.allow_ready_for_agent => {
+                parsed.allow_ready_for_agent = true
+            }
+            "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
+            _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
+            _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}
+            _ => bail!("unexpected argument after triage: {arg}"),
+        }
+    }
+    Ok(parsed)
 }
 
 /// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any

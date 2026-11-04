@@ -827,6 +827,7 @@ fn notify(
         base_fix: None,
         log: failed.and_then(|failed| failed.log.as_deref()),
         ticket_lines: failed.map_or(&[], |failed| failed.ticket_lines.as_slice()),
+        triage: None,
         review: completed
             .architecture_end
             .as_ref()

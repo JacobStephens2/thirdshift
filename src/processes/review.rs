@@ -524,6 +524,7 @@ impl ReviewProcess {
             log: last_log.as_deref(),
             ticket_lines: &[],
             review: None,
+            triage: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             security_findings: None,

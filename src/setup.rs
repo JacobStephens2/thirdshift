@@ -1256,6 +1256,10 @@ failure_limit = 5
 wait_minutes = 60
 order = \"highest-first\"
 
+[triage]
+allow_ready_for_agent = true
+read_machine = [\"acme/widgets\"]
+
 [security]
 harness = \"codex\"
 fix = false

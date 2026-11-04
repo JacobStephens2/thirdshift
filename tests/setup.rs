@@ -230,6 +230,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]"
@@ -360,6 +361,7 @@ effort = 'high' # my Effort
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]",

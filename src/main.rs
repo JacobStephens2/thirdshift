@@ -127,6 +127,8 @@ mod terminal;
 #[cfg(target_os = "linux")]
 mod test_support;
 #[cfg(target_os = "linux")]
+mod triage;
+#[cfg(target_os = "linux")]
 mod trial;
 #[cfg(target_os = "linux")]
 mod trust;
@@ -178,6 +180,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
+       thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -217,7 +220,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
-Shared options (before or after the Issue URL or number, or after a Pass command):
+Shared options (before or after the Issue URL or number, or after a Pass command; -- prefixes accepted, once each, without opposites):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
@@ -226,10 +229,9 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   model <name>, effort <level>       Choose the Harness's Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure, review --author <login>. For architect, pickup and secure, base <branch> selects an origin branch.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
-Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
+Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
 ";
 
@@ -419,6 +421,7 @@ fn main() -> ExitCode {
             );
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
+        Ok(Command::Triage(args)) => return triage(args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
         Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => *run_args,
@@ -504,6 +507,37 @@ fn architect(args: ArchitectArgs) -> ExitCode {
         Outcome::Skipped(skipped) => Ending::Skipped(skipped.into()),
         Outcome::Ran { review, dispatched } => Ending::Architect { review, dispatched },
     })
+}
+
+#[cfg(target_os = "linux")]
+fn triage(args: args::TriageArgs) -> ExitCode {
+    let report = match triage::Report::read(args.file.as_deref()) {
+        Ok(report) => report,
+        Err(error) => return failure(&error),
+    };
+    let flags = asks::Flags {
+        email: args.email,
+        harness: args.harness,
+        ..Default::default()
+    };
+    let (config, mut started) = match command::start(
+        Begin::TriageRun,
+        |config| flags.notification(config),
+        About::TriageRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = flags.harness(&config);
+    started.built_with(&harness);
+    let options = triage::Options {
+        recommend_only: args.recommend_only,
+        allow_ready_for_agent: args.allow_ready_for_agent || config.triage_allow_ready_for_agent,
+        // Without an origin the run fails at once, before any session.
+        read_machine: args.read_machine
+            || launch::repo().is_ok_and(|repo| config.triage_reads_machine(&repo)),
+    };
+    started.finish(Ending::Triage(triage::run(&report, options, &mut harness)))
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the

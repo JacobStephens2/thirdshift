@@ -776,6 +776,7 @@ mod tests {
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
+                | Work::TriageRun(_)
                 | Work::Experiment(_)
                 | Work::Process { .. } => {
                     panic!("not a Run's work")

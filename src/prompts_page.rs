@@ -19,7 +19,9 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, Process, ReviewRun, ScoringRun, SecurityRun, Trial, Units};
+use Sender::{
+    ArchitectRun, Experiment, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun, Trial, Units,
+};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -101,6 +103,7 @@ enum Sender {
     Units(&'static [Unit]),
     /// An Architect run, which the press units, a Ticket run's, don't cover.
     ArchitectRun,
+    TriageRun,
     /// A Security run, before any dispatched Ticket run.
     SecurityRun,
     /// An Experiment's private model Grader.
@@ -243,6 +246,13 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
             sender: ArchitectRun,
             text: prompt::architecture_review(BASE, Some(FOCUS)),
+        },
+        Prompt {
+            id: "prompt-triage",
+            title: "Triage run",
+            when: "Investigates a Report read-only in a throwaway worktree without waiting for a person. thirdshift files the recommended issues or comments on existing open issues unless --recommend-only is given, and retains the result for stdout and the Run notification.",
+            sender: TriageRun,
+            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
         },
         Prompt {
             id: "prompt-security-review",
@@ -587,6 +597,10 @@ fn skill_used_by(skill: &str) -> String {
         "thirdshift-security-audit" => {
             "the Security audit, in a Security run, or a Security review".to_string()
         }
+        "thirdshift-triage" => "a Triage run, investigating a Report".to_string(),
+        "thirdshift-to-questionnaire" => {
+            "a Triage run, when an issue needs a person's answer".to_string()
+        }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
 }
@@ -797,6 +811,7 @@ fn sent_by(sender: &Sender) -> String {
     match sender {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
+        TriageRun => "a Triage run".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
         ScoringRun => "a Scoring run".to_string(),
