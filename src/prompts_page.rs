@@ -395,6 +395,20 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-pull-request-validation",
+            title: "Review run, validation after later fixes",
+            when: "A later editing Step changed the reviewed head. Repeats repository final validation and extra commands before Delivery, and appends the results to the comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_validation(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                OWN_HEAD,
+                &[],
+            ),
+        },
+        Prompt {
             id: "prompt-process-step-later",
             title: "Custom process Step, with an earlier result",
             when: "Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.",

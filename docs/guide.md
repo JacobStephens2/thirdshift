@@ -2380,6 +2380,10 @@ fixes reproduced introduced vulnerabilities, and its commits are pushed with
 the other fixes. The comment lists any Security finding left unfixed or an
 incomplete review. Pre-existing findings stay in private records.
 
+If a Security review or another later editing Step commits more changes,
+Delivery repeats final validation and the configured extra commands on that
+head before pushing. Its comment adds the new head and those validation results.
+
 If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
 and says the branch moved. The fixes remain in the local worktree. A changed base

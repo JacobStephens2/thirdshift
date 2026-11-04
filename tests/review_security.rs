@@ -22,7 +22,9 @@ const NO_FINDINGS: &str =
 
 fn review_sessions(ordinary: &str, security: &str) -> String {
     format!(
-        "if printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{security}\nelse\n{ordinary}\nfi"
+        "if printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q '^Validate the final Review run'; then\n\
+         printf 'Final validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n\
+         elif printf '%s' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'guidance mode'; then\n{security}\nelse\n{ordinary}\nfi"
     )
 }
 
