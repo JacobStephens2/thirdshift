@@ -1,4 +1,6 @@
 //! Triage's opt-in host reads, with writes confined to its throwaway worktree.
+//! A read-only mount still allows `connect` to a host Unix socket, so each
+//! launch also loads a seccomp filter that refuses those sockets.
 
 use std::ffi::OsString;
 use std::fs;
@@ -51,14 +53,17 @@ pub(crate) fn prepare(worktree: &Path, harness: Harness) -> Result<Launch> {
         program: resolve_binary(harness.name())?,
         prefix: Vec::new(),
         stderr: None,
+        seccomp: Some(host_socket_filter()?),
     };
     launch.set_env("TMPDIR", &tmp);
     prepare_home(&mut launch, &tmp.join("home"), harness)
         .context("Triage sandbox failed to prepare its writable Harness home")?;
+    let mut probe_command = Command::new(bwrap);
+    probe_command.args(&launch.argv);
+    launch.pass_seccomp(&mut probe_command);
+    probe_command.args(["--", "/bin/true"]);
     let probe = crate::process::output_until(
-        Command::new(bwrap)
-            .args(&launch.argv)
-            .args(["--", "/bin/true"]),
+        &mut probe_command,
         None,
         crate::process::Control {
             name: "Triage sandbox startup check",
@@ -173,6 +178,70 @@ fn prepare_home(launch: &mut Launch, home: &Path, harness: Harness) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Refuse Unix-domain sockets. The read-only bind does not stop `connect` to
+/// a host service (a session bus, systemd, or a container engine) that then
+/// writes outside the worktree. TCP stays available. `socketpair` stays
+/// available for runtimes. `io_uring_setup` is refused as well: a ring can
+/// issue the blocked calls from a worker this filter does not see.
+fn host_socket_filter() -> Result<Vec<u8>> {
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        Ok(unix_socket_program())
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        anyhow::bail!(
+            "Triage sandbox failed to start: Unix-socket confinement is not built for this architecture"
+        )
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn unix_socket_program() -> Vec<u8> {
+    // linux/audit.h: EM_* with the 64-bit and little-endian flags. These are
+    // the seccomp ABI values, not something libc exports.
+    #[cfg(target_arch = "x86_64")]
+    let arch: u32 = 0xC000_003E;
+    #[cfg(target_arch = "aarch64")]
+    let arch: u32 = 0xC000_00B7;
+    let deny_arch = libc::SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+    let deny_unix = libc::SECCOMP_RET_ERRNO | (libc::EAFNOSUPPORT as u32);
+    // Jump offsets skip that many following instructions. Zero falls through.
+    // A wrong architecture returns EPERM for every syscall. io_uring_setup and
+    // an AF_UNIX socket return EAFNOSUPPORT. Everything else is allowed.
+    [
+        sock_filter(LD_W_ABS, 0, 0, 4),
+        sock_filter(JMP_JEQ_K, 1, 0, arch),
+        sock_filter(RET_K, 0, 0, deny_arch),
+        sock_filter(LD_W_ABS, 0, 0, 0),
+        sock_filter(JMP_JEQ_K, 3, 0, libc::SYS_io_uring_setup as u32),
+        sock_filter(JMP_JEQ_K, 0, 3, libc::SYS_socket as u32),
+        sock_filter(LD_W_ABS, 0, 0, 16),
+        sock_filter(JMP_JEQ_K, 0, 1, libc::AF_UNIX as u32),
+        sock_filter(RET_K, 0, 0, deny_unix),
+        sock_filter(RET_K, 0, 0, libc::SECCOMP_RET_ALLOW),
+    ]
+    .concat()
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const LD_W_ABS: u16 = (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const JMP_JEQ_K: u16 = (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const RET_K: u16 = (libc::BPF_RET | libc::BPF_K) as u16;
+
+/// One classic BPF `sock_filter`, native endian: code, jt, jf, k.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn sock_filter(code: u16, jt: u8, jf: u8, k: u32) -> [u8; 8] {
+    let mut bytes = [0; 8];
+    bytes[..2].copy_from_slice(&code.to_ne_bytes());
+    bytes[2] = jt;
+    bytes[3] = jf;
+    bytes[4..].copy_from_slice(&k.to_ne_bytes());
+    bytes
 }
 
 fn from_environment(name: &str, default: PathBuf) -> PathBuf {

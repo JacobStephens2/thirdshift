@@ -13,7 +13,7 @@ Sessions run with no human to answer an approval prompt or a trust question. The
 
 The worktree is the only boundary. This generalises the Codex part of ADR 0012. Sources: `docs/research/harness-candidates.md`, `docs/research/codex-headless-harness.md`.
 
-Exception (#1711): a Triage run with `--read-machine` wraps the ordinary Harness invocation in a Bubblewrap filesystem sandbox. It can read the host filesystem, with only its throwaway worktree writable. A sandbox startup failure fails the Command; there is no unsandboxed fallback. Without this flag, Triage keeps its ordinary launch and worktree-only prompt. Harness approval and trust flags stay fixed.
+Exception (#1711): a Triage run with `--read-machine` wraps the ordinary Harness invocation in a Bubblewrap filesystem sandbox. It can read the host filesystem, with only its throwaway worktree writable. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. A sandbox startup failure fails the Command; there is no unsandboxed fallback. Without this flag, Triage keeps its ordinary launch and worktree-only prompt. Harness approval and trust flags stay fixed.
 
 ## Considered Options
 

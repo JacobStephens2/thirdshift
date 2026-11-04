@@ -2,6 +2,13 @@
 mod support;
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use support::Scenario;
 use support::concurrency::{release, waits_on};
@@ -77,6 +84,116 @@ echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage re
         fs::read_to_string(scenario.path("home/.claude/.credentials.json")).unwrap(),
         "production login"
     );
+    assert_eq!(scenario.entries("work"), vec![support::REPO]);
+}
+
+/// A host service outside the worktree writes a marker only after the sandbox
+/// connects to its Unix socket. The read-only mount does not stop that write.
+#[test]
+fn read_machine_cannot_delegate_a_write_through_a_host_socket() {
+    let probe = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+        .output();
+    if !probe.is_ok_and(|output| output.status.success()) {
+        eprintln!("SKIPPED (Triage host-socket confinement): bwrap cannot start");
+        return;
+    }
+    let scenario = Scenario::new();
+    let socket_path = scenario.path("host-service.sock");
+    let marker = scenario.path("host-wrote");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let marker_for_service = marker.clone();
+    let service = thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut buf = [0_u8; 8];
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
+        if &buf[..n] == b"delegate" {
+            fs::write(&marker_for_service, "written-by-host-service").unwrap();
+            let _ = stream.write_all(b"y");
+        }
+    });
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = tcp.local_addr().unwrap().port();
+    let tcp_reached = Arc::new(AtomicBool::new(false));
+    let tcp_flag = Arc::clone(&tcp_reached);
+    let tcp_service = thread::spawn(move || {
+        let Ok((mut stream, _)) = tcp.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut buf = [0_u8; 4];
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
+        if &buf[..n] == b"ping" {
+            tcp_flag.store(true, Ordering::SeqCst);
+            let _ = stream.write_all(b"y");
+        }
+    });
+    fs::remove_file(scenario.path("bin/claude")).unwrap();
+    support::write_executable(
+        &scenario.path("bin/claude"),
+        &format!(
+            r#"#!/bin/bash
+set -eu
+if [ "$1" = auth ]; then echo '{{"loggedIn":true}}'; exit; fi
+python3 - {socket_path:?} {port} <<'PY'
+import socket, sys
+sock_path, port = sys.argv[1], int(sys.argv[2])
+try:
+    host = socket.socket(socket.AF_UNIX)
+    host.settimeout(5)
+    host.connect(sock_path)
+    host.sendall(b"delegate")
+    host.recv(1)
+except OSError:
+    pass
+try:
+    net = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    net.settimeout(5)
+    net.connect(("127.0.0.1", port))
+    net.sendall(b"ping")
+    net.recv(1)
+    open("tcp-ok", "w").write("ok")
+except OSError:
+    pass
+PY
+if [ -f {marker:?} ]; then exit 31; fi
+test -f tcp-ok
+echo '{{"type":"system","subtype":"init","session_id":"triage-sandbox"}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage recommendation: {{\"category\":\"bug\",\"state\":\"needs-triage\",\"issues\":[],\"investigation\":\"Host socket could not write; TCP still reached the harness.\"}}"}}'
+"#,
+        ),
+    );
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let result = scenario.run(&[
+        "triage",
+        "--recommend-only",
+        "--read-machine",
+        "--file",
+        report.to_str().unwrap(),
+    ]);
+    let _ = UnixStream::connect(&socket_path);
+    let _ = TcpStream::connect(("127.0.0.1", port));
+    service.join().unwrap();
+    tcp_service.join().unwrap();
+    assert!(
+        !marker.exists(),
+        "host service wrote outside the worktree: {}",
+        fs::read_to_string(&marker).unwrap_or_default()
+    );
+    assert!(
+        tcp_reached.load(Ordering::SeqCst),
+        "TCP to the harness did not survive confinement\n{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(scenario.entries("work"), vec![support::REPO]);
 }
 
