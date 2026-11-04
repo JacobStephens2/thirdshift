@@ -236,6 +236,7 @@ pub fn run(
     recommend_only: bool,
     allow_ready_for_agent: bool,
     harness: &mut Choice,
+    read_machine: bool,
 ) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
@@ -246,42 +247,53 @@ pub fn run(
     let checkout = worktree::ReviewWorktree::for_triage(&launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(&repo);
     let mut filed = Vec::new();
-    let (result, log) =
-        session::Sessions::within(&session_logs, checkout.path(), harness, |sessions| {
-            let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
-            let message = sessions.run_to_final_message(
-                session::Purpose::Ordinary,
-                session::Kind::Triage,
-                &prompt::triage(&skill.path, report),
+    let investigate = |sessions: &session::Sessions<'_>| {
+        let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
+        let message = sessions.run_to_final_message(
+            session::Purpose::Ordinary,
+            session::Kind::Triage,
+            &prompt::triage(&skill.path, report, read_machine),
+        )?;
+        let mut recommendation = recommendation(message.as_deref())?;
+        if !recommend_only {
+            file(
+                &mut recommendation,
+                &repo,
+                report,
+                source,
+                allow_ready_for_agent,
+                &mut filed,
             )?;
-            let mut recommendation = recommendation(message.as_deref())?;
-            if !recommend_only {
-                file(
-                    &mut recommendation,
-                    &repo,
-                    report,
-                    source,
-                    allow_ready_for_agent,
-                    &mut filed,
-                )?;
-            }
-            let json = serde_json::to_string(&recommendation)?;
-            let mut notification = format!("Recommendation:\n{json}\n");
-            for issue in &recommendation.issues {
-                if let Some(questionnaire) = &issue.questionnaire {
-                    notification.push_str(&format!("\nQuestionnaire: {}\n", issue.title));
-                    if let Some(url) = &issue.url {
-                        notification.push_str(&format!("Issue: {url}\n"));
-                    }
-                    notification.push_str(&format!("\n{questionnaire}\n"));
+        }
+        let json = serde_json::to_string(&recommendation)?;
+        let mut notification = format!("Recommendation:\n{json}\n");
+        for issue in &recommendation.issues {
+            if let Some(questionnaire) = &issue.questionnaire {
+                notification.push_str(&format!("\nQuestionnaire: {}\n", issue.title));
+                if let Some(url) = &issue.url {
+                    notification.push_str(&format!("Issue: {url}\n"));
                 }
+                notification.push_str(&format!("\n{questionnaire}\n"));
             }
-            Ok(Ended {
-                json,
-                filed: !recommend_only,
-                notification,
-            })
-        });
+        }
+        Ok(Ended {
+            json,
+            filed: !recommend_only,
+            notification,
+        })
+    };
+    let (result, log) = if read_machine {
+        let sandbox = crate::sandbox::triage::prepare(checkout.path(), harness.harness)?;
+        session::Sessions::within_sandboxed(
+            &session_logs,
+            checkout.path(),
+            harness,
+            &sandbox,
+            investigate,
+        )
+    } else {
+        session::Sessions::within(&session_logs, checkout.path(), harness, investigate)
+    };
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);
         if !filed.is_empty() {

@@ -1,5 +1,6 @@
 //! Trial and Grader sandboxes: bwrap, their own processes and network, a fresh
 //! home and logins.
+//! Triage's opt-in read-only host mount is implemented separately in [`triage`].
 //!
 //! A Trial's session runs in bwrap with process and network namespaces of its
 //! own, so it sees neither an unbound path nor the host's processes, and
@@ -31,6 +32,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -43,6 +45,7 @@ use crate::resend_key::Credentials;
 use crate::{config, interrupt};
 
 pub(crate) mod code_grader;
+pub(crate) mod triage;
 
 /// The environment variable carrying an OpenCode Trial's provider key.
 pub(crate) const OPENCODE_API_KEY_ENV: &str = "THIRDSHIFT_OPENCODE_API_KEY";
@@ -206,6 +209,7 @@ impl Prepared {
             program: self.program.clone(),
             prefix: self.prefix.clone(),
             stderr: Some(self.stderr.clone()),
+            seccomp: None,
         }
     }
 
@@ -235,10 +239,13 @@ pub(crate) struct Launch {
     pub program: PathBuf,
     prefix: Vec<OsString>,
     stderr: Option<PathBuf>,
+    /// BPF program bwrap loads with `--seccomp` before exec. Triage refuses
+    /// Unix-domain sockets here. Trial and Grader launches leave it unset.
+    seccomp: Option<Vec<u8>>,
 }
 
 impl Launch {
-    /// Publish a caller-supplied session path after clearing the ambient environment.
+    /// Publish a session path to both bwrap and the retained-session reader.
     pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
         self.argv.extend([
             OsString::from("--setenv"),
@@ -293,6 +300,7 @@ impl Launch {
     fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
         let marker = crate::process::session::mark(command);
         command.args(&self.argv);
+        self.pass_seccomp(command);
         command.args(["--setenv", crate::process::session::MARKER, &marker]);
         command.arg("--");
         command.args(&self.prefix);
@@ -304,6 +312,74 @@ impl Launch {
         }
         Ok(())
     }
+
+    /// Give bwrap this launch's seccomp program, if it has one. The startup
+    /// probe and the session must both load it: a probe that skipped the
+    /// filter would report success and the session would then fail closed
+    /// for a different reason.
+    pub(crate) fn pass_seccomp(&self, command: &mut Command) {
+        let Some(filter) = self.seccomp.clone() else {
+            return;
+        };
+        command.arg("--seccomp");
+        command.arg(SECCOMP_FD.to_string());
+        // SAFETY: the hook runs in the forked child, before exec. memfd_create,
+        // write, lseek, dup2, close and fcntl are async-signal-safe. The filter
+        // is already allocated, and the success path does not allocate.
+        unsafe {
+            command.pre_exec(move || write_seccomp_fd(&filter));
+        }
+    }
+}
+
+/// bwrap reads `--seccomp FD` after argument parsing, so the descriptor must
+/// survive exec and start at offset 0. 250 is above the stdio descriptors and
+/// under the default `RLIMIT_NOFILE` of 1024.
+const SECCOMP_FD: libc::c_int = 250;
+
+fn write_seccomp_fd(filter: &[u8]) -> std::io::Result<()> {
+    // SAFETY: syscalls only, and this runs in the child before exec.
+    let memfd = unsafe { libc::memfd_create(c"thirdshift-seccomp".as_ptr(), libc::MFD_CLOEXEC) };
+    if memfd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut written = 0usize;
+    while written < filter.len() {
+        let n = unsafe {
+            libc::write(
+                memfd,
+                filter[written..].as_ptr().cast::<libc::c_void>(),
+                filter.len() - written,
+            )
+        };
+        if n < 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe { libc::close(memfd) };
+            return Err(error);
+        }
+        if n == 0 {
+            unsafe { libc::close(memfd) };
+            return Err(std::io::Error::from_raw_os_error(libc::EIO));
+        }
+        written += n as usize;
+    }
+    if unsafe { libc::lseek(memfd, 0, libc::SEEK_SET) } == -1 {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(memfd) };
+        return Err(error);
+    }
+    if memfd != SECCOMP_FD && unsafe { libc::dup2(memfd, SECCOMP_FD) } == -1 {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(memfd) };
+        return Err(error);
+    }
+    if memfd != SECCOMP_FD {
+        unsafe { libc::close(memfd) };
+    }
+    if unsafe { libc::fcntl(SECCOMP_FD, libc::F_SETFD, 0) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Find bwrap on `PATH`, if it is executable.

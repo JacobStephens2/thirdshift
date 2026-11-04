@@ -1086,6 +1086,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 /// A Report to investigate, with only the choices a Triage session uses.
 pub struct TriageArgs {
     pub file: Option<String>,
+    pub read_machine: bool,
     pub recommend_only: bool,
     pub allow_ready_for_agent: bool,
     pub harness: harness::Asked,
@@ -1095,6 +1096,7 @@ pub struct TriageArgs {
 fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut parsed = TriageArgs {
         file: None,
+        read_machine: false,
         recommend_only: false,
         allow_ready_for_agent: false,
         harness: harness::Asked::default(),
@@ -1103,6 +1105,7 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut rest = args.iter().peekable();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
+            "--read-machine" if !parsed.read_machine => parsed.read_machine = true,
             "--recommend-only" if !parsed.recommend_only => parsed.recommend_only = true,
             "--allow-ready-for-agent" if !parsed.allow_ready_for_agent => {
                 parsed.allow_ready_for_agent = true
