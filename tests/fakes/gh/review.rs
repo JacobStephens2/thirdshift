@@ -187,10 +187,7 @@ pub(super) fn closed_issues(state: &Json, wanted_state: &str, label: Option<&str
         println!(
             "{}",
             object([
-                (
-                    "html_url",
-                    string(pr.at("url").str().replace("/pull/", "/issues/"))
-                ),
+                ("html_url", pr.at("url").clone()),
                 ("title", pr.at("title").clone()),
                 (
                     "labels",

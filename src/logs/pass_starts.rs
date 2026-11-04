@@ -51,7 +51,7 @@ pub(super) fn path(root: &Path, pass: Pass) -> PathBuf {
 
 pub(super) fn read(root: &Path, repository: &str, now: DateTime<Local>) -> Result<Vec<PassStart>> {
     let mut starts = Vec::new();
-    for pass in [Pass::Architect, Pass::Pickup, Pass::Security, Pass::Review] {
+    for pass in Pass::ALL {
         let path = path(root, pass);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,

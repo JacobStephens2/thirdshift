@@ -641,7 +641,7 @@ fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let activity = cache::text(&path)?;
     let repository = inventory::name(repo);
     let mut idle = Vec::new();
-    for pass in [Pass::Architect, Pass::Pickup, Pass::Security, Pass::Review] {
+    for pass in Pass::ALL {
         let kind = activity::Kind::Pass(pass);
         if let Some((time, line)) = activity::last_of(&activity, kind)
             && let Some(reason) = line.strip_prefix(&format!("{kind} skipped: "))

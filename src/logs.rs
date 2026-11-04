@@ -181,6 +181,8 @@ pub enum Pass {
 }
 
 impl Pass {
+    const ALL: [Self; 4] = [Self::Architect, Self::Pickup, Self::Security, Self::Review];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Architect => "Architect",

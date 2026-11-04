@@ -50,14 +50,7 @@ impl GitHub {
             if node["user"]["login"]
                 .as_str()
                 .is_none_or(|login| !login.eq_ignore_ascii_case(author))
-                || node["draft"].as_bool() != Some(false)
-                || !node["author_association"]
-                    .as_str()
-                    .is_some_and(trusted_association)
-                || node["head"]["repo"]["full_name"]
-                    .as_str()
-                    .is_none_or(|head| !head.eq_ignore_ascii_case(&repo.slug()))
-                || (reserved != node["number"].as_u64()
+                || (!(reserved.is_some() && reserved == node["number"].as_u64())
                     && super::labels_of(node)?.has(crate::claim::IN_PROGRESS))
             {
                 continue;
@@ -67,6 +60,9 @@ impl GitHub {
                     .as_str()
                     .context("pull request has no URL")?,
             )?;
+            if ensure_reviewable(&pr, node).is_err() {
+                continue;
+            }
             if self.reviewed_head(
                 &pr,
                 node["head"]["sha"]
@@ -162,26 +158,7 @@ impl GitHub {
             "pull request {} is closed",
             pr.url
         );
-        ensure!(
-            !node["draft"]
-                .as_bool()
-                .context("pull request has no draft state")?,
-            "pull request {} is a draft",
-            pr.url
-        );
-        let head_repo = text(&node["head"]["repo"]["full_name"])?;
-        let base_repo = text(&node["base"]["repo"]["full_name"])?;
-        ensure!(
-            head_repo.eq_ignore_ascii_case(&base_repo)
-                && base_repo.eq_ignore_ascii_case(&pr.issue.repo_slug()),
-            "pull request {} is from a fork",
-            pr.url
-        );
-        ensure!(
-            trusted_association(&text(&node["author_association"])?),
-            "pull request {} author is not a Trusted account",
-            pr.url
-        );
+        ensure_reviewable(pr, &node)?;
         Ok(ReviewPullRequest {
             title: text(&node["title"])?,
             body: node["body"].as_str().unwrap_or("").into(),
@@ -283,6 +260,37 @@ impl GitHub {
             body_alone: issues.is_empty(),
         })
     }
+}
+
+/// Shared by explicit runs (which explain refusal) and author selection
+/// (which passes over ineligible pull requests).
+fn ensure_reviewable(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
+    ensure!(
+        !node["draft"]
+            .as_bool()
+            .context("pull request has no draft state")?,
+        "pull request {} is a draft",
+        pr.url
+    );
+    fn text(value: &serde_json::Value) -> Result<&str> {
+        value
+            .as_str()
+            .context("pull request metadata is missing text")
+    }
+    let head_repo = text(&node["head"]["repo"]["full_name"])?;
+    let base_repo = text(&node["base"]["repo"]["full_name"])?;
+    ensure!(
+        head_repo.eq_ignore_ascii_case(base_repo)
+            && base_repo.eq_ignore_ascii_case(&pr.issue.repo_slug()),
+        "pull request {} is from a fork",
+        pr.url
+    );
+    ensure!(
+        trusted_association(text(&node["author_association"])?),
+        "pull request {} author is not a Trusted account",
+        pr.url
+    );
+    Ok(())
 }
 
 const CLOSING_ISSUES: &str =

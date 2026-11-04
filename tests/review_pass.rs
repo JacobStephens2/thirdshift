@@ -271,7 +271,11 @@ fn author_pass_skips_an_origin_reservation_before_its_label_is_visible() {
         scenario.origin_has_branch(branch, "main", &["Feature"]);
         scenario.github_has_pr(branch, "main", "OPEN");
     }
-    scenario.origin_has_branch("thirdshift/pickup/1", "main", &["Another owner"]);
+    scenario.origin_git(&[
+        "update-ref",
+        "refs/heads/thirdshift/pickup/1",
+        "refs/heads/busy",
+    ]);
     let before = scenario.origin_log("thirdshift/pickup/1");
     let result = scenario.run(&["review", "--author", "colleague", "--recommend-only"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);

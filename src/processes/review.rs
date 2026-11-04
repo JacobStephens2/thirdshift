@@ -38,14 +38,13 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
             let github = GitHub::new();
             let mut selected = None;
             for pr in github.waiting_review_pull_requests(&repo, &author, None)? {
-                if let Some(held) = Reservation::take(&launch, &github, &pr)? {
-                    if github
+                if let Some(held) = Reservation::take(&launch, &github, &pr)?
+                    && github
                         .waiting_review_pull_requests(&repo, &author, Some(pr.issue.number))?
                         .contains(&pr)
-                    {
-                        selected = Some((pr, Some(held)));
-                        break;
-                    }
+                {
+                    selected = Some((pr, Some(held)));
+                    break;
                 }
             }
             let Some(selected) = selected else {

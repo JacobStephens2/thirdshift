@@ -403,11 +403,14 @@ impl GitHub {
                     })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("html_url")?).context(
-                        CommandFailure::InvalidResponse(
-                            "gh api output has an invalid issue URL".into(),
-                        ),
-                    )?,
+                    issue: if listed.get("pull_request").is_some() {
+                        crate::review::PullRequestUrl::parse(field("html_url")?).map(|pr| pr.issue)
+                    } else {
+                        IssueUrl::parse(field("html_url")?)
+                    }
+                    .context(CommandFailure::InvalidResponse(
+                        "gh api output has an invalid issue URL".into(),
+                    ))?,
                     title: field("title")?.to_string(),
                     labels: labels_of(listed)?,
                 })
