@@ -15,6 +15,34 @@ fn pull_request(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn known_head_failure_is_preserved_when_base_ci_is_unreadable() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.agent_does(r#"
+base_commit=$(git merge-base HEAD origin/main)
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"unique-head-failure","conclusion":"failure","url":"https://ci.example/known-head-failure"}]'
+gh fake fails "api --paginate --jq .statuses[] repos/acme/widgets/commits/$base_commit/status?per_page=100"
+printf 'Original findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+
+    let result = scenario.run(&["review", &url]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    for evidence in [
+        "unique-head-failure",
+        "https://ci.example/known-head-failure",
+    ] {
+        assert!(
+            comment.contains(evidence) && notification.contains(evidence),
+            "missing {evidence}; comment:\n{comment}\nnotification:\n{notification}"
+        );
+    }
+}
+
+#[test]
 fn unchanged_review_with_red_ci_never_reports_ready_for_review() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);

@@ -563,7 +563,8 @@ fn watch_to_end(
     }
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
-        Some(base_commit) => read_checks(outside, base_commit)?,
+        Some(base_commit) => read_checks(outside, base_commit)
+            .with_context(|| format!("CI red on {sha}:\n{}", check_list(&failed)))?,
         None => Vec::new(),
     };
     let mut failed = split(failed, on_base);
