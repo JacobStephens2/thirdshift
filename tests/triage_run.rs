@@ -24,6 +24,17 @@ fn recommendation_script(recommendation: &str) -> String {
     )
 }
 
+fn assert_notification_links(scenario: &Scenario, notification: &str, numbers: &[u32]) {
+    for &number in numbers {
+        assert!(
+            notification
+                .lines()
+                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
+            "{notification}"
+        );
+    }
+}
+
 /// Whether bwrap can start here. A read-machine test reports itself skipped
 /// where it cannot, rather than failing on the host.
 fn bwrap_starts_or_skip(reason: &str) -> bool {
@@ -82,14 +93,7 @@ fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1);
     let notification = requests[0].body["text"].as_str().unwrap();
-    for number in [8, 9] {
-        assert!(
-            notification
-                .lines()
-                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
-            "{notification}"
-        );
-    }
+    assert_notification_links(&scenario, notification, &[8, 9]);
     support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
 }
 
@@ -143,14 +147,7 @@ fn partial_publication_keeps_created_issue_links_in_the_last_lines() {
         );
     }
     let (_, notification) = saved_notification(&scenario, "triage");
-    for number in [8, 9] {
-        assert!(
-            notification
-                .lines()
-                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
-            "{notification}"
-        );
-    }
+    assert_notification_links(&scenario, &notification, &[8, 9]);
 }
 
 #[test]
