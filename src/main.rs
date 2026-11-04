@@ -224,7 +224,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
   model <name>, effort <level>       Choose the Harness's Model and Effort
-  security-review / no-security-review  Enable / disable a Ticket run's Security review
+  security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.

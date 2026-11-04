@@ -64,6 +64,19 @@ impl SkillWorktree {
     pub fn path(&self) -> &Path {
         self.checkout.path()
     }
+
+    /// Observe only the acquired checkout, even if an agent replaced its path.
+    pub fn head(&self) -> Result<String> {
+        self.checkout
+            .ordinary(&self.launch, |operation| operation.head())
+    }
+
+    /// Compare with the PR's captured base commit, rather than a moving ref.
+    pub fn merge_base_commit(&self, base_commit: &str) -> Result<String> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.run(&["merge-base", base_commit, "HEAD"])
+        })
+    }
 }
 
 impl Drop for SkillWorktree {

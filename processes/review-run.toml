@@ -10,6 +10,11 @@ catalogue = "review-and-address"
 worktree = "review"
 
 [[steps]]
+name = "security-review"
+catalogue = "security-review"
+worktree = "review"
+
+[[steps]]
 name = "delivery"
 catalogue = "delivery"
 worktree = "review"

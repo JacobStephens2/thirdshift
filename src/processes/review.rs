@@ -24,11 +24,10 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
     );
     ensure!(
         command.goal != Some(Goal::Merged)
-            && command.security_review.is_none()
             && command.security_fix.is_none()
             && command.security_close.is_none()
             && !command.plan_only,
-        "merge, security and plan-only flags do not apply to pull-request Processes"
+        "merge, security-fix, security-close and plan-only flags do not apply to pull-request Processes"
     );
     let process = if checking && command.name == "review-run" {
         ReviewProcess::built_in()?
@@ -55,6 +54,7 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
         &Flags {
             harness: command.asked.clone(),
             email: command.email.clone(),
+            security_review: command.security_review,
             ..Flags::default()
         },
         Mode::Address,
@@ -74,10 +74,11 @@ impl ReviewProcess {
     fn built_in() -> Result<Self> {
         let file = load_inherited_builtin("review-run")?;
         ensure!(
-            file.steps.len() == 2
+            file.steps.len() == 3
                 && matches!(file.steps[0].kind, DraftKind::ReviewAndAddress { .. })
-                && matches!(file.steps[1].kind, DraftKind::Delivery { .. }),
-            "review-run needs review-and-address followed by delivery"
+                && matches!(file.steps[1].kind, DraftKind::SecurityReview { .. })
+                && matches!(file.steps[2].kind, DraftKind::Delivery { .. }),
+            "review-run needs review-and-address, security-review and delivery"
         );
         Ok(Self {
             name: "review-run".into(),
@@ -97,6 +98,7 @@ impl ReviewProcess {
     ) -> Result<String> {
         interrupt::install()?;
         let config = UserConfig::load()?;
+        let security_review = mode == Mode::Address && flags.security_review(&config);
         let launch = Git::new(std::env::current_dir()?);
         let origin = launch.run(&["config", "remote.origin.url"])?;
         ensure!(
@@ -116,7 +118,7 @@ impl ReviewProcess {
             ])?;
             let checkout =
                 SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
-            let steps = self.resolve(checkout.path(), &mut command)?;
+            let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             return Ok(steps
                 .iter()
                 .map(|step| {
@@ -179,7 +181,7 @@ impl ReviewProcess {
             ])?;
             let checkout =
                 SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
-            let steps = self.resolve(checkout.path(), &mut command)?;
+            let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             notification.built_with(&command.choice);
             let git = Git::new(checkout.path());
             skills::exclude(&git, "/.thirdshift-review-input.md")?;
@@ -200,7 +202,7 @@ impl ReviewProcess {
                 crate::resources::wait()?;
                 if mode == Mode::Address && matches!(step.kind, StepKind::Delivery) {
                     compatible(&github, pr, &snapshot)?;
-                } else {
+                } else if security_review || !matches!(step.kind, StepKind::SecurityReview) {
                     before_each()?;
                 }
                 let started = Instant::now();
@@ -283,6 +285,43 @@ impl ReviewProcess {
                             &results.join(format!("{}.txt", step.name)),
                             Some(CommandInput::PullRequest(&pr.url)),
                         )?,
+                        StepKind::SecurityReview => {
+                            if !security_review {
+                                "Security review skipped: not requested".to_string()
+                            } else {
+                                let text = prompt::pull_request_security_review(
+                                    pr,
+                                    &snapshot.base,
+                                    &snapshot.branch,
+                                );
+                                let logs = session::Logs::of_process_review(&repo, index + 1);
+                                let (review, log) = session::Sessions::checked_within(
+                                    &logs,
+                                    checkout.path(),
+                                    &step.choice,
+                                    None,
+                                    step.review_default.as_ref(),
+                                    &before_each,
+                                    |sessions| {
+                                        crate::security::review::run_on_pull_request(
+                                            sessions,
+                                            &checkout,
+                                            pr,
+                                            &snapshot.base_head,
+                                            &text,
+                                        )
+                                    },
+                                );
+                                last_log = log.clone();
+                                let entry =
+                                    crate::security::review::Outcome::of(review, log).entry();
+                                let report = findings
+                                    .as_mut()
+                                    .context("Security review needs a review report")?;
+                                report.push_str(&format!("\n\n### Security\n\n{entry}"));
+                                entry
+                            }
+                        }
                         StepKind::Delivery => {
                             let findings = findings
                                 .as_deref()
@@ -294,7 +333,6 @@ impl ReviewProcess {
                         StepKind::Implement
                         | StepKind::ArchitectureReview
                         | StepKind::SpecReview
-                        | StepKind::SecurityReview
                         | StepKind::SecurityAudit
                         | StepKind::ReproduceFindings
                         | StepKind::SelfMerge
@@ -358,7 +396,13 @@ impl ReviewProcess {
         result
     }
 
-    fn resolve(&self, checkout: &Path, command: &mut CommandChoice) -> Result<Vec<ResolvedStep>> {
+    fn resolve(
+        &self,
+        checkout: &Path,
+        command: &mut CommandChoice,
+        security_review: bool,
+        config: &UserConfig,
+    ) -> Result<Vec<ResolvedStep>> {
         let mut steps = self
             .file
             .steps
@@ -366,6 +410,11 @@ impl ReviewProcess {
             .map(|step| resolve(&self.path, step, checkout, command))
             .collect::<Result<Vec<_>>>()?;
         command.check_steps(&mut steps);
+        for step in &mut steps {
+            if matches!(step.kind, StepKind::SecurityReview) {
+                step.check_security_review(security_review, config);
+            }
+        }
         for step in &steps {
             if let Some(failure) = &step.start_failure {
                 bail!("step {} cannot start: {failure}", step.name);
@@ -492,6 +541,17 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                     reviewed = true;
                     None
                 }
+                DraftKind::SecurityReview { .. }
+                    if reviewed
+                        && file.steps[index + 1..].iter().all(|later| {
+                            matches!(
+                                later.kind,
+                                DraftKind::SecurityReview { .. } | DraftKind::Delivery { .. }
+                            )
+                        }) =>
+                {
+                    None
+                }
                 DraftKind::Skill { .. } | DraftKind::Command { .. } => None,
                 DraftKind::Delivery { .. } if reviewed && index + 1 == file.steps.len() => None,
                 DraftKind::ReviewAndAddress { .. }
@@ -507,7 +567,7 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
                 | DraftKind::LandTickets { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => Some(
-                    "pull-request Processes support skill, command, one review-and-address, and delivery as the final Step after a review",
+                    "pull-request Processes support skill, command, one review-and-address, security-review after the editing Steps, and delivery as the final Step after a review",
                 ),
             }
         };
