@@ -196,6 +196,7 @@ fn publish(
         .collect::<Result<Vec<_>>>()?;
     let categories = github.repository_labels(&repo.slug())?;
     let original_report = quoted_report(report, source);
+    let mut labels_to_apply = Vec::with_capacity(recommendation.issues.len());
     for issue in &mut recommendation.issues {
         let category = categories
             .names()
@@ -243,15 +244,10 @@ fn publish(
         );
         issue.category = Some(category.into());
         issue.state = Some(state.name().into());
+        labels_to_apply.push((category, state));
     }
-    for issue in &mut recommendation.issues {
-        let url = github.create_triaged_issue(
-            repo,
-            &issue.title,
-            &issue.body,
-            issue.category.as_deref().expect("validated category"),
-            state_label(issue.state.as_deref().expect("validated state")).expect("validated state"),
-        )?;
+    for (issue, (category, state)) in recommendation.issues.iter_mut().zip(labels_to_apply) {
+        let url = github.create_triaged_issue(repo, &issue.title, &issue.body, category, state)?;
         issue.url = Some(url.url.clone());
         published.push(url);
     }
@@ -303,7 +299,9 @@ pub fn run(
             &prompt::triage(&skill.path, report, read_machine),
         )?;
         let mut recommendation = recommendation(message.as_deref())?;
-        if !recommend_only {
+        let publication = if recommend_only {
+            Ok(())
+        } else {
             publish(
                 &mut recommendation,
                 &repo,
@@ -311,8 +309,8 @@ pub fn run(
                 source,
                 allow_ready_for_agent,
                 &mut published,
-            )?;
-        }
+            )
+        };
         let json = serde_json::to_string(&recommendation)?;
         let mut notification = format!("Recommendation:\n{json}\n");
         for issue in &recommendation.issues {
@@ -324,6 +322,7 @@ pub fn run(
                 notification.push_str(&format!("\n{questionnaire}\n"));
             }
         }
+        publication.with_context(|| format!("Triage analysis retained:\n{notification}"))?;
         Ok(Ended {
             json,
             filed: !recommend_only,

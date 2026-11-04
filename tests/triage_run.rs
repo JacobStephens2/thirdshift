@@ -1017,3 +1017,110 @@ fn email_sends_the_recommendation_to_the_requested_recipient() {
     );
     support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
 }
+
+#[test]
+fn read_machine_cannot_retarget_a_unix_datagram_socketpair_to_a_host_service() {
+    use std::os::unix::net::UnixDatagram;
+
+    let probe = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+        .output();
+    if !probe.is_ok_and(|output| output.status.success()) {
+        eprintln!("SKIPPED (Triage datagram confinement): bwrap cannot start");
+        return;
+    }
+    let scenario = Scenario::new();
+    let socket_path = scenario.path("host-datagram.sock");
+    let marker = scenario.path("host-datagram-wrote");
+    let listener = UnixDatagram::bind(&socket_path).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let marker_for_service = marker.clone();
+    let service = thread::spawn(move || {
+        let mut buffer = [0_u8; 16];
+        if let Ok(n) = listener.recv(&mut buffer)
+            && &buffer[..n] == b"delegate"
+        {
+            fs::write(marker_for_service, "written-by-host-service").unwrap();
+        }
+    });
+    fs::remove_file(scenario.path("bin/claude")).unwrap();
+    support::write_executable(
+        &scenario.path("bin/claude"),
+        &format!(
+            r#"#!/bin/bash
+set -eu
+if [ "$1" = auth ]; then echo '{{"loggedIn":true}}'; exit; fi
+python3 - {socket_path:?} <<'PYTHON'
+import socket, sys
+try:
+    host, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    host.connect(sys.argv[1])
+    host.send(b"delegate")
+except OSError:
+    pass
+PYTHON
+echo '{{"type":"system","subtype":"init","session_id":"triage-datagram"}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage recommendation: {{\"category\":\"bug\",\"state\":\"needs-triage\",\"issues\":[],\"investigation\":\"Checked host datagram confinement.\"}}"}}'
+"#,
+        ),
+    );
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let result = scenario.run(&[
+        "triage",
+        "--recommend-only",
+        "--read-machine",
+        "--file",
+        report.to_str().unwrap(),
+    ]);
+    // Release the receiver when confinement worked or startup failed.
+    let wake = UnixDatagram::unbound().unwrap();
+    let _ = wake.send_to(b"stop", &socket_path);
+    service.join().unwrap();
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        !marker.exists(),
+        "host datagram service wrote outside the worktree: {}",
+        fs::read_to_string(marker).unwrap_or_default()
+    );
+}
+
+#[test]
+fn publication_failure_keeps_the_forwardable_questionnaire_in_notification() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.gh_fails("issue comment");
+    let questionnaire =
+        "For the deploy operator:\n\n1. Which canary failed, and what redacted logs identify it?";
+    let recommendation = serde_json::json!({
+        "category": "bug", "state": "needs-info",
+        "issues": [
+            {"title": "Identify failing canary", "body": "The canary is unknown.", "questionnaire": questionnaire},
+            {"title": "Identify failing cache", "body": "The cache is unknown.", "questionnaire": questionnaire}
+        ],
+        "investigation": "Both problems need an operator's observations."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    let state = scenario.gh_state();
+    assert!(
+        state["bodies"]["8"]
+            .as_str()
+            .unwrap()
+            .contains(questionnaire)
+    );
+    assert!(
+        state["bodies"]["9"]
+            .as_str()
+            .unwrap()
+            .contains(questionnaire)
+    );
+    let (_, notification) = saved_notification(&scenario, "triage");
+    assert!(
+        notification.contains(questionnaire),
+        "filed questionnaire missing from failed Run notification: {notification}"
+    );
+}
