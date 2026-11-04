@@ -39,7 +39,7 @@ fn triage_and_review_commands_render_pages_and_cli_selectors() {
         .unwrap();
         for suffix in ["", "-resume"] {
             super::support::session_trace::write(
-                &folder.join(format!(
+                folder.join(format!(
                     "{subject}-20261019T110000-0400~owner-{session_kind}{suffix}.logs.jsonl"
                 )),
                 "Session output\n",
