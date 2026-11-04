@@ -29,6 +29,8 @@ pub struct Answers {
     pub base_fix: bool,
     /// `launch.pull`.
     pub launch_pull: bool,
+    /// `triage.allow_ready_for_agent`: Triage runs may keep recommended readiness.
+    pub triage_allow_ready_for_agent: bool,
     /// `security.fix`: Security runs may fix reproduced findings.
     pub security_fix: bool,
     /// `security.close`: a Security run may close a finding its fix merged.
@@ -56,6 +58,7 @@ impl Answers {
             merge_always: self.merge_always,
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
+            triage_allow_ready_for_agent: self.triage_allow_ready_for_agent,
             security_fix: self.security_fix,
             security_close: self.security_close,
             security_review: self.security_review,
@@ -151,6 +154,11 @@ pub fn ask(
         "Every Ticket run first fast-forwards your checkout of the Base branch?",
         current.launch_pull,
     )?;
+    let triage_allow_ready_for_agent = yes_or_no(
+        outside,
+        "Triage runs may file ready-for-agent issues by default?",
+        current.triage_allow_ready_for_agent,
+    )?;
     let security_fix = yes_or_no(
         outside,
         "Security runs may fix reproduced findings?",
@@ -196,6 +204,7 @@ pub fn ask(
         merge_always,
         base_fix,
         launch_pull,
+        triage_allow_ready_for_agent,
         security_fix,
         security_close,
         security_review,
