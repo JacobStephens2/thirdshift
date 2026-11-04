@@ -23,8 +23,10 @@ pub(crate) use quota::{Quota, Quotas};
 mod advisories;
 mod base_ci;
 pub(crate) use base_ci::BaseCiAction;
+pub(crate) mod review;
 mod session_issue;
 mod trust;
+pub(crate) use advisories::is_finding_label as is_security_finding_label;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
@@ -301,7 +303,7 @@ impl GitHub {
         ])
     }
 
-    /// Comment on `issue`, which is already closed.
+    /// Comment on `issue`, leaving its state and labels unchanged.
     pub fn comment_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[
             "issue",
@@ -373,7 +375,8 @@ impl GitHub {
     }
 
     /// Every closed issue labelled `label` in the repository `repo`, an
-    /// `owner/repo`, newest first.
+    /// `owner/repo`, newest first. For `in-progress`, include closed pull
+    /// requests so the Sweep also clears abandoned Review-run labels.
     pub fn closed_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "closed")
     }
@@ -390,7 +393,10 @@ impl GitHub {
         )?;
         issues
             .iter()
-            .filter(|listed| listed.get("pull_request").is_none())
+            .filter(|listed| {
+                listed.get("pull_request").is_none()
+                    || (state == "closed" && label == crate::claim::IN_PROGRESS)
+            })
             .map(|listed| {
                 let field = |name: &str| {
                     listed[name].as_str().with_context(|| {
@@ -398,11 +404,14 @@ impl GitHub {
                     })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("html_url")?).context(
-                        CommandFailure::InvalidResponse(
-                            "gh api output has an invalid issue URL".into(),
-                        ),
-                    )?,
+                    issue: if listed.get("pull_request").is_some() {
+                        crate::review::PullRequestUrl::parse(field("html_url")?).map(|pr| pr.issue)
+                    } else {
+                        IssueUrl::parse(field("html_url")?)
+                    }
+                    .context(CommandFailure::InvalidResponse(
+                        "gh api output has an invalid issue URL".into(),
+                    ))?,
                     title: field("title")?.to_string(),
                     labels: labels_of(listed)?,
                 })
@@ -556,12 +565,7 @@ impl GitHub {
     /// Add each of `labels` to the repository `repo`, an `owner/repo`, with its
     /// description, unless the repository has it already.
     pub fn ensure_labels(&self, repo: &str, labels: &[Label]) -> Result<()> {
-        let known = self.gh_json(&[
-            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
-        ])?;
-        let known = named(known.as_array().context(CommandFailure::InvalidResponse(
-            "gh label list did not return a list".into(),
-        ))?);
+        let known = self.repository_labels(repo)?;
         for label in labels {
             if !known.has(*label) {
                 self.gh(&[
@@ -576,6 +580,16 @@ impl GitHub {
             }
         }
         Ok(())
+    }
+
+    /// The category names available to a Triage run, as the repository spells them.
+    pub fn repository_labels(&self, repo: &str) -> Result<Labels> {
+        let known = self.gh_json(&[
+            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
+        ])?;
+        Ok(named(known.as_array().context(
+            CommandFailure::InvalidResponse("gh label list did not return a list".into()),
+        )?))
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
@@ -604,11 +618,36 @@ impl GitHub {
         let repo = repo.slug();
         self.ensure_labels(&repo, labels)?;
         let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
+        self.create_issue_with_labels(&repo, title, body, &names)
+    }
+
+    /// File with a repository-owned category and a factory-owned triage state.
+    /// The caller validates the category against `repository_labels` first.
+    pub fn create_triaged_issue(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: &str,
+        category: &str,
+        state: Label,
+    ) -> Result<IssueUrl> {
+        let repo = repo.slug();
+        self.ensure_labels(&repo, &[state])?;
+        self.create_issue_with_labels(&repo, title, body, &[category, state.name()])
+    }
+
+    fn create_issue_with_labels(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        names: &[&str],
+    ) -> Result<IssueUrl> {
         let url = self.gh_stdout(&[
             "issue",
             "create",
             "--repo",
-            &repo,
+            repo,
             "--title",
             title,
             "--body",

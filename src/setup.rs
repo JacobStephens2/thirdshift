@@ -1215,6 +1215,9 @@ to = \"mine@example.net\"
 from = \"ts@acme.dev\"
 to_by_repo = {}
 
+[review]
+commands_by_repo = { \"Acme/Widgets\" = [\"cargo test --test slow\"] }
+
 [logs]
 dir = \"/var/log/thirdshift\"
 waiting_line_minutes = 5
@@ -1252,6 +1255,10 @@ command_limit = 2
 failure_limit = 5
 wait_minutes = 60
 order = \"highest-first\"
+
+[triage]
+allow_ready_for_agent = true
+read_machine = [\"acme/widgets\"]
 
 [security]
 harness = \"codex\"

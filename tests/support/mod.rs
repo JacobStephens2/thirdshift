@@ -94,7 +94,9 @@ pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
 /// Every Factory skill, by the name a session finds it under.
-pub const FACTORY_SKILLS: [&str; 10] = [
+pub const FACTORY_SKILLS: [&str; 12] = [
+    "thirdshift-triage",
+    "thirdshift-to-questionnaire",
     "thirdshift-implement",
     "thirdshift-code-review",
     "thirdshift-pr",
@@ -528,6 +530,26 @@ impl Scenario {
 
     pub fn run(&self, args: &[&str]) -> RunResult {
         self.command(args).output().unwrap().into()
+    }
+
+    /// Supply a Report or other piped input, closing stdin before waiting.
+    pub fn run_with_input(&self, args: &[&str], input: &str) -> RunResult {
+        use std::io::Write;
+
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap().into()
     }
 
     /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.

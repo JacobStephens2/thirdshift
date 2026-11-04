@@ -210,6 +210,7 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
                 .map(OsString::from)
                 .to_vec(),
             stderr: None,
+            seccomp: None,
         };
         let mut launched = launch.scoped_command(&args[1..], repository, caps)?;
         // SAFETY: fcntl is async-signal-safe. The status file remains owned

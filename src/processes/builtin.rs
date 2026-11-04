@@ -29,7 +29,8 @@ pub(super) fn delivery_step(step: StepDraft) -> Result<Step> {
         DraftKind::SecurityReview { .. } => Ok(Step::SecurityReview),
         DraftKind::Delivery { .. } => Ok(Step::Delivery),
         DraftKind::SelfMerge { .. } => Ok(Step::SelfMerge),
-        DraftKind::Skill { .. }
+        DraftKind::ReviewAndAddress { .. }
+        | DraftKind::Skill { .. }
         | DraftKind::Command { .. }
         | DraftKind::RunPublishedIssue { .. }
         | DraftKind::LandTickets { .. }

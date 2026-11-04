@@ -213,6 +213,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[base]",
             "[launch]",
             "[email]",
+            "[review]",
             "[logs]",
             "[otlp]",
             "[inbox]",
@@ -229,6 +230,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]"
@@ -238,6 +240,12 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
     assert_eq!(config["base"]["fix"].as_bool(), Some(false));
     assert_eq!(config["launch"]["pull"].as_bool(), Some(false));
+    assert!(
+        config["review"]["commands_by_repo"]
+            .as_table()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(config["email"]["always"].as_bool(), Some(false));
     assert_eq!(
         config["email"]["from"].as_str(),
@@ -343,6 +351,7 @@ effort = 'high' # my Effort
             "[harness]",
             "[harness.claude]",
             "[harness.codex]",
+            "[review]",
             "[otlp]",
             "[inbox]",
             "[console]",
@@ -352,6 +361,7 @@ effort = 'high' # my Effort
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]",
@@ -365,6 +375,12 @@ effort = 'high' # my Effort
     assert!(text.contains("effort = 'high' # my Effort\n"), "{text}");
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert!(
+        config["review"]["commands_by_repo"]
+            .as_table()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["review"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));

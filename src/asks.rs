@@ -299,6 +299,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            review: crate::config::review::Settings::default(),
             scoring: crate::config::scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
@@ -322,6 +323,8 @@ mod tests {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
+            triage_read_machine: Default::default(),
             trial_caps: crate::scope::Caps::default(),
             warnings: Vec::new(),
         }

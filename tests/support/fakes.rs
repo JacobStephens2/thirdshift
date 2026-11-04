@@ -11,10 +11,11 @@ use std::sync::OnceLock;
 
 /// The fakes' sources. They name the built executable, and including them
 /// makes Cargo rebuild the tests when they change.
-const SOURCES: [&str; 12] = [
+const SOURCES: [&str; 13] = [
     include_str!("../fakes.rs"),
     include_str!("../fakes/gh.rs"),
     include_str!("../fakes/gh/scoring.rs"),
+    include_str!("../fakes/gh/review.rs"),
     include_str!("../fakes/claude.rs"),
     include_str!("../fakes/codex.rs"),
     include_str!("../fakes/agy.rs"),

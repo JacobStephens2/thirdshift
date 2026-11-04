@@ -243,6 +243,7 @@ stage_names! {
     Trials => "Trials",
     Sampling => "sampling",
     Grading => "grading",
+    Triage => "Triage",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -260,6 +261,8 @@ impl StageName {
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
+            | Work::ReviewRun(_)
+            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
         }
@@ -283,6 +286,7 @@ impl StageName {
             Self::SpecReview,
             Self::SecurityReview,
             Self::ArchitectureReview,
+            Self::Triage,
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
@@ -392,6 +396,8 @@ impl CommandRecord {
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
+                | Work::ReviewRun(_)
+                | Work::TriageRun(_)
                 | Work::Experiment(_)
                 | Work::Process { .. } => None,
             },
@@ -400,6 +406,8 @@ impl CommandRecord {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
+            Work::ReviewRun(_) => format!("review-{stamp}"),
+            Work::TriageRun(_) => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Process { name, .. } => format!("process-{name}-{stamp}"),

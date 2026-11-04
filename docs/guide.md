@@ -10,14 +10,16 @@ Terms in **bold** are defined in [`GLOSSARY.md`](../GLOSSARY.md).
 
 ## Workflows
 
-A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, is the factory's first workflow. It can leave its pull request for review or Self-merge it when asked with `thirdshift merge <Issue URL>` (see [Usage](#usage)). Four more workflows build on it:
+A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, is the factory's first workflow. It can leave its pull request for review or Self-merge it when asked with `thirdshift merge <Issue URL>` (see [Usage](#usage)). Other workflows handle larger plans, discovery, investigation and measurement:
 
 - **[Spec run](#spec-runs)**, `thirdshift <Issue URL>` on an issue with sub-issues: works through its **Tickets** in dependency order, each merged into a **Spec branch**, then leaves one **Spec PR** ready for review.
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
+- **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
+- **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
-Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs, and `review --author <login>`, are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -221,11 +223,11 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `idle_passes.recorded_at` is the Activity log's machine-local date and time, without an offset, or null when it cannot be parsed. Unlike the instants below, that older format does not retain a time zone.
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. Text output and the Console display the stored `Run` kind as **Ticket run**; Command records, the Activity log and JSON retain `Run`, including when reading older records ([ADR 0022](adr/0022-ticket-runs-and-plain-schedules.md)). `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Ticket runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `active_runs` is the count above, computed from the same observations as `commands`, whatever `--all` asks; the Console shows the same total. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run`, `Triage run` and `Base fix`. Text output and the Console display the stored `Run` kind as **Ticket run**; Command records, the Activity log and JSON retain `Run`, including when reading older records ([ADR 0022](adr/0022-ticket-runs-and-plain-schedules.md)). `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Ticket runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `active_runs` is the count above, computed from the same observations as `commands`, whatever `--all` asks; the Console shows the same total. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
 
 Each top-level `commands` entry adds the computed `group` (`needs you`, `ready for review`, `landing`, `working`, `done`, `resolved` or `history`), nullable `needs_you_kind` (`silent`, `slow`, `died`, `failed`, `paused`, `triage`, `finding`), `landing` (also true for a Needs you item referenced from Landing), `stopping` (true while a live Command given a [Stop](#stopping-a-command) is still ending), and `count`. A row a later Command took up also carries `left_from` (the waiting group it left), `left_reason` (`taken up by a later Command`) and `left_at` (that Command's start); rows still waiting, that never waited, or that aged out omit all three. With `group` and `needs_you_kind`, `stopping` gives the row's state word shown in text output and the Console; `state` stays the Command's own. A dismissed row also carries `dismissal` with `who`, `dismissed_at`, `source` (`CLI` or `Console`), the current covered `kind`, and all covered `kinds` in dismissal order. While a live row has no problem, `kind` is the last kind dismissed. Rows waiting on an uncovered kind, and rows never dismissed, omit `dismissal`. A collapsed failure has a `collapsed` array containing the other Commands, each with its own group and kind. These fields are observations, absent from durable records and `show`; child Ticket runs remain within their Command. The durable `security_findings_waiting` flag defaults to false for older records.
 
-`state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction`, `Security fix publishing`, `Security close check`, `dispatched Run` and `dispatched Spec run`. A Pass retains its own stages while its dispatched work records its stages separately. A Pickup run or Security run enters `dispatched Run` or `dispatched Spec run` when it dispatches, so its row reads, for example, `dispatched Spec run · 19 hr 46 min`, timed from the dispatch, and `died at dispatched Spec run` if its process goes. A Pickup run's `issue.title` is the one its Ready issue was listed with; older records have null.
+`state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Triage`, `Security audit`, `Security reproduction`, `Security fix publishing`, `Security close check`, `dispatched Run` and `dispatched Spec run`. A Pass retains its own stages while its dispatched work records its stages separately. A Pickup run or Security run enters `dispatched Run` or `dispatched Spec run` when it dispatches, so its row reads, for example, `dispatched Spec run · 19 hr 46 min`, timed from the dispatch, and `died at dispatched Spec run` if its process goes. A Pickup run's `issue.title` is the one its Ready issue was listed with; older records have null.
 
 `children` recursively contains the immediate child Ticket runs in separate processes, with the same fields as their parent. A Pickup's `dispatched` contains its Ticket run or Spec run. A Spec's `tickets` is its complete roster in issue-number order; each entry has `issue` (`number`, `url`, nullable `title`), `state` (`running`, `merged`, `failed`, `waiting`, or `not started`) and `blockers` (the named open blocking issues, with the same issue fields). Match a Ticket's `issue.url` to the Ticket run in that Spec's `children` for its stage, age, liveness and Base fix descendants. Tickets without a Ticket run remain in the roster. Completed child Ticket runs stay in the tree while its Command is listed. A killed child's `state: "died"` remains independent of the Spec's Ticket accounting. `parent_record` links each child to its parent's exact file; `parent_dispatch`, when present, names the dispatched issue's URL within that file. A top-level Command has null for both. Records from before these fields existed read as having no children or Tickets.
 
@@ -1779,6 +1781,9 @@ unless_merged = false           # every Ticket run sends a Run notification unle
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
+[review]
+commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
+
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
@@ -2317,6 +2322,122 @@ A Spec PR closed, merged or retargeted while the Spec run is working through its
 
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
 
+## Review runs
+
+From a clone of the pull request's repository:
+
+```sh
+thirdshift review https://github.com/you/widgets/pull/42
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
+thirdshift review https://github.com/you/widgets/pull/42 harness codex
+thirdshift review https://github.com/you/widgets/pull/42 security-review
+thirdshift review --author colleague
+```
+
+For cron, `thirdshift review --author <login>` takes the lowest-numbered eligible
+open pull request by that author, one per invocation. The Pass form requires
+`--author`; it cannot be combined with a PR URL. It skips drafts, forks,
+authors who are not Trusted accounts, pull requests labelled `in-progress`,
+and heads already named as `reviewed_head` or `pushed_head` in a Review run's
+marker posted by the GitHub account thirdshift acts as. It also skips a pull
+request based on another open pull request until that base's current head has
+been reviewed. New commits make a head eligible
+again. With no waiting pull request, or at the Command limit, it exits `0`
+without a session or Run notification. `--recommend-only` works on this form too.
+
+If a reviewed base received fixes that the upper pull request does not yet
+contain, the upper pull request's comment says it needs updating before merge.
+thirdshift leaves that update to the author, without merging or rebasing the stack.
+
+A Review run reserves its pull request on `origin`, labels it `in-progress`
+while it runs, and removes that label when it ends, including failure or
+interruption. After a crash, the Day shift must confirm the owner stopped before
+releasing its origin reservation and label. The Sweep removes `in-progress`
+from closed pull requests.
+
+A **Review run** refuses forks, drafts, closed or merged pull requests and
+authors who are not **Trusted accounts**, explaining why before starting a
+session. It checks out the pull request's captured head on its own branch in a
+worktree and reviews only its change against its own base. A locally changed or
+already checked-out head branch must be dealt with before the Review run can use it.
+
+The session gets the pull request body, linked closing issues and comments from
+Trusted accounts only. The linked issues are the Spec; without one, the body is
+the Spec and the posted comment says it used the pull request body alone.
+Without `--recommend-only`, the session addresses findings using the same rules
+as a Ticket run: it runs each behavior finding's test or command before deciding,
+fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
+pushes them to the pull request's own head branch without force. The comment
+lists what it fixed and every **Unaddressed finding**, with the code, plan
+decision, ADR or focused run that refutes it. Decisions left to the Spec or
+Day shift link a `needs-triage` issue. With a linked issue, a departure explained
+only by the pull request body is left as an Unaddressed finding citing that
+reason, without filing a triage issue.
+
+After addressing findings, the review session runs the repository's agent-instruction
+final validation in its Review run worktree. Configure extra commands in the
+[User config](#user-config) for suites you want every review to attempt:
+
+```toml
+[review.commands_by_repo]
+"you/widgets" = ["npm run test:slow", "npm run test:integration"]
+```
+
+Keys are quoted `owner/repo` names, matched without regard to case; each value is
+an ordered list of nonblank shell commands. Replace Setup's `commands_by_repo = {}`
+line with an inline map, or remove that line before adding the subsection above.
+Setup preserves configured commands. The session runs every listed command after
+fixes, in addition to the repository's final validation; a failed command does not
+skip the rest. With no matching list, or an empty list, it still runs the final
+validation the repository's agent instructions require. The posted comment names
+each command, what passed, what failed and what could not run, with reasons.
+A suite those instructions say is invalid from a worktree is reported **not run
+against the branch**, never as passing; thirdshift does not run it in the Launch
+directory as a substitute. `--recommend-only` performs the same validation after
+reviewing, without addressing findings or changing the branch.
+
+`security-review` (or `--security-review`), or `[security] review = true`, adds
+a **Security review** after the review-and-address Step. `no-security-review`
+overrides the setting. It uses `security.harness` and the usual fallback,
+fixes reproduced introduced vulnerabilities, and its commits are pushed with
+the other fixes. The comment lists any Security finding left unfixed or an
+incomplete review. Pre-existing findings stay in private records.
+
+If a Security review or another later editing Step commits more changes,
+Delivery repeats final validation and the configured extra commands on that
+head before pushing. Its comment adds the new head and those validation results.
+When that report includes text from a private Security report, Delivery posts
+`Validation results withheld: the report included private Security review material.`
+instead of the session's text.
+
+If the branch moves before delivery or rejects the push because it moved,
+thirdshift leaves it alone and posts the findings, describes the proposed fixes
+and says the branch moved. The fixes remain in the local worktree. A changed base
+or eligibility stops publication. The hidden comment marker names the reviewed
+head and, when fixes were pushed, the head after the push.
+
+`--recommend-only` fixes nothing and pushes nothing. It posts the findings with
+the reviewed-head marker; a changed head stops publication too. A Ticket run's
+own review still happens inside its implement session.
+
+`--recommend-only` skips the Security review, even when requested, so it stays
+read-only.
+
+Command records, the Activity log, `status` and Run notifications call it a
+Review run. Email and Harness, Model and Effort flags follow the other Commands.
+The Inbox keeps a completed review under **Ready for review** until GitHub shows
+the pull request merged or closed.
+
+Inspect the Built-in process with `thirdshift process show review-run`. Copy it
+to `~/.thirdshift/processes/my-review.toml` to start a Custom process with
+`thirdshift process my-review pull-request <PR URL>`. A `pull-request` worktree
+declares this input; `review-and-address` reviews it and addresses findings, and
+an optional `security-review` Step follows the editing Steps before `delivery`
+pushes fixes and posts the comment. Custom pull-request Processes can
+also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
+the filtered input is in `.thirdshift-review-input.md`. This version keeps these
+Steps sequential and requires `review-and-address` before a final `delivery`.
+
 ## Architect runs
 
 `thirdshift architect` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**, publishes a plan for the top opportunity, and implements it. Start it from a clone of the repository, on the **Base branch**, or name the Base branch with `base <branch>`:
@@ -2545,9 +2666,9 @@ A finding's title becomes the advisory summary. Its description preserves its wr
 
 ### Security review
 
-`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. Setup asks about the setting; it is off by default.
+`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session, a Spec run's Spec review, or a Review run's review-and-address Step, before Delivery pushes. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on Review runs and commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. `--recommend-only` skips the Security review. Setup asks about the setting; it is off by default.
 
-The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
+The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR, in a Review run or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
 
 Before any session, a command checks its review's Harness with the same PATH, Model, Effort and sign-in checks as its own. If a non-default review Harness can't be used, the review falls back to `harness.default`, or Claude Code when blank, with that Harness's own configured Model and Effort. A single `warning:` line names both Harnesses and the reason. If the review Harness is already the default, or the fallback also fails its check, the command fails at preflight. A Spec run checks before any Ticket starts and hands the settled choice to all Tickets and the Spec PR. With Security review off, no review Harness is checked. A Pass checks it only if it may dispatch a Ticket run: a Security run that only audits, or `architect --plan-only`, does not.
 
@@ -2648,7 +2769,7 @@ A Pickup run takes nothing while the repository is at its **Failure limit**: as 
 
 ### The Sweep
 
-In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever.
+In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
 
 - Only `in-progress` and `agent-failed` are removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`, or `taking in-progress and agent-failed off #<n>, which is closed`.
 - It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.
@@ -2738,6 +2859,31 @@ The command's flags and the User config decide what a pass does with the issue i
 An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and, labelled `agent-failed`, it counts towards the [Failure limit](#the-failure-limit) until you hand it back, take it over or close it. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed ticket run stopped, as a [Continuation](#continuation) does. To hand it back to Pickup instead, remove `in-progress` and apply `ready-for-agent`, either in the same edit or afterward: after settling, a pass can continue it if every other Ready issue gate still permits it. Applying the ready label strictly before the last Claim ends does not hand it back. For an ordinary Ticket run, the one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled. A failed Security fix is always left for the Day shift, even with nothing on `origin`.
 
 When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), keep a **Spec** labelled `needs-triage` until every **Ticket** is published, attached as a sub-issue and linked to its blockers; then replace it with `ready-for-agent`. A Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Ticket run on it. A Spec reaches the Base branch only through its Spec PR, once every Ticket is done, so keep out of it any Ticket that needs a release, deployment or host install of the Spec's own earlier Tickets: split the Spec there, with a `ready-for-human` issue for the release blocked by the first Spec and blocking the second. This repository's Day shift follows the publication procedure in [`docs/agents/triage-labels.md`](agents/triage-labels.md), required by [`AGENTS.md`](../AGENTS.md), which overrides the imported skills' defaults and survives their updates. The settling window (five minutes by default) is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
+
+## Triage runs
+
+Give a Report on standard input or with `--file` from the repository's Launch directory:
+
+```sh
+printf '%s\n' 'The deploy canary fails with an empty cache.' | thirdshift triage
+thirdshift triage --file report.txt
+thirdshift triage --read-machine --file report.txt
+thirdshift triage --recommend-only --file report.txt email alerts@example.com
+```
+
+The embedded `thirdshift-triage` Factory skill investigates the Base branch on origin in a throwaway worktree. It follows its own recommendation without waiting for a person and keeps source and Git history unchanged. Before filing, it searches the repository's open issues. When an issue already covers the Report, thirdshift comments there instead of filing a duplicate. The comment quotes the Report with its source and adds new investigation evidence, leaving the existing issue's labels unchanged. Otherwise, thirdshift files the shaped issues. With `--recommend-only`, it writes nothing to GitHub and names the issue it would comment on or the issues it would file. It still reads GitHub to make the checks filing makes, so a recommendation filing would refuse fails under `--recommend-only` too. It records evidence and limitations. It starts no Ticket run.
+
+Each filed issue starts with an AI-generated disclaimer and quotes the Report verbatim in a collapsed section naming standard input or the file path. Separate problems become separate cross-linked issues, each with exactly one repository category label and one state label. A problem that needs credentials or production access to confirm is `ready-for-human`, with the reason in its body. A `wontfix` issue is closed once filed, as the Day shift's triage closes one, with a comment saying the Triage run recommended it.
+
+For a `needs-info` or `ready-for-human` issue, the embedded `thirdshift-to-questionnaire` skill writes a questionnaire addressed to whoever has the answer. It asks only what the repository could not answer, with enough context to forward. thirdshift includes it in the issue body and as readable text in the Run notification, ready for the Day shift to forward. It never contacts a reporter outside the repository. Other outcomes get no questionnaire. With `--recommend-only`, the questionnaire stays in the proposal and notification without being posted.
+
+By default, a recommendation of `ready-for-agent` becomes `needs-triage`, with a note saying what was recommended. Give `--allow-ready-for-agent` to keep it, or set `allow_ready_for_agent = true` under `[triage]` in the User config. thirdshift enforces this permission when filing. This can make the issue eligible for a later Pickup run; the Triage run itself only files it.
+
+Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state; the Run notification links every issue filed or commented on. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The same result is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
+
+The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
+
+Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 
 ## Scoring runs
 

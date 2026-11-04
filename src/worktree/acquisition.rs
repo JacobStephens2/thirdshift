@@ -15,6 +15,27 @@ pub(super) fn add(
     path: &Path,
     start: &str,
 ) -> Result<super::ownership::Checkout> {
+    acquire(launch, branch, path, start, false)
+}
+
+/// Review cleanup owns a branch it created, but never a pre-existing local
+/// branch. Sample that ownership under the same lock as acquisition.
+pub(super) fn add_review(
+    launch: &Git,
+    branch: &str,
+    path: &Path,
+    start: &str,
+) -> Result<super::ownership::Checkout> {
+    acquire(launch, Some(branch), path, start, true)
+}
+
+fn acquire(
+    launch: &Git,
+    branch: Option<&str>,
+    path: &Path,
+    start: &str,
+    preserve_existing_branch: bool,
+) -> Result<super::ownership::Checkout> {
     let _refs_lock = launch.lock_worktree_refs()?;
     let mut owner = Acquisition::inspect(launch, branch, path, start)?;
     let mut args = vec!["worktree", "add"];
@@ -48,7 +69,12 @@ pub(super) fn add(
         Ok(()) => {
             owner.armed = false;
             match std::mem::replace(&mut owner.checkout, CheckoutCapture::Unattempted) {
-                CheckoutCapture::Complete(checkout) => Ok(checkout),
+                CheckoutCapture::Complete(mut checkout) => {
+                    if preserve_existing_branch && owner.branch_before.is_some() {
+                        checkout.preserve_local_branch();
+                    }
+                    Ok(checkout)
+                }
                 CheckoutCapture::Unattempted | CheckoutCapture::Incomplete => {
                     bail!("missing captured checkout")
                 }

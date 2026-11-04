@@ -179,7 +179,8 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
         let (line, name) = match step.kind {
             DraftKind::FixFindings { line } => (line, "fix-findings"),
             DraftKind::CloseFindings { line } => (line, "close-findings"),
-            DraftKind::Skill { .. }
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Skill { .. }
             | DraftKind::Command { .. }
             | DraftKind::Implement { .. }
             | DraftKind::ArchitectureReview { .. }

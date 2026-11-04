@@ -16,12 +16,14 @@
 //! loop, leaving its draft Spec PR for subsequent Steps. A file can declare
 //! one Issue-branch or one Spec-branch worktree, and either needs an issue.
 //!
-//! A Process started with no issue is a Pass, unless it declares an
+//! A Process started on a pull request uses its head branch and own base;
+//! its review and comment delivery live in `review`.
+//! A Process started with no issue or pull request is a Pass, unless it declares an
 //! Issue-branch or Spec-branch worktree, which needs an issue. Such a Pass is
 //! skipped before any worktree while its repository is at its Command limit, and
 //! takes no lock of a kind: it runs beside any other Pass up to the limit.
 //! It does not take an Architect run's Ready-issue or Architect-idea gates.
-//! A Process started with an issue is not a Pass: it takes a slot toward
+//! A Process started with an issue or pull request is not a Pass: it takes a slot toward
 //! the Command limit without counting.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,6 +67,7 @@ pub(crate) mod builtin;
 mod catalog;
 mod findings;
 mod identity;
+pub(crate) mod review;
 pub(crate) mod security;
 mod security_audit;
 pub(crate) mod spec;
@@ -75,6 +78,7 @@ use catalog::Catalog;
 
 /// The issue URL when the Process has an issue; unset otherwise.
 const ISSUE_URL: &str = "THIRDSHIFT_ISSUE_URL";
+const PULL_REQUEST_URL: &str = "THIRDSHIFT_PULL_REQUEST_URL";
 /// The folder of Step result files, beside the Command log.
 const RESULTS_DIR: &str = "THIRDSHIFT_RESULTS_DIR";
 /// The path thirdshift writes this Step's combined output to when it finishes.
@@ -127,6 +131,7 @@ enum WorktreeKind {
     Throwaway,
     IssueBranch,
     SpecBranch,
+    PullRequest,
 }
 
 impl WorktreeDraft {
@@ -161,6 +166,7 @@ impl StepDraft {
 }
 
 enum DraftKind {
+    ReviewAndAddress { line: usize },
     Skill { skill: String, line: usize },
     Command { command: String },
     Implement { line: usize },
@@ -214,6 +220,7 @@ impl ResolvedStep {
             StepKind::LandTickets { .. } => "land-tickets",
             StepKind::FixFindings { .. } => "fix-findings",
             StepKind::CloseFindings => "close-findings",
+            StepKind::ReviewAndAddress => "review-and-address",
         };
         format!(
             "{kind}; worktree {}; {}",
@@ -381,6 +388,7 @@ fn source_from(chosen_by: ChosenBy) -> Source {
 }
 
 enum StepKind {
+    ReviewAndAddress,
     Skill { name: String, path: PathBuf },
     Command(String),
     Implement,
@@ -542,6 +550,12 @@ pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => Catalog::installed()?.list(),
         ProcessAction::Show(name) => Catalog::installed()?.show(&name),
+        ProcessAction::Check(command) if command.pull_request.is_some() => {
+            review::custom(&command, true)
+        }
+        ProcessAction::Run(command) if command.pull_request.is_some() => {
+            review::custom(&command, false)
+        }
         ProcessAction::Check(command) => check(&command),
         ProcessAction::Run(command) => run(&command),
     }
@@ -813,6 +827,7 @@ fn notify(
         base_fix: None,
         log: failed.and_then(|failed| failed.log.as_deref()),
         ticket_lines: failed.map_or(&[], |failed| failed.ticket_lines.as_slice()),
+        triage: None,
         review: completed
             .architecture_end
             .as_ref()
@@ -1126,20 +1141,12 @@ fn execute_groups(
     if let Some(checkout) = issue_run.as_ref().and_then(|run| run.checkout.as_ref()) {
         link_harnesses(checkout.path(), &prepared.steps)?;
     }
-    let owner = logs::captured_owner().map_err(anyhow::Error::msg)?;
-    let mut results = owner
-        .log_path()
-        .context("a Process has no Command log")?
-        .with_extension("steps");
-    if prepared.dispatched.is_some() {
-        let issue = prepared
+    let results = step_results_dir(prepared.dispatched.as_ref().map(|_| {
+        prepared
             .issue
             .as_ref()
-            .expect("a dispatched Ticket has an issue");
-        results = results.join(format!("issue-{}", issue.number));
-    }
-    fs::create_dir_all(&results)
-        .with_context(|| format!("could not create {}", results.display()))?;
+            .expect("a dispatched Ticket has an issue")
+    }))?;
     let mut earlier = Vec::new();
     let mut began = Vec::new();
     let mut last = String::new();
@@ -1424,6 +1431,21 @@ fn run_parallel(
             .map(|handle| handle.join().expect("a step thread panicked"))
             .collect()
     })
+}
+
+/// All Process executors retain Step results under the owning Command log.
+fn step_results_dir(dispatched_issue: Option<&IssueUrl>) -> Result<PathBuf> {
+    let owner = logs::captured_owner().map_err(anyhow::Error::msg)?;
+    let mut results = owner
+        .log_path()
+        .context("a Process has no Command log")?
+        .with_extension("steps");
+    if let Some(issue) = dispatched_issue {
+        results = results.join(format!("issue-{}", issue.number));
+    }
+    fs::create_dir_all(&results)
+        .with_context(|| format!("could not create {}", results.display()))?;
+    Ok(results)
 }
 
 fn finish_step(
@@ -1855,6 +1877,7 @@ fn run_step_in(
 ) -> Result<String> {
     crate::resources::wait()?;
     match &step.kind {
+        StepKind::ReviewAndAddress => bail!("review-and-address needs a pull-request worktree"),
         StepKind::Implement => run_implement(run, cwd, step),
         StepKind::ArchitectureReview => architecture::run(run, step),
         StepKind::SecurityAudit | StepKind::ReproduceFindings => {
@@ -1906,7 +1929,7 @@ fn run_step_in(
                 command,
                 results,
                 &result_file,
-                run.issue.map(|issue| issue.url.as_str()),
+                run.issue.map(|issue| CommandInput::Issue(&issue.url)),
             )
         }
     }
@@ -2167,12 +2190,17 @@ fn resolve_process_issue(issue: Option<IssueInput>) -> Result<Option<IssueUrl>> 
     Ok(Some(issue))
 }
 
+enum CommandInput<'a> {
+    Issue(&'a str),
+    PullRequest(&'a str),
+}
+
 fn run_command(
     worktree: &Path,
     command: &str,
     results: &Path,
     result_file: &Path,
-    issue_url: Option<&str>,
+    input: Option<CommandInput<'_>>,
 ) -> Result<String> {
     let mut child = Command::new("sh");
     child
@@ -2181,13 +2209,15 @@ fn run_command(
         .current_dir(worktree)
         .env(RESULTS_DIR, results)
         .env(STEP_RESULT, result_file);
-    match issue_url {
-        Some(url) => {
+    child.env_remove(ISSUE_URL).env_remove(PULL_REQUEST_URL);
+    match input {
+        Some(CommandInput::Issue(url)) => {
             child.env(ISSUE_URL, url);
         }
-        None => {
-            child.env_remove(ISSUE_URL);
+        Some(CommandInput::PullRequest(url)) => {
+            child.env(PULL_REQUEST_URL, url);
         }
+        None => {}
     }
     let output = process::output(
         &mut child,
@@ -2368,6 +2398,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
             format!("{}: fix-findings (process {process})", step.name)
         }
         StepKind::CloseFindings => format!("{}: close-findings", step.name),
+        StepKind::ReviewAndAddress => format!("{}: review-and-address", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
         let _ = write!(line, " (worktree {worktree})");
@@ -2386,6 +2417,10 @@ fn load(name: &str) -> Result<(PathBuf, ProcessFile, Identity)> {
 
 fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
     let file = parse(path, text)?;
+    review::validate(path, &file)?;
+    if review::has_pull_request(&file) {
+        return Ok(file);
+    }
     refuse_spec_branch(path, &file)?;
     spec_review::validate(path, &file)?;
     refuse_security_review(path, &file)?;
@@ -2658,6 +2693,11 @@ fn refuse_implement(path: &Path, file: &ProcessFile) -> Result<()> {
 }
 
 fn require_issue(path: &Path, file: &ProcessFile, issue: Option<&IssueUrl>) -> Result<()> {
+    ensure!(
+        !review::has_pull_request(file),
+        "{} needs a pull-request <PR URL> input",
+        path.display()
+    );
     let Some(worktree) = file
         .worktrees
         .iter()
@@ -3005,7 +3045,8 @@ fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
             DraftKind::RunPublishedIssue { line } => (line, true),
             DraftKind::LandTickets { line } => (line, false),
             DraftKind::FixFindings { line } => (line, false),
-            DraftKind::Skill { .. }
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Skill { .. }
             | DraftKind::Command { .. }
             | DraftKind::Implement { .. }
             | DraftKind::ArchitectureReview { .. }
@@ -3100,6 +3141,7 @@ fn resolve(
             process: step.child_process(*line).0.to_string(),
         },
         DraftKind::CloseFindings { .. } => StepKind::CloseFindings,
+        DraftKind::ReviewAndAddress { .. } => StepKind::ReviewAndAddress,
     };
     let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
@@ -3338,12 +3380,13 @@ fn parse_worktrees(
                         "throwaway" => WorktreeKind::Throwaway,
                         "issue-branch" => WorktreeKind::IssueBranch,
                         "spec-branch" => WorktreeKind::SpecBranch,
+                        "pull-request" => WorktreeKind::PullRequest,
                         _ => {
                             return Err(rule(
                                 path,
                                 field_line,
                                 "worktree kind",
-                                "kind must be throwaway, issue-branch or spec-branch",
+                                "kind must be throwaway, issue-branch, spec-branch or pull-request",
                             ));
                         }
                     };
@@ -3611,6 +3654,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         ));
     };
     let kind = match value {
+        "review-and-address" => DraftKind::ReviewAndAddress { line },
         "implement" => DraftKind::Implement { line },
         "architecture-review" => DraftKind::ArchitectureReview { line },
         "spec-review" => DraftKind::SpecReview { line },
