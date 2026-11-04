@@ -70,14 +70,7 @@ fn recommendation(message: Option<&str>) -> Result<Recommendation> {
         .context("the Triage recommendation is not valid recommendation JSON")?;
     ensure!(
         !recommendation.category.trim().is_empty()
-            && [
-                "needs-triage",
-                "needs-info",
-                "ready-for-agent",
-                "ready-for-human",
-                "wontfix"
-            ]
-            .contains(&recommendation.state.as_str())
+            && state_label(&recommendation.state).is_some()
             && !recommendation.investigation.trim().is_empty()
             && recommendation.issues.iter().all(|issue| {
                 !issue.title.trim().is_empty()
@@ -97,8 +90,7 @@ fn recommendation(message: Option<&str>) -> Result<Recommendation> {
 }
 
 fn state_label(state: &str) -> Option<Label> {
-    [labels::READY_FOR_AGENT, labels::NEEDS_INFO]
-        .into_iter()
+    std::iter::once(labels::READY_FOR_AGENT)
         .chain(labels::UNREADY)
         .find(|label| label.is_named(state))
 }
