@@ -145,7 +145,8 @@ pub(super) fn validate(path: &Path, file: &ProcessFile) -> Result<()> {
         let (line, name) = match step.kind {
             DraftKind::SecurityAudit { line } => (line, "security-audit"),
             DraftKind::ReproduceFindings { line } => (line, "reproduce-findings"),
-            DraftKind::Skill { .. }
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Skill { .. }
             | DraftKind::Command { .. }
             | DraftKind::Implement { .. }
             | DraftKind::ArchitectureReview { .. }

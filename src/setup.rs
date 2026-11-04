@@ -1215,6 +1215,9 @@ to = \"mine@example.net\"
 from = \"ts@acme.dev\"
 to_by_repo = {}
 
+[review]
+commands_by_repo = { \"Acme/Widgets\" = [\"cargo test --test slow\"] }
+
 [logs]
 dir = \"/var/log/thirdshift\"
 waiting_line_minutes = 5

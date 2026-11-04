@@ -23,6 +23,7 @@ pub(crate) use quota::{Quota, Quotas};
 mod advisories;
 mod base_ci;
 pub(crate) use base_ci::BaseCiAction;
+pub(crate) mod review;
 mod session_issue;
 mod trust;
 pub(crate) use advisories::is_finding_label as is_security_finding_label;
@@ -374,7 +375,8 @@ impl GitHub {
     }
 
     /// Every closed issue labelled `label` in the repository `repo`, an
-    /// `owner/repo`, newest first.
+    /// `owner/repo`, newest first. For `in-progress`, include closed pull
+    /// requests so the Sweep also clears abandoned Review-run labels.
     pub fn closed_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "closed")
     }
@@ -391,7 +393,10 @@ impl GitHub {
         )?;
         issues
             .iter()
-            .filter(|listed| listed.get("pull_request").is_none())
+            .filter(|listed| {
+                listed.get("pull_request").is_none()
+                    || (state == "closed" && label == crate::claim::IN_PROGRESS)
+            })
             .map(|listed| {
                 let field = |name: &str| {
                     listed[name].as_str().with_context(|| {
@@ -399,11 +404,14 @@ impl GitHub {
                     })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("html_url")?).context(
-                        CommandFailure::InvalidResponse(
-                            "gh api output has an invalid issue URL".into(),
-                        ),
-                    )?,
+                    issue: if listed.get("pull_request").is_some() {
+                        crate::review::PullRequestUrl::parse(field("html_url")?).map(|pr| pr.issue)
+                    } else {
+                        IssueUrl::parse(field("html_url")?)
+                    }
+                    .context(CommandFailure::InvalidResponse(
+                        "gh api output has an invalid issue URL".into(),
+                    ))?,
                     title: field("title")?.to_string(),
                     labels: labels_of(listed)?,
                 })

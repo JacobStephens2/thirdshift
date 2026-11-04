@@ -19,7 +19,9 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, Process, ScoringRun, SecurityRun, TriageRun, Trial, Units};
+use Sender::{
+    ArchitectRun, Experiment, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun, Trial, Units,
+};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -111,6 +113,7 @@ enum Sender {
     Trial,
     /// A Step of a Custom process.
     Process,
+    ReviewRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -259,6 +262,20 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::security_review(&issue, BASE, BRANCH),
         },
         Prompt {
+            id: "prompt-pull-request-security-review",
+            title: "Review run Security review",
+            when: "When enabled, reviews security after a Review run addresses Standards and Spec findings. Delivery pushes its fixes with the others and includes unaddressed introduced findings in the comment. Recommend-only skips this session.",
+            sender: ReviewRun,
+            text: prompt::pull_request_security_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.to_string(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                BRANCH,
+            ),
+        },
+        Prompt {
             id: "prompt-security-audit",
             title: "Security audit",
             when: "Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.",
@@ -347,6 +364,58 @@ fn prompts() -> Vec<Prompt> {
                 },
                 None,
                 prompt::ProcessWorktree::Throwaway,
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-address",
+            title: "Review run, address findings",
+            when: "Reviews a pull request against its own base and addresses findings under the Ticket run's rules. Delivery pushes fixes without force and posts the final report as a comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                crate::review::Mode::Address,
+                &[],
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-review",
+            title: "Review run, recommendations",
+            when: "Reviews a pull request's captured head against its own base, using linked closing issues as the Spec or the body alone. Posts recommendations without changing the branch.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                crate::review::Mode::RecommendOnly,
+                &[],
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-validation",
+            title: "Review run, validation after later fixes",
+            when: "A later editing Step changed the reviewed head. Repeats repository final validation and extra commands before Delivery, and appends the results to the comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_validation(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                OWN_HEAD,
+                &[],
             ),
         },
         Prompt {
@@ -514,7 +583,7 @@ fn fence(text: &str) -> String {
 fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
-        "thirdshift-code-review" => format!("{}, or a Code review Trial", unit_links(&[REVIEW])),
+        "thirdshift-code-review" => format!("{}, a Review run, or a Code review Trial", unit_links(&[REVIEW])),
         "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
@@ -748,6 +817,7 @@ fn sent_by(sender: &Sender) -> String {
         ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
         Process => "a Custom process".to_string(),
+        ReviewRun => "a Review run or a Custom pull-request Process".to_string(),
     }
 }
 
@@ -905,6 +975,7 @@ mod tests {
                     | "prompt-spec-review"
                     | "prompt-architecture-review"
                     | "prompt-security-review"
+                    | "prompt-pull-request-security-review"
                     | "prompt-conflict-repair"
                     | "prompt-foreign-conflict-repair"
                     | "prompt-review-repair"
@@ -913,6 +984,7 @@ mod tests {
                     | "prompt-process-step"
                     | "prompt-process-step-later"
                     | "prompt-process-step-issue"
+                    | "prompt-pull-request-address"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

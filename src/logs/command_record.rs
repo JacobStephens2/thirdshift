@@ -261,6 +261,7 @@ impl StageName {
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
+            | Work::ReviewRun(_)
             | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
@@ -395,6 +396,7 @@ impl CommandRecord {
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
+                | Work::ReviewRun(_)
                 | Work::TriageRun(_)
                 | Work::Experiment(_)
                 | Work::Process { .. } => None,
@@ -404,6 +406,7 @@ impl CommandRecord {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
+            Work::ReviewRun(_) => format!("review-{stamp}"),
             Work::TriageRun(_) => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),

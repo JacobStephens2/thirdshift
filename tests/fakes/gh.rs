@@ -257,6 +257,8 @@ use std::sync::Mutex;
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
 use crate::{die, git, python_list};
 
+#[path = "gh/review.rs"]
+mod review;
 #[path = "gh/scoring.rs"]
 mod scoring;
 
@@ -822,6 +824,9 @@ fn now() -> String {
 /// `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 /// labels[]=<label> ...`: set the issue's labels to exactly those given.
 fn issue_labels_put(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, false) {
+        return;
+    }
     let (positional, _) = parse(args);
     let issue = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -958,6 +963,9 @@ fn api_add_blocked_by(state: &mut Json, args: &[&str]) {
 /// `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>`: take
 /// the label, whatever its case, off the issue.
 fn issue_label_delete(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, true) {
+        return;
+    }
     let (positional, _) = parse(args);
     let label = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -1393,6 +1401,9 @@ fn membership_response(state: &Json, key: &str, login: &str) {
 }
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
+    if review::api(state, positional, flags) {
+        return;
+    }
     let path = &positional[0];
     if path == "rate_limit" {
         let reset = std::time::SystemTime::now()
@@ -1547,6 +1558,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
         }
+        review::closed_issues(state, &wanted_state, query.get("labels").copied());
         return;
     }
     if path.contains("/security-advisories") {
@@ -2307,6 +2319,9 @@ fn graphql(state: &Json, args: &[&str]) {
     if scoring::packet(state, &query, &variables) {
         return;
     }
+    if review::linked_issues(state, &query, &variables) {
+        return;
+    }
     if query.contains("ScoringPullRequests") {
         scoring_search(state, &variables);
         return;
@@ -3033,6 +3048,10 @@ pub fn main(args: Vec<String>) {
         ["pr", "view", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             pr_view(&mut state, &positional, &flags);
+        }
+        ["pr", "comment", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            review::comment(&mut state, &positional, &flags);
         }
         ["pr", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);

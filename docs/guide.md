@@ -16,9 +16,10 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
+- **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
 - **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
-Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs, and `review --author <login>`, are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -1780,6 +1781,9 @@ unless_merged = false           # every Ticket run sends a Run notification unle
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
 
+[review]
+commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
+
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
@@ -2318,6 +2322,122 @@ A Spec PR closed, merged or retargeted while the Spec run is working through its
 
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
 
+## Review runs
+
+From a clone of the pull request's repository:
+
+```sh
+thirdshift review https://github.com/you/widgets/pull/42
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
+thirdshift review https://github.com/you/widgets/pull/42 harness codex
+thirdshift review https://github.com/you/widgets/pull/42 security-review
+thirdshift review --author colleague
+```
+
+For cron, `thirdshift review --author <login>` takes the lowest-numbered eligible
+open pull request by that author, one per invocation. The Pass form requires
+`--author`; it cannot be combined with a PR URL. It skips drafts, forks,
+authors who are not Trusted accounts, pull requests labelled `in-progress`,
+and heads already named as `reviewed_head` or `pushed_head` in a Review run's
+marker posted by the GitHub account thirdshift acts as. It also skips a pull
+request based on another open pull request until that base's current head has
+been reviewed. New commits make a head eligible
+again. With no waiting pull request, or at the Command limit, it exits `0`
+without a session or Run notification. `--recommend-only` works on this form too.
+
+If a reviewed base received fixes that the upper pull request does not yet
+contain, the upper pull request's comment says it needs updating before merge.
+thirdshift leaves that update to the author, without merging or rebasing the stack.
+
+A Review run reserves its pull request on `origin`, labels it `in-progress`
+while it runs, and removes that label when it ends, including failure or
+interruption. After a crash, the Day shift must confirm the owner stopped before
+releasing its origin reservation and label. The Sweep removes `in-progress`
+from closed pull requests.
+
+A **Review run** refuses forks, drafts, closed or merged pull requests and
+authors who are not **Trusted accounts**, explaining why before starting a
+session. It checks out the pull request's captured head on its own branch in a
+worktree and reviews only its change against its own base. A locally changed or
+already checked-out head branch must be dealt with before the Review run can use it.
+
+The session gets the pull request body, linked closing issues and comments from
+Trusted accounts only. The linked issues are the Spec; without one, the body is
+the Spec and the posted comment says it used the pull request body alone.
+Without `--recommend-only`, the session addresses findings using the same rules
+as a Ticket run: it runs each behavior finding's test or command before deciding,
+fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
+pushes them to the pull request's own head branch without force. The comment
+lists what it fixed and every **Unaddressed finding**, with the code, plan
+decision, ADR or focused run that refutes it. Decisions left to the Spec or
+Day shift link a `needs-triage` issue. With a linked issue, a departure explained
+only by the pull request body is left as an Unaddressed finding citing that
+reason, without filing a triage issue.
+
+After addressing findings, the review session runs the repository's agent-instruction
+final validation in its Review run worktree. Configure extra commands in the
+[User config](#user-config) for suites you want every review to attempt:
+
+```toml
+[review.commands_by_repo]
+"you/widgets" = ["npm run test:slow", "npm run test:integration"]
+```
+
+Keys are quoted `owner/repo` names, matched without regard to case; each value is
+an ordered list of nonblank shell commands. Replace Setup's `commands_by_repo = {}`
+line with an inline map, or remove that line before adding the subsection above.
+Setup preserves configured commands. The session runs every listed command after
+fixes, in addition to the repository's final validation; a failed command does not
+skip the rest. With no matching list, or an empty list, it still runs the final
+validation the repository's agent instructions require. The posted comment names
+each command, what passed, what failed and what could not run, with reasons.
+A suite those instructions say is invalid from a worktree is reported **not run
+against the branch**, never as passing; thirdshift does not run it in the Launch
+directory as a substitute. `--recommend-only` performs the same validation after
+reviewing, without addressing findings or changing the branch.
+
+`security-review` (or `--security-review`), or `[security] review = true`, adds
+a **Security review** after the review-and-address Step. `no-security-review`
+overrides the setting. It uses `security.harness` and the usual fallback,
+fixes reproduced introduced vulnerabilities, and its commits are pushed with
+the other fixes. The comment lists any Security finding left unfixed or an
+incomplete review. Pre-existing findings stay in private records.
+
+If a Security review or another later editing Step commits more changes,
+Delivery repeats final validation and the configured extra commands on that
+head before pushing. Its comment adds the new head and those validation results.
+When that report includes text from a private Security report, Delivery posts
+`Validation results withheld: the report included private Security review material.`
+instead of the session's text.
+
+If the branch moves before delivery or rejects the push because it moved,
+thirdshift leaves it alone and posts the findings, describes the proposed fixes
+and says the branch moved. The fixes remain in the local worktree. A changed base
+or eligibility stops publication. The hidden comment marker names the reviewed
+head and, when fixes were pushed, the head after the push.
+
+`--recommend-only` fixes nothing and pushes nothing. It posts the findings with
+the reviewed-head marker; a changed head stops publication too. A Ticket run's
+own review still happens inside its implement session.
+
+`--recommend-only` skips the Security review, even when requested, so it stays
+read-only.
+
+Command records, the Activity log, `status` and Run notifications call it a
+Review run. Email and Harness, Model and Effort flags follow the other Commands.
+The Inbox keeps a completed review under **Ready for review** until GitHub shows
+the pull request merged or closed.
+
+Inspect the Built-in process with `thirdshift process show review-run`. Copy it
+to `~/.thirdshift/processes/my-review.toml` to start a Custom process with
+`thirdshift process my-review pull-request <PR URL>`. A `pull-request` worktree
+declares this input; `review-and-address` reviews it and addresses findings, and
+an optional `security-review` Step follows the editing Steps before `delivery`
+pushes fixes and posts the comment. Custom pull-request Processes can
+also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
+the filtered input is in `.thirdshift-review-input.md`. This version keeps these
+Steps sequential and requires `review-and-address` before a final `delivery`.
+
 ## Architect runs
 
 `thirdshift architect` starts an **Architect run**: the factory looks for architecture work itself, with no **Issue URL**, publishes a plan for the top opportunity, and implements it. Start it from a clone of the repository, on the **Base branch**, or name the Base branch with `base <branch>`:
@@ -2546,9 +2666,9 @@ A finding's title becomes the advisory summary. Its description preserves its wr
 
 ### Security review
 
-`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. Setup asks about the setting; it is off by default.
+`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session, a Spec run's Spec review, or a Review run's review-and-address Step, before Delivery pushes. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on Review runs and commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. `--recommend-only` skips the Security review. Setup asks about the setting; it is off by default.
 
-The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
+The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR, in a Review run or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
 
 Before any session, a command checks its review's Harness with the same PATH, Model, Effort and sign-in checks as its own. If a non-default review Harness can't be used, the review falls back to `harness.default`, or Claude Code when blank, with that Harness's own configured Model and Effort. A single `warning:` line names both Harnesses and the reason. If the review Harness is already the default, or the fallback also fails its check, the command fails at preflight. A Spec run checks before any Ticket starts and hands the settled choice to all Tickets and the Spec PR. With Security review off, no review Harness is checked. A Pass checks it only if it may dispatch a Ticket run: a Security run that only audits, or `architect --plan-only`, does not.
 
@@ -2649,7 +2769,7 @@ A Pickup run takes nothing while the repository is at its **Failure limit**: as 
 
 ### The Sweep
 
-In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever.
+In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
 
 - Only `in-progress` and `agent-failed` are removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`, or `taking in-progress and agent-failed off #<n>, which is closed`.
 - It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.

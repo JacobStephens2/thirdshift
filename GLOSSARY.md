@@ -51,7 +51,7 @@ The number of live **Commands** on one repository on one machine at which a **Pa
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
-A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
+A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
 _Avoid_: cleanup, garbage collection
 
 ### Repository and branches
@@ -99,7 +99,7 @@ A continuation of the same agent session, started once when that session ended i
 ### Factory work
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Triage run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Review run**, a **Triage run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Paused Command**:
@@ -117,6 +117,10 @@ A **Ticket** for a recorded Base branch CI failure whose same commit passed on r
 One invocation of the factory on a **Spec**'s **Issue URL**: it works through the Spec's **Tickets** in dependency order, starting a **Ticket run** for each Ticket once the Tickets blocking it are done, several at once when the graph allows. Its **Built-in process** owns the sequence: land the Tickets, the **Spec review**, an optional **Security review**, **Delivery** and an optional **Self-merge**. Dispatch chooses Spec or Ticket and makes the **Claim** before the first Step; the Command's Child asks and Limits are inherited.
 _Avoid_: batch run, spec implementation
 
+**Review run**:
+One invocation of the factory on an open pull request by a **Trusted account**, reviewing its change on the Standards and Spec axes against its own base in a **Worktree** on its head branch. With `--recommend-only`, it posts its findings without changing the branch, ends with a **Run notification** and waits in the **Inbox** under Ready for review until the pull request is merged or closed.
+Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping reviewed or pushed heads, `in-progress` pull requests and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
+
 **Architect run**:
 One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Ticket run** on the **Architect plan** it published. Its **Built-in process** owns the sequence of **Steps**, after the Pass has decided to go ahead. One pass per invocation. It reserves its plan across machines before marking it ready, as a **Pickup run** reserves its Ready issue, and holds the reservation through the dispatched run's ending. It is skipped, doing nothing, when the repository is at its **Command limit** on the machine or another Architect run is running there, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue** or an issue that meets every Ready issue condition except settling, including a **Spec** having a **Startable Ticket**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
 _Avoid_: Weeding (former name), improve run, architecture run
@@ -133,7 +137,7 @@ _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), a
 One **Command** that investigates a **Report** against its repository, read-only and without waiting for a person, and files shaped issues, or only recommends them when asked. Its investigation and issue links reach the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
+An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 **Process**:
@@ -144,7 +148,7 @@ _Avoid_: workflow, pipeline, recipe, run type
 A **Process** that ships inside thirdshift, such as those a **Ticket run**, **Spec run**, **Architect run** or **Security run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run, Spec run, Architect run or Security run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, whether it holds a **Claim**, and whether a **Pass** is skipped are decided before its first Step.
 
 **Custom process**:
-A **Process** a person defines on their own machine and starts by name; it can't take a **Built-in process**'s name, a file can only tighten limits, and its `self-merge` catalogue Step directly after `delivery` is the **Self-merge**, only when the command or **User config** asks. Started with no issue and neither an Issue-branch nor a Spec-branch worktree, it is a **Pass**; either branch worktree needs an issue, an Issue-branch worktree needs one without **Tickets**, and a Spec-branch worktree needs a **Spec**, with a **Claim** made before either worktree; started with an issue, it is not a Pass.
+A **Process** a person defines on their own machine and starts by name; it can't take a **Built-in process**'s name, a file can only tighten limits, and its `self-merge` catalogue Step directly after `delivery` is the **Self-merge**, only when the command or **User config** asks. Started with no issue or pull request and neither an Issue-branch nor a Spec-branch worktree, it is a **Pass**; either branch worktree needs an issue, an Issue-branch worktree needs one without **Tickets**, and a Spec-branch worktree needs a **Spec**, with a **Claim** made before either worktree; started with an issue or pull request, it is not a Pass.
 _Avoid_: workflow, pipeline
 
 **Step**:

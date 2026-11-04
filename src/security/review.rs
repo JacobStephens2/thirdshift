@@ -9,9 +9,10 @@ use std::{fmt, fs};
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
 use crate::harness::interpretation::{SafeguardRefusal, SessionFailure};
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
+use crate::review::PullRequestUrl;
 use crate::session::{Kind, Purpose, Sessions};
-use crate::worktree::Worktree;
+use crate::worktree::{SkillWorktree, Worktree};
 use crate::{logs, progress, prompt};
 
 pub(crate) mod step;
@@ -26,6 +27,34 @@ pub(crate) fn run(
     text: &str,
 ) -> Result<Review> {
     let merge_base = worktree.merge_base_commit(base)?;
+    run_in(sessions, issue, &merge_base, text, || {
+        worktree.head()?;
+        Ok(worktree.path())
+    })
+}
+
+/// Keep private recording and the final-line contract shared with Ticket runs.
+pub(crate) fn run_on_pull_request(
+    sessions: &Sessions<'_>,
+    worktree: &SkillWorktree,
+    pr: &PullRequestUrl,
+    base_commit: &str,
+    text: &str,
+) -> Result<Review> {
+    let merge_base = worktree.merge_base_commit(base_commit)?;
+    run_in(sessions, &pr.issue, &merge_base, text, || {
+        worktree.head()?;
+        Ok(worktree.path())
+    })
+}
+
+fn run_in<'a>(
+    sessions: &Sessions<'_>,
+    issue: &IssueUrl,
+    merge_base: &str,
+    text: &str,
+    checkout: impl Fn() -> Result<&'a Path>,
+) -> Result<Review> {
     let root = logs::root(&issue.repo()).join("security-reviews");
     fs::create_dir_all(&root)?;
     let directory = tempfile::Builder::new()
@@ -38,7 +67,7 @@ pub(crate) fn run(
             prompt::SECURITY_REVIEW_REPORT_FILE,
             &report.to_string_lossy(),
         )
-        .replace(prompt::SECURITY_REVIEW_MERGE_BASE, &merge_base);
+        .replace(prompt::SECURITY_REVIEW_MERGE_BASE, merge_base);
     progress::step(format!(
         "Security review private report: {}",
         report.display()
@@ -47,7 +76,7 @@ pub(crate) fn run(
         sessions.run_to_final_message(Purpose::SecurityReview, Kind::SecurityReview, &text)?;
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
-    worktree.head()?;
+    let worktree = checkout()?;
     let review = Review::from_final_message(message.as_deref());
     // A deliberate incomplete still has a private report to validate and
     // record. Keep its public reason only if that processing succeeds.
@@ -75,12 +104,12 @@ pub(crate) fn run(
         let github = GitHub::new();
         let repo = issue.repo_slug();
         let mut known = github.security_records(&repo)?;
-        let package = super::audit::package_in(worktree.path());
+        let package = super::audit::package_in(worktree);
         for (finding, reproduction) in findings {
             let draft = DraftAdvisory::new(FindingDraft {
                 fingerprint: &finding.fingerprint,
                 summary: &finding.title,
-                audited_commit: &merge_base,
+                audited_commit: merge_base,
                 provenance: FindingProvenance::Review {
                     issue_url: &issue.url,
                 },
@@ -160,6 +189,105 @@ impl OldFinding {
             test: proof.test.clone(),
         })
     }
+}
+
+const MAX_REPORT_BYTES: u64 = 1024 * 1024;
+const MIN_FRAGMENT_CHARS: usize = 8;
+
+/// Identifying text from this repository's private Security reports.
+/// Delivery captures it before a later session: that session can read the
+/// report and then replace the file, and its final message is posted.
+pub(crate) struct PrivateReportMaterial {
+    fragments: Vec<String>,
+}
+
+impl PrivateReportMaterial {
+    /// Whether `text` contains a stored report path or identifying field.
+    /// Command strings are omitted; they are ordinary test invocations.
+    pub(crate) fn exposes(&self, text: &str) -> bool {
+        self.fragments
+            .iter()
+            .any(|fragment| text.contains(fragment))
+    }
+}
+
+pub(crate) fn private_report_material(repo: &Repo) -> PrivateReportMaterial {
+    let mut fragments = Vec::new();
+    let root = logs::root(repo).join("security-reviews");
+    if is_real_dir(&root)
+        && let Ok(entries) = fs::read_dir(&root)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_real_dir(&path) {
+                collect_report(&path.join("pre-existing.json"), &mut fragments);
+            }
+        }
+    }
+    PrivateReportMaterial { fragments }
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
+}
+
+fn collect_report(report: &Path, fragments: &mut Vec<String>) {
+    let Some(bytes) = read_regular_report(report) else {
+        return;
+    };
+    let path = report.to_string_lossy();
+    push_fragment(fragments, &path);
+    let Ok(findings) = serde_json::from_slice::<Vec<OldFinding>>(&bytes) else {
+        return;
+    };
+    for finding in findings {
+        let proof = finding.proof_of_concept;
+        push_fragment(fragments, &finding.fingerprint);
+        push_fragment(fragments, &finding.title);
+        push_fragment(fragments, &finding.description);
+        push_fragment(fragments, &proof.test);
+        push_fragment(fragments, &proof.notes);
+    }
+}
+
+fn push_fragment(fragments: &mut Vec<String>, text: &str) {
+    let text = text.trim();
+    // A validation report can quote one line without copying the whole field.
+    for fragment in std::iter::once(text).chain(text.lines().filter(|line| *line != text)) {
+        let fragment = fragment.trim();
+        if fragment.chars().count() < MIN_FRAGMENT_CHARS {
+            continue;
+        }
+        if let Ok(encoded) = serde_json::to_string(fragment)
+            && let Some(escaped) = encoded
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+            && escaped != fragment
+            && escaped.chars().count() >= MIN_FRAGMENT_CHARS
+        {
+            fragments.push(escaped.to_string());
+        }
+        fragments.push(fragment.to_string());
+    }
+}
+
+/// A regular file no larger than [`MAX_REPORT_BYTES`], opened without
+/// following a symlink. Anything else is skipped.
+fn read_regular_report(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_REPORT_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_REPORT_BYTES).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
