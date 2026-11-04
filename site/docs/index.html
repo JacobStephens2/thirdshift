@@ -66,7 +66,7 @@
 <li><strong><a href="#security-runs">Security run</a></strong>, <code>thirdshift secure</code>: audits the <strong>Base branch</strong> and records each <strong>Security finding</strong> privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.</li>
 <li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt;</code>: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add <code>--recommend-only</code> to get findings without fixes.</li>
 </ul>
-<p>Architect, Pickup and Security runs are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
+<p>Architect, Pickup and Security runs, and <code>review --author &lt;login&gt;</code>, are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
 <p>Every session runs on the <strong>Harness</strong> you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See <a href="#harness-model-and-effort">Harness, Model and Effort</a>.</p>
 </div></details>
 <details class="fold"><summary><h2>What a Ticket run does</h2></summary>
@@ -2091,7 +2091,22 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
 thirdshift review https://github.com/you/widgets/pull/42 security-review
+thirdshift review --author colleague
 </code></pre>
+<p>For cron, <code>thirdshift review --author &lt;login&gt;</code> takes the lowest-numbered eligible
+open pull request by that author, one per invocation. The Pass form requires
+<code>--author</code>; it cannot be combined with a PR URL. It skips drafts, forks,
+authors who are not Trusted accounts, pull requests labelled <code>in-progress</code>,
+and heads already named as <code>reviewed_head</code> or <code>pushed_head</code> in a Review run&#39;s
+marker. It also skips a pull request based on another open pull request until
+that base&#39;s current head has been reviewed. New commits make a head eligible
+again. With no waiting pull request, or at the Command limit, it exits <code>0</code>
+without a session or Run notification. <code>--recommend-only</code> works on this form too.</p>
+<p>A Review run reserves its pull request on <code>origin</code>, labels it <code>in-progress</code>
+while it runs, and removes that label when it ends, including failure or
+interruption. After a crash, the Day shift must confirm the owner stopped before
+releasing its origin reservation and label. The Sweep removes <code>in-progress</code>
+from closed pull requests.</p>
 <p>A <strong>Review run</strong> refuses forks, drafts, closed or merged pull requests and
 authors who are not <strong>Trusted accounts</strong>, explaining why before starting a
 session. It checks out the pull request&#39;s captured head on its own branch in a
@@ -2416,7 +2431,7 @@ then starts <code>ticket-run</code> or <code>spec-run</code> as a command on tha
 </div></details>
 <details class="fold"><summary><h3>The Sweep</h3></summary>
 <div class="manual-content" id="the-sweep">
-<p>In the <strong>Sweep</strong>, each Pickup run, once it holds its slot and before it counts, lists the repository&#39;s closed issues labelled <code>in-progress</code> or <code>agent-failed</code> and takes both labels off each, so an issue whose pull request you merged by hand doesn&#39;t look taken, or failed, for ever.</p>
+<p>In the <strong>Sweep</strong>, each Pickup run, once it holds its slot and before it counts, lists the repository&#39;s closed issues labelled <code>in-progress</code> or <code>agent-failed</code> and takes both labels off each, so an issue whose pull request you merged by hand doesn&#39;t look taken, or failed, for ever. It also removes <code>in-progress</code> from closed pull requests.</p>
 <ul>
 <li>Only <code>in-progress</code> and <code>agent-failed</code> are removed, in one request per issue: the closed issue&#39;s other labels stay. stderr says <code>taking in-progress off #&lt;n&gt;, which is closed</code>, or <code>taking in-progress and agent-failed off #&lt;n&gt;, which is closed</code>.</li>
 <li>It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.</li>

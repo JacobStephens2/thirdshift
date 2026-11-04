@@ -350,7 +350,8 @@ fn a_receive_time_rewind_does_not_republish_removed_history() {
         &scenario.path("bin/git"),
         &format!(
             "#!/bin/sh\n\
-             if [ \"$1\" = push ] && [ \"$2\" = --no-verify ] && [ ! -e '{marker}' ]; then\n\
+             if [ \"$1\" = push ] && [ \"$2\" = --no-verify ] && [ ! -e '{marker}' ] && \
+                 printf '%s\\n' \"$@\" | /usr/bin/grep -q ':refs/heads/colleague$'; then\n\
                touch '{marker}'\n\
                /usr/bin/git --git-dir='{origin}' update-ref refs/heads/colleague refs/heads/colleague^\n\
              fi\n\

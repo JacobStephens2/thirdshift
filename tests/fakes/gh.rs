@@ -824,6 +824,9 @@ fn now() -> String {
 /// `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 /// labels[]=<label> ...`: set the issue's labels to exactly those given.
 fn issue_labels_put(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, false) {
+        return;
+    }
     let (positional, _) = parse(args);
     let issue = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -960,6 +963,9 @@ fn api_add_blocked_by(state: &mut Json, args: &[&str]) {
 /// `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>`: take
 /// the label, whatever its case, off the issue.
 fn issue_label_delete(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, true) {
+        return;
+    }
     let (positional, _) = parse(args);
     let label = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -1552,6 +1558,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
         }
+        review::closed_issues(state, &wanted_state, query.get("labels").copied());
         return;
     }
     if path.contains("/security-advisories") {
