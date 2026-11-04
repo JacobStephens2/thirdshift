@@ -2,12 +2,59 @@
 
 mod support;
 
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::process::Command;
+
 use serde_json::json;
 use support::Scenario;
 
 fn pull_request(scenario: &Scenario) -> String {
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
     scenario.github_has_pr("colleague", "main", "OPEN")
+}
+
+/// Commit `branch` so `.thirdshift-review-input.md` is a symlink to `target`.
+fn commit_review_input_symlink(scenario: &Scenario, branch: &str, target: &Path) {
+    let seed = scenario.path("seed-link");
+    let home = scenario.path("home");
+    let git = |args: &[&str], dir: &Path| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(
+        &[
+            "clone",
+            "-q",
+            &scenario.github_url(),
+            seed.to_str().unwrap(),
+        ],
+        &scenario.path(""),
+    );
+    git(&["checkout", "-q", branch], &seed);
+    symlink(target, seed.join(".thirdshift-review-input.md")).unwrap();
+    git(&["add", ".thirdshift-review-input.md"], &seed);
+    git(
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "Point the review input at another file",
+        ],
+        &seed,
+    );
+    git(&["push", "-q", "origin", branch], &seed);
+    std::fs::remove_dir_all(&seed).unwrap();
 }
 
 #[test]
@@ -324,4 +371,44 @@ worktree = "review"
         retained && informed,
         "retained Step result: {retained}; later session received result path: {informed}; results directory: {results}; prompt: {prompt}"
     );
+}
+
+#[test]
+fn review_input_does_not_follow_a_symlink_outside_the_worktree() {
+    let scenario = Scenario::new();
+    let outside = scenario.path("outside-secret.txt");
+    std::fs::write(&outside, "operator secret\n").unwrap();
+    let url = pull_request(&scenario);
+    commit_review_input_symlink(&scenario, "colleague", &outside);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["body"] = json!("SYMLINK-PAYLOAD-TOKEN");
+    scenario.write_gh_state(&state);
+    scenario.agent_does("printf 'session started' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"; exit 1");
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "operator secret\n",
+        "review wrote through .thirdshift-review-input.md\n{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("symlink"),
+        "expected a symlink refusal: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    assert_eq!(
+        scenario
+            .launch_git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1,
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.launch_git(&["branch", "--list", "colleague"]), "");
 }

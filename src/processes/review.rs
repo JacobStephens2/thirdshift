@@ -1,6 +1,9 @@
 //! Pull-request Processes share eligibility, captured-head checkout, session
 //! execution and comment delivery. Recommend-only never publishes branch work.
 
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+
 use super::*;
 use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
@@ -170,8 +173,10 @@ impl ReviewProcess {
             let git = Git::new(checkout.path());
             skills::exclude(&git, "/.thirdshift-review-input.md")?;
             let input = github.review_input(pr, &snapshot)?;
-            fs::write(
-                checkout.path().join(".thirdshift-review-input.md"),
+            // The checked-out branch chooses this path. A symlink here would
+            // send the packet write outside the worktree.
+            write_review_input(
+                &checkout.path().join(".thirdshift-review-input.md"),
                 &input.markdown,
             )?;
             let results = step_results_dir(None)?;
@@ -363,6 +368,41 @@ impl ReviewProcess {
         }
         Ok(steps)
     }
+}
+
+fn write_review_input(path: &Path, markdown: &str) -> Result<()> {
+    let replacing = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "review input {} is a symlink; refusing to follow it",
+                path.display()
+            );
+        }
+        Ok(metadata) if metadata.is_file() => true,
+        Ok(_) => bail!("review input {} is not a regular file", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("could not inspect review input {}", path.display()));
+        }
+    };
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    if replacing {
+        options.truncate(true);
+    } else {
+        options.create_new(true).mode(0o600);
+    }
+    let mut file = options.open(path).with_context(|| {
+        format!(
+            "refusing to follow a symlink for the review input {}",
+            path.display()
+        )
+    })?;
+    file.write_all(markdown.as_bytes())?;
+    Ok(())
 }
 
 fn unchanged(github: &GitHub, pr: &PullRequestUrl, snapshot: &ReviewPullRequest) -> Result<()> {
