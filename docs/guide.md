@@ -10,12 +10,13 @@ Terms in **bold** are defined in [`GLOSSARY.md`](../GLOSSARY.md).
 
 ## Workflows
 
-A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, is the factory's first workflow. It can leave its pull request for review or Self-merge it when asked with `thirdshift merge <Issue URL>` (see [Usage](#usage)). Four more workflows build on it:
+A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, is the factory's first workflow. It can leave its pull request for review or Self-merge it when asked with `thirdshift merge <Issue URL>` (see [Usage](#usage)). Five more workflows build on it:
 
 - **[Spec run](#spec-runs)**, `thirdshift <Issue URL>` on an issue with sub-issues: works through its **Tickets** in dependency order, each merged into a **Spec branch**, then leaves one **Spec PR** ready for review.
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
+- **[Review run](#review-runs)**, `thirdshift review <PR URL> --recommend-only`: reviews an existing pull request and posts its Standards and Spec findings in one comment.
 
 Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
@@ -2316,6 +2317,42 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 A Spec PR closed, merged or retargeted while the Spec run is working through its Tickets, as when the Day shift reshapes the Spec onto another Base branch, ends the Ticket loop. The Spec run checks its captured Spec PR before it starts each Ticket and whenever it writes the Tickets checklist; once the check fails it starts no further Ticket, waits for the Tickets already running, and fails with `the Spec PR <url> was closed under this Spec run` (or `merged`, or `retargeted from <base> to <other>`). It prints no Recovery command, since one would resume the Spec branch the Spec just left: decide the Spec's Base branch and Spec branch before starting it again. A Ticket started once the Spec PR was open checks it again just before its Self-merge, as does a Base fix that Ticket starts into the Spec branch, and fails with the same cause, its pull request back to a draft, rather than merge into a Spec branch the Spec has left. A Ticket started before the first landing opened the Spec PR has nothing to check and Self-merges as before.
 
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
+
+## Review runs
+
+From a clone of the pull request's repository:
+
+```sh
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only harness codex
+```
+
+A **Review run** refuses forks, drafts, closed or merged pull requests and
+authors who are not **Trusted accounts**, explaining why before starting a
+session. It checks out the pull request's captured head on its own branch in a
+worktree and reviews only its change against its own base. A locally changed or
+already checked-out head branch must be dealt with before the Review run can use it.
+
+The session gets the pull request body, linked closing issues and comments from
+Trusted accounts only. The linked issues are the Spec; without one, the body is
+the Spec and the posted comment says it used the pull request body alone.
+`--recommend-only` is required in this first version: it fixes nothing and pushes
+nothing. thirdshift posts one comment with the findings and a hidden marker
+naming the reviewed head. A changed head, base or eligibility stops publication.
+
+Command records, the Activity log, `status` and Run notifications call it a
+Review run. Email and Harness, Model and Effort flags follow the other Commands.
+The Inbox keeps a completed review under **Ready for review** until GitHub shows
+the pull request merged or closed.
+
+Inspect the Built-in process with `thirdshift process show review-run`. Copy it
+to `~/.thirdshift/processes/my-review.toml` to start a Custom process with
+`thirdshift process my-review pull-request <PR URL>`. A `pull-request` worktree
+declares this input; `review-and-address` reviews it and `delivery` posts the
+recommendations. Custom pull-request Processes can also run skill and command
+Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
+the filtered input is in `.thirdshift-review-input.md`. This version keeps these
+Steps sequential and requires `review-and-address` before a final `delivery`.
 
 ## Architect runs
 

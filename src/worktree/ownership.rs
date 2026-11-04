@@ -24,6 +24,7 @@ pub(super) struct Checkout {
     admin: Directory,
     common: Directory,
     branch: Option<String>,
+    preserve_local_branch: bool,
 }
 
 impl Checkout {
@@ -37,6 +38,7 @@ impl Checkout {
             ))?,
             common: Directory::open(launch.common_dir()?.canonicalize()?)?,
             branch: branch.map(str::to_string),
+            preserve_local_branch: false,
         };
         owner.inspect(launch)?;
         Ok(owner)
@@ -44,6 +46,10 @@ impl Checkout {
 
     pub(super) fn path(&self) -> &Path {
         &self.root.path
+    }
+
+    pub(super) fn preserve_local_branch(&mut self) {
+        self.preserve_local_branch = true;
     }
 
     /// One interruptible operation owns the lock, including observations and
@@ -186,6 +192,9 @@ impl Checkout {
                 return;
             }
             progress::step(match &self.branch {
+                Some(branch) if self.preserve_local_branch => {
+                    format!("cleaning up the worktree; keeping existing local branch {branch}")
+                }
                 Some(branch) => format!("cleaning up the worktree and local branch {branch}"),
                 None => "cleaning up the worktree".to_string(),
             });
@@ -414,7 +423,9 @@ impl<'a> Disposal<'a> {
                 },
             )
             .context("owned checkout removal failed; local branch retained")?;
-        if let Some(branch) = &self.checkout.branch {
+        if let Some(branch) = &self.checkout.branch
+            && !self.checkout.preserve_local_branch
+        {
             self.remove_branch(branch)?;
         }
         Ok(())

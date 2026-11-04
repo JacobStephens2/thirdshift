@@ -126,7 +126,8 @@ pub(crate) fn run(outside: &mut impl Outside, run: SecurityRun<'_>) -> Outcome {
                 | DraftKind::ReproduceFindings { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => {}
-                DraftKind::Skill { .. }
+                DraftKind::ReviewAndAddress { .. }
+                | DraftKind::Skill { .. }
                 | DraftKind::Command { .. }
                 | DraftKind::Implement { .. }
                 | DraftKind::ArchitectureReview { .. }
@@ -172,7 +173,8 @@ fn steps() -> Result<Vec<DraftKind>> {
                 | DraftKind::ReproduceFindings { .. }
                 | DraftKind::FixFindings { .. }
                 | DraftKind::CloseFindings { .. } => Ok(step.kind),
-                DraftKind::Skill { .. }
+                DraftKind::ReviewAndAddress { .. }
+                | DraftKind::Skill { .. }
                 | DraftKind::Command { .. }
                 | DraftKind::Implement { .. }
                 | DraftKind::ArchitectureReview { .. }

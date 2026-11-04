@@ -81,7 +81,8 @@ fn run_steps<O: Outside>(outside: &mut O, run: &ArchitectRun<'_>) -> Result<Outc
                     base: run.base,
                 }));
             }
-            DraftKind::Skill { .. }
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Skill { .. }
             | DraftKind::Command { .. }
             | DraftKind::Implement { .. }
             | DraftKind::SpecReview { .. }
@@ -144,7 +145,8 @@ fn steps() -> Result<Vec<DraftKind>> {
                 DraftKind::ArchitectureReview { .. } | DraftKind::RunPublishedIssue { .. } => {
                     Ok(step.kind)
                 }
-                DraftKind::Skill { .. }
+                DraftKind::ReviewAndAddress { .. }
+                | DraftKind::Skill { .. }
                 | DraftKind::Command { .. }
                 | DraftKind::Implement { .. }
                 | DraftKind::SpecReview { .. }

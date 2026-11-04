@@ -43,6 +43,7 @@ pub enum About<'a> {
     /// A Security run, from the Launch directory.
     SecurityRun,
     ScoringRun,
+    ReviewRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
         name: &'a str,
@@ -59,6 +60,7 @@ impl About<'_> {
                 launch::repo().ok()
             }
             About::ScoringRun => None,
+            About::ReviewRun => launch::repo().ok(),
         }
     }
 }
@@ -80,6 +82,7 @@ enum Subject {
     /// A Security run, with its repository if origin names one.
     SecurityRun(Option<Repo>),
     ScoringRun,
+    ReviewRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
     /// A Custom process, with the repository the Launch directory's `origin`
@@ -98,6 +101,7 @@ impl Subject {
             Subject::ArchitectRun(repo) => Some(("Architect run".into(), repo.as_ref())),
             Subject::SecurityRun(repo) => Some(("Security run".into(), repo.as_ref())),
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
+            Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
         }
@@ -156,6 +160,7 @@ impl RunNotification {
             About::PickupRun => Subject::Pending,
             About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
+            About::ReviewRun => Subject::ReviewRun(repo),
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),

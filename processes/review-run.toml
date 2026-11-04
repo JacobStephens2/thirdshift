@@ -1,0 +1,15 @@
+version = 1
+description = "Review a pull request and post recommendations"
+
+[worktrees.review]
+kind = "pull-request"
+
+[[steps]]
+name = "review-and-address"
+catalogue = "review-and-address"
+worktree = "review"
+
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "review"
