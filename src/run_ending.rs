@@ -58,9 +58,13 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
         }),
         Ending::Run(ended) => Ok(Account::of_run(ended)),
         Ending::Triage(result) => Ok(match result {
-            Ok(recommendation) => Account {
-                outcome: "recommended",
-                ended: Ok("Triage run recommendation complete".into()),
+            Ok(ended) => Account {
+                outcome: if ended.filed { "filed" } else { "recommended" },
+                ended: Ok(if ended.filed {
+                    "Triage run filing complete".into()
+                } else {
+                    "Triage run recommendation complete".into()
+                }),
                 interrupted: false,
                 pr_url: None,
                 advice: &[],
@@ -68,7 +72,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
-                triage: Some(recommendation),
+                triage: Some(&ended.json),
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,

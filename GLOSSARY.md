@@ -130,7 +130,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Triage run**:
-One **Command** that investigates a **Report** against its repository, read-only and without waiting for a person, and recommends shaped issues. Its recommendation reaches the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
+One **Command** that investigates a **Report** against its repository, read-only and without waiting for a person, and files shaped issues, or only recommends them when asked. Its investigation and issue links reach the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
 
 **Pass**:
 An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.

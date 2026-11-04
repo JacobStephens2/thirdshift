@@ -16,7 +16,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
-- **[Triage run](#triage-runs)**, `thirdshift triage --recommend-only`: investigates a **Report** and recommends shaped issues without publishing them.
+- **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
 Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
@@ -27,19 +27,23 @@ Every session runs on the **Harness** you choose: Claude Code by default, or Cod
 Give a Report on standard input or with `--file` from the repository's Launch directory:
 
 ```sh
-printf '%s\n' 'The deploy canary fails with an empty cache.' | thirdshift triage --recommend-only
-thirdshift triage --recommend-only --file report.txt
-thirdshift triage --recommend-only --read-machine --file report.txt
+printf '%s\n' 'The deploy canary fails with an empty cache.' | thirdshift triage
+thirdshift triage --file report.txt
+thirdshift triage --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
 
-The embedded `thirdshift-triage` Factory skill investigates the Base branch on origin in a throwaway worktree. It follows its own recommendation without waiting for a person, keeps source and Git history unchanged, and writes nothing to GitHub. It searches existing open issues, records its evidence and limitations, and recommends a questionnaire when the reporter or Day shift must answer. This first slice requires `--recommend-only`; filing issues is not available yet.
+The embedded `thirdshift-triage` Factory skill investigates the Base branch on origin in a throwaway worktree. It follows its own recommendation without waiting for a person and keeps source and Git history unchanged. It searches existing open issues, records its evidence and limitations, and recommends a questionnaire when the reporter or Day shift must answer. thirdshift files the shaped issues by default; with `--recommend-only`, it writes nothing to GitHub and reports what it would file. It starts no Ticket run.
 
-Standard output is one JSON object with `category`, `state`, `issues` (proposed titles and bodies) and `investigation`. When an existing issue covers the Report, the investigation names its URL and the comment it would add. The same recommendation is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one; an incomplete session recommendation fails the Command.
+Each filed issue starts with an AI-generated disclaimer and quotes the Report verbatim in a collapsed section naming standard input or the file path. Separate problems become separate cross-linked issues, each with exactly one repository category label and one state label. A problem that needs credentials or production access to confirm is `ready-for-human`, with the reason in its body.
+
+By default, a recommendation of `ready-for-agent` becomes `needs-triage`, with a note saying what was recommended. Give `--allow-ready-for-agent` to keep it, or set `allow_ready_for_agent = true` under `[triage]` in the User config. thirdshift enforces this permission when filing. This can make the issue eligible for a later Pickup run; the Triage run itself only files it.
+
+Standard output is one JSON object with `category`, `state`, `issues` (titles and bodies) and `investigation`. Filed issues also include their URL and applied category and state; the Run notification links every issue filed. With `--recommend-only`, the issues remain proposals. When an existing issue covers the Report, the investigation names its URL and the comment it would add. The same result is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one; an incomplete session recommendation fails the Command.
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
-Add `--read-machine` to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. Git history and GitHub remain unchanged. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without the flag, the launch and worktree-only prompt stay as before.
+Add `--read-machine` to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift files its recommendations unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without the flag, the launch and worktree-only prompt stay as before.
 
 ## What a Ticket run does
 
