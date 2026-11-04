@@ -119,6 +119,14 @@ test('the architecture page identifies the current Verdict method', async () => 
   assert.match(page, /New Verdicts use <code>paired-dirichlet-v4<\/code>/);
 });
 
+test('the architecture page distinguishes Triage stdout JSON from its notification summary', async () => {
+  const page = await readFile(join(__dirname, '..', 'architecture', 'index.html'), 'utf8');
+  const triage = page.split('id="triage-run"')[1].split('</section>')[0];
+  assert.doesNotMatch(triage, /Its JSON result and every filed or commented-on issue link reach stdout and the Run notification\./);
+  assert.match(triage, /full JSON result goes to stdout/);
+  assert.match(triage, /Run notification summarizes/);
+});
+
 test('the workflow page identifies the current Experiment result contract', async () => {
   const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
   assert.match(page, /contract with <code>format: 4<\/code>/);
