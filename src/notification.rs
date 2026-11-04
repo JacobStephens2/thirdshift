@@ -345,6 +345,9 @@ fn body(
     if let Some(recommendation) = account.triage {
         text += &recommendation.notification;
     }
+    for line in account.triage_publication_lines() {
+        text += &format!("{line}\n");
+    }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.
         let audit = match (&account.security_fix, &account.ended) {

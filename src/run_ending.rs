@@ -302,6 +302,8 @@ pub struct Review<'a> {
 pub struct Cause {
     full: String,
     safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
+    /// Completed Triage writes, retained separately from verbose failure diagnostics.
+    triage_publication: Vec<crate::issue::IssueUrl>,
 }
 
 impl Cause {
@@ -310,6 +312,10 @@ impl Cause {
         Self {
             full: format!("{error:#}"),
             safeguard_refusal: error.downcast_ref().copied(),
+            triage_publication: error
+                .downcast_ref::<crate::triage::IncompletePublication>()
+                .map(|publication| publication.published.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -475,6 +481,18 @@ impl<'a> Account<'a> {
         self.ended.is_ok()
     }
 
+    /// Readable links to completed Triage writes, even after a later publication failure.
+    pub fn triage_publication_lines(&self) -> impl Iterator<Item = String> {
+        let published = match (self.triage, &self.ended) {
+            (Some(triage), _) => triage.published.as_slice(),
+            (None, Err(cause)) => cause.triage_publication.as_slice(),
+            _ => &[],
+        };
+        published
+            .iter()
+            .map(|issue| format!("Issue: {}", issue.url))
+    }
+
     /// Show stopping/recovery facts first, then on stderr its `elapsed` wall
     /// time if this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
@@ -570,6 +588,7 @@ impl Shown {
                 steps.push(format!("{COMMAND_LOG}{}", log.display()));
             }
         }
+        steps.extend(account.triage_publication_lines());
         Shown {
             steps,
             urls: account.urls.iter().map(|url| url.to_string()).collect(),
