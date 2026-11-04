@@ -448,6 +448,13 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn pull_request(&mut self, url: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().pull_request = Some(url.into());
+            self.write_record();
+        }
+    }
+
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
         let name = stage.name();
         let Some((_, tree)) = &mut self.command_record else {
