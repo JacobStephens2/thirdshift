@@ -108,39 +108,71 @@ struct ProposedIssue {
 
 impl Recommendation {
     /// A readable Run notification, leaving full issue and comment bodies on stdout.
+    /// Fields stay inside their records: a line break in session text must not
+    /// open another `Issue:` line, and terminal controls must not be written out.
     fn notification(&self) -> String {
         let mut notification = format!(
             "Investigation:\n{}\n\nRecommendation: {} ({})\n",
-            self.investigation, self.category, self.state
+            investigation_text(&self.investigation),
+            one_line(&self.category),
+            one_line(&self.state)
         );
         if !self.issues.is_empty() {
             notification.push_str("\nIssues:\n");
             for issue in &self.issues {
                 notification.push_str(&format!(
                     "- {} ({}, {})\n",
-                    issue.title,
-                    issue.category.as_deref().unwrap_or(&self.category),
-                    issue.state.as_deref().unwrap_or(&self.state)
+                    one_line(&issue.title),
+                    one_line(issue.category.as_deref().unwrap_or(&self.category)),
+                    one_line(issue.state.as_deref().unwrap_or(&self.state))
                 ));
             }
         }
         if !self.comments.is_empty() {
             notification.push_str("\nComment targets:\n");
             for comment in &self.comments {
-                notification.push_str(&format!("- {}\n", comment.url));
+                notification.push_str(&format!("- {}\n", one_line(&comment.url)));
             }
         }
         for issue in &self.issues {
             if let Some(questionnaire) = &issue.questionnaire {
-                notification.push_str(&format!("\nQuestionnaire: {}\n", issue.title));
+                notification.push_str(&format!("\nQuestionnaire: {}\n", one_line(&issue.title)));
                 if let Some(url) = &issue.url {
-                    notification.push_str(&format!("Issue: {url}\n"));
+                    notification.push_str(&format!("Issue: {}\n", one_line(url)));
                 }
                 notification.push_str(&format!("\n{questionnaire}\n"));
             }
         }
         notification
     }
+}
+
+/// One notification field. Line breaks and terminal controls would otherwise
+/// open another record, such as a forged `Issue:` line.
+fn one_line(text: &str) -> String {
+    let mut collapsed = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch == '\u{2028}' || ch == '\u{2029}' || ch.is_control() {
+            pending_space = !collapsed.is_empty();
+            continue;
+        }
+        if pending_space {
+            collapsed.push(' ');
+            pending_space = false;
+        }
+        collapsed.push(ch);
+    }
+    collapsed
+}
+
+/// The investigation, one indented line per row, so none of its text stands
+/// as its own notification record.
+fn investigation_text(text: &str) -> String {
+    text.split('\n')
+        .map(|line| format!("  {}", one_line(line)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 const INCOMPLETE: &str = "the Triage recommendation needs a category, triage state, investigation and complete proposed issues or comments";
