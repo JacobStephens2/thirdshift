@@ -502,6 +502,17 @@ impl Scenario {
         fs::write(self.path("claude-script.sh"), script).unwrap();
     }
 
+    /// Script an agent that touches `started`, waits up to [`WAIT_BOUND`]
+    /// for `release` in the scenario root, then runs `script`.
+    pub fn agent_waits_for_release(&self, script: &str) {
+        let looks = WAIT_BOUND.as_millis() / 50;
+        self.agent_does(&format!(
+            "touch '{started}'\nfor _ in $(seq {looks}); do test -f '{release}' && break; sleep 0.05; done\ntest -f '{release}'\n{script}",
+            started = self.path("started").display(),
+            release = self.path("release").display(),
+        ));
+    }
+
     /// Script the fake agent's `session`-th session (1-based) differently
     /// from the rest.
     pub fn agent_does_in_session(&self, session: usize, script: &str) {

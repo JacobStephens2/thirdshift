@@ -229,6 +229,8 @@ impl ReviewProcess {
             };
             let snapshot = github.review_pull_request(pr)?;
             logs::issue_branch(Some(&snapshot.branch));
+            logs::pull_request(&pr.url);
+            progress::step(format_args!("working on pull request {}", pr.url));
             launch.fetch(&[
                 &snapshot.branch,
                 &snapshot.base,

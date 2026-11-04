@@ -4,6 +4,30 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn a_live_review_run_links_its_pull_request_in_working() {
+    let scenario = super::support::Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.agent_waits_for_release("printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let _held = super::HeldFixture {
+        run: Some(scenario.run_until(&["review", &url, "--recommend-only"], &[], "started")),
+        release: scenario.path("release"),
+    };
+    let console = Console::start(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &scenario.path("home"),
+    );
+
+    let html = console.get("/").text().unwrap();
+    let working = section(&html, "working");
+
+    assert!(working.contains("data-live=\"true\""), "{working}");
+    assert!(working.contains("<p class=\"pr\">"), "{working}");
+    assert!(working.contains(&format!("href=\"{url}\"")), "{working}");
+}
+
+#[test]
 fn triage_and_review_commands_render_pages_and_cli_selectors() {
     use serde_json::json;
 
