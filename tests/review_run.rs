@@ -37,12 +37,9 @@ fn live_pull_request_processes_identify_their_target_before_the_first_session_en
             }
             _ => (vec!["review", &url], "review"),
         };
-        scenario.agent_does(&format!(
-            "touch '{}'\nfor _ in $(seq 2400); do test -f '{}' && break; sleep 0.05; done\ntest -f '{}'\nprintf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
-            scenario.path("started").display(),
-            scenario.path("release").display(),
-            scenario.path("release").display()
-        ));
+        scenario.agent_waits_for_release(
+            "printf '## Standards\\nNo findings.\\n## Spec\\nNo findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+        );
         let held = scenario.run_until(&args, &[], "started");
         let folder = format!("home/.thirdshift/logs/acme/widgets/commands/{kind}");
         let record = scenario.command_record(&folder);

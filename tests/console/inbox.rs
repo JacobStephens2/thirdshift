@@ -9,12 +9,7 @@ fn a_live_review_run_links_its_pull_request_in_working() {
     scenario.user_config_is("[console]\nport = 0\n");
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
     let url = scenario.github_has_pr("colleague", "main", "OPEN");
-    scenario.agent_does(&format!(
-        "touch '{}'\nfor _ in $(seq 2400); do test -f '{}' && break; sleep 0.05; done\ntest -f '{}'\nprintf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
-        scenario.path("started").display(),
-        scenario.path("release").display(),
-        scenario.path("release").display()
-    ));
+    scenario.agent_waits_for_release("printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
     let _held = super::HeldFixture {
         run: Some(scenario.run_until(&["review", &url, "--recommend-only"], &[], "started")),
         release: scenario.path("release"),
