@@ -20,6 +20,11 @@ const SECURITY_FINDING: Label = Label::new(
     "A Security finding recorded privately for the Day shift",
 );
 
+/// Whether `name` is the private Security finding label, whatever its case.
+pub(crate) fn is_finding_label(name: &str) -> bool {
+    SECURITY_FINDING.is_named(name)
+}
+
 #[derive(Clone, Copy)]
 pub enum FixEnding {
     Failed,

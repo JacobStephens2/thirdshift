@@ -95,6 +95,19 @@ fn state_label(state: &str) -> Option<Label> {
         .find(|label| label.is_named(state))
 }
 
+/// A label thirdshift treats as workflow state. The session may name a
+/// repository category; these stay factory-owned, whatever their case.
+fn factory_label(name: &str) -> bool {
+    state_label(name).is_some()
+        || crate::claim::IN_PROGRESS.is_named(name)
+        || crate::claim::AGENT_FAILED.is_named(name)
+        || crate::base_fix::BASE_FIX.is_named(name)
+        || labels::FLAKY_TEST.is_named(name)
+        || crate::security::fixing::SECURITY_FIX.is_named(name)
+        || crate::architect::is_mark(name)
+        || crate::github::is_security_finding_label(name)
+}
+
 /// The result retained by stdout, the Command record and Run notification.
 pub struct Ended {
     pub json: String,
@@ -132,13 +145,9 @@ fn file(
                         .unwrap_or(&recommendation.category),
                 )
             })
-            .filter(|name| {
-                state_label(name).is_none()
-                    && !crate::claim::IN_PROGRESS.is_named(name)
-                    && !name.contains(',')
-            })
+            .filter(|name| !factory_label(name) && !name.contains(','))
             .context(
-                "the Triage category must be a repository category label, separate from its state",
+                "the Triage category must be a repository category label, not a triage state or another factory label",
             )?;
         let recommended = state_label(issue.state.as_deref().unwrap_or(&recommendation.state))
             .context("unknown Triage state")?;

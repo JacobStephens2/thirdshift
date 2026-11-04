@@ -25,6 +25,7 @@ mod base_ci;
 pub(crate) use base_ci::BaseCiAction;
 mod session_issue;
 mod trust;
+pub(crate) use advisories::is_finding_label as is_security_finding_label;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,

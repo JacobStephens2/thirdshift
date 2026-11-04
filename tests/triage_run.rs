@@ -308,6 +308,74 @@ fn an_incomplete_recommendation_fails_and_keeps_the_session_trace() {
 }
 
 #[test]
+fn triage_filing_cannot_apply_a_factory_control_label() {
+    let categories = [
+        "agent-failed",
+        "architect-idea",
+        "architect-plan",
+        "security-finding",
+        "base-fix",
+        "security-fix",
+        "flaky-test",
+    ];
+    let scenario = Scenario::new();
+    scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
+    scenario.repo_has_labels(&[
+        "bug",
+        "agent-failed",
+        "architect-idea",
+        "architect-plan",
+        "security-finding",
+        "base-fix",
+        "security-fix",
+        "flaky-test",
+    ]);
+    let issues = categories
+        .iter()
+        .map(|category| {
+            serde_json::json!({
+                "title": format!("Problem marked {category}"),
+                "body": "The report describes this problem.",
+                "category": category,
+                "state": "ready-for-agent",
+            })
+        })
+        .collect::<Vec<_>>();
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-triage",
+        "issues": issues,
+        "investigation": "Each problem was given a factory label as its category.",
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let filed = scenario.run_with_input(&["triage"], REPORT);
+    let mut applied = Vec::new();
+    for number in 8..8 + categories.len() {
+        for label in scenario.issue_labels(number as u32) {
+            if categories
+                .iter()
+                .any(|category| label.eq_ignore_ascii_case(category))
+            {
+                applied.push((number, label));
+            }
+        }
+    }
+    let pickup = scenario.run(&["pickup"]);
+    assert!(
+        applied.is_empty(),
+        "factory control labels were filed: {applied:?}; triage exit {:?} stderr {}; pickup stderr {}",
+        filed.code,
+        filed.stderr,
+        pickup.stderr
+    );
+    assert!(
+        !pickup.stderr.to_ascii_lowercase().contains("failure limit"),
+        "pickup counted a triaged issue as an agent failure: {}",
+        pickup.stderr
+    );
+}
+
+#[test]
 fn email_sends_the_recommendation_to_the_requested_recipient() {
     let scenario = Scenario::new();
     let resend = ResendStandIn::replying(200, r#"{"id":"triage-email"}"#);
