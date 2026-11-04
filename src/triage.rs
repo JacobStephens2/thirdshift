@@ -200,12 +200,22 @@ pub struct Ended {
     pub published: Vec<IssueUrl>,
 }
 
-impl Ended {
-    /// The readable links shared by the final progress lines and Run notification.
-    pub fn publication_lines(&self) -> impl Iterator<Item = String> {
-        self.published
-            .iter()
-            .map(|issue| format!("Issue: {}", issue.url))
+/// Publication stopped after these issues were successfully filed or commented on.
+#[derive(Debug)]
+pub struct IncompletePublication {
+    pub published: Vec<IssueUrl>,
+}
+
+impl std::fmt::Display for IncompletePublication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Triage publication incomplete. Issues already filed or commented on:"
+        )?;
+        for issue in &self.published {
+            write!(f, "\n{}", issue.url)?;
+        }
+        Ok(())
     }
 }
 
@@ -452,14 +462,7 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);
         if !published.is_empty() {
-            let urls = published
-                .iter()
-                .map(|issue| issue.url.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            failed.error = failed.error.context(format!(
-                "Triage publication incomplete. Issues already filed or commented on:\n{urls}"
-            ));
+            failed.error = failed.error.context(IncompletePublication { published });
         }
         failed.log = log;
         failed

@@ -94,6 +94,66 @@ fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
 }
 
 #[test]
+fn partial_publication_keeps_created_issue_links_in_the_last_lines() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.gh_fails("issue comment");
+    let questionnaire = format!(
+        "For the deploy operator:\n\n{}",
+        (1..=30)
+            .map(|number| format!("{number}. Which canary produced evidence item {number}?"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-triage",
+        "issues": [
+            {
+                "title": "Identify failing canary",
+                "body": "The affected canary is unknown.",
+                "state": "needs-info",
+                "questionnaire": questionnaire
+            },
+            {
+                "title": "Handle an empty cache",
+                "body": "Reproduce with an empty cache."
+            }
+        ],
+        "investigation": "Two separate problems need issues."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    let state = scenario.gh_state();
+    assert_eq!(state["issues"]["8"], "OPEN");
+    assert_eq!(state["issues"]["9"], "OPEN");
+    let tail = result
+        .stderr
+        .lines()
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for number in [8, 9] {
+        assert!(
+            tail.contains(&scenario.issue_url(number)),
+            "created issue {number} missing from final output:\n{}",
+            result.stderr
+        );
+    }
+    let (_, notification) = saved_notification(&scenario, "triage");
+    for number in [8, 9] {
+        assert!(
+            notification
+                .lines()
+                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
+            "{notification}"
+        );
+    }
+}
+
+#[test]
 fn triage_comments_on_a_covering_issue_without_filing_or_changing_labels() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["enhancement", "ready-for-human", "in-progress"]);
@@ -265,6 +325,13 @@ fn a_comment_failure_still_notifies_issues_already_commented_on() {
     scenario.agent_does(&recommendation_script(&recommendation.to_string()));
     let result = scenario.run(&["triage", "--file", path.to_str().unwrap()]);
     assert_ne!(result.code, Some(0));
+    assert!(
+        result
+            .stderr
+            .ends_with(&format!("thirdshift: Issue: {}\n", scenario.issue_url(7))),
+        "{}",
+        result.stderr
+    );
     let state = scenario.gh_state();
     let comment = state["comments"]["7"][0].as_str().unwrap();
     assert!(comment.contains(report), "{comment}");
@@ -278,6 +345,12 @@ fn a_comment_failure_still_notifies_issues_already_commented_on() {
     );
     assert!(
         notification.contains("already filed or commented on"),
+        "{notification}"
+    );
+    assert!(
+        !notification
+            .lines()
+            .any(|line| line == format!("Issue: {}", scenario.issue_url(8))),
         "{notification}"
     );
 }
