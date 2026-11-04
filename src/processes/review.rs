@@ -254,6 +254,9 @@ impl ReviewProcess {
             let mut findings = None;
             let mut validation_head = None;
             let mut last = String::new();
+            // Captured before any session. A session can read a private
+            // Security report and delete it, and its final message is posted.
+            let earlier_private_reports = crate::security::review::private_report_material(&repo);
             for (index, step) in steps.iter().enumerate() {
                 crate::resources::wait()?;
                 // Once the captured head has been reviewed, later Steps still
@@ -338,11 +341,18 @@ impl ReviewProcess {
                                 },
                             );
                             last_log = log;
-                            let message = result?
+                            let mut message = result?
                                 .filter(|text| !text.trim().is_empty())
                                 .context("session left no final report")?;
                             if reviewing {
                                 validation_head = Some(git.run(&["rev-parse", "HEAD"])?);
+                                // The validation section is not the only text
+                                // Delivery posts. This report is posted too.
+                                message = withhold_private(
+                                    message,
+                                    &[&earlier_private_reports],
+                                    "Review report withheld: it included private Security review material.",
+                                );
                                 findings = Some(message.clone());
                             }
                             message
@@ -384,6 +394,13 @@ impl ReviewProcess {
                                 last_log = log.clone();
                                 let entry =
                                     crate::security::review::Outcome::of(review, log).entry();
+                                let current_private_reports =
+                                    crate::security::review::private_report_material(&repo);
+                                let entry = withhold_private(
+                                    entry,
+                                    &[&earlier_private_reports, &current_private_reports],
+                                    "Security review results withheld: the report included private Security review material.",
+                                );
                                 let report = findings
                                     .as_mut()
                                     .context("Security review needs a review report")?;
@@ -433,11 +450,11 @@ impl ReviewProcess {
                                     git.run(&["rev-parse", "HEAD"])? == head,
                                     "validation session changed the final Review run head"
                                 );
-                                let validation = if private_reports.exposes(&validation) {
-                                    "Validation results withheld: the report included private Security review material.".to_string()
-                                } else {
-                                    validation
-                                };
+                                let validation = withhold_private(
+                                    validation,
+                                    &[&earlier_private_reports, &private_reports],
+                                    "Validation results withheld: the report included private Security review material.",
+                                );
                                 findings
                                     .as_mut()
                                     .context("delivery needs a review report")?
@@ -546,6 +563,21 @@ impl ReviewProcess {
             }
         }
         Ok(steps)
+    }
+}
+
+/// Session output is posted on the pull request. A prompt not to copy a
+/// private Security report is not a boundary, so any stored report fragment
+/// replaces the whole public text.
+fn withhold_private(
+    text: String,
+    reports: &[&crate::security::review::PrivateReportMaterial],
+    withheld: &str,
+) -> String {
+    if reports.iter().any(|report| report.exposes(&text)) {
+        withheld.to_string()
+    } else {
+        text
     }
 }
 

@@ -57,6 +57,62 @@ fi
     );
 }
 
+/// The Standards and Spec report is posted in full. A prior private Security
+/// report is on disk before that session, and the session can copy it. The
+/// comment must not publish that text. Validation is not the only public path.
+#[test]
+fn review_report_does_not_publish_a_prior_private_description() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    let private_line = "PRIVATE_PRIOR_DESCRIPTION_706";
+    let report = scenario
+        .path("home/.thirdshift/logs/acme/widgets/security-reviews/prior/pre-existing.json");
+    std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+    std::fs::write(
+        &report,
+        serde_json::json!([{
+            "fingerprint": "old-prior-review-edge",
+            "title": "Existing prior edge",
+            "description": private_line,
+            "proof_of_concept": {
+                "test": "assert_prior_review_edge();",
+                "command": "cargo test prior_review_edge",
+                "head_exit_code": 101,
+                "merge_base_exit_code": 101,
+                "notes": "Harmless local fixture fails at both commits.",
+                "severity": "low",
+                "fix_size": "single"
+            }
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    scenario.agent_does(
+        r#"
+report=$(find "$HOME/.thirdshift/logs" -name pre-existing.json -print -quit)
+test -n "$report"
+cp "$report" "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let comment = scenario.gh_state()["prs"][0]["postedComments"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !comment.contains(private_line),
+        "a prior private Security description was published: {comment}"
+    );
+    assert!(
+        !comment.contains("old-prior-review-edge"),
+        "a prior private Security fingerprint was published: {comment}"
+    );
+}
+
 /// A later validation session can read the private Security report. Its final
 /// message is public comment text, so the sentinel must not be published.
 #[test]
