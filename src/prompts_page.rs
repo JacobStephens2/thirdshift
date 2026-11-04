@@ -252,6 +252,20 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::security_review(&issue, BASE, BRANCH),
         },
         Prompt {
+            id: "prompt-pull-request-security-review",
+            title: "Review run Security review",
+            when: "When enabled, reviews security after a Review run addresses Standards and Spec findings. Delivery pushes its fixes with the others and includes unaddressed introduced findings in the comment. Recommend-only skips this session.",
+            sender: ReviewRun,
+            text: prompt::pull_request_security_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.to_string(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                BRANCH,
+            ),
+        },
+        Prompt {
             id: "prompt-security-audit",
             title: "Security audit",
             when: "Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root.",
@@ -774,7 +788,7 @@ fn sent_by(sender: &Sender) -> String {
         ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
         Process => "a Custom process".to_string(),
-        ReviewRun => "a Review run or a Custom process's review-and-address Step".to_string(),
+        ReviewRun => "a Review run or a Custom pull-request Process".to_string(),
     }
 }
 
@@ -932,6 +946,7 @@ mod tests {
                     | "prompt-spec-review"
                     | "prompt-architecture-review"
                     | "prompt-security-review"
+                    | "prompt-pull-request-security-review"
                     | "prompt-conflict-repair"
                     | "prompt-foreign-conflict-repair"
                     | "prompt-review-repair"

@@ -2090,6 +2090,7 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 <pre><code class="language-sh">thirdshift review https://github.com/you/widgets/pull/42
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
+thirdshift review https://github.com/you/widgets/pull/42 security-review
 </code></pre>
 <p>A <strong>Review run</strong> refuses forks, drafts, closed or merged pull requests and
 authors who are not <strong>Trusted accounts</strong>, explaining why before starting a
@@ -2126,6 +2127,12 @@ A suite those instructions say is invalid from a worktree is reported <strong>no
 against the branch</strong>, never as passing; thirdshift does not run it in the Launch
 directory as a substitute. <code>--recommend-only</code> performs the same validation after
 reviewing, without addressing findings or changing the branch.</p>
+<p><code>security-review</code> (or <code>--security-review</code>), or <code>[security] review = true</code>, adds
+a <strong>Security review</strong> after the review-and-address Step. <code>no-security-review</code>
+overrides the setting. It uses <code>security.harness</code> and the usual fallback,
+fixes reproduced introduced vulnerabilities, and its commits are pushed with
+the other fixes. The comment lists any Security finding left unfixed or an
+incomplete review. Pre-existing findings stay in private records.</p>
 <p>If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
 and says the branch moved. The fixes remain in the local worktree. A changed base
@@ -2134,6 +2141,8 @@ head and, when fixes were pushed, the head after the push.</p>
 <p><code>--recommend-only</code> fixes nothing and pushes nothing. It posts the findings with
 the reviewed-head marker; a changed head stops publication too. A Ticket run&#39;s
 own review still happens inside its implement session.</p>
+<p><code>--recommend-only</code> skips the Security review, even when requested, so it stays
+read-only.</p>
 <p>Command records, the Activity log, <code>status</code> and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
 The Inbox keeps a completed review under <strong>Ready for review</strong> until GitHub shows
@@ -2142,7 +2151,8 @@ the pull request merged or closed.</p>
 to <code>~/.thirdshift/processes/my-review.toml</code> to start a Custom process with
 <code>thirdshift process my-review pull-request &lt;PR URL&gt;</code>. A <code>pull-request</code> worktree
 declares this input; <code>review-and-address</code> reviews it and addresses findings, and
-<code>delivery</code> pushes fixes and posts the comment. Custom pull-request Processes can
+an optional <code>security-review</code> Step follows the editing Steps before <code>delivery</code>
+pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
 the filtered input is in <code>.thirdshift-review-input.md</code>. This version keeps these
 Steps sequential and requires <code>review-and-address</code> before a final <code>delivery</code>.</p>
@@ -2319,8 +2329,8 @@ stay the same.</p>
 <p>A finding&#39;s title becomes the advisory summary. Its description preserves its write-up, trace, evidence and validation plan, with the fingerprint and audited commit. thirdshift claims no severity, CWE or affected version range. It uses the package in the repository&#39;s manifest, or the <code>other</code> ecosystem when none is identified. Matching fingerprints in any advisory state are kept rather than recorded again. Rejected candidates stay in the local report and produce no advisory. Draft advisories require GitHub repository security manager or administrator access. On a private repository whose advisory endpoint is unavailable, the private record is an issue labelled <code>security-finding</code> and <code>needs-triage</code>. It is never replaced by a public finding issue.</p>
 <details class="fold"><summary><h3>Security review</h3></summary>
 <div class="manual-content" id="security-review">
-<p><code>security-review</code>, or <code>review = true</code> under <code>[security]</code>, enables one guidance review after a Ticket run&#39;s opening session or a Spec run&#39;s Spec review, before Delivery pushes and enters the Repair loop. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. <code>no-security-review</code> overrides the setting. Both words, with or without dashes, are accepted on commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. Setup asks about the setting; it is off by default.</p>
-<p>The review runs on <code>[security] harness</code> when that is set, with that Harness&#39;s own <code>[harness.&lt;name&gt;]</code> Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run&#39;s Spec PR or in a Base fix. The command&#39;s <code>harness</code>, <code>model</code> and <code>effort</code> words choose the Harness of every other session, and don&#39;t change the review&#39;s; there is no word for the review&#39;s Harness. With <code>security.harness</code> blank or missing, the review runs on the Command&#39;s Harness. Every other session, Repairs and Resumes after the review included, stays on the Command&#39;s Harness.</p>
+<p><code>security-review</code>, or <code>review = true</code> under <code>[security]</code>, enables one guidance review after a Ticket run&#39;s opening session, a Spec run&#39;s Spec review, or a Review run&#39;s review-and-address Step, before Delivery pushes. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. <code>no-security-review</code> overrides the setting. Both words, with or without dashes, are accepted on Review runs and commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. <code>--recommend-only</code> skips the Security review. Setup asks about the setting; it is off by default.</p>
+<p>The review runs on <code>[security] harness</code> when that is set, with that Harness&#39;s own <code>[harness.&lt;name&gt;]</code> Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run&#39;s Spec PR, in a Review run or in a Base fix. The command&#39;s <code>harness</code>, <code>model</code> and <code>effort</code> words choose the Harness of every other session, and don&#39;t change the review&#39;s; there is no word for the review&#39;s Harness. With <code>security.harness</code> blank or missing, the review runs on the Command&#39;s Harness. Every other session, Repairs and Resumes after the review included, stays on the Command&#39;s Harness.</p>
 <p>Before any session, a command checks its review&#39;s Harness with the same PATH, Model, Effort and sign-in checks as its own. If a non-default review Harness can&#39;t be used, the review falls back to <code>harness.default</code>, or Claude Code when blank, with that Harness&#39;s own configured Model and Effort. A single <code>warning:</code> line names both Harnesses and the reason. If the review Harness is already the default, or the fallback also fails its check, the command fails at preflight. A Spec run checks before any Ticket starts and hands the settled choice to all Tickets and the Spec PR. With Security review off, no review Harness is checked. A Pass checks it only if it may dispatch a Ticket run: a Security run that only audits, or <code>architect --plan-only</code>, does not.</p>
 <p>If a non-default review Harness passes preflight but returns a Harness error before any turns or tokens, thirdshift warns in the same way and retries the review once on the default Harness. A failure on the default, a model refusal or a failure after work starts is not retried. Each attempt keeps its own Session trace and <code>.models.json</code>; the retry uses <code>security-review-fallback</code>, also selected by <code>logs --session security-review</code>. Those records, the Command log and the Run notification name the Harness each attempt actually ran on; the <code>Built with</code> line still names the Command&#39;s. A Continuation reads <code>security.harness</code> again and applies these checks again.</p>
 <p>The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. Unaddressed introduced findings appear under Security in the PR&#39;s Unaddressed findings. A Ticket run or Spec run asked to Self-merge leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Ticket run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository&#39;s logs (<code>security-reviews/</code>). thirdshift records it as a draft advisory, or a <code>security-finding</code>/<code>needs-triage</code> issue on a private repository, reusing existing fingerprints and preserving the Day shift&#39;s grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.</p>

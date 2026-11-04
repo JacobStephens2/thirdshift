@@ -2329,6 +2329,7 @@ From a clone of the pull request's repository:
 thirdshift review https://github.com/you/widgets/pull/42
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
 thirdshift review https://github.com/you/widgets/pull/42 harness codex
+thirdshift review https://github.com/you/widgets/pull/42 security-review
 ```
 
 A **Review run** refuses forks, drafts, closed or merged pull requests and
@@ -2372,6 +2373,13 @@ against the branch**, never as passing; thirdshift does not run it in the Launch
 directory as a substitute. `--recommend-only` performs the same validation after
 reviewing, without addressing findings or changing the branch.
 
+`security-review` (or `--security-review`), or `[security] review = true`, adds
+a **Security review** after the review-and-address Step. `no-security-review`
+overrides the setting. It uses `security.harness` and the usual fallback,
+fixes reproduced introduced vulnerabilities, and its commits are pushed with
+the other fixes. The comment lists any Security finding left unfixed or an
+incomplete review. Pre-existing findings stay in private records.
+
 If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
 and says the branch moved. The fixes remain in the local worktree. A changed base
@@ -2382,6 +2390,9 @@ head and, when fixes were pushed, the head after the push.
 the reviewed-head marker; a changed head stops publication too. A Ticket run's
 own review still happens inside its implement session.
 
+`--recommend-only` skips the Security review, even when requested, so it stays
+read-only.
+
 Command records, the Activity log, `status` and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
 The Inbox keeps a completed review under **Ready for review** until GitHub shows
@@ -2391,7 +2402,8 @@ Inspect the Built-in process with `thirdshift process show review-run`. Copy it
 to `~/.thirdshift/processes/my-review.toml` to start a Custom process with
 `thirdshift process my-review pull-request <PR URL>`. A `pull-request` worktree
 declares this input; `review-and-address` reviews it and addresses findings, and
-`delivery` pushes fixes and posts the comment. Custom pull-request Processes can
+an optional `security-review` Step follows the editing Steps before `delivery`
+pushes fixes and posts the comment. Custom pull-request Processes can
 also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
 the filtered input is in `.thirdshift-review-input.md`. This version keeps these
 Steps sequential and requires `review-and-address` before a final `delivery`.
@@ -2624,9 +2636,9 @@ A finding's title becomes the advisory summary. Its description preserves its wr
 
 ### Security review
 
-`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. Setup asks about the setting; it is off by default.
+`security-review`, or `review = true` under `[security]`, enables one guidance review after a Ticket run's opening session, a Spec run's Spec review, or a Review run's review-and-address Step, before Delivery pushes. A Spec run reviews every Ticket against its Spec branch and the whole Spec branch against its Base branch once. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on Review runs and commands that start Ticket runs and follow dispatched Ticket runs and Base fixes. `--recommend-only` skips the Security review. Setup asks about the setting; it is off by default.
 
-The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
+The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Ticket run, each Ticket, on a Spec run's Spec PR, in a Review run or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness.
 
 Before any session, a command checks its review's Harness with the same PATH, Model, Effort and sign-in checks as its own. If a non-default review Harness can't be used, the review falls back to `harness.default`, or Claude Code when blank, with that Harness's own configured Model and Effort. A single `warning:` line names both Harnesses and the reason. If the review Harness is already the default, or the fallback also fails its check, the command fails at preflight. A Spec run checks before any Ticket starts and hands the settled choice to all Tickets and the Spec PR. With Security review off, no review Harness is checked. A Pass checks it only if it may dispatch a Ticket run: a Security run that only audits, or `architect --plan-only`, does not.
 
