@@ -7,14 +7,57 @@ use std::os::unix::fs::OpenOptionsExt;
 use super::*;
 use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
-use crate::review::{Mode, PullRequestUrl};
+use crate::review::{Mode, PullRequestUrl, Reservation};
 
 mod delivery;
 
 use delivery::deliver;
 
 pub(crate) fn run(command: ReviewArgs) -> Result<String> {
-    ReviewProcess::built_in()?.execute(&command.pull_request, &command.flags, command.mode, false)
+    let (pr, reservation) = match command.target {
+        crate::review::Target::PullRequest(pr) => (pr, None),
+        crate::review::Target::Author(author) => {
+            interrupt::install()?;
+            let config = UserConfig::load()?;
+            logs::begin(Begin::ReviewRun { pass: true });
+            logs::configured(&config);
+            let launch = Git::new(std::env::current_dir()?);
+            let repo =
+                crate::issue::Repo::of_origin(&launch.run(&["config", "remote.origin.url"])?)
+                    .context("review --author needs a GitHub origin")?;
+            logs::pass_fired(&repo);
+            if let Some(running) = command_limit::hold_pass(
+                &repo,
+                config.command_limit,
+                command_limit::Sharing::UpToTheLimit,
+            )? {
+                logs::skipped(logs::Pass::Review, &repo, &running);
+                progress::step(&running);
+                return Ok(String::new());
+            }
+            let github = GitHub::new();
+            let mut selected = None;
+            for pr in github.waiting_review_pull_requests(&repo, &author, None)? {
+                if let Some(held) = Reservation::take(&launch, &github, &pr)? {
+                    if github
+                        .waiting_review_pull_requests(&repo, &author, Some(pr.issue.number))?
+                        .contains(&pr)
+                    {
+                        selected = Some((pr, Some(held)));
+                        break;
+                    }
+                }
+            }
+            let Some(selected) = selected else {
+                let reason = format!("no waiting pull request by {author} on {}", repo.slug());
+                logs::skipped(logs::Pass::Review, &repo, &reason);
+                progress::step(reason);
+                return Ok(String::new());
+            };
+            selected
+        }
+    };
+    ReviewProcess::built_in()?.execute(&pr, &command.flags, command.mode, false, reservation)
 }
 
 pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
@@ -59,6 +102,7 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
         },
         Mode::Address,
         checking,
+        None,
     )
 }
 
@@ -95,6 +139,7 @@ impl ReviewProcess {
         flags: &Flags,
         mode: Mode,
         checking: bool,
+        reservation: Option<Reservation>,
     ) -> Result<String> {
         interrupt::install()?;
         let config = UserConfig::load()?;
@@ -145,17 +190,21 @@ impl ReviewProcess {
                 About::Process { name: &self.name }
             },
         )?;
-        logs::begin(if self.built_in {
-            Begin::ReviewRun
-        } else {
-            Begin::Process {
-                name: &self.name,
-                pass: false,
-            }
-        });
-        logs::configured(&config);
+        if reservation.is_none() {
+            logs::begin(if self.built_in {
+                Begin::ReviewRun { pass: false }
+            } else {
+                Begin::Process {
+                    name: &self.name,
+                    pass: false,
+                }
+            });
+            logs::configured(&config);
+        }
         logs::process_loaded(self.identity.clone());
-        command_limit::hold_slot(&repo);
+        if reservation.is_none() {
+            command_limit::hold_slot(&repo);
+        }
         logs::started(
             if self.built_in {
                 Work::ReviewRun(&repo)
@@ -171,6 +220,14 @@ impl ReviewProcess {
         let mut delivered = false;
         let result = (|| {
             let github = GitHub::new();
+            // Validate before reserving, so an ineligible explicit PR changes
+            // no label. Capture again after reservation for the actual run.
+            github.review_pull_request(pr)?;
+            let _reservation = match reservation {
+                Some(held) => held,
+                None => Reservation::take(&launch, &github, pr)?
+                    .context("pull request is already reserved or labelled in-progress")?,
+            };
             let snapshot = github.review_pull_request(pr)?;
             logs::issue_branch(Some(&snapshot.branch));
             launch.fetch(&[

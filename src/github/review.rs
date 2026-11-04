@@ -21,6 +21,123 @@ pub(crate) struct ReviewInput {
 }
 
 impl GitHub {
+    pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {
+        let labels = self.gh_api_items(
+            &format!(
+                "repos/{}/issues/{}/labels?per_page=100",
+                pr.issue.repo_slug(),
+                pr.issue.number
+            ),
+            "",
+        )?;
+        Ok(super::named(&labels))
+    }
+
+    /// Page the repository rather than a capped search, then select by author
+    /// and issue number locally so every waiting pull request is considered.
+    pub fn waiting_review_pull_requests(
+        &self,
+        repo: &crate::issue::Repo,
+        author: &str,
+        reserved: Option<u64>,
+    ) -> Result<Vec<PullRequestUrl>> {
+        let nodes = self.gh_api_items(
+            &format!("repos/{}/pulls?state=open&per_page=100", repo.slug()),
+            "",
+        )?;
+        let mut candidates = Vec::new();
+        for node in &nodes {
+            if node["user"]["login"]
+                .as_str()
+                .is_none_or(|login| !login.eq_ignore_ascii_case(author))
+                || node["draft"].as_bool() != Some(false)
+                || !node["author_association"]
+                    .as_str()
+                    .is_some_and(trusted_association)
+                || node["head"]["repo"]["full_name"]
+                    .as_str()
+                    .is_none_or(|head| !head.eq_ignore_ascii_case(&repo.slug()))
+                || (reserved != node["number"].as_u64()
+                    && super::labels_of(node)?.has(crate::claim::IN_PROGRESS))
+            {
+                continue;
+            }
+            let pr = PullRequestUrl::parse(
+                node["html_url"]
+                    .as_str()
+                    .context("pull request has no URL")?,
+            )?;
+            if self.reviewed_head(
+                &pr,
+                node["head"]["sha"]
+                    .as_str()
+                    .context("pull request has no head")?,
+            )? {
+                continue;
+            }
+            let mut base_waiting = false;
+            for base_pr in nodes.iter().filter(|base| {
+                base["head"]["ref"] == node["base"]["ref"]
+                    && base["head"]["repo"]["full_name"] == node["base"]["repo"]["full_name"]
+            }) {
+                let base = PullRequestUrl::parse(
+                    base_pr["html_url"]
+                        .as_str()
+                        .context("base pull request has no URL")?,
+                )?;
+                if !self.reviewed_head(
+                    &base,
+                    base_pr["head"]["sha"]
+                        .as_str()
+                        .context("base pull request has no head")?,
+                )? {
+                    base_waiting = true;
+                    break;
+                }
+            }
+            if base_waiting {
+                continue;
+            }
+            candidates.push(pr);
+        }
+        candidates.sort_by_key(|pr| pr.issue.number);
+        Ok(candidates)
+    }
+
+    fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
+        let comments = self.gh_api_items(
+            &format!(
+                "repos/{}/issues/{}/comments?per_page=100",
+                pr.issue.repo_slug(),
+                pr.issue.number
+            ),
+            "",
+        )?;
+        Ok(comments.iter().any(|comment| {
+            if !comment["author_association"]
+                .as_str()
+                .is_some_and(trusted_association)
+            {
+                return false;
+            }
+            comment["body"]
+                .as_str()
+                .unwrap_or("")
+                .split("<!-- thirdshift-review ")
+                .skip(1)
+                .any(|part| {
+                    let Some((json, _)) = part.split_once("-->") else {
+                        return false;
+                    };
+                    let Ok(marker) = serde_json::from_str::<serde_json::Value>(json.trim()) else {
+                        return false;
+                    };
+                    marker["reviewed_head"].as_str() == Some(head)
+                        || marker["pushed_head"].as_str() == Some(head)
+                })
+        }))
+    }
+
     /// Fail closed on missing metadata, before creating a worktree or session.
     pub fn review_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
         let node = self.gh_json(&[

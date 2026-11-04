@@ -133,7 +133,9 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
-    ReviewRun,
+    ReviewRun {
+        pass: bool,
+    },
     Experiment,
     /// `thirdshift process <name> [issue <issue>]`, a Custom process.
     /// `pass` holds the first lines, as the other Passes do, when it was
@@ -175,6 +177,7 @@ pub enum Pass {
     Architect,
     Pickup,
     Security,
+    Review,
 }
 
 impl Pass {
@@ -183,6 +186,7 @@ impl Pass {
             Self::Architect => "Architect",
             Self::Pickup => "Pickup",
             Self::Security => "Security",
+            Self::Review => "Review",
         }
     }
 }

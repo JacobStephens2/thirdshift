@@ -374,7 +374,8 @@ impl GitHub {
     }
 
     /// Every closed issue labelled `label` in the repository `repo`, an
-    /// `owner/repo`, newest first.
+    /// `owner/repo`, newest first. For `in-progress`, include closed pull
+    /// requests so the Sweep also clears abandoned Review-run labels.
     pub fn closed_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "closed")
     }
@@ -391,7 +392,10 @@ impl GitHub {
         )?;
         issues
             .iter()
-            .filter(|listed| listed.get("pull_request").is_none())
+            .filter(|listed| {
+                listed.get("pull_request").is_none()
+                    || (state == "closed" && label == crate::claim::IN_PROGRESS)
+            })
             .map(|listed| {
                 let field = |name: &str| {
                     listed[name].as_str().with_context(|| {

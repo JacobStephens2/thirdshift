@@ -44,13 +44,14 @@ pub(super) fn path(root: &Path, pass: Pass) -> PathBuf {
         Pass::Architect => "architect",
         Pass::Pickup => "pickup",
         Pass::Security => "secure",
+        Pass::Review => "review",
     };
     root.join(format!("{kind}.last-fired"))
 }
 
 pub(super) fn read(root: &Path, repository: &str, now: DateTime<Local>) -> Result<Vec<PassStart>> {
     let mut starts = Vec::new();
-    for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
+    for pass in [Pass::Architect, Pass::Pickup, Pass::Security, Pass::Review] {
         let path = path(root, pass);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,

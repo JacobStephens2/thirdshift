@@ -48,7 +48,7 @@ The number of live **Commands** on one repository on one machine at which a **Pa
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
-A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, such as one whose pull request was merged by hand, with the issue's other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
+A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
 _Avoid_: cleanup, garbage collection
 
 ### Repository and branches
@@ -116,6 +116,7 @@ _Avoid_: batch run, spec implementation
 
 **Review run**:
 One invocation of the factory on an open pull request by a **Trusted account**, reviewing its change on the Standards and Spec axes against its own base in a **Worktree** on its head branch. With `--recommend-only`, it posts its findings without changing the branch, ends with a **Run notification** and waits in the **Inbox** under Ready for review until the pull request is merged or closed.
+Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping reviewed or pushed heads, `in-progress` pull requests and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
 
 **Architect run**:
 One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Ticket run** on the **Architect plan** it published. Its **Built-in process** owns the sequence of **Steps**, after the Pass has decided to go ahead. One pass per invocation. It reserves its plan across machines before marking it ready, as a **Pickup run** reserves its Ready issue, and holds the reservation through the dispatched run's ending. It is skipped, doing nothing, when the repository is at its **Command limit** on the machine or another Architect run is running there, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue** or an issue that meets every Ready issue condition except settling, including a **Spec** having a **Startable Ticket**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
@@ -130,7 +131,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
+An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 **Process**:
