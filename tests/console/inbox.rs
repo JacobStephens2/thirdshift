@@ -4,6 +4,105 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn triage_and_review_commands_render_pages_and_cli_selectors() {
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let mut commands = Vec::new();
+    for (number, prefix, kind, subject, session_kind) in [
+        (1, "triage", "Triage run", "triage", "triage"),
+        (2, "review", "Review run", "process-step-1", "code-review"),
+    ] {
+        let mut fixture = record(home.path(), number, Some("failed"), 0);
+        let name = format!("{prefix}-20261019T110000-0400");
+        fixture["kind"] = json!(kind);
+        fixture["name"] = json!(name);
+        fixture["issue"] = Value::Null;
+        fixture["tickets"] = json!([]);
+        let folder = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands")
+            .join(prefix);
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("20261019T110000-0400~owner.command.json");
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        fs::remove_file(home.path().join(format!(
+            ".thirdshift/logs/acme/widgets/commands/issue/{number}-fixture.command.json"
+        )))
+        .unwrap();
+        fs::write(
+            folder.join("20261019T110000-0400~owner.log"),
+            "Command output\n",
+        )
+        .unwrap();
+        for suffix in ["", "-resume"] {
+            super::support::session_trace::write(
+                folder.join(format!(
+                    "{subject}-20261019T110000-0400~owner-{session_kind}{suffix}.logs.jsonl"
+                )),
+                "Session output\n",
+            );
+        }
+        commands.push((name, path));
+    }
+    let console = Console::start(binary, home.path());
+    for page in ["/?page=inbox", "/?page=history", "/?page=logs"] {
+        let response = console.get(page);
+        assert_eq!(response.status(), 200, "{page}");
+        let html = response.text().unwrap();
+        for (name, _) in &commands {
+            assert!(html.contains(name), "{page}: {html}");
+        }
+    }
+    let run = |args: &[&str]| {
+        let output = Command::new(binary)
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["logs", "--json"]);
+    for (name, path) in &commands {
+        run(&["show", name, "--json"]);
+        run(&["show", path.to_str().unwrap(), "--json"]);
+        run(&["logs", name]);
+        let session = if name.starts_with("triage-") {
+            "triage"
+        } else {
+            "code-review"
+        };
+        run(&["logs", name, "--session", session]);
+        let output = Command::new(binary)
+            .args(["stop", name, "--json"])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Command ended"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = Command::new(binary)
+            .args(["dismiss", name, "--json"])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn paused_command_rows_and_details_offer_the_resume_command_and_reset() {
     use serde_json::json;
     let home = tempfile::tempdir().unwrap();

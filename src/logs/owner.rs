@@ -218,7 +218,8 @@ impl Decoded<'_> {
 
     pub fn command_log(&self, path: &Path) -> PathBuf {
         let subject = match self.subject {
-            "" | "architect" | "secure" => String::new(),
+            "" | "architect" | "secure" | "triage" => String::new(),
+            subject if subject.starts_with("process-step-") => String::new(),
             subject => format!("{subject}-"),
         };
         path.with_file_name(format!("{subject}{}.log", self.identity))
