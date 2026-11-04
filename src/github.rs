@@ -302,7 +302,7 @@ impl GitHub {
         ])
     }
 
-    /// Comment on `issue`, which is already closed.
+    /// Comment on `issue`, leaving its state and labels unchanged.
     pub fn comment_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[
             "issue",
