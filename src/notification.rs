@@ -338,7 +338,7 @@ fn body(
         text += &command_lines(&command, repo);
     }
     if let Some(recommendation) = account.triage {
-        text += &format!("Recommendation:\n{recommendation}\n");
+        text += &recommendation.notification;
     }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.

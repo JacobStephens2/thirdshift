@@ -72,7 +72,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
-                triage: Some(&ended.json),
+                triage: Some(ended),
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -234,7 +234,7 @@ pub struct Account<'a> {
     /// In an Architect run, how its Architecture review ended.
     pub review: Option<Review<'a>>,
     /// The recommendation a Triage run prints and retains in its notification.
-    pub triage: Option<&'a str>,
+    pub triage: Option<&'a crate::triage::Ended>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
     /// A fixed operational cause when a Security audit never started.
@@ -483,7 +483,7 @@ impl<'a> Account<'a> {
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
         if let Some(recommendation) = self.triage {
-            logs::print(recommendation);
+            logs::print(&recommendation.json);
         }
         let mut shown = Shown::of(self);
         if let Some(elapsed) = elapsed {
