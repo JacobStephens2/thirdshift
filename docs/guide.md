@@ -2872,6 +2872,17 @@ thirdshift triage --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
 
+For a pasted multi-line Report, such as a chat thread or email, use a single-quoted heredoc:
+
+```sh
+thirdshift triage <<'EOF'
+Alex: The deploy canary can't start with an empty cache.
+Sam: $CACHE_DIR is set, but `cache warm` still fails.
+EOF
+```
+
+Quoting the opening delimiter (`'EOF'`) passes the Report verbatim: apostrophes, dollar signs (`$`) and backticks stay literal, without shell variable expansion or command substitution. Keep the closing `EOF` on its own line, without quotes; if the Report contains that exact line, choose a different delimiter at both ends.
+
 The embedded `thirdshift-triage` Factory skill investigates the Base branch on origin in a throwaway worktree. It follows its own recommendation without waiting for a person and keeps source and Git history unchanged. Before filing, it searches the repository's open issues. When an issue already covers the Report, thirdshift comments there instead of filing a duplicate. The comment quotes the Report with its source and adds new investigation evidence, leaving the existing issue's labels unchanged. Otherwise, thirdshift files the shaped issues. With `--recommend-only`, it writes nothing to GitHub and names the issue it would comment on or the issues it would file. It still reads GitHub to make the checks filing makes, so a recommendation filing would refuse fails under `--recommend-only` too. It records evidence and limitations. It starts no Ticket run.
 
 Each filed issue starts with an AI-generated disclaimer and quotes the Report verbatim in a collapsed section naming standard input or the file path. Separate problems become separate cross-linked issues, each with exactly one repository category label and one state label. A problem that needs credentials or production access to confirm is `ready-for-human`, with the reason in its body. A `wontfix` issue is closed once filed, as the Day shift's triage closes one, with a comment saying the Triage run recommended it.
@@ -2880,7 +2891,9 @@ For a `needs-info` or `ready-for-human` issue, the embedded `thirdshift-to-quest
 
 By default, a recommendation of `ready-for-agent` becomes `needs-triage`, with a note saying what was recommended. Give `--allow-ready-for-agent` to keep it, or enable the default in `thirdshift setup`, which sets `allow_ready_for_agent = true` under `[triage]` in the User config. thirdshift enforces this permission when filing. This can make the issue eligible for a later Pickup run; the Triage run itself only files it.
 
-Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state; the Run notification links every issue filed or commented on. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The same result is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
+Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state. After filing completes, the final progress lines on stderr list every issue filed or commented on, one link per line; the Run notification includes the same readable list. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The same result is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
+
+If publication fails partway, links to issues already filed or commented on still appear after the failure diagnostics and in the Run notification. Proposed writes that failed get no link in that list.
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
