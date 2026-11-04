@@ -7,10 +7,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use super::*;
 use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
-use crate::review::PullRequestUrl;
+use crate::review::{Mode, PullRequestUrl};
+
+mod delivery;
+
+use delivery::deliver;
 
 pub(crate) fn run(command: ReviewArgs) -> Result<String> {
-    ReviewProcess::built_in()?.execute(&command.pull_request, &command.flags, false)
+    ReviewProcess::built_in()?.execute(&command.pull_request, &command.flags, command.mode, false)
 }
 
 pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
@@ -24,7 +28,7 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
             && command.security_fix.is_none()
             && command.security_close.is_none()
             && !command.plan_only,
-        "pull-request Processes currently support recommendations only; merge, security and plan-only flags do not apply"
+        "merge, security and plan-only flags do not apply to pull-request Processes"
     );
     let process = if checking && command.name == "review-run" {
         ReviewProcess::built_in()?
@@ -53,6 +57,7 @@ pub(super) fn custom(command: &ProcessRun, checking: bool) -> Result<String> {
             email: command.email.clone(),
             ..Flags::default()
         },
+        Mode::Address,
         checking,
     )
 }
@@ -83,7 +88,13 @@ impl ReviewProcess {
         })
     }
 
-    fn execute(&self, pr: &PullRequestUrl, flags: &Flags, checking: bool) -> Result<String> {
+    fn execute(
+        &self,
+        pr: &PullRequestUrl,
+        flags: &Flags,
+        mode: Mode,
+        checking: bool,
+    ) -> Result<String> {
         interrupt::install()?;
         let config = UserConfig::load()?;
         let launch = Git::new(std::env::current_dir()?);
@@ -187,7 +198,11 @@ impl ReviewProcess {
             let before_each = || unchanged(&github, pr, &snapshot);
             for (index, step) in steps.iter().enumerate() {
                 crate::resources::wait()?;
-                before_each()?;
+                if mode == Mode::Address && matches!(step.kind, StepKind::Delivery) {
+                    compatible(&github, pr, &snapshot)?;
+                } else {
+                    before_each()?;
+                }
                 let started = Instant::now();
                 let began_at = Utc::now();
                 progress::step(format_args!(
@@ -221,6 +236,7 @@ impl ReviewProcess {
                                 prompt::pull_request_review(
                                     pr,
                                     &snapshot.base_head,
+                                    mode,
                                     prompt::EarlierSteps {
                                         results: &earlier,
                                         first: index == 0,
@@ -268,21 +284,10 @@ impl ReviewProcess {
                             Some(CommandInput::PullRequest(&pr.url)),
                         )?,
                         StepKind::Delivery => {
-                            unchanged_checkout(&git, &snapshot)?;
                             let findings = findings
                                 .as_deref()
                                 .context("delivery needs a review report")?;
-                            let spec = if input.body_alone {
-                                "Spec axis used the pull request body alone; no closing issue was linked."
-                            } else {
-                                "Spec axis used the linked closing issues."
-                            };
-                            let comment = format!(
-                                "Review run (--recommend-only). {spec}\n\n{findings}\n\n<!-- thirdshift-review {{\"reviewed_head\":\"{}\"}} -->\n",
-                                snapshot.head
-                            );
-                            before_each()?;
-                            github.comment_review(pr, &comment)?;
+                            deliver(&git, &github, pr, &snapshot, mode, &input, findings)?;
                             delivered = true;
                             pr.url.clone()
                         }
@@ -406,15 +411,29 @@ fn write_review_input(path: &Path, markdown: &str) -> Result<()> {
 }
 
 fn unchanged(github: &GitHub, pr: &PullRequestUrl, snapshot: &ReviewPullRequest) -> Result<()> {
+    let current = compatible(github, pr, snapshot)?;
+    ensure!(
+        current.head == snapshot.head,
+        "pull request changed during Review run"
+    );
+    Ok(())
+}
+
+/// Delivery may report a moved head, but never publish to a changed base,
+/// branch or an ineligible pull request.
+fn compatible(
+    github: &GitHub,
+    pr: &PullRequestUrl,
+    snapshot: &ReviewPullRequest,
+) -> Result<ReviewPullRequest> {
     let current = github.review_pull_request(pr)?;
     ensure!(
-        current.head == snapshot.head
-            && current.base_head == snapshot.base_head
+        current.base_head == snapshot.base_head
             && current.base == snapshot.base
             && current.branch == snapshot.branch,
         "pull request changed during Review run"
     );
-    Ok(())
+    Ok(current)
 }
 
 fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {

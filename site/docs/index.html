@@ -64,7 +64,7 @@
 <li><strong><a href="#architect-runs">Architect run</a></strong>, <code>thirdshift architect</code>: reviews the codebase&#39;s architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an <strong>Architect idea</strong> for the <strong>Day shift</strong>.</li>
 <li><strong><a href="#pickup-runs">Pickup run</a></strong>, <code>thirdshift pickup</code>: takes the lowest-numbered <strong>Ready issue</strong> by default, the highest-numbered with <code>pickup.order = &quot;highest-first&quot;</code> or <code>highest-first</code> on the command, and runs it.</li>
 <li><strong><a href="#security-runs">Security run</a></strong>, <code>thirdshift secure</code>: audits the <strong>Base branch</strong> and records each <strong>Security finding</strong> privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.</li>
-<li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt; --recommend-only</code>: reviews an existing pull request and posts its Standards and Spec findings in one comment.</li>
+<li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt;</code>: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add <code>--recommend-only</code> to get findings without fixes.</li>
 </ul>
 <p>Architect, Pickup and Security runs are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
 <p>Every session runs on the <strong>Harness</strong> you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See <a href="#harness-model-and-effort">Harness, Model and Effort</a>.</p>
@@ -2084,8 +2084,9 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 <details class="fold"><summary><h2>Review runs</h2></summary>
 <div class="manual-content" id="review-runs">
 <p>From a clone of the pull request&#39;s repository:</p>
-<pre><code class="language-sh">thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
-thirdshift review https://github.com/you/widgets/pull/42 --recommend-only harness codex
+<pre><code class="language-sh">thirdshift review https://github.com/you/widgets/pull/42
+thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
+thirdshift review https://github.com/you/widgets/pull/42 harness codex
 </code></pre>
 <p>A <strong>Review run</strong> refuses forks, drafts, closed or merged pull requests and
 authors who are not <strong>Trusted accounts</strong>, explaining why before starting a
@@ -2095,9 +2096,23 @@ already checked-out head branch must be dealt with before the Review run can use
 <p>The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.
-<code>--recommend-only</code> is required in this first version: it fixes nothing and pushes
-nothing. thirdshift posts one comment with the findings and a hidden marker
-naming the reviewed head. A changed head, base or eligibility stops publication.</p>
+Without <code>--recommend-only</code>, the session addresses findings using the same rules
+as a Ticket run: it runs each behavior finding&#39;s test or command before deciding,
+fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
+pushes them to the pull request&#39;s own head branch without force. The comment
+lists what it fixed and every <strong>Unaddressed finding</strong>, with the code, plan
+decision, ADR or focused run that refutes it. Decisions left to the Spec or
+Day shift link a <code>needs-triage</code> issue. With a linked issue, a departure explained
+only by the pull request body is left as an Unaddressed finding citing that
+reason, without filing a triage issue.</p>
+<p>If the branch moves before delivery or rejects the push because it moved,
+thirdshift leaves it alone and posts the findings, describes the proposed fixes
+and says the branch moved. The fixes remain in the local worktree. A changed base
+or eligibility stops publication. The hidden comment marker names the reviewed
+head and, when fixes were pushed, the head after the push.</p>
+<p><code>--recommend-only</code> fixes nothing and pushes nothing. It posts the findings with
+the reviewed-head marker; a changed head stops publication too. A Ticket run&#39;s
+own review still happens inside its implement session.</p>
 <p>Command records, the Activity log, <code>status</code> and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
 The Inbox keeps a completed review under <strong>Ready for review</strong> until GitHub shows
@@ -2105,9 +2120,9 @@ the pull request merged or closed.</p>
 <p>Inspect the Built-in process with <code>thirdshift process show review-run</code>. Copy it
 to <code>~/.thirdshift/processes/my-review.toml</code> to start a Custom process with
 <code>thirdshift process my-review pull-request &lt;PR URL&gt;</code>. A <code>pull-request</code> worktree
-declares this input; <code>review-and-address</code> reviews it and <code>delivery</code> posts the
-recommendations. Custom pull-request Processes can also run skill and command
-Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
+declares this input; <code>review-and-address</code> reviews it and addresses findings, and
+<code>delivery</code> pushes fixes and posts the comment. Custom pull-request Processes can
+also run skill and command Steps on that checkout. Command Steps receive <code>THIRDSHIFT_PULL_REQUEST_URL</code> and
 the filtered input is in <code>.thirdshift-review-input.md</code>. This version keeps these
 Steps sequential and requires <code>review-and-address</code> before a final <code>delivery</code>.</p>
 </div></details>

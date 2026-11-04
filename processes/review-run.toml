@@ -1,5 +1,5 @@
 version = 1
-description = "Review a pull request and post recommendations"
+description = "Review a pull request, address findings and post a comment"
 
 [worktrees.review]
 kind = "pull-request"

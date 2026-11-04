@@ -134,6 +134,193 @@ fn recommend_only_posts_one_review_of_the_pr_head_and_keeps_it_in_the_inbox() {
 }
 
 #[test]
+fn review_addresses_findings_on_the_pr_branch_and_reports_both_heads() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let reviewed = scenario.launch_git(&["ls-remote", "origin", "refs/heads/colleague"]);
+    let reviewed = reviewed.split_whitespace().next().unwrap();
+    scenario.agent_does(
+        "echo 'fixed widget export' > export.txt\n\
+         git add export.txt\n\
+         git commit -qm 'Fix widget export'\n\
+         printf '## Fixed findings\\nFixed widget export.\\n## Unaddressed findings\\n### Standards\\nNone.\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_file("colleague", "export.txt").as_deref(),
+        Some("fixed widget export\n")
+    );
+    let pushed = scenario.launch_git(&["ls-remote", "origin", "refs/heads/colleague"]);
+    let pushed = pushed.split_whitespace().next().unwrap();
+    assert_ne!(reviewed, pushed);
+    let state = scenario.gh_state();
+    let comments = state["prs"][0]["postedComments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1);
+    let comment = comments[0].as_str().unwrap();
+    for text in [
+        "Fixed widget export",
+        "Unaddressed findings",
+        reviewed,
+        pushed,
+        "pushed_head",
+    ] {
+        assert!(comment.contains(text), "missing {text}: {comment}");
+    }
+    let prompt = scenario.first_prompt();
+    for text in [
+        "run its test or command as written",
+        "fix the code and keep the test",
+        "Do not push",
+        "Commit only if",
+        "Unaddressed findings",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    assert!(!prompt.contains("This is --recommend-only"), "{prompt}");
+    assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_receive_time_branch_move_keeps_the_fixes_local_and_posts_the_findings() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("concurrent", "colleague", &["Later author work"]);
+    scenario.repo_has_hook(
+        &scenario.path("origin.git"),
+        "update",
+        "#!/bin/sh\nif test \"$1\" = refs/heads/colleague; then\n  echo attempted > review-race\n  git update-ref \"$1\" refs/heads/concurrent\nfi\n",
+    );
+    scenario.agent_does(
+        "echo 'proposed fix' > fix.txt\n\
+         git add fix.txt\n\
+         git commit -qm 'Fix export'\n\
+         printf '## Standards\\nExport fails.\\n## Fixed findings\\nFixed export.\\n## Unaddressed findings\\n### Spec\\nBody explains UTF-8 choice.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        scenario.path("origin.git/review-race").is_file(),
+        "push was never attempted"
+    );
+    assert_eq!(
+        scenario.origin_log("colleague"),
+        scenario.origin_log("concurrent")
+    );
+    assert!(scenario.origin_file("colleague", "fix.txt").is_none());
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    for text in [
+        "branch moved",
+        "no fixes were pushed",
+        "Export fails",
+        "Fixed export",
+        "Unaddressed findings",
+        "Body explains UTF-8 choice",
+    ] {
+        assert!(comment.contains(text), "missing {text}: {comment}");
+    }
+    assert!(!comment.contains("pushed_head"), "{comment}");
+    let calls = scenario.claude_calls();
+    let worktree = Path::new(calls[0]["cwd"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("fix.txt")).unwrap(),
+        "proposed fix\n"
+    );
+}
+
+#[test]
+fn a_receive_time_rewind_does_not_republish_removed_history() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_commit(
+        "colleague",
+        "secret.txt",
+        "local-marker-not-a-credential\n",
+        "Add a local marker",
+    );
+    let origin = scenario.origin_dir();
+    let marker = scenario.path("rewound");
+    support::write_executable(
+        &scenario.path("bin/git"),
+        &format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = push ] && [ \"$2\" = --no-verify ] && [ ! -e '{marker}' ]; then\n\
+               touch '{marker}'\n\
+               /usr/bin/git --git-dir='{origin}' update-ref refs/heads/colleague refs/heads/colleague^\n\
+             fi\n\
+             exec /usr/bin/git \"$@\"\n",
+            marker = marker.display(),
+            origin = origin.display(),
+        ),
+    );
+    scenario.agent_does(
+        "echo 'proposed fix' > fix.txt\n\
+         git add fix.txt\n\
+         git commit -qm 'Fix export'\n\
+         printf '## Standards\\nExport fails.\\n## Unaddressed findings\\n### Standards\\nNone.\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert!(
+        marker.is_file(),
+        "publish never reached the push that should observe the rewind\n{}",
+        result.stderr
+    );
+    assert!(
+        scenario.origin_file("colleague", "secret.txt").is_none(),
+        "removed history was republished\n{}",
+        result.stderr
+    );
+    assert!(scenario.origin_file("colleague", "fix.txt").is_none());
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("branch moved"), "{comment}");
+    assert!(comment.contains("no fixes were pushed"), "{comment}");
+    assert!(!comment.contains("pushed_head"), "{comment}");
+}
+
+#[test]
+fn review_leaves_body_explained_spec_departures_unaddressed_and_commits_nothing_without_fixes() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let before = scenario.origin_log("colleague");
+    let mut state = scenario.gh_state();
+    state["bodies"] = json!({"7": "Export ASCII only."});
+    state["prs"][0]["closingIssuesReferences"] = json!([{"url": scenario.issue_url(7)}]);
+    state["prs"][0]["body"] = json!("Use UTF-8 to preserve widget names.");
+    scenario.write_gh_state(&state);
+    scenario.agent_does(
+        "printf '## Standards\\nNo findings.\\n## Unaddressed findings\\n### Spec\\n- ASCII requirement: PR body explains UTF-8 preserves widget names.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    for text in [
+        "Linked closing issues are the Spec",
+        "do not fix a departure explained only by the pull request body",
+        "citing the body's reason, and do not file a `needs-triage` issue for it",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("No fixes to push"), "{comment}");
+    assert!(comment.contains("PR body explains UTF-8"), "{comment}");
+    assert!(!comment.contains("pushed_head"), "{comment}");
+    assert_eq!(scenario.origin_log("colleague"), before);
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+}
+
+#[test]
 fn review_packet_uses_closing_issues_and_only_trusted_comments() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
@@ -274,6 +461,52 @@ fn a_changed_pr_stops_before_posting_recommendations() {
             );
         } else {
             assert!(result.stderr.contains(changed), "{}", result.stderr);
+        }
+    }
+}
+
+#[test]
+fn address_mode_reports_a_moved_head_but_stops_publication_after_base_or_eligibility_changes() {
+    for changed in ["head", "base", "merged", "draft"] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        let release = scenario.path("release");
+        scenario.agent_does(&format!(
+            "echo 'proposed fix' > fix.txt\ngit add fix.txt\ngit commit -qm 'Fix export'\ntouch '{}'\nfor _ in $(seq 2400); do test -f '{}' && break; sleep 0.05; done\ntest -f '{}'\nprintf '## Standards\\nFixed export.\\n## Unaddressed findings\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+            scenario.path("started").display(), release.display(), release.display()
+        ));
+        let held = scenario.run_until(&["review", &url], &[], "started");
+        match changed {
+            "head" => scenario.origin_has_commit(
+                "colleague",
+                "later.txt",
+                "Author work",
+                "Later author commit",
+            ),
+            "base" => {
+                scenario.origin_has_commit("main", "base.txt", "Base work", "Later base commit")
+            }
+            _ => {
+                let mut state = scenario.gh_state();
+                if changed == "merged" {
+                    state["prs"][0]["state"] = json!("MERGED");
+                } else {
+                    state["prs"][0]["isDraft"] = json!(true);
+                }
+                scenario.write_gh_state(&state);
+            }
+        }
+        std::fs::write(release, "").unwrap();
+        let result = held.finish();
+        assert_eq!(result.code, Some(1), "{changed}: {}", result.stderr);
+        assert!(scenario.origin_file("colleague", "fix.txt").is_none());
+        let state = scenario.gh_state();
+        if changed == "head" {
+            let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+            assert!(comment.contains("branch moved"), "{comment}");
+            assert!(comment.contains("Fixed export"), "{comment}");
+        } else {
+            assert!(state["prs"][0]["postedComments"].is_null(), "{state}");
         }
     }
 }

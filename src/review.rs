@@ -4,6 +4,12 @@ use anyhow::{Result, bail, ensure};
 
 use crate::issue::IssueUrl;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    Address,
+    RecommendOnly,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PullRequestUrl {
     pub url: String,

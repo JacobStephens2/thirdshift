@@ -28,6 +28,7 @@ pub enum ProcessAction {
 pub struct ReviewArgs {
     pub pull_request: crate::review::PullRequestUrl,
     pub flags: Flags,
+    pub mode: crate::review::Mode,
 }
 
 /// A Custom process to check or run, with the Command's explicit choices.
@@ -894,18 +895,16 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
             bail!("unexpected review argument: {arg}");
         }
     }
-    ensure_review_recommend_only(recommend_only)?;
     Ok(ReviewArgs {
-        pull_request: pull_request.context("usage: thirdshift review <PR URL> --recommend-only")?,
+        pull_request: pull_request
+            .context("usage: thirdshift review <PR URL> [--recommend-only]")?,
         flags,
+        mode: if recommend_only {
+            crate::review::Mode::RecommendOnly
+        } else {
+            crate::review::Mode::Address
+        },
     })
-}
-
-fn ensure_review_recommend_only(recommend_only: bool) -> Result<()> {
-    if !recommend_only {
-        bail!("thirdshift review currently requires --recommend-only");
-    }
-    Ok(())
 }
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
