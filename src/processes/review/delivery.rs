@@ -1,4 +1,4 @@
-//! Publish a Review run's fixes with a normal fast-forward push, then its report.
+//! Publish a Review run's fixes only while the branch is still the reviewed head, then its report.
 
 use super::*;
 use crate::github::review::ReviewInput;
@@ -76,10 +76,11 @@ fn push_fixes(
     if head == snapshot.head {
         return Ok(None);
     }
-    let refspec = format!("{head}:refs/heads/{}", snapshot.branch);
-    // Deliberately no force or lease flag: another author's branch may only
-    // advance by Git's normal fast-forward rules, including a receive-time race.
-    git.run_checked(&["push", "--no-verify", "origin", &refspec], || {
+    // Compare the remote ref with the reviewed head at receive time. A plain
+    // fast-forward republishes that head when the branch was rewound to an
+    // ancestor after the API check. The reviewed head is an ancestor of this
+    // commit, so a matching lease stays a fast-forward and sends no force update.
+    git.push_checked(&snapshot.branch, &head, Some(&snapshot.head), || {
         compatible(github, pr, snapshot).map(|_| ())
     })?;
     Ok(Some(head))

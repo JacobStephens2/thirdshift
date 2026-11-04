@@ -234,6 +234,59 @@ fn a_receive_time_branch_move_keeps_the_fixes_local_and_posts_the_findings() {
 }
 
 #[test]
+fn a_receive_time_rewind_does_not_republish_removed_history() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_commit(
+        "colleague",
+        "secret.txt",
+        "local-marker-not-a-credential\n",
+        "Add a local marker",
+    );
+    let origin = scenario.origin_dir();
+    let marker = scenario.path("rewound");
+    support::write_executable(
+        &scenario.path("bin/git"),
+        &format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = push ] && [ \"$2\" = --no-verify ] && [ ! -e '{marker}' ]; then\n\
+               touch '{marker}'\n\
+               /usr/bin/git --git-dir='{origin}' update-ref refs/heads/colleague refs/heads/colleague^\n\
+             fi\n\
+             exec /usr/bin/git \"$@\"\n",
+            marker = marker.display(),
+            origin = origin.display(),
+        ),
+    );
+    scenario.agent_does(
+        "echo 'proposed fix' > fix.txt\n\
+         git add fix.txt\n\
+         git commit -qm 'Fix export'\n\
+         printf '## Standards\\nExport fails.\\n## Unaddressed findings\\n### Standards\\nNone.\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert!(
+        marker.is_file(),
+        "publish never reached the push that should observe the rewind\n{}",
+        result.stderr
+    );
+    assert!(
+        scenario.origin_file("colleague", "secret.txt").is_none(),
+        "removed history was republished\n{}",
+        result.stderr
+    );
+    assert!(scenario.origin_file("colleague", "fix.txt").is_none());
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("branch moved"), "{comment}");
+    assert!(comment.contains("no fixes were pushed"), "{comment}");
+    assert!(!comment.contains("pushed_head"), "{comment}");
+}
+
+#[test]
 fn review_leaves_body_explained_spec_departures_unaddressed_and_commits_nothing_without_fixes() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
