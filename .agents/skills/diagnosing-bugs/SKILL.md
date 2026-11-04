@@ -9,6 +9,8 @@ A discipline for hard bugs. Skip phases only when explicitly justified.
 
 When exploring the codebase, read `GLOSSARY.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
 
+When the task touches rendered UI, HTML, CSS, templates or visual layout and a headless browser is available, capture `/tmp/before-*.png` (or `.gif` for interactive or animated flows) against the unpatched baseline before editing code, at `1440×900` desktop plus `390×844` mobile when responsive layout is affected. When verifying the change, capture matching `/tmp/after-*.png` or `.gif` at the same viewports and states so both Before and After artifacts are ready for the PR.
+
 ## Redact
 
 This skill has you show commands, outputs and captured artifacts. **Redact every secret first**: write `<REDACTED>` in its place. Build loops against env vars, so the credential stays in the environment rather than in what you show. Captured artifacts carry auth headers: quote only the lines that carry the signal.

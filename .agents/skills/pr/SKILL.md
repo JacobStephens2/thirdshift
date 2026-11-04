@@ -18,8 +18,17 @@ Use this template for writing the PR body:
 
 ## Evidence
 
-- **Before:** <screenshot/output/failing test run>
-  **After:** <screenshot/output/passing test run>
+### Execution evidence
+
+- **Before:** <exact test/command and actual failing output>
+  **After:** <same test/command and actual passing output>
+
+### Visual evidence
+
+<required for visual changes when a headless browser is available; repeat for each viewport/flow>
+
+![Before](<raw gist URL for before capture>)
+![After](<raw gist URL for after capture>)
 
 ## Merge Danger
 
@@ -157,11 +166,59 @@ You may use one of these, you may use several, it is unlikely you will use all o
 
 ### Evidence
 
-Concrete evidence that the change works. Show a before and after.
+Always include **Execution evidence**: the exact test or command, its actual failing-before output and its actual passing-after output. Keep this separate from **Visual evidence**.
 
-Screenshots are S-tier - when the environment is set up for it and the change is visual.
+For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evidence** is also required when a headless browser is available: embed `![Before](<raw gist URL>)` and `![After](<raw gist URL>)` using `.png` screenshots, or `.gif` recordings for interactive or animated flows. Pair captures at the same viewport and state: `1440×900` desktop, plus `390×844` mobile when responsive layout is affected; label each pair with its viewport and flow. If a headless browser is unavailable, state that limitation in Evidence.
 
-Execution-based evidence is A-tier. Test results, console output. Show the exact test that now fails and passes, using pseudocode.
+#### Recover a missing Before capture
+
+Use the implementation or diagnosis session's `/tmp/before-*` and `/tmp/after-*` captures. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save `/tmp/before-*.png` or `.gif`, then stop the server and remove the worktree:
+
+```sh
+(
+  set -eu
+  before_root=$(mktemp -d /tmp/pr-before.XXXXXX)
+  trap 'git worktree remove --force "$before_root/worktree"; rmdir "$before_root"' EXIT
+  git worktree add --detach "$before_root/worktree" main
+  # Build and serve "$before_root/worktree"; capture /tmp/before-* at After's viewport/state.
+  # Stop that server before this subshell exits and removes the worktree.
+)
+```
+
+#### Publish the captures
+
+Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branches free of PR-evidence media files. Use an authenticated `gh` account with Gist access and a Git author configured. Secret Gists are unlisted but readable by anyone with the URL, so publish only captures suitable for that audience, with secrets redacted.
+
+`gh gist create` sends text through the API; create a placeholder text file, then push the binary captures with Git. Run this shell recipe after capturing the images; adjust the explicit `cp` list for your mobile or `.gif` pairs:
+
+```sh
+(
+  set -eu
+  evidence_root=$(mktemp -d /tmp/pr-evidence.XXXXXX)
+  trap 'rm -rf "$evidence_root"' EXIT
+  printf '%s\n' 'Before and After PR evidence' > "$evidence_root/README.md"
+  # gh gist create defaults to secret visibility.
+  gist_url=$(gh gist create --desc "PR visual evidence" "$evidence_root/README.md")
+  gist_id=${gist_url##*/}
+  git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+    clone "https://gist.github.com/$gist_id.git" "$evidence_root/gist"
+  cp /tmp/before-desktop.png /tmp/after-desktop.png "$evidence_root/gist/"
+  git -C "$evidence_root/gist" add --all
+  git -C "$evidence_root/gist" commit -m "Add Before and After captures"
+  git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+    -C "$evidence_root/gist" push origin HEAD
+  gist_owner=$(gh api "gists/$gist_id" --jq '.owner.login')
+  gist_sha=$(git -C "$evidence_root/gist" rev-parse HEAD)
+  for capture in "$evidence_root/gist/"*.png "$evidence_root/gist/"*.gif; do
+    test -f "$capture" || continue
+    filename=${capture##*/}
+    printf 'https://gist.githubusercontent.com/%s/%s/raw/%s/%s\n' \
+      "$gist_owner" "$gist_id" "$gist_sha" "$filename"
+  done
+)
+```
+
+Embed the printed commit-pinned URLs in the Before and After image slots. The temporary clone is removed on exit; retain the Gist so the PR's evidence remains available.
 
 ### Merge Danger
 

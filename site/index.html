@@ -283,7 +283,7 @@
             </article>
             <article class="unit-col ink-y" aria-labelledby="unit-3">
               <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>Step 3 · Review</h3>
-              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review.</p>
+              <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review. Evidence includes actual failing-before and passing-after execution output, plus embedded Before and After screenshots or recordings for visual changes when a headless browser is available.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ul>
               <ol class="stderr-lines" aria-label="stderr lines from step 3">
                 <li><span class="prefix">thirdshift: 00:26:05</span> implement: $ git status --short &amp;&amp; gh pr list --repo JacobStephens2/thirdshift --head issue-663 --state open --js…</li>
