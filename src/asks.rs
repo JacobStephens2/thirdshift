@@ -299,6 +299,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            review: crate::config::review::Settings::default(),
             scoring: crate::config::scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),

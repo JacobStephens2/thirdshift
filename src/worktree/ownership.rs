@@ -164,10 +164,10 @@ impl Checkout {
 
     /// A skill or Process may own no automatic publication step. Retain local
     /// work, rechecking under the disposal locks before every removal attempt.
-    pub(super) fn cleanup_preserving_work(&self, launch: &Git) {
+    pub(super) fn cleanup_preserving_work(&self, launch: &Git, untracked: super::UntrackedFiles) {
         self.cleanup_checked(launch, false, &|| {
             let git = Git::new(self.path()).completion();
-            if super::uncommitted_changes(|args| git.run(args))? {
+            if super::uncommitted_changes(|args| git.run(args), untracked)? {
                 bail!("the worktree has uncommitted changes");
             }
             if !git

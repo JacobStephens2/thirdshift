@@ -9,7 +9,7 @@ use std::{fmt, fs};
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
 use crate::harness::interpretation::{SafeguardRefusal, SessionFailure};
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
 use crate::review::PullRequestUrl;
 use crate::session::{Kind, Purpose, Sessions};
 use crate::worktree::{SkillWorktree, Worktree};
@@ -189,6 +189,101 @@ impl OldFinding {
             test: proof.test.clone(),
         })
     }
+}
+
+const MAX_REPORT_BYTES: u64 = 1024 * 1024;
+const MIN_FRAGMENT_CHARS: usize = 8;
+
+/// Identifying text from this repository's private Security reports.
+/// Delivery captures it before a later session: that session can read the
+/// report and then replace the file, and its final message is posted.
+pub(crate) struct PrivateReportMaterial {
+    fragments: Vec<String>,
+}
+
+impl PrivateReportMaterial {
+    /// Whether `text` contains a stored report path or identifying field.
+    /// Command strings are omitted; they are ordinary test invocations.
+    pub(crate) fn exposes(&self, text: &str) -> bool {
+        self.fragments
+            .iter()
+            .any(|fragment| text.contains(fragment))
+    }
+}
+
+pub(crate) fn private_report_material(repo: &Repo) -> PrivateReportMaterial {
+    let mut fragments = Vec::new();
+    let root = logs::root(repo).join("security-reviews");
+    if is_real_dir(&root)
+        && let Ok(entries) = fs::read_dir(&root)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if is_real_dir(&path) {
+                collect_report(&path.join("pre-existing.json"), &mut fragments);
+            }
+        }
+    }
+    PrivateReportMaterial { fragments }
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
+}
+
+fn collect_report(report: &Path, fragments: &mut Vec<String>) {
+    let Some(bytes) = read_regular_report(report) else {
+        return;
+    };
+    let path = report.to_string_lossy();
+    push_fragment(fragments, &path);
+    let Ok(findings) = serde_json::from_slice::<Vec<OldFinding>>(&bytes) else {
+        return;
+    };
+    for finding in findings {
+        let proof = finding.proof_of_concept;
+        push_fragment(fragments, &finding.fingerprint);
+        push_fragment(fragments, &finding.title);
+        push_fragment(fragments, &finding.description);
+        push_fragment(fragments, &proof.test);
+        push_fragment(fragments, &proof.notes);
+    }
+}
+
+fn push_fragment(fragments: &mut Vec<String>, text: &str) {
+    let text = text.trim();
+    if text.chars().count() < MIN_FRAGMENT_CHARS {
+        return;
+    }
+    if let Ok(encoded) = serde_json::to_string(text)
+        && let Some(escaped) = encoded
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        && escaped != text
+        && escaped.chars().count() >= MIN_FRAGMENT_CHARS
+    {
+        fragments.push(escaped.to_string());
+    }
+    fragments.push(text.to_string());
+}
+
+/// A regular file no larger than [`MAX_REPORT_BYTES`], opened without
+/// following a symlink. Anything else is skipped.
+fn read_regular_report(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_REPORT_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_REPORT_BYTES).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

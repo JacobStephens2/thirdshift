@@ -368,6 +368,7 @@ fn prompts() -> Vec<Prompt> {
                 },
                 BASE,
                 crate::review::Mode::Address,
+                &[],
                 prompt::EarlierSteps {
                     results: &[],
                     first: true,
@@ -386,10 +387,25 @@ fn prompts() -> Vec<Prompt> {
                 },
                 BASE,
                 crate::review::Mode::RecommendOnly,
+                &[],
                 prompt::EarlierSteps {
                     results: &[],
                     first: true,
                 },
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-validation",
+            title: "Review run, validation after later fixes",
+            when: "A later editing Step changed the reviewed head. Repeats repository final validation and extra commands before Delivery, and appends the results to the comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_validation(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                OWN_HEAD,
+                &[],
             ),
         },
         Prompt {

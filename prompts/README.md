@@ -46,6 +46,7 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 | Custom process Step | Starts the first Step of a Custom process. No earlier Step has a result. | [process-step.md](process-step.md) |
 | Review run, address findings | Reviews a pull request against its own base and addresses findings under the Ticket run's rules. Delivery pushes fixes without force and posts the final report as a comment. | [pull-request-address.md](pull-request-address.md) |
 | Review run, recommendations | Reviews a pull request's captured head against its own base, using linked closing issues as the Spec or the body alone. Posts recommendations without changing the branch. | [pull-request-review.md](pull-request-review.md) |
+| Review run, validation after later fixes | A later editing Step changed the reviewed head. Repeats repository final validation and extra commands before Delivery, and appends the results to the comment. | [pull-request-validation.md](pull-request-validation.md) |
 | Custom process Step, with an earlier result | Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message. | [process-step-later.md](process-step-later.md) |
 | Custom process Step, on an issue | Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue. | [process-step-issue.md](process-step-issue.md) |
 

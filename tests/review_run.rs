@@ -143,6 +143,7 @@ fn review_addresses_findings_on_the_pr_branch_and_reports_both_heads() {
         "echo 'fixed widget export' > export.txt\n\
          git add export.txt\n\
          git commit -qm 'Fix widget export'\n\
+         printf passed > validation-results.txt\n\
          printf '## Fixed findings\\nFixed widget export.\\n## Unaddressed findings\\n### Standards\\nNone.\\n### Spec\\nNone.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
     );
 
@@ -181,6 +182,106 @@ fn review_addresses_findings_on_the_pr_branch_and_reports_both_heads() {
     }
     assert!(!prompt.contains("This is --recommend-only"), "{prompt}");
     assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn review_requests_this_repositories_extra_validation_after_fixes_and_posts_results() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'ACME/Widgets' = ['sh slow-suite.sh', 'sh unavailable-suite.sh']\n'other/repo' = ['do-not-run-this']\n",
+    );
+    scenario.agent_does(
+        "printf 'Validation: sh slow-suite.sh passed; sh unavailable-suite.sh: not run against the branch (requires primary checkout).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    for text in [
+        "After addressing findings",
+        "in this Review run's worktree",
+        "sh slow-suite.sh",
+        "sh unavailable-suite.sh",
+        "not run against the branch",
+        "never report it as passing",
+        "what ran, what passed, what failed and what could not run",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    assert!(!prompt.contains("do-not-run-this"), "{prompt}");
+    assert!(
+        prompt.contains(r#"["sh slow-suite.sh","sh unavailable-suite.sh"]"#),
+        "{prompt}"
+    );
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("sh slow-suite.sh passed"), "{comment}");
+    assert!(comment.contains("not run against the branch"), "{comment}");
+}
+
+#[test]
+fn reviews_without_extra_commands_still_request_repository_final_validation() {
+    for config in [
+        "",
+        "[review.commands_by_repo]\n'acme/widgets' = []\n",
+        "[review.commands_by_repo]\n'other/repo' = ['unrelated-suite']\n",
+    ] {
+        let scenario = Scenario::new();
+        let url = pull_request(&scenario);
+        scenario.user_config_is(config);
+        scenario.agent_does("printf 'Validation: repository final validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let result = scenario.run(&["review", &url]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let prompt = scenario.first_prompt();
+        assert!(
+            prompt.contains(
+                "run final validation as required by the repository's agent instructions"
+            ),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("An empty list still requires the repository's final validation"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("in that worktree: []"), "{prompt}");
+        assert!(!prompt.contains("unrelated-suite"), "{prompt}");
+    }
+}
+
+#[test]
+fn recommendation_only_requests_extra_validation_without_fixes_or_pushes() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let before = scenario.origin_log("colleague");
+    scenario.user_config_is("[review.commands_by_repo]\n'acme/widgets' = ['sh slow-suite.sh']\n");
+    scenario.agent_does(
+        "printf 'Validation: sh slow-suite.sh failed (exit 1).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    for text in [
+        "after reviewing in --recommend-only",
+        "sh slow-suite.sh",
+        "A failed command must not skip the remaining commands",
+        "Do not commit, push, fix findings",
+        "disposable validation artifacts",
+    ] {
+        assert!(prompt.contains(text), "missing {text}: {prompt}");
+    }
+    assert_eq!(scenario.origin_log("colleague"), before);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(
+        comment.contains("sh slow-suite.sh failed (exit 1)"),
+        "{comment}"
+    );
 }
 
 #[test]
@@ -513,9 +614,15 @@ fn address_mode_reports_a_moved_head_but_stops_publication_after_base_or_eligibi
 }
 
 #[test]
-fn recommendation_sessions_that_change_files_are_refused_and_the_work_is_retained() {
+fn recommendation_sessions_that_change_tracked_files_are_refused_and_the_work_is_retained() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
+    scenario.origin_has_commit(
+        "colleague",
+        "unexpected.txt",
+        "original\n",
+        "Add tracked fixture",
+    );
     let before = scenario.origin_log("colleague");
     scenario.agent_does("echo 'unexpected edit' > unexpected.txt\nprintf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
     let result = scenario.run(&["review", &url, "--recommend-only"]);
@@ -532,6 +639,41 @@ fn recommendation_sessions_that_change_files_are_refused_and_the_work_is_retaine
     assert_eq!(
         std::fs::read_to_string(worktree.join("unexpected.txt")).unwrap(),
         "unexpected edit\n"
+    );
+}
+
+#[test]
+fn recommend_only_posts_validation_results_with_disposable_artifacts() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'acme/widgets' = ['printf passed > validation-results.txt']\n",
+    );
+    scenario.agent_does("printf passed > validation-results.txt\nprintf 'Validation: printf passed > validation-results.txt passed (exit 0).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let comments = state["prs"][0]["postedComments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "{state}");
+    assert!(comments[0].as_str().unwrap().contains("passed (exit 0)"));
+}
+
+#[test]
+fn disposable_validation_artifacts_do_not_block_the_next_review() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.user_config_is(
+        "[review.commands_by_repo]\n'acme/widgets' = ['printf passed > validation-results.txt']\n",
+    );
+    scenario.agent_does("printf passed > validation-results.txt\nprintf 'Validation passed (exit 0).' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let first = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let second = scenario.run(&["review", &url, "--recommend-only"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(
+        state["prs"][0]["postedComments"].as_array().unwrap().len(),
+        2
     );
 }
 

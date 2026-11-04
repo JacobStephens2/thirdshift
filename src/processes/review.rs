@@ -235,7 +235,7 @@ impl ReviewProcess {
                 &snapshot.head,
                 &snapshot.base_head,
             ])?;
-            let checkout =
+            let mut checkout =
                 SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
             let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             notification.built_with(&command.choice);
@@ -252,6 +252,7 @@ impl ReviewProcess {
             let mut earlier = Vec::new();
             let mut began = Vec::new();
             let mut findings = None;
+            let mut validation_head = None;
             let mut last = String::new();
             let before_each = || unchanged(&github, pr, &snapshot);
             for (index, step) in steps.iter().enumerate() {
@@ -295,6 +296,7 @@ impl ReviewProcess {
                                     pr,
                                     &snapshot.base_head,
                                     mode,
+                                    config.review.commands_for(&repo),
                                     prompt::EarlierSteps {
                                         results: &earlier,
                                         first: index == 0,
@@ -330,6 +332,7 @@ impl ReviewProcess {
                                 .filter(|text| !text.trim().is_empty())
                                 .context("session left no final report")?;
                             if reviewing {
+                                validation_head = Some(git.run(&["rev-parse", "HEAD"])?);
                                 findings = Some(message.clone());
                             }
                             message
@@ -379,6 +382,59 @@ impl ReviewProcess {
                             }
                         }
                         StepKind::Delivery => {
+                            let head = git.run(&["rev-parse", "HEAD"])?;
+                            if mode == Mode::Address
+                                && validation_head.as_deref() != Some(head.as_str())
+                            {
+                                let text = prompt::pull_request_validation(
+                                    pr,
+                                    &head,
+                                    config.review.commands_for(&repo),
+                                );
+                                let logs = session::Logs::of_process_review(&repo, index + 1);
+                                let before_validation =
+                                    || compatible(&github, pr, &snapshot).map(|_| ());
+                                // Captured before the session. It can read and
+                                // then remove the report, and Delivery posts
+                                // its final message. A prompt not to copy the
+                                // report is not a boundary.
+                                let private_reports =
+                                    crate::security::review::private_report_material(&repo);
+                                let (result, log) = session::Sessions::checked_within(
+                                    &logs,
+                                    checkout.path(),
+                                    &step.choice,
+                                    None,
+                                    None,
+                                    &before_validation,
+                                    |sessions| {
+                                        sessions.run_to_final_message(
+                                            session::Purpose::Ordinary,
+                                            session::Kind::ProcessStep(index + 1),
+                                            &text,
+                                        )
+                                    },
+                                );
+                                last_log = log;
+                                let validation = result?
+                                    .filter(|text| !text.trim().is_empty())
+                                    .context("validation session left no final report")?;
+                                ensure!(
+                                    git.run(&["rev-parse", "HEAD"])? == head,
+                                    "validation session changed the final Review run head"
+                                );
+                                let validation = if private_reports.exposes(&validation) {
+                                    "Validation results withheld: the report included private Security review material.".to_string()
+                                } else {
+                                    validation
+                                };
+                                findings
+                                    .as_mut()
+                                    .context("delivery needs a review report")?
+                                    .push_str(&format!(
+                                        "\n\n### Final validation at {head}\n\n{validation}"
+                                    ));
+                            }
                             let findings = findings
                                 .as_deref()
                                 .context("delivery needs a review report")?;
@@ -409,6 +465,9 @@ impl ReviewProcess {
                     &mut began,
                     &mut last,
                 )?;
+            }
+            if delivered {
+                checkout.discard_validation_artifacts();
             }
             Ok(last)
         })();
@@ -545,7 +604,9 @@ fn unchanged_checkout(git: &Git, snapshot: &ReviewPullRequest) -> Result<()> {
     ensure!(
         git.run(&["rev-parse", "HEAD"])? == snapshot.head
             && git.run(&["branch", "--show-current"])? == snapshot.branch
-            && git.run(&["status", "--porcelain"])?.is_empty(),
+            && git
+                .run(&["status", "--porcelain", "--untracked-files=no"])?
+                .is_empty(),
         "recommend-only session changed the branch; no comment posted"
     );
     Ok(())

@@ -31,6 +31,12 @@ mod review_recovery_tests;
 #[cfg(test)]
 mod synchronization_tests;
 
+#[derive(Clone, Copy)]
+enum UntrackedFiles {
+    Preserve,
+    DiscardValidationArtifacts,
+}
+
 /// A successful preservation either published work or found no changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preserved {
@@ -257,7 +263,10 @@ impl Worktree {
     /// checkout under the synchronization lock, without staging or committing.
     pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
-            Ok(!uncommitted_changes(|args| operation.run(args))? && operation.head()? == head)
+            Ok(
+                !uncommitted_changes(|args| operation.run(args), UntrackedFiles::Preserve)?
+                    && operation.head()? == head,
+            )
         })
     }
 
@@ -392,7 +401,10 @@ impl Worktree {
 
 /// Use each caller's checked Git execution and interruption policy while
 /// sharing the evidence required to establish absence of uncommitted work.
-fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> {
+fn uncommitted_changes(
+    run: impl Fn(&[&str]) -> Result<String>,
+    untracked: UntrackedFiles,
+) -> Result<bool> {
     let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
     Ok(index_hides_tracked_work(&entries)
         || !run(&[
@@ -400,7 +412,10 @@ fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> 
             "core.fsmonitor=false",
             "status",
             "--porcelain",
-            "--untracked-files=all",
+            match untracked {
+                UntrackedFiles::Preserve => "--untracked-files=all",
+                UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
+            },
             "--ignore-submodules=none",
         ])?
         .is_empty())
@@ -461,7 +476,9 @@ impl Drop for Worktree {
         match self.cleanup {
             Cleanup::Remove => self.checkout.cleanup(&self.launch, false),
             Cleanup::Retain => self.checkout.cleanup(&self.launch, true),
-            Cleanup::KeepUnpublished => self.checkout.cleanup_preserving_work(&self.launch),
+            Cleanup::KeepUnpublished => self
+                .checkout
+                .cleanup_preserving_work(&self.launch, UntrackedFiles::Preserve),
         }
     }
 }

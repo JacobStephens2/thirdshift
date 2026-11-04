@@ -4,13 +4,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{acquisition, lock_launch, ownership};
+use super::{UntrackedFiles, acquisition, lock_launch, ownership};
 use crate::git::Git;
 use crate::progress;
 
 pub struct SkillWorktree {
     launch: Git,
     checkout: ownership::Checkout,
+    untracked: UntrackedFiles,
 }
 
 impl SkillWorktree {
@@ -40,6 +41,7 @@ impl SkillWorktree {
         Ok(Self {
             launch: Git::new(root),
             checkout,
+            untracked: UntrackedFiles::Preserve,
         })
     }
 
@@ -58,11 +60,19 @@ impl SkillWorktree {
         Ok(Self {
             launch: Git::new(root),
             checkout,
+            untracked: UntrackedFiles::Preserve,
         })
     }
 
     pub fn path(&self) -> &Path {
         self.checkout.path()
+    }
+
+    /// A delivered Review run may discard its disposable validation output.
+    /// Cleanup still preserves tracked edits and unpushed commits, and verifies
+    /// ownership under the disposal locks before removing the acquired checkout.
+    pub fn discard_validation_artifacts(&mut self) {
+        self.untracked = UntrackedFiles::DiscardValidationArtifacts;
     }
 
     /// Observe only the acquired checkout, even if an agent replaced its path.
@@ -81,6 +91,7 @@ impl SkillWorktree {
 
 impl Drop for SkillWorktree {
     fn drop(&mut self) {
-        self.checkout.cleanup_preserving_work(&self.launch);
+        self.checkout
+            .cleanup_preserving_work(&self.launch, self.untracked);
     }
 }
