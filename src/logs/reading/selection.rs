@@ -10,10 +10,21 @@ use super::{Command, Entry};
 use crate::issue::IssueUrl;
 use crate::logs::owner;
 
+const COMMAND_PREFIXES: &[(&str, &str)] = &[
+    ("Architect run", "architect"),
+    ("Pickup run", "pickup"),
+    ("Security run", "secure"),
+    ("Triage run", "triage"),
+    ("Review run", "review"),
+    ("Scoring run", "scoring"),
+    ("Experiment", "experiment"),
+    ("Process", "process"),
+];
+
 enum Name {
     Path(PathBuf),
     Issue { repository: String, number: u64 },
-    Pass(String),
+    KindStamp(String),
 }
 
 impl Name {
@@ -40,18 +51,10 @@ impl Name {
                 });
             }
         }
-        if [
-            "architect-",
-            "pickup-",
-            "secure-",
-            "scoring-",
-            "experiment-",
-            "process-",
-        ]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+        if let Some((prefix, _)) = name.split_once('-')
+            && COMMAND_PREFIXES.iter().any(|(_, known)| *known == prefix)
         {
-            return Ok(Self::Pass(name.into()));
+            return Ok(Self::KindStamp(name.into()));
         }
         bail!("invalid Command name: {name}; use repo#number, an Issue URL or kind-stamp")
     }
@@ -66,7 +69,7 @@ impl Name {
                             .next()
                             .is_some_and(|name| name.eq_ignore_ascii_case(repository)))
             }
-            Self::Pass(_) | Self::Path(_) => true,
+            Self::KindStamp(_) | Self::Path(_) => true,
         }
     }
 }
@@ -130,10 +133,10 @@ impl<'a> Observation<'a> {
                 };
                 issue.is_some_and(|issue| issue.number == *number)
             }
-            Name::Pass(name) => match self {
+            Name::KindStamp(name) => match self {
                 Self::Record(command) => command.record.name == *name,
                 Self::History(command) => command.command_log.as_ref().is_some_and(|path| {
-                    let Some(kind) = pass_prefix(&command.kind) else {
+                    let Some(kind) = kind_prefix(&command.kind) else {
                         return false;
                     };
                     super::command_stamp(path)
@@ -216,7 +219,7 @@ impl<'a> Observation<'a> {
         {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
-                .or_else(|| pass_prefix(kind).map(String::from))
+                .or_else(|| kind_prefix(kind).map(String::from))
                 .context("cannot name Session traces for this Command kind")?;
             for path in inventory.sessions_of(log, &prefix)? {
                 if !paths.contains(&path) {
@@ -251,16 +254,10 @@ impl<'a> Observation<'a> {
     }
 }
 
-pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
-    match kind {
-        "Architect run" => Some("architect"),
-        "Pickup run" => Some("pickup"),
-        "Security run" => Some("secure"),
-        "Scoring run" => Some("scoring"),
-        "Experiment" => Some("experiment"),
-        "Process" => Some("process"),
-        _ => None,
-    }
+fn kind_prefix(kind: &str) -> Option<&'static str> {
+    COMMAND_PREFIXES
+        .iter()
+        .find_map(|&(stored, prefix)| (stored == kind).then_some(prefix))
 }
 
 /// A selected Run and its captured outer process/record. Child refusal is an
@@ -365,7 +362,7 @@ pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection
         );
     }
     candidates.retain(|command| command.observation.matches(&name));
-    if matches!(name, Name::Pass(_)) {
+    if matches!(name, Name::KindStamp(_)) {
         let repositories: BTreeSet<_> = candidates
             .iter()
             .map(|command| command.observation.repository())
