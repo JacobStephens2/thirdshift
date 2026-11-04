@@ -343,6 +343,24 @@ fn prompts() -> Vec<Prompt> {
             ),
         },
         Prompt {
+            id: "prompt-pull-request-address",
+            title: "Review run, address findings",
+            when: "Reviews a pull request against its own base and addresses findings under the Ticket run's rules. Delivery pushes fixes without force and posts the final report as a comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                crate::review::Mode::Address,
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        },
+        Prompt {
             id: "prompt-pull-request-review",
             title: "Review run, recommendations",
             when: "Reviews a pull request's captured head against its own base, using linked closing issues as the Spec or the body alone. Posts recommendations without changing the branch.",
@@ -353,6 +371,7 @@ fn prompts() -> Vec<Prompt> {
                     issue: issue.clone(),
                 },
                 BASE,
+                crate::review::Mode::RecommendOnly,
                 prompt::EarlierSteps {
                     results: &[],
                     first: true,
@@ -919,6 +938,7 @@ mod tests {
                     | "prompt-process-step"
                     | "prompt-process-step-later"
                     | "prompt-process-step-issue"
+                    | "prompt-pull-request-address"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

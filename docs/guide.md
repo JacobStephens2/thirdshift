@@ -16,7 +16,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Architect run](#architect-runs)**, `thirdshift architect`: reviews the codebase's architecture, publishes a plan for its top Strong recommendation and builds it, or leaves an **Architect idea** for the **Day shift**.
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
-- **[Review run](#review-runs)**, `thirdshift review <PR URL> --recommend-only`: reviews an existing pull request and posts its Standards and Spec findings in one comment.
+- **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
 
 Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
@@ -2323,8 +2323,9 @@ Running the Spec again picks up where the last Spec run stopped. The Spec branch
 From a clone of the pull request's repository:
 
 ```sh
+thirdshift review https://github.com/you/widgets/pull/42
 thirdshift review https://github.com/you/widgets/pull/42 --recommend-only
-thirdshift review https://github.com/you/widgets/pull/42 --recommend-only harness codex
+thirdshift review https://github.com/you/widgets/pull/42 harness codex
 ```
 
 A **Review run** refuses forks, drafts, closed or merged pull requests and
@@ -2336,9 +2337,25 @@ already checked-out head branch must be dealt with before the Review run can use
 The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.
-`--recommend-only` is required in this first version: it fixes nothing and pushes
-nothing. thirdshift posts one comment with the findings and a hidden marker
-naming the reviewed head. A changed head, base or eligibility stops publication.
+Without `--recommend-only`, the session addresses findings using the same rules
+as a Ticket run: it runs each behavior finding's test or command before deciding,
+fixes reproduced failures and keeps the tests. It commits fixes, and thirdshift
+pushes them to the pull request's own head branch without force. The comment
+lists what it fixed and every **Unaddressed finding**, with the code, plan
+decision, ADR or focused run that refutes it. Decisions left to the Spec or
+Day shift link a `needs-triage` issue. With a linked issue, a departure explained
+only by the pull request body is left as an Unaddressed finding citing that
+reason, without filing a triage issue.
+
+If the branch moves before delivery or rejects the push because it moved,
+thirdshift leaves it alone and posts the findings, describes the proposed fixes
+and says the branch moved. The fixes remain in the local worktree. A changed base
+or eligibility stops publication. The hidden comment marker names the reviewed
+head and, when fixes were pushed, the head after the push.
+
+`--recommend-only` fixes nothing and pushes nothing. It posts the findings with
+the reviewed-head marker; a changed head stops publication too. A Ticket run's
+own review still happens inside its implement session.
 
 Command records, the Activity log, `status` and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
@@ -2348,9 +2365,9 @@ the pull request merged or closed.
 Inspect the Built-in process with `thirdshift process show review-run`. Copy it
 to `~/.thirdshift/processes/my-review.toml` to start a Custom process with
 `thirdshift process my-review pull-request <PR URL>`. A `pull-request` worktree
-declares this input; `review-and-address` reviews it and `delivery` posts the
-recommendations. Custom pull-request Processes can also run skill and command
-Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
+declares this input; `review-and-address` reviews it and addresses findings, and
+`delivery` pushes fixes and posts the comment. Custom pull-request Processes can
+also run skill and command Steps on that checkout. Command Steps receive `THIRDSHIFT_PULL_REQUEST_URL` and
 the filtered input is in `.thirdshift-review-input.md`. This version keeps these
 Steps sequential and requires `review-and-address` before a final `delivery`.
 
