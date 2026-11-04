@@ -888,6 +888,7 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
             recommend_only = true;
         } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
             || take_email_flag(&mut flags.email, arg, &mut words)?
+            || take_security_review_flag(&mut flags, arg)?
         {
         } else if pull_request.is_none() {
             pull_request = Some(crate::review::PullRequestUrl::parse(arg)?);
@@ -1199,6 +1200,9 @@ fn take_flag<'a>(
     if take_merge_flag(&mut flags.goal, arg)? {
         return Ok(true);
     }
+    if take_security_review_flag(flags, arg)? {
+        return Ok(true);
+    }
     match arg {
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
@@ -1231,6 +1235,14 @@ fn take_flag<'a>(
             arg,
             SECURITY_CLOSE_FLAGS,
         )?,
+        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+    }
+    Ok(true)
+}
+
+/// The same Security review ask applies to Ticket and Review runs.
+fn take_security_review_flag(flags: &mut Flags, arg: &str) -> Result<bool> {
+    match arg {
         "security-review" | "--security-review" => ask_once(
             &mut flags.security_review,
             crate::security::review::Ask::Allow,
@@ -1243,7 +1255,7 @@ fn take_flag<'a>(
             arg,
             SECURITY_REVIEW_FLAGS,
         )?,
-        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+        _ => return Ok(false),
     }
     Ok(true)
 }

@@ -10,8 +10,9 @@ use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction,
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
 use crate::harness::interpretation::{SafeguardRefusal, SessionFailure};
 use crate::issue::IssueUrl;
+use crate::review::PullRequestUrl;
 use crate::session::{Kind, Purpose, Sessions};
-use crate::worktree::Worktree;
+use crate::worktree::{SkillWorktree, Worktree};
 use crate::{logs, progress, prompt};
 
 pub(crate) mod step;
@@ -26,6 +27,34 @@ pub(crate) fn run(
     text: &str,
 ) -> Result<Review> {
     let merge_base = worktree.merge_base_commit(base)?;
+    run_in(sessions, issue, &merge_base, text, || {
+        worktree.head()?;
+        Ok(worktree.path())
+    })
+}
+
+/// Keep private recording and the final-line contract shared with Ticket runs.
+pub(crate) fn run_on_pull_request(
+    sessions: &Sessions<'_>,
+    worktree: &SkillWorktree,
+    pr: &PullRequestUrl,
+    base_commit: &str,
+    text: &str,
+) -> Result<Review> {
+    let merge_base = worktree.merge_base_commit(base_commit)?;
+    run_in(sessions, &pr.issue, &merge_base, text, || {
+        worktree.head()?;
+        Ok(worktree.path())
+    })
+}
+
+fn run_in<'a>(
+    sessions: &Sessions<'_>,
+    issue: &IssueUrl,
+    merge_base: &str,
+    text: &str,
+    checkout: impl Fn() -> Result<&'a Path>,
+) -> Result<Review> {
     let root = logs::root(&issue.repo()).join("security-reviews");
     fs::create_dir_all(&root)?;
     let directory = tempfile::Builder::new()
@@ -38,7 +67,7 @@ pub(crate) fn run(
             prompt::SECURITY_REVIEW_REPORT_FILE,
             &report.to_string_lossy(),
         )
-        .replace(prompt::SECURITY_REVIEW_MERGE_BASE, &merge_base);
+        .replace(prompt::SECURITY_REVIEW_MERGE_BASE, merge_base);
     progress::step(format!(
         "Security review private report: {}",
         report.display()
@@ -47,7 +76,7 @@ pub(crate) fn run(
         sessions.run_to_final_message(Purpose::SecurityReview, Kind::SecurityReview, &text)?;
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
-    worktree.head()?;
+    let worktree = checkout()?;
     let review = Review::from_final_message(message.as_deref());
     // A deliberate incomplete still has a private report to validate and
     // record. Keep its public reason only if that processing succeeds.
@@ -75,12 +104,12 @@ pub(crate) fn run(
         let github = GitHub::new();
         let repo = issue.repo_slug();
         let mut known = github.security_records(&repo)?;
-        let package = super::audit::package_in(worktree.path());
+        let package = super::audit::package_in(worktree);
         for (finding, reproduction) in findings {
             let draft = DraftAdvisory::new(FindingDraft {
                 fingerprint: &finding.fingerprint,
                 summary: &finding.title,
-                audited_commit: &merge_base,
+                audited_commit: merge_base,
                 provenance: FindingProvenance::Review {
                     issue_url: &issue.url,
                 },
