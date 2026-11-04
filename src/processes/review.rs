@@ -338,6 +338,12 @@ impl ReviewProcess {
                                 let logs = session::Logs::of_process_review(&repo, index + 1);
                                 let before_validation =
                                     || compatible(&github, pr, &snapshot).map(|_| ());
+                                // Captured before the session. It can read and
+                                // then remove the report, and Delivery posts
+                                // its final message. A prompt not to copy the
+                                // report is not a boundary.
+                                let private_reports =
+                                    crate::security::review::private_report_material(&repo);
                                 let (result, log) = session::Sessions::checked_within(
                                     &logs,
                                     checkout.path(),
@@ -361,6 +367,11 @@ impl ReviewProcess {
                                     git.run(&["rev-parse", "HEAD"])? == head,
                                     "validation session changed the final Review run head"
                                 );
+                                let validation = if private_reports.exposes(&validation) {
+                                    "Validation results withheld: the report included private Security review material.".to_string()
+                                } else {
+                                    validation
+                                };
                                 findings
                                     .as_mut()
                                     .context("delivery needs a review report")?

@@ -2383,6 +2383,9 @@ incomplete review. Pre-existing findings stay in private records.
 If a Security review or another later editing Step commits more changes,
 Delivery repeats final validation and the configured extra commands on that
 head before pushing. Its comment adds the new head and those validation results.
+When that report includes text from a private Security report, Delivery posts
+`Validation results withheld: the report included private Security review material.`
+instead of the session's text.
 
 If the branch moves before delivery or rejects the push because it moved,
 thirdshift leaves it alone and posts the findings, describes the proposed fixes
