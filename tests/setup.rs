@@ -1178,7 +1178,7 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
         &[],
         &[(
             HARNESS,
-            "  claude  \n\n\n\n\n\n\n\ny\n  café@example.com  \n\n\n\n",
+            "  claude  \n\n\n\n\n\n\n\n\ny\n  café@example.com  \n\n\n\n",
         )],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
