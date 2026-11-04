@@ -38,6 +38,62 @@ fn bwrap_starts_or_skip(reason: &str) -> bool {
 }
 
 #[test]
+fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    let recommendation = serde_json::json!({
+        "category": "bug", "state": "needs-triage",
+        "issues": [
+            {"title": "Handle an empty cache", "body": "Reproduce with an empty cache."},
+            {"title": "Handle a stale cache", "body": "Reproduce with a stale cache."}
+        ],
+        "investigation": "The cache reader fails for empty and stale entries."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let resend = ResendStandIn::replying(200, r#"{"id":"triage-links"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "triage",
+            "--file",
+            report.to_str().unwrap(),
+            "email",
+            "day-shift@example.com",
+        ],
+        &[
+            ("RESEND_API_KEY", "test-key"),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
+    assert_eq!(output["issues"][0]["url"], scenario.issue_url(8));
+    assert_eq!(output["issues"][1]["url"], scenario.issue_url(9));
+    assert!(
+        result.stderr.ends_with(&format!(
+            "thirdshift: Triage run filing complete\nthirdshift: Issue: {}\nthirdshift: Issue: {}\n",
+            scenario.issue_url(8),
+            scenario.issue_url(9),
+        )),
+        "{}",
+        result.stderr
+    );
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    for number in [8, 9] {
+        assert!(
+            notification
+                .lines()
+                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
+            "{notification}"
+        );
+    }
+    support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
+}
+
+#[test]
 fn triage_comments_on_a_covering_issue_without_filing_or_changing_labels() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["enhancement", "ready-for-human", "in-progress"]);
@@ -66,6 +122,13 @@ fn triage_comments_on_a_covering_issue_without_filing_or_changing_labels() {
     assert!(comment.contains("cache.rs:42"), "{comment}");
     let output: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
     assert_eq!(output["comments"][0]["url"], scenario.issue_url(7));
+    assert!(
+        result
+            .stderr
+            .ends_with(&format!("thirdshift: Issue: {}\n", scenario.issue_url(7))),
+        "{}",
+        result.stderr
+    );
     let (_, notification) = saved_notification(&scenario, "triage");
     assert!(
         notification.contains(&scenario.issue_url(7)),
@@ -88,7 +151,18 @@ fn recommend_only_names_the_covering_issue_and_comment_without_github_writes() {
     assert_eq!(scenario.gh_state(), before);
     let output: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
     assert_eq!(output, recommendation);
+    assert!(
+        result
+            .stderr
+            .ends_with("thirdshift: Triage run recommendation complete\n"),
+        "{}",
+        result.stderr
+    );
     let (_, notification) = saved_notification(&scenario, "triage");
+    assert!(
+        !notification.lines().any(|line| line.starts_with("Issue:")),
+        "{notification}"
+    );
     assert!(
         notification.contains(&scenario.issue_url(7)),
         "{notification}"

@@ -196,6 +196,17 @@ pub struct Ended {
     pub json: String,
     pub filed: bool,
     pub notification: String,
+    /// Issues successfully filed or commented on, in publication order.
+    pub published: Vec<IssueUrl>,
+}
+
+impl Ended {
+    /// The readable links shared by the final progress lines and Run notification.
+    pub fn publication_lines(&self) -> impl Iterator<Item = String> {
+        self.published
+            .iter()
+            .map(|issue| format!("Issue: {}", issue.url))
+    }
 }
 
 /// How filing labels one proposed issue.
@@ -423,6 +434,7 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
             json,
             filed: !options.recommend_only,
             notification,
+            published: published.clone(),
         })
     };
     let (result, log) = if options.read_machine {

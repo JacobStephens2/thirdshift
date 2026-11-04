@@ -561,6 +561,9 @@ impl Shown {
             Ok(line) => steps.push(line.clone()),
             Err(cause) => steps.push(cause.full().to_string()),
         }
+        if let Some(triage) = account.triage {
+            steps.extend(triage.publication_lines());
+        }
         steps.extend(account.advice.iter().map(Advice::to_string));
         if account.ended.is_err() {
             if let Some(log) = account.log {
