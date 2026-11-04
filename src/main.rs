@@ -177,7 +177,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
-       thirdshift triage --recommend-only [--file <path>]  Investigate a Report from stdin or a file
+       thirdshift triage [--recommend-only] [--file <path>]  Investigate a Report and file triaged issues
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -527,7 +527,13 @@ fn triage(args: args::TriageArgs) -> ExitCode {
     };
     let mut harness = flags.harness(&config);
     started.built_with(&harness);
-    started.finish(Ending::Triage(triage::run(&report, &mut harness)))
+    started.finish(Ending::Triage(triage::run(
+        &report,
+        args.file.as_deref(),
+        args.recommend_only,
+        args.allow_ready_for_agent || config.triage_allow_ready_for_agent,
+        &mut harness,
+    )))
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the
