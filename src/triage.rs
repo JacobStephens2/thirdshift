@@ -79,7 +79,7 @@ fn recommendation(message: Option<&str>) -> Result<String> {
 }
 
 /// A Triage run always takes a Command slot, even above the Command limit.
-pub fn run(report: &str, harness: &mut Choice) -> Result<String, FailedRun> {
+pub fn run(report: &str, harness: &mut Choice, read_machine: bool) -> Result<String, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
     logs::started(logs::Work::TriageRun(&repo), harness);
@@ -88,16 +88,27 @@ pub fn run(report: &str, harness: &mut Choice) -> Result<String, FailedRun> {
     let launch = Git::new(std::env::current_dir().context("could not read the Launch directory")?);
     let checkout = worktree::ReviewWorktree::for_triage(&launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(&repo);
-    let (result, log) =
-        session::Sessions::within(&session_logs, checkout.path(), harness, |sessions| {
-            let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
-            let message = sessions.run_to_final_message(
-                session::Purpose::Ordinary,
-                session::Kind::Triage,
-                &prompt::triage(&skill.path, report),
-            )?;
-            recommendation(message.as_deref())
-        });
+    let investigate = |sessions: &session::Sessions<'_>| {
+        let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
+        let message = sessions.run_to_final_message(
+            session::Purpose::Ordinary,
+            session::Kind::Triage,
+            &prompt::triage(&skill.path, report, read_machine),
+        )?;
+        recommendation(message.as_deref())
+    };
+    let (result, log) = if read_machine {
+        let sandbox = crate::sandbox::triage::prepare(checkout.path(), harness.harness)?;
+        session::Sessions::within_sandboxed(
+            &session_logs,
+            checkout.path(),
+            harness,
+            &sandbox,
+            investigate,
+        )
+    } else {
+        session::Sessions::within(&session_logs, checkout.path(), harness, investigate)
+    };
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);
         failed.log = log;

@@ -1086,6 +1086,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 /// A Report to investigate, with only the choices a Triage session uses.
 pub struct TriageArgs {
     pub file: Option<String>,
+    pub read_machine: bool,
     pub harness: harness::Asked,
     pub email: Option<NotificationAsk>,
 }
@@ -1093,6 +1094,7 @@ pub struct TriageArgs {
 fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut parsed = TriageArgs {
         file: None,
+        read_machine: false,
         harness: harness::Asked::default(),
         email: None,
     };
@@ -1101,6 +1103,7 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--recommend-only" if !recommend_only => recommend_only = true,
+            "--read-machine" if !parsed.read_machine => parsed.read_machine = true,
             "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
             _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
             _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}

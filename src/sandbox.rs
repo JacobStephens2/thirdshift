@@ -1,5 +1,6 @@
 //! Trial and Grader sandboxes: bwrap, their own processes and network, a fresh
 //! home and logins.
+//! Triage's opt-in read-only host mount is implemented separately in [`triage`].
 //!
 //! A Trial's session runs in bwrap with process and network namespaces of its
 //! own, so it sees neither an unbound path nor the host's processes, and
@@ -43,6 +44,7 @@ use crate::resend_key::Credentials;
 use crate::{config, interrupt};
 
 pub(crate) mod code_grader;
+pub(crate) mod triage;
 
 /// The environment variable carrying an OpenCode Trial's provider key.
 pub(crate) const OPENCODE_API_KEY_ENV: &str = "THIRDSHIFT_OPENCODE_API_KEY";
@@ -238,7 +240,7 @@ pub(crate) struct Launch {
 }
 
 impl Launch {
-    /// Publish a caller-supplied session path after clearing the ambient environment.
+    /// Publish a session path to both bwrap and the retained-session reader.
     pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
         self.argv.extend([
             OsString::from("--setenv"),

@@ -13,6 +13,8 @@ Sessions run with no human to answer an approval prompt or a trust question. The
 
 The worktree is the only boundary. This generalises the Codex part of ADR 0012. Sources: `docs/research/harness-candidates.md`, `docs/research/codex-headless-harness.md`.
 
+Exception (#1711): a Triage run with `--read-machine` wraps the ordinary Harness invocation in a Bubblewrap filesystem sandbox. It can read the host filesystem, with only its throwaway worktree writable. A sandbox startup failure fails the Command; there is no unsandboxed fallback. Without this flag, Triage keeps its ordinary launch and worktree-only prompt. Harness approval and trust flags stay fixed.
+
 ## Considered Options
 
 - **Each CLI's own sandbox.** Rejected. On stock Ubuntu (`kernel.apparmor_restrict_unprivileged_userns = 1`), bubblewrap can't start, so every sandboxed command fails under Codex and Muse. The sandboxes of agy and Grok make the main checkout's `.git` read-only, which blocks commits. A sandboxed mode for machines where it works would be a separate issue.

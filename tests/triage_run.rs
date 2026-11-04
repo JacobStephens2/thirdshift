@@ -11,8 +11,79 @@ const REPORT: &str = "Deploy canary fails when the cache is empty.\nPlease inves
 const RECOMMENDATION: &str = r#"{"category":"bug","state":"ready-for-agent","issues":[{"title":"Handle an empty cache","body":"Reproduce with an empty cache."}],"investigation":"The cache read assumes an entry exists."}"#;
 
 #[test]
+fn read_machine_reads_outside_but_writes_only_inside_the_worktree() {
+    let probe = std::process::Command::new("bwrap")
+        .args(["--ro-bind", "/", "/", "--", "/bin/true"])
+        .output();
+    if !probe.is_ok_and(|output| output.status.success()) {
+        eprintln!("SKIPPED (Triage filesystem confinement): bwrap cannot start");
+        return;
+    }
+    let scenario = Scenario::new();
+    let outside = scenario.path("host-evidence.txt");
+    fs::write(&outside, "host evidence").unwrap();
+    fs::create_dir_all(scenario.path("home/.claude")).unwrap();
+    fs::write(
+        scenario.path("home/.claude/.credentials.json"),
+        "production login",
+    )
+    .unwrap();
+    // The ordinary fake records outside the worktree. This Harness stand-in
+    // emits its observations through the real Session protocol instead.
+    fs::remove_file(scenario.path("bin/claude")).unwrap();
+    support::write_executable(
+        &scenario.path("bin/claude"),
+        &format!(
+            r#"#!/bin/bash
+set -eu
+if [ "$1" = auth ]; then echo '{{"loggedIn":true}}'; exit; fi
+test "$(cat {outside:?})" = 'host evidence'
+if (echo changed > {outside:?}) 2>/dev/null; then exit 31; fi
+if touch {outside:?}.new 2>/dev/null; then exit 32; fi
+ln -s {outside:?} escape
+if (echo changed > escape) 2>/dev/null; then exit 33; fi
+echo scratch > local-scratch
+test "$(cat local-scratch)" = scratch
+test "$(cat escape)" = 'host evidence'
+test "$(cat "$HOME/.claude/.credentials.json")" = 'production login'
+echo refreshed > "$HOME/.claude/.credentials.json"
+mkdir -p "$HOME/.claude/projects"
+echo session > "$HOME/.claude/projects/session"
+touch "$TMPDIR/scratch"
+case "${{@: -1}}" in *'read the whole machine'*) ;; *) exit 34 ;; esac
+echo '{{"type":"system","subtype":"init","session_id":"triage-sandbox"}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"result":"Triage recommendation: {{\"category\":\"bug\",\"state\":\"needs-triage\",\"issues\":[],\"investigation\":\"Read host evidence; outside writes denied; worktree writes allowed.\"}}"}}'
+"#,
+        ),
+    );
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let result = scenario.run(&[
+        "triage",
+        "--recommend-only",
+        "--read-machine",
+        "--file",
+        report.to_str().unwrap(),
+    ]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let recommendation: serde_json::Value = serde_json::from_str(result.stdout.trim()).unwrap();
+    assert_eq!(
+        recommendation["investigation"],
+        "Read host evidence; outside writes denied; worktree writes allowed."
+    );
+    assert_eq!(fs::read_to_string(outside).unwrap(), "host evidence");
+    assert!(!scenario.path("host-evidence.txt.new").exists());
+    assert_eq!(
+        fs::read_to_string(scenario.path("home/.claude/.credentials.json")).unwrap(),
+        "production login"
+    );
+    assert_eq!(scenario.entries("work"), vec![support::REPO]);
+}
+
+#[test]
 fn a_file_report_reaches_a_triage_session_and_its_recommendation_is_retained() {
     let scenario = Scenario::new();
+    support::write_executable(&scenario.path("bin/bwrap"), "#!/bin/sh\nexit 99\n");
     let before = scenario.gh_state();
     let report = scenario.path("report.txt");
     fs::write(&report, REPORT).unwrap();
@@ -29,6 +100,11 @@ fn a_file_report_reaches_a_triage_session_and_its_recommendation_is_retained() {
     let calls = scenario.claude_calls();
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(prompt.contains("thirdshift-triage"), "{prompt}");
+    assert!(
+        prompt.contains("Investigate only within this throwaway worktree"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("read the whole machine"), "{prompt}");
     assert!(
         prompt.contains(&serde_json::to_string(REPORT).unwrap()),
         "{prompt}"
@@ -63,6 +139,45 @@ fn a_file_report_reaches_a_triage_session_and_its_recommendation_is_retained() {
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     assert!(status.stdout.contains("Triage run"), "{}", status.stdout);
     assert_eq!(scenario.entries("work"), vec![support::REPO]);
+}
+
+#[test]
+fn sandbox_startup_failure_never_launches_the_harness_unsandboxed() {
+    for after_probe in [false, true] {
+        let scenario = Scenario::new();
+        let probe_marker = scenario.path("sandbox-probed");
+        support::write_executable(
+            &scenario.path("bin/bwrap"),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ {after_probe} = true ] && [ ! -f {probe_marker:?} ]; then touch {probe_marker:?}; exit 0; fi\n\
+                 echo 'bwrap: fixture user namespace denied' >&2\nexit 1\n"
+            ),
+        );
+        let report = scenario.path("report.txt");
+        fs::write(&report, REPORT).unwrap();
+        let result = scenario.run_with_env(
+            &[
+                "triage",
+                "--recommend-only",
+                "--read-machine",
+                "--file",
+                report.to_str().unwrap(),
+            ],
+            &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
+        );
+        assert_ne!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("fixture user namespace denied"),
+            "{}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty());
+        assert!(result.stdout.is_empty(), "{}", result.stdout);
+        let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/triage");
+        assert_eq!(record["outcome"], "failed");
+        assert_eq!(scenario.entries("work"), vec![support::REPO]);
+    }
 }
 
 #[test]

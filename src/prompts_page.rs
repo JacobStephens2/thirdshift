@@ -249,7 +249,7 @@ fn prompts() -> Vec<Prompt> {
             title: "Triage run",
             when: "Investigates a Report read-only in a throwaway worktree with --recommend-only, without publishing or waiting for a person. Returns the recommendation for stdout and the Run notification.",
             sender: TriageRun,
-            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>"),
+            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
         },
         Prompt {
             id: "prompt-security-review",

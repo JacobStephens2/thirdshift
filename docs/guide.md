@@ -29,6 +29,7 @@ Give a Report on standard input or with `--file` from the repository's Launch di
 ```sh
 printf '%s\n' 'The deploy canary fails with an empty cache.' | thirdshift triage --recommend-only
 thirdshift triage --recommend-only --file report.txt
+thirdshift triage --recommend-only --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
 
@@ -37,6 +38,8 @@ The embedded `thirdshift-triage` Factory skill investigates the Base branch on o
 Standard output is one JSON object with `category`, `state`, `issues` (proposed titles and bodies) and `investigation`. When an existing issue covers the Report, the investigation names its URL and the comment it would add. The same recommendation is saved in the Run notification and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one; an incomplete session recommendation fails the Command.
 
 The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
+
+Add `--read-machine` to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Git history and GitHub remain unchanged. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without the flag, the launch and worktree-only prompt stay as before.
 
 ## What a Ticket run does
 
