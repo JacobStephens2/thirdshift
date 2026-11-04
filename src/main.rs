@@ -177,8 +177,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
-       thirdshift review <PR URL> [--recommend-only]  Review and fix findings, or post recommendations only
-       thirdshift review --author <login>             Review one waiting pull request by that author (Pass)
+       thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -228,7 +227,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
-Pass commands: architect, pickup, secure (no Issue URL); base <branch> uses an origin branch, whatever is checked out.
+Pass commands: architect, pickup, secure, review --author <login>. For architect, pickup and secure, base <branch> selects an origin branch.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
   https://thirdshift.app/docs/
