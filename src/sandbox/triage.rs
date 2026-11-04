@@ -46,7 +46,6 @@ fn prepare_around(
             "--unshare-user",
             "--unshare-pid",
             "--unshare-ipc",
-            "--disable-userns",
             "--proc",
             "/proc",
             "--remount-ro",
@@ -352,6 +351,42 @@ mod tests {
             println!("SKIPPED ({reason}): bwrap cannot start");
         }
         bwrap
+    }
+
+    #[test]
+    fn read_machine_starts_when_bwrap_does_not_support_disable_userns() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let bwrap = temp.path().join("bwrap");
+        // Model older Bubblewrap's option parser without needing host namespaces.
+        std::fs::write(
+            &bwrap,
+            r#"#!/bin/sh
+for arg do
+    if [ "$arg" = --disable-userns ]; then
+        echo 'bwrap: Unknown option --disable-userns' >&2
+        exit 1
+    fi
+done
+exit 0
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let worktree = temp.path().join("worktree");
+        let user_home = temp.path().join("home");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::create_dir(&user_home).unwrap();
+
+        super::prepare_around(
+            &worktree,
+            crate::harness::Harness::Agy,
+            &bwrap,
+            "/bin/sh".into(),
+            &user_home,
+        )
+        .unwrap();
     }
 
     #[test]
