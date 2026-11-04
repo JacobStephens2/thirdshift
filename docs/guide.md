@@ -2449,8 +2449,8 @@ read-only.
 
 Command records, the Activity log, `status` and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
-The Inbox keeps a completed review under **Ready for review** until GitHub shows
-the pull request merged or closed.
+The Inbox keeps a successful review under **Ready for review** until GitHub shows
+the pull request merged or closed. Failed reviews appear under **Needs you**.
 
 Inspect the Built-in process with `thirdshift process show review-run`. Copy it
 to `~/.thirdshift/processes/my-review.toml` to start a Custom process with

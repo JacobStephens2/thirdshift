@@ -2193,8 +2193,8 @@ own review still happens inside its implement session.</p>
 read-only.</p>
 <p>Command records, the Activity log, <code>status</code> and Run notifications call it a
 Review run. Email and Harness, Model and Effort flags follow the other Commands.
-The Inbox keeps a completed review under <strong>Ready for review</strong> until GitHub shows
-the pull request merged or closed.</p>
+The Inbox keeps a successful review under <strong>Ready for review</strong> until GitHub shows
+the pull request merged or closed. Failed reviews appear under <strong>Needs you</strong>.</p>
 <p>Inspect the Built-in process with <code>thirdshift process show review-run</code>. Copy it
 to <code>~/.thirdshift/processes/my-review.toml</code> to start a Custom process with
 <code>thirdshift process my-review pull-request &lt;PR URL&gt;</code>. A <code>pull-request</code> worktree
