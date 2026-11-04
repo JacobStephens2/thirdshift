@@ -92,7 +92,7 @@ fn recommendation(message: Option<&str>) -> Result<Recommendation> {
         let state = issue.state.as_deref().unwrap_or(&recommendation.state);
         let needs_answer = issue.confirmation_blocked.is_some()
             || labels::NEEDS_INFO.is_named(state)
-            || labels::UNREADY[0].is_named(state);
+            || labels::READY_FOR_HUMAN.is_named(state);
         ensure!(
             if needs_answer {
                 issue
@@ -174,7 +174,7 @@ fn file(
         let recommended = state_label(issue.state.as_deref().unwrap_or(&recommendation.state))
             .context("unknown Triage state")?;
         let state = if issue.confirmation_blocked.is_some() {
-            labels::UNREADY[0]
+            labels::READY_FOR_HUMAN
         } else if recommended == labels::READY_FOR_AGENT && !allow_ready_for_agent {
             labels::NEEDS_TRIAGE
         } else {
