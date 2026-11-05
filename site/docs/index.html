@@ -409,7 +409,8 @@ address_scopes = { &quot;reader@example.com&quot; = [&quot;read&quot;] }
 <p>A sign-in session uses its address&#39;s current scopes on every request. The page
 hides controls it cannot use, and a refused API call returns 403 naming the
 missing scope. The sign-in list and address scopes are CLI-only settings: no
-page or API endpoint can write them, even with <code>admin</code>.</p>
+page or API endpoint can write them, even with <code>admin</code>.
+Signing out of your own browser remains available even with no scopes.</p>
 <p>A bearer request can name a person with <code>X-Thirdshift-Person: reader@example.com</code>.
 The owning machine requires that exact address on its own <code>allowed_emails</code> list,
 or returns 403. Its effective scopes are the intersection of the token&#39;s scopes

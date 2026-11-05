@@ -592,7 +592,7 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/account",
         api: "/api/v1/account",
-        scope: Some(Scope::Act),
+        scope: None,
         cli: &["thirdshift console sign-out"],
         method: Method::GET,
         view: View::Account,
@@ -600,7 +600,7 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/sign-out",
         api: "/api/v1/sign-out",
-        scope: Some(Scope::Act),
+        scope: None,
         cli: &["thirdshift console sign-out"],
         method: Method::POST,
         view: View::SignOut,

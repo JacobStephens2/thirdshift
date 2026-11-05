@@ -16,14 +16,6 @@ pub(super) const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 pub(super) const TAIL: u64 = 64 * 1024;
 const TIME_FORMAT_LENGTH: usize = "2026-10-03 10:41:01".len();
 
-pub(super) fn attribution(who: &str, from_console: bool, holder: Option<&str>) -> String {
-    match (from_console, holder) {
-        (true, Some(holder)) => format!("by {who} from the Console on {holder}"),
-        (true, None) => format!("from the Console by {who}"),
-        (false, _) => format!("from the CLI by {who}"),
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Run,

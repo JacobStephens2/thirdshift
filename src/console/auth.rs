@@ -54,31 +54,20 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
-    pub fn activity_actor(&self) -> String {
-        match &self.identity {
+    pub fn activity_actor(&self) -> crate::logs::Actor {
+        let (who, holder) = match &self.identity {
             Identity::Token {
+                holder,
                 person: Some(person),
-                ..
-            } => person.clone(),
+            } => (person.clone(), Some(holder.clone())),
             Identity::Token {
                 holder,
                 person: None,
-            } => format!("token {holder}"),
-            Identity::Session { address } => address.clone(),
-            Identity::Local { .. } => self.caller_label.clone(),
-        }
-    }
-
-    pub fn console_holder(&self) -> Option<String> {
-        match &self.identity {
-            Identity::Token {
-                holder,
-                person: Some(_),
-            } => Some(holder.clone()),
-            Identity::Token { person: None, .. }
-            | Identity::Session { .. }
-            | Identity::Local { .. } => None,
-        }
+            } => (format!("token {holder}"), None),
+            Identity::Session { address } => (address.clone(), None),
+            Identity::Local { .. } => (self.caller_label.clone(), None),
+        };
+        crate::logs::Actor::console(who, holder)
     }
 
     // Streams recheck on account changes without extending idle lifetime.

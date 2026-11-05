@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn restricted_sessions_can_sign_out_of_their_own_browser_with_csrf() {
+    for scopes in ["read", ""] {
+        let home = configured();
+        assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+        let console = Console::start_mode(
+            Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            home.path(),
+            false,
+        );
+        let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+        api::cli(
+            home.path(),
+            &["console", "scopes", "--scopes", scopes, "--json"],
+        );
+        let account = get(&console, "/account", &session);
+        assert_eq!(account.status(), 200);
+        let page = account.text().unwrap();
+        assert!(page.contains("Sign out this browser"));
+        let post = |csrf: &str| {
+            client()
+                .post(format!("{}/sign-out", console.address))
+                .header("cookie", &session)
+                .form(&[("csrf", csrf)])
+                .send()
+                .unwrap()
+        };
+        assert_eq!(post("wrong").status(), 403);
+        let signed_out = post(&csrf(&page));
+        assert_eq!(signed_out.status(), 303);
+        assert!(
+            signed_out.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
+        assert_eq!(get(&console, "/api/v1/whoami", &session).status(), 401);
+    }
+}
+
+#[test]
 fn named_person_stop_records_the_person_and_token_holder() {
     let scenario = support::Scenario::new();
     let home = scenario.path("home");

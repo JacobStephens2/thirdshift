@@ -59,10 +59,8 @@ pub(super) async fn submit(
             stop::request_json(
                 &form.command,
                 stop::Request {
-                    who: viewer.activity_actor(),
-                    console_holder: viewer.console_holder(),
+                    actor: viewer.activity_actor(),
                     requeue: form.requeue,
-                    from_console: true,
                 },
             )
         })
@@ -76,10 +74,8 @@ pub(super) async fn submit(
         stop::request_stop(
             &form.command,
             stop::Request {
-                who: viewer.activity_actor(),
-                console_holder: viewer.console_holder(),
+                actor: viewer.activity_actor(),
                 requeue: form.ending == "requeue",
-                from_console: true,
             },
         )
     })

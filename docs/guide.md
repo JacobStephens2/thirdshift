@@ -441,6 +441,7 @@ A sign-in session uses its address's current scopes on every request. The page
 hides controls it cannot use, and a refused API call returns 403 naming the
 missing scope. The sign-in list and address scopes are CLI-only settings: no
 page or API endpoint can write them, even with `admin`.
+Signing out of your own browser remains available even with no scopes.
 
 A bearer request can name a person with `X-Thirdshift-Person: reader@example.com`.
 The owning machine requires that exact address on its own `allowed_emails` list,
