@@ -15,6 +15,75 @@ fn pull_request(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn retry_delivers_commits_retained_after_delivery_validation_failed() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario
+        .agent_does("printf 'No findings. Validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    scenario.agent_does_in_session(
+        1,
+        r#"
+echo review-fix > review-fix.txt
+git add review-fix.txt
+git commit -qm 'Address review finding'
+printf 'Review finding fixed. Validation passed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"
+echo security-fix > security-fix.txt
+git add security-fix.txt
+git commit -qm 'Address security finding'
+printf 'Security finding fixed.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_in_session(3, "exit 1");
+    let first = scenario.run(&["review", &url, "security-review"]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    assert!(
+        first.stderr.contains("unpushed commits"),
+        "{}",
+        first.stderr
+    );
+    assert!(
+        scenario
+            .origin_file("colleague", "review-fix.txt")
+            .is_none()
+    );
+
+    let retry = scenario.run(&["review", &url]);
+
+    assert_eq!(retry.code, Some(0), "{}", retry.stderr);
+    assert_eq!(
+        scenario
+            .origin_file("colleague", "review-fix.txt")
+            .as_deref(),
+        Some("review-fix\n")
+    );
+    assert_eq!(
+        scenario
+            .origin_file("colleague", "security-fix.txt")
+            .as_deref(),
+        Some("security-fix\n")
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["postedComments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        scenario
+            .launch_git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn known_head_failure_is_preserved_when_base_ci_is_unreadable() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);

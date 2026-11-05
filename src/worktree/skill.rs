@@ -12,6 +12,13 @@ pub struct SkillWorktree {
     launch: Git,
     checkout: ownership::Checkout,
     untracked: UntrackedFiles,
+    recovered: bool,
+}
+
+/// A local conflict's private fingerprint contains no worktree contents.
+pub struct ReviewConflict {
+    pub fingerprint: String,
+    pub error: anyhow::Error,
 }
 
 impl SkillWorktree {
@@ -29,19 +36,27 @@ impl SkillWorktree {
     }
 
     /// A review uses the author's branch at the captured head. Existing
-    /// local work and an already checked-out branch are refused by acquisition.
+    /// local work is refused unless durable evidence authorizes clean recovery.
     pub fn on_pull_request(launch: &Git, branch: &str, commit: &str) -> Result<Self> {
         let _lock = lock_launch(launch)?;
         let root = launch.run(&["rev-parse", "--show-toplevel"])?;
-        let path = tempfile::Builder::new()
-            .prefix("thirdshift-review-")
-            .tempdir()?
-            .keep();
-        let checkout = acquisition::add_review(launch, branch, &path, commit)?;
+        let retained = acquisition::recover_pull_request(launch, branch, commit)?;
+        let recovered = retained.is_some();
+        let checkout = match retained {
+            Some(checkout) => checkout,
+            None => {
+                let path = tempfile::Builder::new()
+                    .prefix("thirdshift-review-")
+                    .tempdir()?
+                    .keep();
+                acquisition::add_review(launch, branch, &path, commit)?
+            }
+        };
         Ok(Self {
             launch: Git::new(root),
             checkout,
             untracked: UntrackedFiles::Preserve,
+            recovered,
         })
     }
 
@@ -61,7 +76,33 @@ impl SkillWorktree {
             launch: Git::new(root),
             checkout,
             untracked: UntrackedFiles::Preserve,
+            recovered: false,
         })
+    }
+
+    /// Author-pass admission is read-only and repeats acquisition's checks.
+    pub fn pull_request_conflict(
+        launch: &Git,
+        branch: &str,
+        commit: &str,
+    ) -> Result<Option<ReviewConflict>> {
+        let _lock = lock_launch(launch)?;
+        let _refs_lock = launch.lock_worktree_refs()?;
+        ownership::pull_request_conflict(launch, branch, commit)
+    }
+
+    pub fn recovered(&self) -> bool {
+        self.recovered
+    }
+
+    /// Recommendation retries restart the owned, clean branch at its captured head.
+    pub fn restart_recommendation(&self, commit: &str) -> Result<()> {
+        if self.recovered {
+            self.checkout.ordinary(&self.launch, |_| {
+                ownership::restart_retained(&self.launch, &self.checkout, commit)
+            })?;
+        }
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
