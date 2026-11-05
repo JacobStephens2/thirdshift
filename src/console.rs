@@ -716,7 +716,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
-        };
+        }
+        .route_layer(middleware::from_fn(auth::csrf_guard));
         if page.serves_api() {
             assert!(page.scope.is_some(), "API route needs a scope");
             router = router.route(

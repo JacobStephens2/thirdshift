@@ -248,8 +248,16 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
     response
 }
 
-async fn authorized(viewer: &Viewer, mut request: Request, next: Next) -> Response {
-    let api = super::api::is_path(request.uri().path());
+// Attach to routed methods, so unsupported methods keep the router's 404/405.
+pub(super) async fn csrf_guard(
+    viewer: Option<Extension<Viewer>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    // Anonymous sign-in/password forms validate their own sign-in cookie.
+    let Some(Extension(viewer)) = viewer else {
+        return next.run(request).await;
+    };
     if !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
@@ -276,6 +284,11 @@ async fn authorized(viewer: &Viewer, mut request: Request, next: Next) -> Respon
         }
         request = Request::from_parts(parts, Body::from(bytes));
     }
+    next.run(request).await
+}
+
+async fn authorized(viewer: &Viewer, mut request: Request, next: Next) -> Response {
+    let api = super::api::is_path(request.uri().path());
     let withhold = api && !viewer.scopes.contains(&Scope::Security);
     request.extensions_mut().insert(viewer.clone());
     let mut response = next.run(request).await;
