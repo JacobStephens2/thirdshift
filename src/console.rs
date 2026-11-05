@@ -1096,6 +1096,7 @@ mod tests {
         routing::{Route, get, post},
     };
     use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
     use tower_layer::Layer;
 
     fn router() -> Router {
@@ -1124,6 +1125,53 @@ mod tests {
 
     fn assert_cli_parity(router: Router) {
         assert_parity(router, super::openapi::document());
+    }
+
+    fn assert_routed_operations(
+        router: Router,
+        operations: &std::collections::BTreeSet<(&str, String)>,
+    ) {
+        // Stop before authentication and handlers. A method fallback also
+        // passes through the layer, but axum identifies it with an Allow header.
+        let router = router
+            .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+            .method_not_allowed_fallback(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED })
+            .route_layer(axum::middleware::from_fn(
+                |_: axum::extract::Request, _: axum::middleware::Next| async {
+                    axum::http::StatusCode::NO_CONTENT
+                },
+            ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for (path, method) in operations {
+            let uri = path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "parity-fixture"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            let request = axum::http::Request::builder()
+                .uri(uri)
+                .method(method.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = runtime.block_on(router.clone().oneshot(request)).unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NO_CONTENT,
+                "registered routes must all have a CLI pair: {method} {path} is not routed"
+            );
+            assert!(
+                !response.headers().contains_key(axum::http::header::ALLOW),
+                "registered routes must all have a CLI pair: {method} {path} used a method fallback"
+            );
+        }
     }
 
     fn assert_parity(router: Router, description: serde_json::Value) {
@@ -1187,10 +1235,11 @@ mod tests {
             + get_methods
             - shared_fallbacks;
         assert_eq!(
-            registered_methods(router),
+            registered_methods(router.clone()),
             expected,
             "registered routes must all have a CLI pair; only static resources are exempt"
         );
+        assert_routed_operations(router, &described);
         for route in super::PAGES {
             assert_api_metadata(route);
             assert!(
@@ -1269,6 +1318,21 @@ mod tests {
     #[should_panic(expected = "registered routes must all have a CLI pair")]
     fn parity_rejects_an_api_route_registered_outside_the_table() {
         assert_cli_parity(router().route("/api/v1/undocumented", get(|| async {})));
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_api_routes_mounted_under_wrong_prefix() {
+        assert_cli_parity(Router::new().nest("/wrong", router()));
+    }
+
+    #[test]
+    #[should_panic(expected = "used a method fallback")]
+    fn parity_rejects_a_different_method_at_the_described_path() {
+        assert_routed_operations(
+            Router::new().route("/api/v1/status", post(|| async {})),
+            &std::collections::BTreeSet::from([("/api/v1/status", "GET".to_owned())]),
+        );
     }
 
     #[test]

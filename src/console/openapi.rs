@@ -15,16 +15,17 @@ pub(super) async fn serve() -> axum::Json<Value> {
 pub(super) fn document() -> Value {
     let mut paths = Map::<String, Value>::new();
     for route in PAGES.iter().filter(|route| route.serves_api()) {
+        let (parameters, schema) = operation(route);
         paths.entry(route.api).or_insert_with(|| json!({}))
             [route.method.as_str().to_ascii_lowercase()] = json!({
             "description": format!("CLI twins: {}. The required scope is declared in x-scope.", route.cli.join("; ")),
             "x-scope": route.scope,
             "x-cli-twins": route.cli,
-            "parameters": parameters(route),
+            "parameters": parameters,
             "responses": {
                 "200": {
                     "description": "The CLI twin's JSON response.",
-                    "content": {"application/json": {"schema": response_shape(route)}}
+                    "content": {"application/json": {"schema": schema}}
                 },
                 "400": refusal("Invalid path argument."),
                 "401": refusal("A Console sign-in is required."),
@@ -58,81 +59,6 @@ fn parameter(name: &str, location: &str, required: bool, schema: Value) -> Value
     json!({"name": name, "in": location, "required": required, "schema": schema})
 }
 
-fn parameters(route: &PageRoute) -> Vec<Value> {
-    let mut parameters: Vec<_> = route
-        .api
-        .split('/')
-        .filter_map(|segment| {
-            let name = segment.strip_prefix('{')?.strip_suffix('}')?;
-            Some(parameter(name, "path", true, json!({"type": "string"})))
-        })
-        .collect();
-    let mut query = |name, required, schema| {
-        parameters.push(parameter(name, "query", required, schema));
-    };
-    match route.view {
-        View::Inspect | View::Log => {
-            query("command", true, json!({"type": "string"}));
-            if matches!(route.view, View::Log) {
-                query("session", false, json!({"type": "string"}));
-            }
-        }
-        View::Spans => {
-            query("command", false, json!({"type": "string"}));
-            query("span", false, json!({"type": "string"}));
-        }
-        View::Inbox if route.path == "/waterfall" => {
-            query("command", false, json!({"type": "string"}));
-        }
-        View::Inbox if route.path == "/" => {
-            query("all", false, json!({"type": "boolean", "default": false}));
-        }
-        View::Scores => query("pull_request", false, json!({"type": "string"})),
-        View::Metrics => {
-            for name in ["command", "from", "through"] {
-                query(name, false, json!({"type": "string"}));
-            }
-            query("repo", false, array(json!({"type": "string"})));
-        }
-        // These served reads take only their path arguments (if any).
-        View::OpenApi
-        | View::Inbox
-        | View::BugOrigins
-        | View::Experiments
-        | View::Experiment
-        | View::ExperimentSession
-        | View::CronJobs
-        | View::Resources
-        | View::ResourceStatus
-        | View::Logs
-        | View::CommandLogs
-        | View::Reader
-        | View::ConsoleLog
-        | View::ThemeExport => {}
-        View::SettleBugOrigin
-        | View::HumanScores
-        | View::ApproveEvalTask
-        | View::Changes
-        | View::LogStream
-        | View::Account
-        | View::SignOut
-        | View::SignInPage
-        | View::SignIn
-        | View::Look
-        | View::Theme
-        | View::ThemeImport
-        | View::Sections
-        | View::StopPage
-        | View::Stop
-        | View::Dismiss
-        | View::UndoDismissal
-        | View::SetPasswordPage
-        | View::SendCode
-        | View::SetPassword => unreachable!("page-only operation"),
-    }
-    parameters
-}
-
 fn object(properties: Value) -> Value {
     let required = properties
         .as_object()
@@ -148,45 +74,85 @@ fn array(items: Value) -> Value {
 
 /// Describe the CLI envelopes. Nested Command and Experiment records are open
 /// objects so their existing versioned JSON fields remain extensible.
-fn response_shape(route: &PageRoute) -> Value {
+fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
+    let mut parameters: Vec<_> = route
+        .api
+        .split('/')
+        .filter_map(|segment| {
+            let name = segment.strip_prefix('{')?.strip_suffix('}')?;
+            Some(parameter(name, "path", true, json!({"type": "string"})))
+        })
+        .collect();
+    let mut query = |name, required, schema| {
+        parameters.push(parameter(name, "query", required, schema));
+    };
     let text = json!({"type": "string"});
     let integer = json!({"type": "integer"});
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
-    match route.view {
+    let schema = match route.view {
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
             "info": record, "paths": record, "components": record, "security": array(record.clone())
         })),
-        View::Inbox if route.path == "/waterfall" => tree(),
-        View::Inbox => object(json!({
-            "version": version, "hostname": text, "active_runs": integer,
-            "commands": array(record.clone()), "idle_passes": array(record.clone()),
-            "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
-            "github_last_answered_at": {"type": ["string", "null"]},
-            "github_failure": {"type": ["string", "null"]}
-        })),
-        View::Inspect => object(json!({"version": version, "hostname": text, "command": record})),
-        View::Spans => json!({"oneOf": [tree(), span()]}),
-        View::Log | View::Reader => object(json!({"version": version, "contents": text})),
+        View::Inbox if route.path == "/waterfall" => {
+            query("command", false, text);
+            tree()
+        }
+        View::Inbox => {
+            if route.path == "/" {
+                query("all", false, json!({"type": "boolean", "default": false}));
+            }
+            object(json!({
+                "version": version, "hostname": text, "active_runs": integer,
+                "commands": array(record.clone()), "idle_passes": array(record.clone()),
+                "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
+                "github_last_answered_at": {"type": ["string", "null"]},
+                "github_failure": {"type": ["string", "null"]}
+            }))
+        }
+        View::Inspect => {
+            query("command", true, text.clone());
+            object(json!({"version": version, "hostname": text, "command": record}))
+        }
+        View::Spans => {
+            query("command", false, text.clone());
+            query("span", false, text);
+            json!({"oneOf": [tree(), span()]})
+        }
+        View::Log => {
+            query("command", true, text.clone());
+            query("session", false, text.clone());
+            object(json!({"version": version, "contents": text}))
+        }
+        View::Reader => object(json!({"version": version, "contents": text})),
         View::Logs | View::CommandLogs => object(json!({
             "version": version, "logs": array(object(json!({
                 "id": text, "name": text, "repository": text, "kind": text,
                 "live": {"type": "boolean"}, "command": text, "owners": array(text.clone())
             })))
         })),
-        View::Metrics => json!({"oneOf": [
-            object(json!({"version": version, "hostname": text, "command": record})),
-            object(json!({"version": version, "hostname": text, "weeks": array(record)}))
-        ]}),
+        View::Metrics => {
+            for name in ["command", "from", "through"] {
+                query(name, false, text.clone());
+            }
+            query("repo", false, array(text.clone()));
+            json!({"oneOf": [
+                object(json!({"version": version, "hostname": text, "command": record})),
+                object(json!({"version": version, "hostname": text, "weeks": array(record)}))
+            ]})
+        }
         View::BugOrigins => array(object(json!({
             "issue": text, "closed_at": text, "state": {"enum": ["proposed", "confirmed", "rejected"]},
             "commit": {"type": ["string", "null"]}, "reason": text, "pull_requests": array(record)
         }))),
-        View::Scores => array(object(json!({
-            "week": text, "window_start": text, "window_end": text,
-            "seed": integer, "sample": array(record), "initial_calibration": {"type": "boolean"}
-        }))),
+        View::Scores => {
+            query("pull_request", false, text.clone());
+            array(object(json!({
+                "week": text, "window_start": text, "window_end": text,
+                "seed": integer, "sample": array(record), "initial_calibration": {"type": "boolean"}
+            })))
+        }
         View::Experiments => array(experiment()),
         View::Experiment => experiment(),
         View::ExperimentSession => object(json!({
@@ -228,7 +194,8 @@ fn response_shape(route: &PageRoute) -> Value {
         | View::SetPasswordPage
         | View::SendCode
         | View::SetPassword => unreachable!("page-only operation"),
-    }
+    };
+    (parameters, schema)
 }
 
 fn tree() -> Value {
