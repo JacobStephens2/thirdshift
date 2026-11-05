@@ -22,6 +22,7 @@ use crate::session::Logs;
 use crate::worktree::Worktree;
 
 pub(crate) fn run(command: &FixArgs, config: &UserConfig, harness: &mut Choice) -> Ended {
+    let started = Utc::now() - crate::run::STARTED_MARGIN;
     let mut base_fix = None;
     let outcome = (|| -> Result<_, crate::failed_run::FailedRun> {
         let launch = Git::new(std::env::current_dir().context("could not read Launch directory")?);
@@ -75,7 +76,7 @@ pub(crate) fn run(command: &FixArgs, config: &UserConfig, harness: &mut Choice) 
             goal: asks.goal,
             base_fix: &mut repair_base,
             logs: &logs,
-            started: Utc::now() - crate::run::STARTED_MARGIN,
+            started,
             repair_cap: asks.delivery_limits.repair_cap,
             protected_paths: &asks.delivery_limits.protected_paths,
         }
