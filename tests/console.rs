@@ -884,6 +884,7 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
     configure(home.path());
     // Pickup run 1 dispatched a ready Run on issue 7, replaced by record 2;
     // Pickup run 3 dispatched a ready Run on issue 9, older than inbox.days.
+    // Each issue has its own PR, so a later Command cannot take up the other.
     for (file, issue, hours) in [(1, 7, 2), (3, 9, 8 * 24 + 1)] {
         let ended = (chrono::Local::now() - chrono::Duration::hours(hours)).to_rfc3339();
         let mut outer = record(home.path(), file, Some("ready for review"), 0);
@@ -897,6 +898,7 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
         dispatched["kind"] = json!("Run");
         dispatched["name"] = json!(format!("acme/widgets#{issue}"));
         dispatched["issue"]["number"] = json!(issue);
+        dispatched["pull_request"] = json!(format!("https://github.com/acme/widgets/pull/{issue}"));
         dispatched["started_at"] = json!(ended);
         dispatched["ended_at"] = json!(ended);
         outer["dispatched"] = json!([dispatched]);
