@@ -1006,7 +1006,7 @@ async fn inspect(
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
         if format == api::Format::Json
-            && details.details["kind"] == "Security run"
+            && details.security_details
             && !viewer.scopes.contains(&Scope::Security)
         {
             return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));

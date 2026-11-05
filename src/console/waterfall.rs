@@ -14,6 +14,18 @@ struct WaterfallPage {
     data: String,
 }
 
+fn security_refusal(
+    viewer: &super::auth::Viewer,
+    format: super::api::Format,
+    config: &UserConfig,
+    command: &str,
+) -> anyhow::Result<Option<Response>> {
+    Ok((format == super::api::Format::Json
+        && !viewer.scopes.contains(&super::Scope::Security)
+        && super::api::security_command(config, command)?)
+    .then(|| super::api::error(axum::http::StatusCode::FORBIDDEN, "Missing scope: security")))
+}
+
 pub(super) async fn show(
     viewer: super::auth::Viewer,
     format: super::api::Format,
@@ -22,14 +34,8 @@ pub(super) async fn show(
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         let view = spans::load(&config, &super::query_value(&query, "command"))?;
-        if format == super::api::Format::Json
-            && !viewer.scopes.contains(&super::Scope::Security)
-            && super::api::security_command(&config, &view.tree.command)?
-        {
-            return Ok(super::api::error(
-                axum::http::StatusCode::FORBIDDEN,
-                "Missing scope: security",
-            ));
+        if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)? {
+            return Ok(response);
         }
         // JSON is data, never executable markup, even inside a script tag.
         let data = serde_json::to_string(&view.tree)?
@@ -57,14 +63,9 @@ pub(super) async fn data(
         let value = (|| -> anyhow::Result<Response> {
             let config = UserConfig::load()?;
             let view = spans::load(&config, &super::query_value(&query, "command"))?;
-            if format == super::api::Format::Json
-                && !viewer.scopes.contains(&super::Scope::Security)
-                && super::api::security_command(&config, &view.tree.command)?
+            if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)?
             {
-                return Ok(super::api::error(
-                    axum::http::StatusCode::FORBIDDEN,
-                    "Missing scope: security",
-                ));
+                return Ok(response);
             }
             let selected = super::query_value(&query, "span");
             let value = if selected.is_empty() {

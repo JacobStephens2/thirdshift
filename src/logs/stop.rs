@@ -117,6 +117,8 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    /// A dispatched Run keeps the privacy of its owning Security run.
+    pub security_details: bool,
     pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
@@ -135,6 +137,10 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
     let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
+    let security_details = details["kind"] == "Security run"
+        || selected
+            .owner
+            .is_some_and(|owner| owner.record.kind == "Security run");
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
@@ -151,6 +157,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .accepted_log_directory()
         .map(Path::to_path_buf);
     Ok(Inspection {
+        security_details,
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,

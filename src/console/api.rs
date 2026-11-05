@@ -43,7 +43,7 @@ pub(super) fn security_command(config: &crate::config::UserConfig, command: &str
     if command.is_empty() {
         return Ok(false);
     }
-    Ok(crate::logs::stop::inspect(config, command)?.details["kind"] == "Security run")
+    Ok(crate::logs::stop::inspect(config, command)?.security_details)
 }
 
 /// Extractor and routing refusals occur before a read handler can format them.
