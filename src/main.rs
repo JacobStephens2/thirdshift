@@ -205,8 +205,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift console openapi                     Print the Console API's OpenAPI description
        thirdshift console theme <name|list> [--json]  Choose or list Console Themes
-       thirdshift console theme import <file>        Import a Theme JSON document
-       thirdshift console theme export <name>        Export a Theme as JSON
+       thirdshift console theme import <file> | export <name>  Import or export a Theme JSON document
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
