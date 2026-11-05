@@ -85,18 +85,22 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
     Ok(lines.join("\n"))
 }
 
-pub(super) async fn index() -> Response {
-    inventory(None).await
+pub(super) async fn index(Extension(format): Extension<super::api::Format>) -> Response {
+    inventory(format, None).await
 }
-pub(super) async fn command(Path(id): Path<String>) -> Response {
-    inventory(Some(id)).await
+pub(super) async fn command(
+    Path(id): Path<String>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    inventory(format, Some(id)).await
 }
 
-async fn inventory(owner: Option<String>) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
-            let logs = catalog::load(&config, owner.as_deref())?;
+async fn inventory(format: super::api::Format, owner: Option<String>) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        let logs = catalog::load(&config, owner.as_deref())?;
+        let value = serde_json::json!({"version": 1, "logs": logs});
+        format.render(value, |_| {
             Ok(LogsPage {
                 page: super::PageContext::new(&config),
                 groups: by_repository(logs),
@@ -104,11 +108,21 @@ async fn inventory(owner: Option<String>) -> Response {
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
-pub(super) async fn reader(Path(id): Path<String>) -> Response {
+pub(super) async fn reader(
+    Path(id): Path<String>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::read(format, move || {
+            let log = catalog::find(&UserConfig::load()?, &id)?;
+            Ok(Json(catalog::contents(&log.reader)?).into_response())
+        })
+        .await;
+    }
     let result = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let config = UserConfig::load()?;
         let Some(log) = catalog::load(&config, None)?

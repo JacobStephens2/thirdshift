@@ -4,8 +4,8 @@ mod inbox;
 pub mod inspect;
 pub(crate) mod time;
 mod watching;
-pub(crate) use inbox::{Archive, ArchivePage, archive};
-pub(crate) use inbox::{Inbox, Row, inbox, issue_url, subject};
+pub(crate) use inbox::{Archive, ArchivePage};
+pub(crate) use inbox::{Inbox, Row, issue_url, subject};
 pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;
@@ -32,6 +32,69 @@ struct Status<'a> {
     github_answer_age_seconds: Option<u64>,
     github_last_answered_at: Option<String>,
     github_failure: Option<&'a str>,
+}
+
+/// One captured read, rendered by the CLI, Console page or Console API.
+pub(crate) struct Read {
+    snapshot: Snapshot,
+    kept: super::github::Kept,
+    now: chrono::DateTime<Local>,
+}
+
+impl Read {
+    pub fn capture(config: &UserConfig, refresh: bool) -> Result<Self> {
+        let now = Local::now();
+        let snapshot = Snapshot::for_user(config, now)?;
+        let kept = if refresh {
+            super::github::refresh(&snapshot, config, super::github::FRESH_FOR)?
+        } else {
+            super::github::load(&config.logs_dir)
+        };
+        Ok(Self {
+            snapshot,
+            kept,
+            now,
+        })
+    }
+
+    fn status(&self, config: &UserConfig, all: bool) -> Status<'_> {
+        Status {
+            version: 1,
+            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+            active_runs: self.snapshot.active_runs(),
+            commands: self
+                .snapshot
+                .evaluate_inbox(config.inbox_days, &self.kept)
+                .into_rows(all),
+            idle_passes: &self.snapshot.idle_passes,
+            pass_starts: &self.snapshot.pass_starts,
+            github_answer_age_seconds: self.kept.age.map(|age| age.as_secs()),
+            github_last_answered_at: self.kept.last_answered_at(),
+            github_failure: self.kept.failure.as_deref(),
+        }
+    }
+
+    pub fn json(&self, config: &UserConfig, all: bool) -> Result<serde_json::Value> {
+        Ok(serde_json::to_value(self.status(config, all))?)
+    }
+
+    pub fn inbox(&self, config: &UserConfig) -> Result<Inbox> {
+        inbox::from_read(config, &self.snapshot, &self.kept, self.now)
+    }
+
+    pub fn archive(
+        &self,
+        config: &UserConfig,
+        page: ArchivePage,
+        outcome: &str,
+        repository: &str,
+    ) -> Result<Archive> {
+        inbox::archive_from_read(config, page, outcome, repository, &self.snapshot, self.now)
+    }
+
+    pub fn times(&self, hours: f64, by_repository: bool) -> Result<time::Views> {
+        time::from_read(&self.snapshot, self.now, hours, by_repository)
+    }
 }
 
 fn print_command(command: &Command, state_word: &str, indent: &str) {
@@ -121,30 +184,17 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             waiting.as_secs()
         );
     }
-    let snapshot = Snapshot::for_user(&config, Local::now())?;
-    for account in &snapshot.unavailable_accounts {
+    let read = Read::capture(&config, true)?;
+    for account in &read.snapshot.unavailable_accounts {
         eprintln!("thirdshift: account {account}: logs unavailable or unreadable");
     }
-    let kept = super::github::refresh(&snapshot, &config, super::github::FRESH_FOR)?;
-    let status = Status {
-        version: 1,
-        hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-        active_runs: snapshot.active_runs(),
-        commands: snapshot
-            .evaluate_inbox(config.inbox_days, &kept)
-            .into_rows(all),
-        idle_passes: &snapshot.idle_passes,
-        pass_starts: &snapshot.pass_starts,
-        github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
-        github_last_answered_at: kept.last_answered_at(),
-        github_failure: kept.failure.as_deref(),
-    };
+    let status = read.status(&config, all);
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
         println!("{}", active_runs_text(status.active_runs));
-        if let Some(warning) = kept.warning() {
+        if let Some(warning) = read.kept.warning() {
             println!("Warning: {warning}");
         }
         for group in Group::ORDER {

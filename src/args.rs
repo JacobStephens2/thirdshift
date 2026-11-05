@@ -130,6 +130,7 @@ pub enum Command {
         command: String,
         session: Option<String>,
         follow: bool,
+        json: bool,
     },
     LogsList {
         json: bool,
@@ -142,6 +143,7 @@ pub enum Command {
     LogFile {
         id: String,
         follow: bool,
+        json: bool,
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
@@ -637,6 +639,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     return Ok(Command::LogFile {
                         id: id.clone(),
                         follow: false,
+                        json: false,
                     });
                 }
                 [flag, id, follow]
@@ -645,11 +648,21 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     return Ok(Command::LogFile {
                         id: id.clone(),
                         follow: true,
+                        json: false,
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--file" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: false,
+                        json: true,
                     });
                 }
                 _ => {}
             }
-            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow] | thirdshift logs <command> --export <dir>";
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow | --json] | thirdshift logs <command> --export <dir>";
             let command = args
                 .get(1)
                 .filter(|name| !name.starts_with('-'))
@@ -665,10 +678,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             let mut session = None;
             let mut follow = false;
+            let mut json = false;
             let mut flags = args[2..].iter();
             while let Some(flag) = flags.next() {
                 match flag.as_str() {
                     "--follow" if !follow => follow = true,
+                    "--json" if !json => json = true,
                     "--session" if session.is_none() => {
                         session = Some(
                             flags
@@ -681,10 +696,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     _ => bail!(usage),
                 }
             }
+            anyhow::ensure!(!(follow && json), "--json cannot be combined with --follow");
             return Ok(Command::Logs {
                 command: command.clone(),
                 session,
                 follow,
+                json,
             });
         }
         Some("cronjobs") => {

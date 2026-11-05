@@ -19,6 +19,7 @@ pub(crate) struct SessionLog {
     pub trace: bool,
 }
 
+#[derive(Serialize)]
 pub(crate) struct Contents {
     pub id: String,
     pub trace: bool,

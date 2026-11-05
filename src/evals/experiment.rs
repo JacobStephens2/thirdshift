@@ -456,9 +456,7 @@ pub fn show(args: &[String]) -> Result<String> {
     {
         let session = read_session(id, session)?;
         return Ok(if json {
-            serde_json::to_string_pretty(&serde_json::json!({
-                "id": session.id, "trace": session.trace, "contents": session.contents
-            }))?
+            serde_json::to_string_pretty(&session)?
         } else {
             session.contents
         });

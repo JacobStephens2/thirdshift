@@ -56,6 +56,23 @@ fn origin_command(home: &Path) -> Command {
 }
 
 #[test]
+fn scores_and_bug_origin_api_reads_equal_the_cli_retained_views() {
+    let home = tempfile::tempdir().unwrap();
+    fixture(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (path, args) in [
+        ("/api/v1/scores", vec!["scores", "--json"]),
+        (
+            "/api/v1/scores?pull_request=23",
+            vec!["scores", "23", "--json"],
+        ),
+        ("/api/v1/bug-origins", vec!["bug-origins", "--json"]),
+    ] {
+        api::parity(&console, home.path(), path, &args);
+    }
+}
+
+#[test]
 fn scoring_actions_leave_console_terminable() {
     for path in ["/scores/mine", "/bug-origins/settle"] {
         let home = tempfile::tempdir().unwrap();

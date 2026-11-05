@@ -1,6 +1,9 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
 mod support;
 
+#[path = "console/api.rs"]
+mod api;
+
 #[path = "console/resources.rs"]
 mod resources;
 

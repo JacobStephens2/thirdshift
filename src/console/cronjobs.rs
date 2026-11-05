@@ -1,5 +1,4 @@
 //! The Console's read-only view of the CLI's cron job inventory.
-use anyhow::Result;
 use askama::Template;
 use axum::response::Response;
 
@@ -15,16 +14,16 @@ struct CronJobsPage {
     inventory: CronJobs,
 }
 
-pub(super) async fn show() -> Response {
-    super::page(
-        tokio::task::spawn_blocking(|| -> Result<String> {
-            let config = UserConfig::load()?;
+pub(super) async fn show(axum::Extension(format): axum::Extension<super::api::Format>) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        format.render(cronjobs::load()?, |inventory| {
             Ok(CronJobsPage {
                 page: super::PageContext::new(&config),
-                inventory: cronjobs::load()?,
+                inventory,
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }

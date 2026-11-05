@@ -92,6 +92,16 @@ fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts
 
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
+    let report = read(&config, asked)?;
+    if asked.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print(&report, 0);
+    }
+    Ok(())
+}
+
+pub(crate) fn read(config: &UserConfig, asked: &MetricsArgs) -> Result<Value> {
     let snapshot = Snapshot::load_metrics(&config.logs_dir, Local::now())?;
     let origins = ConfirmedCounts::read(&snapshot)?;
     let mut report = serde_json::json!({
@@ -106,12 +116,7 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
     } else {
         report["weeks"] = serde_json::to_value(trends::weekly(&snapshot, asked, &origins))?;
     }
-    if asked.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print(&report, 0);
-    }
-    Ok(())
+    Ok(report)
 }
 
 // Both renderers walk the same document, so text cannot silently drop a signal.

@@ -379,6 +379,38 @@ Open the localhost address it prints. The Console shows the same Inbox as `third
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
 
+#### Console API
+
+The Console serves read views as JSON under `/api/v1`, using the same sign-in
+session as the page. `console --no-sign-in` also enables the API on localhost.
+An unauthenticated API request receives a 401 JSON error instead of the sign-in
+page. Reads use GET; these endpoints start no work and change no Commands.
+
+Each response equals its CLI twin's `--json` output. For example,
+`GET /api/v1/status` equals `thirdshift status --json`, and
+`GET /api/v1/peek?command=widgets%237` equals `thirdshift show widgets#7 --json`.
+Query arguments use the CLI flag names without `--`; positional Command
+selectors use `command`, and Scores selectors use `pull_request`.
+
+| Read | API path | CLI twin (add `--json`) |
+| --- | --- | --- |
+| Inbox | `/api/v1/status` (`?all=true` includes History) | `status` (`--all`) |
+| History, Security, Lanes, Stages | `/api/v1/history`, `/api/v1/security`, `/api/v1/lanes`, `/api/v1/stages` | `status --all` |
+| Command details, child Ticket runs and stages | `/api/v1/peek?command=<selector>` | `show <selector>` |
+| Waterfall | `/api/v1/waterfall?command=<selector>`, `/api/v1/spans?command=<selector>&span=<id>` | `show <selector> --spans` or `--span <id>` |
+| Command log or Session trace | `/api/v1/log?command=<selector>&session=<kind>` (omit `session` for the Command log) | `logs <selector> [--session <kind>]` |
+| Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
+| Run metrics | `/api/v1/metrics` (`command`, `from`, `through`, repeated `repo`) | `metrics` |
+| Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
+| Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
+| Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
+
+Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
+`--follow` stays a separate streaming option. Other-account Commands retain
+their account tags and remain read-only. CLI refusals return 422 JSON with an
+`error` message. Action endpoints, tokens and scope enforcement arrive in later
+Console API tickets; actions on the signed-in page keep working as before.
+
 #### Console on a server
 
 Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:

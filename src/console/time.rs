@@ -1,12 +1,11 @@
 //! Lanes and Stages share the status reader's complete time observations.
-use anyhow::Result;
 use askama::Template;
 
 use super::filters;
 use axum::response::Response;
 
 use crate::config::UserConfig;
-use crate::logs::status::time::{self, Views};
+use crate::logs::status::{Read, time::Views};
 
 #[derive(Template)]
 #[template(path = "console/time.html")]
@@ -18,25 +17,30 @@ struct TimePage {
     views: Views,
 }
 
-pub(super) async fn show(stages: bool, query: Option<String>) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
-            let hours = match super::query_value(&query, "hours").as_str() {
-                "12" => 12.0,
-                "24" => 24.0,
-                _ => 3.5,
-            };
-            let by_repository = super::query_value(&query, "view") == "repository";
+pub(super) async fn show(
+    format: super::api::Format,
+    stages: bool,
+    query: Option<String>,
+) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        let read = Read::capture(&config, false)?;
+        let hours = match super::query_value(&query, "hours").as_str() {
+            "12" => 12.0,
+            "24" => 24.0,
+            _ => 3.5,
+        };
+        let by_repository = super::query_value(&query, "view") == "repository";
+        format.render(read.json(&config, true)?, |_| {
             Ok(TimePage {
                 page: super::PageContext::new(&config),
                 title: if stages { "Stages" } else { "Lanes" },
                 hours: hours.to_string(),
                 by_repository,
-                views: time::load(&config, hours, by_repository)?,
+                views: read.times(hours, by_repository)?,
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
