@@ -91,7 +91,7 @@ impl ReviewReports {
                 }
                 Ok(source) => source,
             };
-            let pinned = match source.metadata() {
+            let metadata = match source.metadata() {
                 Ok(metadata) if metadata.is_file() => metadata,
                 Ok(_) => {
                     found = true;
@@ -107,7 +107,7 @@ impl ReviewReports {
                 }
             };
             found = true;
-            if let Err(error) = copy_regular_file(&mut source, &pinned, &kept) {
+            if let Err(error) = copy_regular_file(&mut source, &metadata, &kept) {
                 lines.push(format!("could not keep {}: {error}", kept.display()));
             }
         }
@@ -159,7 +159,7 @@ fn open_report(directory: &File, file: &str) -> io::Result<File> {
 /// Copy the already-opened report onto `kept` without following a symlink
 /// at the destination. The session has already exited, so following a
 /// symlink would write a host path outside the Session trace's directory.
-fn copy_regular_file(source: &mut File, pinned: &std::fs::Metadata, kept: &Path) -> Result<()> {
+fn copy_regular_file(source: &mut File, metadata: &std::fs::Metadata, kept: &Path) -> Result<()> {
     let mut destination = match OpenOptions::new()
         .write(true)
         .create(true)
@@ -174,7 +174,7 @@ fn copy_regular_file(source: &mut File, pinned: &std::fs::Metadata, kept: &Path)
         Err(error) => return Err(error.into()),
     };
     io::copy(source, &mut destination)?;
-    destination.set_permissions(pinned.permissions())?;
+    destination.set_permissions(metadata.permissions())?;
     Ok(())
 }
 
