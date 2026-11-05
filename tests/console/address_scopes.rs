@@ -83,6 +83,70 @@ fn named_person_stop_records_the_person_and_token_holder() {
 }
 
 #[test]
+fn act_without_security_cannot_read_a_security_run_from_the_stop_page() {
+    let home = configured();
+    let mut security = record(home.path(), 2, Some("findings recorded"), 0);
+    security["kind"] = json!("Security run");
+    security["name"] = json!("secure-fixture");
+    security["issue"] = Value::Null;
+    security["security_findings"] = json!([{
+        "title": "stop page private finding",
+        "severity": "high",
+        "url": "https://github.com/acme/widgets/security/advisories/GHSA-stop"
+    }]);
+    security["security_fix_findings"] = json!([{
+        "title": "stop page private fix",
+        "severity": "high",
+        "url": "https://github.com/acme/widgets/security/advisories/GHSA-stop-fix"
+    }]);
+    write_record(home.path(), 2, &security);
+    api::cli(
+        home.path(),
+        &["console", "scopes", "--scopes", "read,act", "--json"],
+    );
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let identity = api::json(get(&console, "/api/v1/whoami", &session));
+    assert_eq!(identity["scopes"], json!(["read", "act"]));
+    record(home.path(), 7, Some("failed"), 0);
+    let ordinary = get(&console, "/stop?command=widgets%237", &session);
+    let ordinary_status = ordinary.status();
+    let ordinary_body = ordinary.text().unwrap();
+    assert_eq!(ordinary_status, 200, "{ordinary_body}");
+    assert!(!ordinary_body.contains("Missing scope"), "{ordinary_body}");
+    let page = get(&console, "/stop?command=secure-fixture", &session);
+    let status = page.status();
+    let body = page.text().unwrap();
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("security"), "{body}");
+    assert!(!body.contains("stop page private finding"), "{body}");
+    assert!(!body.contains("stop page private fix"), "{body}");
+    api::cli(
+        home.path(),
+        &[
+            "console",
+            "scopes",
+            "--scopes",
+            "read,act,security",
+            "--json",
+        ],
+    );
+    let allowed = get(&console, "/stop?command=secure-fixture", &session);
+    let allowed_status = allowed.status();
+    let allowed_body = allowed.text().unwrap();
+    assert_eq!(allowed_status, 200, "{allowed_body}");
+    assert!(
+        allowed_body.contains("stop page private finding"),
+        "{allowed_body}"
+    );
+}
+
+#[test]
 fn read_only_session_refuses_security_details_and_log_streams() {
     let home = configured();
     let mut security = record(home.path(), 2, Some("findings recorded"), 0);

@@ -21,19 +21,29 @@ pub(super) async fn show(
     RawQuery(query): RawQuery,
 ) -> Response {
     let command = super::query_value(&query, "command");
-    match tokio::task::spawn_blocking(move || -> Result<String> {
+    let scopes = viewer.scopes.clone();
+    let csrf = viewer.csrf;
+    match tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let config = UserConfig::load()?;
         let inspection = stop::inspect(&config, &command)?;
-        Ok(StopPage {
-            page: super::PageContext::new(&config, &viewer.scopes),
-            csrf: viewer.csrf.clone(),
-            details: Peek::new(command, inspection, viewer.csrf, &config),
+        // The confirmation page embeds the same Command details as Peek.
+        // Act may stop the run; it does not reveal a Security run.
+        if inspection.security_details && !scopes.contains(&super::Scope::Security) {
+            return Ok(None);
         }
-        .render()?)
+        Ok(Some(
+            StopPage {
+                page: super::PageContext::new(&config, &scopes),
+                csrf: csrf.clone(),
+                details: Peek::new(command, inspection, csrf, &config),
+            }
+            .render()?,
+        ))
     })
     .await
     {
-        Ok(Ok(html)) => Html(html).into_response(),
+        Ok(Ok(Some(html))) => Html(html).into_response(),
+        Ok(Ok(None)) => super::api::error(StatusCode::FORBIDDEN, "Missing scope: security"),
         _ => (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response(),
     }
 }
