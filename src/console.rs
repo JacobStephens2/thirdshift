@@ -17,6 +17,8 @@ mod live;
 mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
+mod openapi;
+pub use openapi::print as openapi;
 mod changes;
 mod dismiss;
 mod peek;
@@ -82,7 +84,8 @@ struct PageRoute {
     view: View,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 enum Scope {
     Read,
     Security,
@@ -91,6 +94,7 @@ enum Scope {
 
 #[derive(Clone, Copy)]
 enum View {
+    OpenApi,
     BugOrigins,
     SettleBugOrigin,
     Scores,
@@ -138,6 +142,7 @@ impl PageRoute {
             && matches!(
                 self.view,
                 View::BugOrigins
+                    | View::OpenApi
                     | View::Scores
                     | View::Experiments
                     | View::Experiment
@@ -160,6 +165,14 @@ impl PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/api/v1/openapi.json",
+        api: "/api/v1/openapi.json",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console openapi"],
+        method: Method::GET,
+        view: View::OpenApi,
+    },
     PageRoute {
         path: "/metrics",
         api: "/api/v1/metrics",
@@ -617,6 +630,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::OpenApi, Method::GET) => get(openapi::serve),
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
@@ -659,7 +673,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
         };
-        if page.serves_api() {
+        if page.serves_api() && page.api != page.path {
             assert!(page.scope.is_some(), "API route needs a scope");
             router = router.route(
                 page.api,
@@ -1082,6 +1096,7 @@ mod tests {
         routing::{Route, get, post},
     };
     use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
     use tower_layer::Layer;
 
     fn router() -> Router {
@@ -1109,6 +1124,78 @@ mod tests {
     }
 
     fn assert_cli_parity(router: Router) {
+        assert_parity(router, super::openapi::document());
+    }
+
+    fn assert_routed_operations(
+        router: Router,
+        operations: &std::collections::BTreeSet<(&str, String)>,
+    ) {
+        // Stop before authentication and handlers. A method fallback also
+        // passes through the layer, but axum identifies it with an Allow header.
+        let router = router
+            .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+            .method_not_allowed_fallback(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED })
+            .route_layer(axum::middleware::from_fn(
+                |_: axum::extract::Request, _: axum::middleware::Next| async {
+                    axum::http::StatusCode::NO_CONTENT
+                },
+            ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for (path, method) in operations {
+            let uri = path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "parity-fixture"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            let request = axum::http::Request::builder()
+                .uri(uri)
+                .method(method.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = runtime.block_on(router.clone().oneshot(request)).unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NO_CONTENT,
+                "registered routes must all have a CLI pair: {method} {path} is not routed"
+            );
+            assert!(
+                !response.headers().contains_key(axum::http::header::ALLOW),
+                "registered routes must all have a CLI pair: {method} {path} used a method fallback"
+            );
+        }
+    }
+
+    fn assert_parity(router: Router, description: serde_json::Value) {
+        let described = description["paths"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(path, methods)| {
+                methods
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(move |method| (path.as_str(), method.to_ascii_uppercase()))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let routed = super::PAGES
+            .iter()
+            .filter(|route| route.serves_api())
+            .map(|route| (route.api, route.method.as_str().to_owned()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            described, routed,
+            "OpenAPI operations must match API routes"
+        );
         // Measure the GET registration footprint through axum's public layer
         // interface after attaching state, as the production router does, so
         // this does not depend on its implicit HEAD/fallback count.
@@ -1140,14 +1227,19 @@ mod tests {
                 }
             })
             .sum::<usize>()
-            + super::PAGES.iter().filter(|page| page.serves_api()).count() * get_methods
+            + super::PAGES
+                .iter()
+                .filter(|page| page.serves_api() && page.api != page.path)
+                .count()
+                * get_methods
             + get_methods
             - shared_fallbacks;
         assert_eq!(
-            registered_methods(router),
+            registered_methods(router.clone()),
             expected,
             "registered routes must all have a CLI pair; only static resources are exempt"
         );
+        assert_routed_operations(router, &described);
         for route in super::PAGES {
             assert_api_metadata(route);
             assert!(
@@ -1201,6 +1293,46 @@ mod tests {
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
         assert_cli_parity(router());
+    }
+
+    #[test]
+    #[should_panic(expected = "OpenAPI operations must match API routes")]
+    fn parity_rejects_an_api_route_missing_from_openapi() {
+        let mut description = super::openapi::document();
+        description["paths"]
+            .as_object_mut()
+            .unwrap()
+            .remove("/api/v1/metrics");
+        assert_parity(router(), description);
+    }
+
+    #[test]
+    #[should_panic(expected = "OpenAPI operations must match API routes")]
+    fn parity_rejects_an_openapi_operation_without_a_route() {
+        let mut description = super::openapi::document();
+        description["paths"]["/api/v1/status"]["post"] = serde_json::json!({});
+        assert_parity(router(), description);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_an_api_route_registered_outside_the_table() {
+        assert_cli_parity(router().route("/api/v1/undocumented", get(|| async {})));
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_api_routes_mounted_under_wrong_prefix() {
+        assert_cli_parity(Router::new().nest("/wrong", router()));
+    }
+
+    #[test]
+    #[should_panic(expected = "used a method fallback")]
+    fn parity_rejects_a_different_method_at_the_described_path() {
+        assert_routed_operations(
+            Router::new().route("/api/v1/status", post(|| async {})),
+            &std::collections::BTreeSet::from([("/api/v1/status", "GET".to_owned())]),
+        );
     }
 
     #[test]

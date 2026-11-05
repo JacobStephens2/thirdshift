@@ -371,6 +371,12 @@ page. Reads use GET; these endpoints start no work and change no Commands.</p>
 <code>GET /api/v1/peek?command=widgets%237</code> equals <code>thirdshift show widgets#7 --json</code>.
 Query arguments use the CLI flag names without <code>--</code>; positional Command
 selectors use <code>command</code>, and Scores selectors use <code>pull_request</code>.</p>
+<p><code>GET /api/v1/openapi.json</code> returns the OpenAPI description of the endpoints
+this Console serves. Its CLI twin, <code>thirdshift console openapi</code>, prints the same
+JSON without a running Console. Both generate it from the shared route table:
+each operation lists its declared scope, CLI twins, arguments and response
+schema. The description contains no credentials or local records. Routes added
+by later Console API tickets appear when they are served.</p>
 <table>
 <thead>
 <tr>
