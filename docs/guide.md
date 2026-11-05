@@ -425,6 +425,22 @@ The exception is a direct connection to `127.0.0.1` with no proxy headers.
 Other transports are refused before checking the token, with the same 401
 whether it was valid or not.
 
+Failed bearer tokens and password sign-ins share an in-memory limit per client
+IP address, across token holders and account names. From the third failure,
+responses slow down; the eighth failure starts a 60-second cool-down. Requests
+from that address then receive 429 with `Retry-After` in seconds; API errors
+also include `retry_after` in their JSON. A success does not clear the count.
+Idle failure counts expire after 60 seconds, and restarting the Console clears
+the limiter. Other client addresses can still authenticate. The existing
+account password slowdown and five-tries-per-code limit remain in place.
+
+Only a proxy connecting from `127.0.0.1` may supply `X-Forwarded-For`: the Console
+uses the last address of the first header, the one the proxy appended or
+replaced. A later duplicate header is ignored. Other peers' headers are ignored
+and their connection's IP address is used. A missing or invalid forwarded
+address also falls back to the peer. Set this header in a custom proxy as in
+the nginx example below.
+
 `GET /api/v1/whoami` returns `hostname`, `thirdshift_version`, `api_version`,
 `identity` (token holder, session address or local caller), and effective
 `scopes`. Its CLI twin is `thirdshift console whoami [--json]`, reporting the
@@ -515,6 +531,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Connection "";
         proxy_buffering off;
         proxy_cache off;
