@@ -2107,7 +2107,12 @@ marker posted by the GitHub account thirdshift acts as. It also skips a pull
 request based on another open pull request until that base&#39;s current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits <code>0</code>
-without a session or Run notification. <code>--recommend-only</code> works on this form too.</p>
+without a session or Run notification. <code>--recommend-only</code> works on this form too.
+An unrecoverable local branch or occupied worktree is skipped so later waiting
+pull requests can run. The Pass saves a conflict fingerprint under
+<code>~/.thirdshift/review-conflicts/</code> and sends one failure notification per state;
+an unchanged conflict only logs a skip. Changed refs or checkout state allow a
+new notification. Naming the PR URL explicitly still fails with preservation advice.</p>
 <p>If a reviewed base received fixes that the upper pull request does not yet
 contain, the upper pull request&#39;s comment says it needs updating before merge.
 thirdshift leaves that update to the author, without merging or rebasing the stack.</p>
@@ -2119,8 +2124,14 @@ from closed pull requests.</p>
 <p>A <strong>Review run</strong> refuses forks, drafts, closed or merged pull requests and
 authors who are not <strong>Trusted accounts</strong>, explaining why before starting a
 session. It checks out the pull request&#39;s captured head on its own branch in a
-worktree and reviews only its change against its own base. A locally changed or
-already checked-out head branch must be dealt with before the Review run can use it.</p>
+worktree and reviews only its change against its own base. A retained Review
+worktree can be recovered when its durable ownership token and directory
+identities still match, its captured head is the PR&#39;s current head, and it has
+only clean committed fixes descending from that head. Recovery discards leftover
+untracked validation artifacts and reruns review and delivery with the preserved
+commits. Recommendation retries restart that owned checkout at the captured head.
+Uncommitted tracked edits, unfinished Git operations, locked checkouts, changed
+ownership evidence and other local branches are preserved for human attention.</p>
 <p>The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.

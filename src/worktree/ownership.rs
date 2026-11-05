@@ -17,7 +17,9 @@ use crate::progress;
 
 #[path = "review_recovery.rs"]
 mod review_recovery;
+pub(super) use review_recovery::pull_request_conflict;
 pub(super) use review_recovery::{Publication, recover as recover_review};
+pub(super) use review_recovery::{clean_retained, restart_retained, retained_pull_request};
 
 pub(super) struct Checkout {
     root: Directory,

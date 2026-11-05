@@ -9,6 +9,7 @@ use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
 use crate::review::{Mode, PullRequestUrl, Reservation};
 
+mod conflicts;
 mod delivery;
 
 pub(crate) fn run(command: ReviewArgs) -> Result<String> {
@@ -40,6 +41,7 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                     && github
                         .waiting_review_pull_requests(&repo, &author, Some(pr.issue.number))?
                         .contains(&pr)
+                    && conflicts::eligible(&launch, &github, &pr, &command.flags, &config)?
                 {
                     selected = Some((pr, Some(held)));
                     break;
@@ -158,8 +160,9 @@ impl ReviewProcess {
                 &snapshot.head,
                 &snapshot.base_head,
             ])?;
-            let checkout =
-                SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
+            // Inspection holds no PR Reservation and must never adopt a live
+            // Review checkout. Resolve the plan in isolated detached scratch.
+            let checkout = SkillWorktree::at(&launch, &snapshot.head)?;
             let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             return Ok(steps
                 .iter()
@@ -237,6 +240,9 @@ impl ReviewProcess {
             ])?;
             let mut checkout =
                 SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
+            if mode == Mode::RecommendOnly {
+                checkout.restart_recommendation(&snapshot.head)?;
+            }
             let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             notification.built_with(&command.choice);
             let git = Git::new(checkout.path());
@@ -286,7 +292,31 @@ impl ReviewProcess {
                         StepKind::ReviewAndAddress | StepKind::Skill { .. } => {
                             let reviewing = matches!(step.kind, StepKind::ReviewAndAddress);
                             if reviewing {
-                                unchanged_checkout(&git, &snapshot)?;
+                                if mode == Mode::Address && checkout.recovered() {
+                                    ensure!(
+                                        git.succeeds(&[
+                                            "merge-base",
+                                            "--is-ancestor",
+                                            &snapshot.head,
+                                            "HEAD"
+                                        ])? && git.run(&["branch", "--show-current"])?
+                                            == snapshot.branch
+                                            && git
+                                                .run(&[
+                                                    "-c",
+                                                    "core.hooksPath=/dev/null",
+                                                    "-c",
+                                                    "core.fsmonitor=false",
+                                                    "status",
+                                                    "--porcelain",
+                                                    "--untracked-files=no",
+                                                ])?
+                                                .is_empty(),
+                                        "recovered Review worktree changed before review"
+                                    );
+                                } else {
+                                    unchanged_checkout(&git, &snapshot)?;
+                                }
                             }
                             let text = if let StepKind::Skill { name, path } = &step.kind {
                                 prompt::process_step(
