@@ -25,20 +25,31 @@ struct ScoresPage {
 
 pub(super) async fn show(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
-            let mine = super::query_value(&query, "mine");
-            let mut view = scoring::view((!mine.is_empty()).then_some(mine.as_str()))?;
-            // Starting another entry is blind too, even when replacing saved Scores.
-            if !mine.is_empty() {
-                for pr in view.weeks.iter_mut().flat_map(|week| &mut week.sample) {
-                    pr.mine = None;
-                    pr.assessment = None;
-                }
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        let mine = if format == super::api::Format::Html {
+            super::query_value(&query, "mine")
+        } else {
+            String::new()
+        };
+        let target = super::query_value(&query, "pull_request");
+        let target = if mine.is_empty() {
+            target.as_str()
+        } else {
+            mine.as_str()
+        };
+        let mut view = scoring::view((!target.is_empty()).then_some(target))?;
+        // Starting another entry is blind too, even when replacing saved Scores.
+        if !mine.is_empty() {
+            for pr in view.weeks.iter_mut().flat_map(|week| &mut week.sample) {
+                pr.mine = None;
+                pr.assessment = None;
             }
+        }
+        format.render(scoring::json_view(&view.weeks, &view.calibration)?, |_| {
             Ok(ScoresPage {
                 page: super::PageContext::new(&config),
                 view,
@@ -47,8 +58,8 @@ pub(super) async fn show(
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
 pub(super) async fn submit(Form(form): Form<HashMap<String, String>>) -> Response {

@@ -288,8 +288,17 @@ pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn print_file(selected: &str, follow: bool) -> Result<()> {
+pub(crate) fn contents(reader: &Reader) -> Result<serde_json::Value> {
+    let bytes = reader.read(0, super::Framing::Raw, usize::MAX)?;
+    Ok(serde_json::json!({"version": 1, "contents": String::from_utf8_lossy(&bytes.bytes)}))
+}
+
+pub(crate) fn print_file(selected: &str, follow: bool, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let log = find(&config, selected)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&contents(&log.reader)?)?);
+        return Ok(());
+    }
     crate::logs::status::inspect::stream_log(&log.reader, follow)
 }

@@ -189,6 +189,12 @@ fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     assert!(output.status.success(), "{output:?}");
     let status: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(status["commands"][0]["account"], "conductor");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    assert_eq!(api::json(console.get("/api/v1/status")), status);
     assert!(
         machine
             .home("serving")

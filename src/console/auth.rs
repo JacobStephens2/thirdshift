@@ -91,6 +91,14 @@ pub(super) async fn guard(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
+    let api = super::api::is_path(path);
+    let unauthenticated = || {
+        if api {
+            super::api::error(StatusCode::UNAUTHORIZED, "Sign in to the Console.")
+        } else {
+            Redirect::to("/sign-in").into_response()
+        }
+    };
     if matches!(path, "/sign-in" | "/set-password" | "/set-password/code")
         || path.starts_with("/assets/")
     {
@@ -104,7 +112,7 @@ pub(super) async fn guard(
         }
     } else {
         let Some(token) = cookie(request.headers(), SESSION) else {
-            return Redirect::to("/sign-in").into_response();
+            return unauthenticated();
         };
         let selected = token.clone();
         let result =
@@ -115,10 +123,20 @@ pub(super) async fn guard(
                 csrf: csrf(&token),
                 token: Some(token),
             },
-            Ok(Ok(None)) => return Redirect::to("/sign-in").into_response(),
+            Ok(Ok(None)) => return unauthenticated(),
+            error if api => {
+                eprintln!("thirdshift Console: API account read failed: {error:?}");
+                return super::api::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Can't read Console accounts.",
+                );
+            }
             error => return failed(error),
         }
     };
+    if api && !matches!(*request.method(), Method::GET | Method::HEAD) {
+        return super::api::error(StatusCode::METHOD_NOT_ALLOWED, "API reads require GET.");
+    }
     if !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
@@ -324,19 +342,19 @@ struct LogPage {
     resources: super::resources::Status,
 }
 
-pub(super) async fn log() -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
+pub(super) async fn log(Extension(format): Extension<super::api::Format>) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        format.render(Accounts::load()?.events()?, |events| {
             Ok(LogPage {
-                events: Accounts::load()?.events()?,
+                events,
                 resources: super::resources::Status::new(&config),
                 theme: config.console.theme,
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
 fn failed(error: impl std::fmt::Debug) -> Response {

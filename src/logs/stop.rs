@@ -126,7 +126,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = super::metrics::details(&snapshot, selected.observation)?;
+    let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected

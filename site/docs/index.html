@@ -360,6 +360,82 @@ thirdshift metrics --from 2026-10-05 --through 2026-10-19 --repo acme/widgets --
 </code></pre>
 <p>Open the localhost address it prints. The Console shows the same Inbox as <code>thirdshift status</code>, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; <code>/?section=done</code> opens Done and <code>/?section=overview</code> returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row&#39;s Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine&#39;s time zone on hover, or in full without JavaScript, for example <strong>Ended 2026-10-23 19:03 EDT · 52 min ago</strong>. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command&#39;s own finish time; missing or invalid finish times say <strong>End time unknown</strong>. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system&#39;s scheduler.</p>
 <p>Command details shows the last five lines of recent Command output above <strong>Full Command log</strong>, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.</p>
+<details class="fold"><summary><h4>Console API</h4></summary>
+<div class="manual-content" id="console-api">
+<p>The Console serves read views as JSON under <code>/api/v1</code>, using the same sign-in
+session as the page. <code>console --no-sign-in</code> also enables the API on localhost.
+An unauthenticated API request receives a 401 JSON error instead of the sign-in
+page. Reads use GET; these endpoints start no work and change no Commands.</p>
+<p>Each response equals its CLI twin&#39;s <code>--json</code> output. For example,
+<code>GET /api/v1/status</code> equals <code>thirdshift status --json</code>, and
+<code>GET /api/v1/peek?command=widgets%237</code> equals <code>thirdshift show widgets#7 --json</code>.
+Query arguments use the CLI flag names without <code>--</code>; positional Command
+selectors use <code>command</code>, and Scores selectors use <code>pull_request</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Read</th>
+<th>API path</th>
+<th>CLI twin (add <code>--json</code>)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Inbox</td>
+<td><code>/api/v1/status</code> (<code>?all=true</code> includes History)</td>
+<td><code>status</code> (<code>--all</code>)</td>
+</tr>
+<tr>
+<td>History, Security, Lanes, Stages</td>
+<td><code>/api/v1/history</code>, <code>/api/v1/security</code>, <code>/api/v1/lanes</code>, <code>/api/v1/stages</code></td>
+<td><code>status --all</code></td>
+</tr>
+<tr>
+<td>Command details, child Ticket runs and stages</td>
+<td><code>/api/v1/peek?command=&lt;selector&gt;</code></td>
+<td><code>show &lt;selector&gt;</code></td>
+</tr>
+<tr>
+<td>Waterfall</td>
+<td><code>/api/v1/waterfall?command=&lt;selector&gt;</code>, <code>/api/v1/spans?command=&lt;selector&gt;&amp;span=&lt;id&gt;</code></td>
+<td><code>show &lt;selector&gt; --spans</code> or <code>--span &lt;id&gt;</code></td>
+</tr>
+<tr>
+<td>Command log or Session trace</td>
+<td><code>/api/v1/log?command=&lt;selector&gt;&amp;session=&lt;kind&gt;</code> (omit <code>session</code> for the Command log)</td>
+<td><code>logs &lt;selector&gt; [--session &lt;kind&gt;]</code></td>
+</tr>
+<tr>
+<td>Log inventory and exact file</td>
+<td><code>/api/v1/logs</code>, <code>/api/v1/logs/command/&lt;id&gt;</code>, <code>/api/v1/logs/&lt;id&gt;</code></td>
+<td><code>logs</code>, <code>logs --command &lt;id&gt;</code>, <code>logs --file &lt;id&gt;</code></td>
+</tr>
+<tr>
+<td>Run metrics</td>
+<td><code>/api/v1/metrics</code> (<code>command</code>, <code>from</code>, <code>through</code>, repeated <code>repo</code>)</td>
+<td><code>metrics</code></td>
+</tr>
+<tr>
+<td>Scores, Bug origins</td>
+<td><code>/api/v1/scores?pull_request=&lt;selector&gt;</code>, <code>/api/v1/bug-origins</code></td>
+<td><code>scores [&lt;selector&gt;]</code>, <code>bug-origins</code></td>
+</tr>
+<tr>
+<td>Experiments and Trial Session evidence</td>
+<td><code>/api/v1/experiments</code>, <code>/api/v1/experiments/&lt;id&gt;</code>, <code>/api/v1/experiments/&lt;id&gt;/sessions/&lt;session&gt;</code></td>
+<td><code>experiments [&lt;id&gt;] [--session &lt;session&gt;]</code></td>
+</tr>
+<tr>
+<td>Cron jobs, Resources, Console log, Theme export</td>
+<td><code>/api/v1/cronjobs</code>, <code>/api/v1/resources</code>, <code>/api/v1/console-log</code>, <code>/api/v1/themes/&lt;name&gt;</code></td>
+<td><code>cronjobs</code>, <code>resources</code>, <code>console log</code>, <code>console theme export &lt;name&gt;</code> (already JSON)</td>
+</tr>
+</tbody></table>
+<p>Finite log reads support <code>--json</code>, returning <code>{&quot;version&quot;:1,&quot;contents&quot;:&quot;...&quot;}</code>;
+<code>--follow</code> stays a separate streaming option. Other-account Commands retain
+their account tags and remain read-only. CLI refusals return 422 JSON with an
+<code>error</code> message. Action endpoints, tokens and scope enforcement arrive in later
+Console API tickets; actions on the signed-in page keep working as before.</p>
+</div></details>
 <details class="fold"><summary><h4>Console on a server</h4></summary>
 <div class="manual-content" id="console-on-a-server">
 <p>Set the machine&#39;s address, fixed localhost port and sign-in allowlist in <code>~/.thirdshift/config.toml</code>:</p>

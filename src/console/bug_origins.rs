@@ -18,19 +18,22 @@ struct BugOriginsPage {
     csrf: String,
 }
 
-pub(super) async fn show(Extension(viewer): Extension<Viewer>) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
+pub(super) async fn show(
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        format.render(origins::view()?, |origins| {
             Ok(BugOriginsPage {
                 page: super::PageContext::new(&config),
-                origins: origins::view()?,
+                origins,
                 csrf: viewer.csrf,
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
 #[derive(Deserialize)]

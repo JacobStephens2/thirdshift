@@ -213,8 +213,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log
-       thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
+       thirdshift logs --file <id> [--follow | --json]  Read a log
+       thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -365,8 +365,9 @@ fn main() -> ExitCode {
             command,
             session,
             follow,
+            json,
         }) => {
-            return match logs::status::inspect::logs(&command, session.as_deref(), follow) {
+            return match logs::status::inspect::logs(&command, session.as_deref(), follow, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -383,8 +384,8 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogFile { id, follow }) => {
-            return match logs::catalog::print_file(&id, follow) {
+        Ok(Command::LogFile { id, follow, json }) => {
+            return match logs::catalog::print_file(&id, follow, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

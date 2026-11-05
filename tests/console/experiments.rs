@@ -32,6 +32,18 @@ fn legacy_paused_experiment_advertises_a_supported_resume_command() {
     fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let console = Console::start(binary, home.path());
+    api::parity(
+        &console,
+        home.path(),
+        "/api/v1/experiments",
+        &["experiments", "--json"],
+    );
+    api::parity(
+        &console,
+        home.path(),
+        &format!("/api/v1/experiments/{id}"),
+        &["experiments", &id, "--json"],
+    );
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     let resume = html
         .split("Run the same command to resume: <code>")
@@ -360,6 +372,12 @@ fn selected_session_evidence_survives_unrelated_corruption_and_legacy_verdicts()
     let view: Value = serde_json::from_slice(&cli(&["experiments", &id, "--json"]).stdout).unwrap();
     let session = view["sessions"][0]["id"].as_str().unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    api::parity(
+        &console,
+        home.path(),
+        &format!("/api/v1/experiments/{id}/sessions/{session}"),
+        &["experiments", &id, "--session", session, "--json"],
+    );
     let metadata = directory.join("experiment.json");
     let mut record: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
     for state in ["running", "completed"] {

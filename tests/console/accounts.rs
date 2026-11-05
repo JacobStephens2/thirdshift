@@ -97,6 +97,32 @@ fn sign_in(console: &Console, email: &str, password: &str) -> reqwest::blocking:
 }
 
 #[test]
+fn api_requires_a_current_sign_in_and_returns_json_instead_of_redirecting() {
+    let home = configured();
+    record(home.path(), 7, Some("merged"), 0);
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let response = get(&console, "/api/v1/status", "");
+    assert_eq!(response.status(), 401);
+    assert!(!response.headers().contains_key("location"));
+    assert!(response.json::<Value>().unwrap()["error"].is_string());
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let expected: Value =
+        serde_json::from_slice(&cli(home.path(), &["status", "--json"]).stdout).unwrap();
+    assert_eq!(
+        api::json(get(&console, "/api/v1/status", &session)),
+        expected
+    );
+    assert!(cli(home.path(), &["console", "sign-out"]).status.success());
+    assert_eq!(get(&console, "/api/v1/status", &session).status(), 401);
+    assert_eq!(get(&console, "/", &session).status(), 303);
+}
+
+#[test]
 fn account_pages_and_sign_in_follow_the_configured_theme() {
     let home = configured();
     assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());

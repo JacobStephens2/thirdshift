@@ -30,9 +30,13 @@ pub fn export_theme(name: &str) -> Result<String> {
 
 pub(super) async fn export_document(
     axum::extract::Path(name): axum::extract::Path<String>,
+    Extension(format): Extension<super::api::Format>,
 ) -> Response {
     match tokio::task::spawn_blocking(move || Theme::export(&name)).await {
         Ok(Ok(theme)) => Json(theme).into_response(),
+        Ok(Err(error)) if format == super::api::Format::Json => {
+            super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)
+        }
         Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         error => failed(error),
     }

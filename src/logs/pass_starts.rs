@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::{Pass, reading, status};
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct PassStart {
     pub repository: String,
     pub kind: Pass,
