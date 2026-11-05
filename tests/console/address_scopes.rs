@@ -19,6 +19,11 @@ fn restricted_sessions_can_sign_out_of_their_own_browser_with_csrf() {
         assert_eq!(account.status(), 200);
         let page = account.text().unwrap();
         assert!(page.contains("Sign out this browser"));
+        assert_eq!(
+            page.contains("id=\"host-resources\""),
+            scopes == "read",
+            "{scopes}: {page}"
+        );
         let post = |csrf: &str| {
             client()
                 .post(format!("{}/sign-out", console.address))
