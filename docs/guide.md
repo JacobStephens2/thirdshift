@@ -435,10 +435,11 @@ the limiter. Other client addresses can still authenticate. The existing
 account password slowdown and five-tries-per-code limit remain in place.
 
 Only a proxy connecting from `127.0.0.1` may supply `X-Forwarded-For`: the Console
-uses its last address, appended or replaced by the proxy. Other peers' headers
-are ignored and their connection's IP address is used. A missing or invalid
-forwarded address also falls back to the peer. Set this header in a custom
-proxy as in the nginx example below.
+uses the last address of the first header, the one the proxy appended or
+replaced. A later duplicate header is ignored. Other peers' headers are ignored
+and their connection's IP address is used. A missing or invalid forwarded
+address also falls back to the peer. Set this header in a custom proxy as in
+the nginx example below.
 
 `GET /api/v1/whoami` returns `hostname`, `thirdshift_version`, `api_version`,
 `identity` (token holder, session address or local caller), and effective

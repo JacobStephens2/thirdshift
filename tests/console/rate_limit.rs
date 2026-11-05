@@ -7,13 +7,32 @@ fn attempt(
     email: &str,
     password: &str,
 ) -> reqwest::blocking::Response {
+    post_sign_in(
+        console,
+        client,
+        &[("x-forwarded-for", address)],
+        email,
+        password,
+    )
+}
+
+fn post_sign_in(
+    console: &Console,
+    client: &reqwest::blocking::Client,
+    forwarded_for: &[(&str, &str)],
+    email: &str,
+    password: &str,
+) -> reqwest::blocking::Response {
     let form = get(console, "/sign-in", "");
     let cookie = cookie(&form);
     let csrf = csrf(&form.text().unwrap());
-    client
+    let mut request = client
         .post(format!("{}/sign-in", console.address))
-        .header("cookie", cookie)
-        .header("x-forwarded-for", address)
+        .header("cookie", cookie);
+    for (name, value) in forwarded_for {
+        request = request.header(*name, *value);
+    }
+    request
         .form(&[("email", email), ("password", password), ("csrf", &csrf)])
         .send()
         .unwrap()
@@ -130,5 +149,43 @@ fn tokens_and_passwords_share_the_limit_and_restart_clears_it() {
             .unwrap()
             .status(),
         200
+    );
+}
+
+#[test]
+fn a_later_forwarded_for_header_cannot_lock_out_another_address() {
+    let home = configured();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let http = client();
+    // The first header is the one a proxy appends its observed client onto
+    // (`198.51.100.9, 192.0.2.1`). A later duplicate is left unchanged and
+    // must not become the limited address.
+    for number in 1..=8 {
+        post_sign_in(
+            &console,
+            &http,
+            &[
+                ("x-forwarded-for", "198.51.100.9, 192.0.2.1"),
+                ("x-forwarded-for", "192.0.2.50"),
+            ],
+            &format!("unknown{number}@example.test"),
+            "wrong",
+        );
+    }
+    assert_eq!(
+        post_sign_in(
+            &console,
+            &http,
+            &[("x-forwarded-for", "192.0.2.50")],
+            EMAIL,
+            PASSWORD,
+        )
+        .status(),
+        303
     );
 }

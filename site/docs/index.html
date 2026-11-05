@@ -408,10 +408,11 @@ Idle failure counts expire after 60 seconds, and restarting the Console clears
 the limiter. Other client addresses can still authenticate. The existing
 account password slowdown and five-tries-per-code limit remain in place.</p>
 <p>Only a proxy connecting from <code>127.0.0.1</code> may supply <code>X-Forwarded-For</code>: the Console
-uses its last address, appended or replaced by the proxy. Other peers&#39; headers
-are ignored and their connection&#39;s IP address is used. A missing or invalid
-forwarded address also falls back to the peer. Set this header in a custom
-proxy as in the nginx example below.</p>
+uses the last address of the first header, the one the proxy appended or
+replaced. A later duplicate header is ignored. Other peers&#39; headers are ignored
+and their connection&#39;s IP address is used. A missing or invalid forwarded
+address also falls back to the peer. Set this header in a custom proxy as in
+the nginx example below.</p>
 <p><code>GET /api/v1/whoami</code> returns <code>hostname</code>, <code>thirdshift_version</code>, <code>api_version</code>,
 <code>identity</code> (token holder, session address or local caller), and effective
 <code>scopes</code>. Its CLI twin is <code>thirdshift console whoami [--json]</code>, reporting the

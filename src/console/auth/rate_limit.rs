@@ -67,13 +67,14 @@ impl Limiter {
 }
 
 pub(super) fn address(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
-    // Caddy replaces untrusted forwarding; Apache appends the connecting client.
-    // Taking the last entry never trusts an address supplied to that proxy by a client.
+    // Caddy and nginx replace this header with one value. Apache appends the
+    // client it saw onto the first header and leaves a later duplicate as the
+    // caller sent it, so the last header is not the proxy's address.
     if peer.ip() == Ipv4Addr::LOCALHOST
         && let Some(address) = headers
             .get_all("x-forwarded-for")
             .iter()
-            .next_back()
+            .next()
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.rsplit(',').next())
             .and_then(|value| value.trim().parse::<IpAddr>().ok())
