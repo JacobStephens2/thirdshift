@@ -170,7 +170,7 @@ For changes to rendered UI, HTML, CSS, templates or visual layout, **Visual evid
 
 #### Recover a missing Before capture
 
-Use the implementation or diagnosis session's `/tmp/before-*` and `/tmp/after-*` captures. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save `/tmp/before-*.png` or `.gif`, then stop the server and remove the worktree:
+Use the implementation or diagnosis session's `mktemp` capture paths. If Before is missing (including during a Spec review), capture the Base branch commit in a temporary detached worktree, using the same viewport and state as After. Replace `main` below with the PR's Base branch, build and serve that checkout with the project's commands, save each Before capture with `mktemp /tmp/before-desktop.XXXXXX.png` (or `.gif`), then stop the server and remove the worktree:
 
 ```sh
 (
@@ -178,7 +178,7 @@ Use the implementation or diagnosis session's `/tmp/before-*` and `/tmp/after-*`
   before_root=$(mktemp -d /tmp/pr-before.XXXXXX)
   trap 'git worktree remove --force "$before_root/worktree"; rmdir "$before_root"' EXIT
   git worktree add --detach "$before_root/worktree" main
-  # Build and serve "$before_root/worktree"; capture /tmp/before-* at After's viewport/state.
+  # Build and serve "$before_root/worktree"; save Before with mktemp /tmp/before-desktop.XXXXXX.png at After's viewport and state.
   # Stop that server before this subshell exits and removes the worktree.
 )
 ```
@@ -187,7 +187,7 @@ Use the implementation or diagnosis session's `/tmp/before-*` and `/tmp/after-*`
 
 Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branches free of PR-evidence media files. Use an authenticated `gh` account with Gist access and a Git author configured. Secret Gists are unlisted but readable by anyone with the URL, so publish only captures suitable for that audience, with secrets redacted.
 
-`gh gist create` sends text through the API; create a placeholder text file, then push the binary captures with Git. Run this shell recipe after capturing the images; adjust the explicit `cp` list for your mobile or `.gif` pairs:
+`gh gist create` sends text through the API; create a placeholder text file, then push the binary captures with Git. Export `BEFORE_DESKTOP` and `AFTER_DESKTOP` as the exact `mktemp` paths from this session, and `BEFORE_MOBILE` and `AFTER_MOBILE` when those pairs exist. The recipe copies a path only when it is a regular file owned by this user, and refuses a symlink instead of publishing the link's target:
 
 ```sh
 (
@@ -200,15 +200,50 @@ Host PR-evidence media in a **secret git-pushed Gist**, keeping repository branc
   gist_id=${gist_url##*/}
   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
     clone "https://gist.github.com/$gist_id.git" "$evidence_root/gist"
-  cp /tmp/before-desktop.png /tmp/after-desktop.png "$evidence_root/gist/"
-  git -C "$evidence_root/gist" add --all
+  copy_regular() {
+    src=$1
+    if [ -L "$src" ] || [ ! -f "$src" ] || [ ! -O "$src" ]; then
+      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$src" >&2
+      exit 1
+    fi
+    filename=${src##*/}
+    case "$filename" in
+      *[!A-Za-z0-9._-]* | '' | .*)
+        printf 'refusing capture filename: %s\n' "$filename" >&2
+        exit 1
+        ;;
+    esac
+    case "$filename" in
+      *.png | *.gif) ;;
+      *)
+        printf 'refusing capture filename: %s\n' "$filename" >&2
+        exit 1
+        ;;
+    esac
+    dest=$evidence_root/gist/$filename
+    cp -P -- "$src" "$dest"
+    if [ -L "$dest" ] || [ ! -f "$dest" ]; then
+      rm -f -- "$dest"
+      printf 'refusing capture that is not a regular file owned by this user: %s\n' "$src" >&2
+      exit 1
+    fi
+    git -C "$evidence_root/gist" add -- "$filename"
+  }
+  copy_regular "${BEFORE_DESKTOP:?}"
+  copy_regular "${AFTER_DESKTOP:?}"
+  if [ -n "${BEFORE_MOBILE:-}" ]; then
+    copy_regular "$BEFORE_MOBILE"
+  fi
+  if [ -n "${AFTER_MOBILE:-}" ]; then
+    copy_regular "$AFTER_MOBILE"
+  fi
   git -C "$evidence_root/gist" commit -m "Add Before and After captures"
   git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
     -C "$evidence_root/gist" push origin HEAD
   gist_owner=$(gh api "gists/$gist_id" --jq '.owner.login')
   gist_sha=$(git -C "$evidence_root/gist" rev-parse HEAD)
   for capture in "$evidence_root/gist/"*.png "$evidence_root/gist/"*.gif; do
-    test -f "$capture" || continue
+    [ -f "$capture" ] && [ ! -L "$capture" ] || continue
     filename=${capture##*/}
     printf 'https://gist.githubusercontent.com/%s/%s/raw/%s/%s\n' \
       "$gist_owner" "$gist_id" "$gist_sha" "$filename"
