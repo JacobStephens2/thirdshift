@@ -154,16 +154,19 @@ fn targeted(
         let child_asks = ChildAsks::of(&asks);
         let steps = crate::processes::fix::steps()?;
         let logs = Logs::of_fix_run(&repo);
-        let reviewed =
-            asks.goal != crate::run::Goal::Merged || github.reviewed_head(&pr, &snapshot.head)?;
         let worktree =
             Worktree::continue_existing(&launch, &repo.name, &snapshot.branch, &snapshot.base)?;
+        // Acquisition samples origin independently of PR metadata. Evidence
+        // must cover the head actually adopted before Delivery begins.
+        let adopted_head = worktree.head()?;
+        let reviewed =
+            asks.goal != crate::run::Goal::Merged || github.reviewed_head(&pr, &adopted_head)?;
         let mut target =
             PullRequest::on_pull_request(&pr, &snapshot.branch, &snapshot.base, github);
         if !reviewed {
             target.hold_self_merge(format!(
                 "PR {} stays ready for review: adopted head {} has no recorded agent review; run thirdshift review {} before retrying Self-merge",
-                pr.url, snapshot.head, pr.url
+                pr.url, adopted_head, pr.url
             ));
         }
         let result = Delivery {

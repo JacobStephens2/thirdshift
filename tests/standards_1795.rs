@@ -4,6 +4,66 @@ use serde_json::json;
 use support::Scenario;
 
 #[test]
+fn fix_checks_review_evidence_for_the_fetched_head() {
+    let scenario = Scenario::new();
+    scenario.origin_has_branch("colleague", "main", &["Reviewed feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    let original = scenario.origin_git(&["rev-parse", "colleague"]);
+    scenario.origin_has_branch("concurrent", "colleague", &["Unreviewed follow-up"]);
+    let foreign = scenario.origin_git(&["rev-parse", "concurrent"]);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["comments"] = json!([{
+        "body": format!("<!-- thirdshift-review {} -->", json!({
+            "reviewed_head": original.trim()
+        })),
+        "author_association": "COLLABORATOR",
+        "user": {"login": "runner"}
+    }]);
+    for head in [original.trim(), foreign.trim()] {
+        state["checks"][head] = json!([{
+            "name": "test", "conclusion": "success", "url": "https://ci.example/test"
+        }]);
+    }
+    scenario.write_gh_state(&state);
+    scenario.agent_does("printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let marker = scenario.path("advanced-at-fetch");
+    support::write_executable(
+        &scenario.path("bin/git"),
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = fetch ] && [ ! -e '{marker}' ]; then
+  /usr/bin/git --git-dir='{origin}' update-ref refs/heads/colleague '{foreign}' || exit 1
+  touch '{marker}'
+fi
+exec /usr/bin/git "$@"
+"#,
+            marker = marker.display(),
+            origin = scenario.origin_dir().display(),
+            foreign = foreign.trim(),
+        ),
+    );
+
+    let result = scenario.run(&["fix", &url, "--merge", "--no-email"]);
+    assert!(
+        marker.is_file(),
+        "acquisition race did not run: {}",
+        result.stderr
+    );
+    let merged = scenario.gh_state()["prs"][0]["state"] == "MERGED";
+    let reviewed_foreign = scenario.claude_calls().iter().any(|call| {
+        call["prompt"]
+            .as_str()
+            .unwrap_or("")
+            .contains("/thirdshift-code-review")
+    });
+    assert!(
+        !merged || reviewed_foreign,
+        "ADR-0004: merged a fetched head covered only by an older head's review; {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn fix_self_merge_requires_review_evidence() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("unreviewed", "main", &["Manually authored feature"]);
