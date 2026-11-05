@@ -279,6 +279,29 @@ fn security_scope_covers_dispatched_fix_details_and_sessions() {
             "{path}"
         );
     }
+    let scoring = home.path().join(".thirdshift/evals/scoring");
+    fs::create_dir_all(&scoring).unwrap();
+    fs::write(scoring.join("broken.json"), "{").unwrap();
+    for path in [
+        "/api/v1/log?command=widgets%237&session=implement".to_owned(),
+        format!("/api/v1/logs/{id}"),
+    ] {
+        let denied = request(&console, &reader, &path).send().unwrap();
+        assert_eq!(denied.status(), 403, "{path}");
+        assert!(
+            denied.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("security")
+        );
+        let allowed = api::json(request(&console, &reviewer, &path).send().unwrap());
+        assert!(
+            allowed["contents"]
+                .as_str()
+                .unwrap()
+                .contains("private-security-fix-session")
+        );
+    }
 }
 
 #[test]

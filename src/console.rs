@@ -1051,7 +1051,8 @@ async fn log(
                 Ok(Ok(true)) => {
                     return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
                 }
-                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => return api::error(StatusCode::UNPROCESSABLE_ENTITY, error),
                 Err(_) => {
                     return api::error(
                         StatusCode::INTERNAL_SERVER_ERROR,

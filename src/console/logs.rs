@@ -131,7 +131,10 @@ pub(super) async fn reader(
                 Ok(Ok(true)) => {
                     return super::api::error(StatusCode::FORBIDDEN, "Missing scope: security");
                 }
-                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => {
+                    return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error);
+                }
                 Err(_) => {
                     return super::api::error(
                         StatusCode::INTERNAL_SERVER_ERROR,

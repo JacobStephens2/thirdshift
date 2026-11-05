@@ -129,6 +129,12 @@ pub(crate) struct Inspection {
     pub accepted_log_directory: Option<PathBuf>,
 }
 
+/// Read privacy from captured ownership, without Scoring or detail enrichment.
+pub(crate) fn security_details(config: &UserConfig, input: &str) -> Result<bool> {
+    let snapshot = Snapshot::for_user(config, chrono::Local::now())?;
+    Ok(snapshot.resolve(input)?.security_details())
+}
+
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let snapshot = Snapshot::details_for_user(config, chrono::Local::now(), input)?;
@@ -137,10 +143,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
     let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
-    let security_details = details["kind"] == "Security run"
-        || selected
-            .owner
-            .is_some_and(|owner| owner.record.kind == "Security run");
+    let security_details = selected.security_details();
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
