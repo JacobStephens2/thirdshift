@@ -44,6 +44,13 @@ if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
 for (const section of document.querySelectorAll("details[data-group]")) {
   if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
 }
+window.addEventListener("pagehide", () => {
+  // Navigation can discard a native toggle event before it saves the choice.
+  for (const section of document.querySelectorAll("details[data-group]")) {
+    folded[section.dataset.group] = section.open;
+  }
+  remember(foldKey, folded);
+});
 document.addEventListener("toggle", event => {
   const section = event.target;
   if (!section.matches("details[data-group]")) return;
