@@ -181,7 +181,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
-       thirdshift fix <PR URL or number>             Repair conflicts and CI on an existing PR; merge when asked
+       thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
@@ -231,7 +231,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   model <name>, effort <level>       Choose the Harness's Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Pass commands: architect, pickup, secure, review --author <login>. For architect, pickup and secure, base <branch> selects an origin branch.
+Pass commands: architect, pickup, secure, review --author <login>, fix. For architect, pickup, secure and fix, base <branch> selects an origin branch; fix also accepts author <login>.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
@@ -469,7 +469,9 @@ fn main() -> ExitCode {
 #[cfg(target_os = "linux")]
 fn fix(args: args::FixArgs) -> ExitCode {
     let (config, mut started) = match command::start(
-        Begin::FixRun,
+        Begin::FixRun {
+            pass: matches!(args.target, fix::Target::Pass { .. }),
+        },
         |config| args.flags.notification(config),
         About::FixRun,
     ) {
@@ -479,7 +481,7 @@ fn fix(args: args::FixArgs) -> ExitCode {
     let mut harness = args.flags.harness(&config);
     let ended = fix::run(&args, &config, &mut harness);
     started.built_with(&harness);
-    started.finish(Ending::Run(ended))
+    started.finish(ended)
 }
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
