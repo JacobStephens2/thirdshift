@@ -239,6 +239,7 @@ pub(super) async fn guard(
         }
         request = Request::from_parts(parts, Body::from(bytes));
     }
+    let withhold = api && !viewer.scopes.contains(&Scope::Security);
     request.extensions_mut().insert(viewer.clone());
     let mut response = next.run(request).await;
     if let Some(token) = viewer.token
@@ -246,7 +247,116 @@ pub(super) async fn guard(
     {
         set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
     }
+    // Read routes embed the same Command records as `/api/v1/security`.
+    // Callers without that scope keep the rest of the CLI JSON, minus the
+    // finding records ADR 0026 reserves for `security`.
+    if withhold {
+        response = withhold_security_records(response).await;
+    }
     response
+}
+
+const SECURITY_RECORD_LIMIT: usize = 32 * 1024 * 1024;
+
+async fn withhold_security_records(response: Response) -> Response {
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = to_bytes(body, SECURITY_RECORD_LIMIT).await else {
+        return super::api::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't scope this response.",
+        );
+    };
+    let replacement = match redacted_security_records(&bytes) {
+        Redaction::Unchanged => return Response::from_parts(parts, Body::from(bytes)),
+        Redaction::Unreadable => {
+            return super::api::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't scope this response.",
+            );
+        }
+        Redaction::Rewritten(body) => body,
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.insert(
+        header::CONTENT_LENGTH,
+        replacement
+            .len()
+            .to_string()
+            .parse()
+            .expect("content length"),
+    );
+    Response::from_parts(parts, Body::from(replacement))
+}
+
+enum Redaction {
+    Unchanged,
+    Rewritten(Vec<u8>),
+    Unreadable,
+}
+
+fn redacted_security_records(bytes: &[u8]) -> Redaction {
+    let mut value: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return if security_record_marker(bytes) {
+                Redaction::Unreadable
+            } else {
+                Redaction::Unchanged
+            };
+        }
+    };
+    if !strip_security_records(&mut value) {
+        return Redaction::Unchanged;
+    }
+    match serde_json::to_vec(&value) {
+        Ok(body) => Redaction::Rewritten(body),
+        Err(_) => Redaction::Unreadable,
+    }
+}
+
+fn security_record_marker(bytes: &[u8]) -> bool {
+    const MARKERS: &[&[u8]] = &[
+        b"\"security_findings\"",
+        b"\"security_fix_findings\"",
+        b"\"security_findings_waiting\"",
+    ];
+    MARKERS
+        .iter()
+        .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
+}
+
+fn strip_security_records(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                changed |= strip_security_records(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            changed |= map.remove("security_findings").is_some();
+            changed |= map.remove("security_fix_findings").is_some();
+            if map
+                .get("security_findings_waiting")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                map.insert(
+                    "security_findings_waiting".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+                changed = true;
+            }
+            for child in map.values_mut() {
+                changed |= strip_security_records(child);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+    changed
 }
 
 pub(super) async fn headers(request: Request, next: Next) -> Response {

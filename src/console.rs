@@ -993,12 +993,39 @@ async fn inspect(
 }
 
 async fn log(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
     if format == api::Format::Json {
+        if !viewer.scopes.contains(&Scope::Security) {
+            let command_for_check = command.clone();
+            let session_for_check = session.clone();
+            match tokio::task::spawn_blocking(move || -> Result<bool> {
+                let config = UserConfig::load()?;
+                let path = status::inspect::log_path(
+                    &config,
+                    &command_for_check,
+                    (!session_for_check.is_empty()).then_some(session_for_check.as_str()),
+                )?;
+                Ok(crate::logs::owner::security_session(&path))
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+                }
+                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Err(_) => {
+                    return api::error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Can't read this view; check the Console's stderr.",
+                    );
+                }
+            }
+        }
         return api::read(format, move || {
             let config = UserConfig::load()?;
             Ok(axum::Json(status::inspect::read_log(
@@ -1025,7 +1052,9 @@ async fn log(
     })
     .await
     {
-        Ok(Ok(id)) => logs::reader(Path(id), axum::Extension(format)).await,
+        Ok(Ok(id)) => {
+            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
+        }
         _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
     }
 }

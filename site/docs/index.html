@@ -377,9 +377,16 @@ thirdshift console token revoke laptop
 Holders are unique on this machine. The default scope is <code>read</code>. The five
 accepted scopes are <code>read</code> (views), <code>security</code> (Security run details and findings),
 <code>act</code> (actions), <code>run</code> (starting Commands) and <code>admin</code> (administration).
-Action endpoints and their auditing arrive in later Console API tickets;
-granting a scope does not create an endpoint. A missing route scope returns
-403 JSON naming that scope. An expired or revoked token returns 401.</p>
+A token without <code>security</code> still receives the other fields of a read route, but
+not Security finding records: <code>security_findings</code>, <code>security_fix_findings</code>, and
+a true <code>security_findings_waiting</code> flag are omitted or cleared. It also cannot
+read a Security session trace (<code>security-review</code>, <code>security-audit</code>,
+<code>security-reproduction-&lt;n&gt;</code>, <code>security-fix-publishing</code>, <code>security-close-check</code>,
+and their resumes); those log reads return 403 naming <code>security</code>. A token that
+has <code>security</code> receives the finding records and those traces. Action endpoints
+and their auditing arrive in later Console API tickets; granting a scope does
+not create an endpoint. A missing route scope returns 403 JSON naming that
+scope. An expired or revoked token returns 401.</p>
 <p>The machine stores only SHA-256 hashes in the owner-only
 <code>~/.thirdshift/console-tokens.json</code>, beside the Credentials. List shows holder,
 scopes, issue date, optional expiry and last use, never the token or its hash.
@@ -399,9 +406,11 @@ local caller with all scopes. In <code>--no-sign-in</code> mode its JSON matches
 response. For example, with a token in the client&#39;s <code>THIRDSHIFT_TOKEN</code> variable:</p>
 <pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; https://console.example.com/api/v1/whoami
 </code></pre>
-<p>Each response equals its CLI twin&#39;s <code>--json</code> output. For example,
-<code>GET /api/v1/status</code> equals <code>thirdshift status --json</code>, and
-<code>GET /api/v1/peek?command=widgets%237</code> equals <code>thirdshift show widgets#7 --json</code>.
+<p>Each response equals its CLI twin&#39;s <code>--json</code> output, except that a caller
+without the <code>security</code> scope does not receive Security finding records or
+Security session traces. For example, <code>GET /api/v1/status</code> equals
+<code>thirdshift status --json</code>, and <code>GET /api/v1/peek?command=widgets%237</code> equals
+<code>thirdshift show widgets#7 --json</code>, aside from those withheld records.
 Query arguments use the CLI flag names without <code>--</code>; positional Command
 selectors use <code>command</code>, and Scores selectors use <code>pull_request</code>.</p>
 <table>
@@ -471,8 +480,9 @@ selectors use <code>command</code>, and Scores selectors use <code>pull_request<
 <p>Finite log reads support <code>--json</code>, returning <code>{&quot;version&quot;:1,&quot;contents&quot;:&quot;...&quot;}</code>;
 <code>--follow</code> stays a separate streaming option. Other-account Commands retain
 their account tags and remain read-only. CLI refusals return 422 JSON with an
-<code>error</code> message. Action endpoints and further scope enforcement arrive in later
-Console API tickets; actions on the signed-in page keep working as before.</p>
+<code>error</code> message. Action endpoints arrive in later Console API tickets; actions
+on the signed-in page keep working as before. A signed-in session and
+<code>console --no-sign-in</code> hold every scope, so their JSON still matches the CLI.</p>
 </div></details>
 <details class="fold"><summary><h4>Console on a server</h4></summary>
 <div class="manual-content" id="console-on-a-server">

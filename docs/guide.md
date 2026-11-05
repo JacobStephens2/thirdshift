@@ -400,9 +400,16 @@ Create prints the `ts_` token once; copy it into the client's Credentials.
 Holders are unique on this machine. The default scope is `read`. The five
 accepted scopes are `read` (views), `security` (Security run details and findings),
 `act` (actions), `run` (starting Commands) and `admin` (administration).
-Action endpoints and their auditing arrive in later Console API tickets;
-granting a scope does not create an endpoint. A missing route scope returns
-403 JSON naming that scope. An expired or revoked token returns 401.
+A token without `security` still receives the other fields of a read route, but
+not Security finding records: `security_findings`, `security_fix_findings`, and
+a true `security_findings_waiting` flag are omitted or cleared. It also cannot
+read a Security session trace (`security-review`, `security-audit`,
+`security-reproduction-<n>`, `security-fix-publishing`, `security-close-check`,
+and their resumes); those log reads return 403 naming `security`. A token that
+has `security` receives the finding records and those traces. Action endpoints
+and their auditing arrive in later Console API tickets; granting a scope does
+not create an endpoint. A missing route scope returns 403 JSON naming that
+scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
 `~/.thirdshift/console-tokens.json`, beside the Credentials. List shows holder,
@@ -428,9 +435,11 @@ response. For example, with a token in the client's `THIRDSHIFT_TOKEN` variable:
 curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/whoami
 ```
 
-Each response equals its CLI twin's `--json` output. For example,
-`GET /api/v1/status` equals `thirdshift status --json`, and
-`GET /api/v1/peek?command=widgets%237` equals `thirdshift show widgets#7 --json`.
+Each response equals its CLI twin's `--json` output, except that a caller
+without the `security` scope does not receive Security finding records or
+Security session traces. For example, `GET /api/v1/status` equals
+`thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
+`thirdshift show widgets#7 --json`, aside from those withheld records.
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
 
@@ -451,8 +460,9 @@ selectors use `command`, and Scores selectors use `pull_request`.
 Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
 `--follow` stays a separate streaming option. Other-account Commands retain
 their account tags and remain read-only. CLI refusals return 422 JSON with an
-`error` message. Action endpoints and further scope enforcement arrive in later
-Console API tickets; actions on the signed-in page keep working as before.
+`error` message. Action endpoints arrive in later Console API tickets; actions
+on the signed-in page keep working as before. A signed-in session and
+`console --no-sign-in` hold every scope, so their JSON still matches the CLI.
 
 #### Console on a server
 

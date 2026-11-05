@@ -114,9 +114,30 @@ async fn inventory(format: super::api::Format, owner: Option<String>) -> Respons
 
 pub(super) async fn reader(
     Path(id): Path<String>,
+    Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
     if format == super::api::Format::Json {
+        if !viewer.scopes.contains(&super::Scope::Security) {
+            let selected = id.clone();
+            match tokio::task::spawn_blocking(move || -> Result<bool> {
+                let log = catalog::find(&UserConfig::load()?, &selected)?;
+                Ok(crate::logs::owner::security_session(&log.path))
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    return super::api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+                }
+                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Err(_) => {
+                    return super::api::error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Can't read this view; check the Console's stderr.",
+                    );
+                }
+            }
+        }
         return super::api::read(format, move || {
             let log = catalog::find(&UserConfig::load()?, &id)?;
             Ok(Json(catalog::contents(&log.reader)?).into_response())

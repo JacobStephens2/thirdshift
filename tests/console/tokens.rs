@@ -209,6 +209,153 @@ fn bearer_transport_refuses_cleartext_without_confirming_validity_or_recording_u
 }
 
 #[test]
+fn read_scope_cannot_read_security_findings() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut security = record(home.path(), 2, Some("findings recorded"), 1);
+    let directory = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = directory.join("2-20261105T120000-0500-security-audit.logs.jsonl");
+    let ordinary = directory.join("2-20261105T120000-0500-implement.logs.jsonl");
+    super::support::session_trace::write(&session, "PoC finding title 1755\n");
+    super::support::session_trace::write(&ordinary, "ordinary session marker\n");
+    security["kind"] = json!("Security run");
+    security["name"] = json!("secure-fixture");
+    security["issue"] = Value::Null;
+    security["security_findings_waiting"] = json!(true);
+    security["security_findings"] = json!([{
+        "title": "PoC finding title 1755",
+        "severity": "high",
+        "url": "https://github.com/acme/widgets/security/advisories/GHSA-test"
+    }]);
+    security["session_log"] = json!(session);
+    security["stages"][0]["session_log"] = json!(ordinary);
+    write_record(home.path(), 2, &security);
+    let token = create(home.path(), "reader", &[]);
+    let console = server(home.path());
+    for path in [
+        "/api/v1/history",
+        "/api/v1/status?all=true",
+        "/api/v1/peek?command=secure-fixture",
+    ] {
+        let response = request(&console, &token, path).send().unwrap();
+        let status = response.status();
+        let body = response.text().unwrap();
+        assert_eq!(status, 200, "{path}: {body}");
+        assert!(
+            !body.contains("PoC finding title 1755") && !body.contains("GHSA-test"),
+            "{path} disclosed a security finding to a read token: {body}"
+        );
+        assert!(
+            !body.contains("\"security_findings_waiting\":true"),
+            "{path} told a read token that findings are waiting: {body}"
+        );
+    }
+    assert_eq!(
+        request(&console, &token, "/api/v1/security")
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    let session_log = request(
+        &console,
+        &token,
+        "/api/v1/log?command=secure-fixture&session=security-audit",
+    )
+    .send()
+    .unwrap();
+    assert_eq!(session_log.status(), 403);
+    let session_body = session_log.text().unwrap();
+    assert!(
+        !session_body.contains("PoC finding title 1755"),
+        "{session_body}"
+    );
+    let ordinary_log = request(
+        &console,
+        &token,
+        "/api/v1/log?command=secure-fixture&session=implement",
+    )
+    .send()
+    .unwrap();
+    assert_eq!(ordinary_log.status(), 200);
+    let ordinary_body = ordinary_log.text().unwrap();
+    assert!(
+        ordinary_body.contains("ordinary session marker"),
+        "{ordinary_body}"
+    );
+    assert!(!ordinary_body.contains("PoC finding title 1755"));
+    let listed = request(&console, &token, "/api/v1/logs")
+        .send()
+        .unwrap()
+        .json::<Value>()
+        .unwrap();
+    let logs = listed["logs"].as_array().unwrap();
+    let security_id = logs
+        .iter()
+        .find(|log| {
+            log["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("security-audit"))
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let by_id = request(&console, &token, &format!("/api/v1/logs/{security_id}"))
+        .send()
+        .unwrap();
+    assert_eq!(by_id.status(), 403);
+    let by_id_body = by_id.text().unwrap();
+    assert!(
+        !by_id_body.contains("PoC finding title 1755"),
+        "{by_id_body}"
+    );
+    let implement_id = logs
+        .iter()
+        .find(|log| {
+            log["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("implement"))
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let implement = request(&console, &token, &format!("/api/v1/logs/{implement_id}"))
+        .send()
+        .unwrap();
+    assert_eq!(implement.status(), 200);
+    let implement_body = implement.text().unwrap();
+    assert!(
+        implement_body.contains("ordinary session marker"),
+        "{implement_body}"
+    );
+
+    let reviewer = create(home.path(), "reviewer", &["--scopes", "read,security"]);
+    let visible = request(&console, &reviewer, "/api/v1/history")
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(visible.contains("PoC finding title 1755"));
+    assert!(visible.contains("GHSA-test"));
+    assert!(visible.contains("\"security_findings_waiting\":true"));
+    let trace = request(
+        &console,
+        &reviewer,
+        "/api/v1/log?command=secure-fixture&session=security-audit",
+    )
+    .send()
+    .unwrap();
+    assert_eq!(trace.status(), 200);
+    let trace_body = trace.text().unwrap();
+    assert!(
+        trace_body.contains("PoC finding title 1755"),
+        "{trace_body}"
+    );
+}
+
+#[test]
 fn expired_tokens_are_refused_and_invalid_options_create_no_grant() {
     let home = tempfile::tempdir().unwrap();
     let expired = create(home.path(), "expired", &["--expires", "2000-01-01"]);
