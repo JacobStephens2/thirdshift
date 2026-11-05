@@ -34,6 +34,13 @@ fn fix_self_merge_deletes_its_head_branch_from_origin() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
     let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    let head = scenario.origin_git(&["rev-parse", "colleague"]);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["comments"] = serde_json::json!([{
+        "body": format!("<!-- thirdshift-review {} -->", serde_json::json!({"reviewed_head": head.trim()})),
+        "author_association": "COLLABORATOR", "user": {"login": "runner"}
+    }]);
+    scenario.write_gh_state(&state);
     let result = scenario.run(&["fix", &url, "--merge", "--no-email"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
