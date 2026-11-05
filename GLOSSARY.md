@@ -292,19 +292,23 @@ _Avoid_: completion email, alert
 ### Console
 
 **Console**:
-The web page a machine serves that shows the serving OS account's **Commands**, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. The **User config** can include readable **Other-account Commands** on that machine; each machine serves its own Console, behind a sign-in, and every view and action it offers is also a CLI command.
+The web page a machine serves that shows the serving OS account's **Commands**, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. The **User config** can include readable **Other-account Commands** on that machine, and the Commands of every machine in its **Fleet**, which it can stop and dismiss as their own Consoles can. Each machine serves its own Console, behind a sign-in, and every view and action it offers is also a CLI command.
 _Avoid_: dashboard, floor, UI, web UI
 
 **Other-account Command**:
 A **Command** owned by another OS account on the same machine, included by choice in the **Console** and `status` when the serving account can read its logs. Its account is shown with it, and it can be read but never given a **Stop** or **Dismissal** from that account.
 _Avoid_: remote Command, shared Command
 
+**Fleet**:
+The machines one **Console** shows: its own, and each machine its **User config** lists that has given it access. From the Console, the **Day shift** can see and do on each of them whatever that machine's own Console offers. A machine listed without access is only a link to its Console.
+_Avoid_: cluster, network, hosts
+
 **Stop**:
 Ending a live **Command** on request, from the CLI or the **Console**. It is an interruption, and the Command cleans up as after any other, but its issue is left for the **Day shift**: labelled `needs-triage`, with `ready-for-agent` not put back, unless the Stop asks for the issue to go back in line. Stop waits for the Command to end, then reports its outcome and any branch or pull request it left. The **Activity log** records who asked for it. A Stop of a **Spec run** stops its **Ticket runs** with it.
 _Avoid_: kill, cancel, abort
 
 **Console account**:
-An email address allowed by the **User config** to sign in to a machine's **Console**, with its password. Created, and its password reset, by proving the address with a code sent to it, or from the CLI. Taking an address off the allowlist ends its sign-ins at once; the account is kept, so adding it back restores it.
+An email address allowed by the **User config** to sign in to a machine's **Console**, with its password, and with what it may do there: everything, unless the User config narrows it. A **Fleet** machine applies its own limits to a person acting from another Console. Created, and its password reset, by proving the address with a code sent to it, or from the CLI. Taking an address off the allowlist ends its sign-ins at once; the account is kept, so adding it back restores it.
 _Avoid_: user, login
 
 **Console log**:
