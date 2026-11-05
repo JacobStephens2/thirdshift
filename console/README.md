@@ -188,6 +188,13 @@ motion and reduced motion hold the stripe still.
 
 The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
 show together, each under its heading and count, including empty groups.
+Every group starts open. Click its heading, or focus it and press Enter or Space,
+to fold its rows. The heading and count stay visible; counts and active runs
+still include folded rows. Each browser keeps its group choices through live
+updates, folder changes and reloads when storage is available. Without storage,
+folding still works through live updates. Keyboard row navigation skips folded
+rows, and the same controls work in every Theme and on phones. Without
+JavaScript, groups start open and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved.
 Rows show on one line each: state, subject, title, gist and age. Ready for review
 subjects link to the recorded pull request and show its title from the batched

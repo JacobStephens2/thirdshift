@@ -847,7 +847,7 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     record(home.path(), 2, Some("merged"), 0);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let shown = |html: &str| -> Vec<String> {
-        html.split("<section id=\"group-")
+        html.split("<details id=\"group-")
             .skip(1)
             .filter(|section| !section.split('>').next().unwrap().contains(" hidden"))
             .map(|section| {
@@ -901,11 +901,12 @@ fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
         ("ready for review", "Ready for review"),
         ("landing", "Landing"),
         ("working", "Working"),
+        ("done", "Done"),
+        ("resolved", "Resolved"),
     ] {
-        assert!(
-            section(&html, group).contains(&format!("<h3>{title} ")),
-            "{html}"
-        );
+        let group = section(&html, group);
+        assert!(group.contains(&format!("<summary><h3>{title} ")), "{html}");
+        assert!(group.split('>').next().unwrap().ends_with(" open"));
     }
     // Both sections are still on the page, so a switch needs no request.
     assert!(html.contains("data-group=\"done\""), "{html}");
