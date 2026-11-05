@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use sha2::{Digest, Sha256};
 
 use super::{UntrackedFiles, acquisition, lock_launch, ownership};
 use crate::git::Git;
@@ -87,75 +86,9 @@ impl SkillWorktree {
         branch: &str,
         commit: &str,
     ) -> Result<Option<ReviewConflict>> {
-        use std::os::unix::fs::MetadataExt;
         let _lock = lock_launch(launch)?;
         let _refs_lock = launch.lock_worktree_refs()?;
-        let entries = acquisition::registrations(launch)?;
-        let local = super::local_head(launch, branch)?;
-        let reference = format!("refs/heads/{branch}");
-        let occupied = entries
-            .iter()
-            .find(|entry| entry.branch.as_deref() == Some(&reference));
-        match acquisition::inspect_review(launch, branch, commit) {
-            Ok(_) => Ok(None),
-            Err(error) => {
-                let mut digest = Sha256::new();
-                digest.update(format!("{branch:?}:{local:?}:{commit:?}:{error:#}"));
-                if let Some(entry) = occupied {
-                    digest.update(format!("{:?}:{}", entry.path, entry.locked));
-                    let git = Git::new(&entry.path);
-                    for args in [
-                        vec![
-                            "-c",
-                            "core.fsmonitor=false",
-                            "status",
-                            "--porcelain=v1",
-                            "--untracked-files=no",
-                        ],
-                        vec!["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
-                        vec!["diff", "--no-ext-diff", "--no-textconv", "--cached", "--"],
-                    ] {
-                        digest.update(format!("{:?}", git.run(&args)));
-                    }
-                    // Identity and operation/evidence changes re-enable notification,
-                    // even when refs and the occupied pathname did not move.
-                    let admin = git.run(&["rev-parse", "--absolute-git-dir"]).ok();
-                    for path in std::iter::once(entry.path.clone())
-                        .chain(admin.map(std::path::PathBuf::from))
-                    {
-                        for name in [
-                            "",
-                            ".thirdshift-review-token",
-                            "thirdshift-review.json",
-                            "MERGE_HEAD",
-                            "CHERRY_PICK_HEAD",
-                            "REVERT_HEAD",
-                            "rebase-merge",
-                            "rebase-apply",
-                            "sequencer",
-                        ] {
-                            let metadata = std::fs::symlink_metadata(path.join(name));
-                            digest.update(format!(
-                                "{:?}",
-                                metadata.map(|m| (
-                                    m.dev(),
-                                    m.ino(),
-                                    if name.is_empty() {
-                                        (0, 0, 0)
-                                    } else {
-                                        (m.mtime(), m.mtime_nsec(), m.len())
-                                    }
-                                ))
-                            ));
-                        }
-                    }
-                }
-                Ok(Some(ReviewConflict {
-                    fingerprint: format!("{:x}", digest.finalize()),
-                    error,
-                }))
-            }
-        }
+        ownership::pull_request_conflict(launch, branch, commit)
     }
 
     pub fn recovered(&self) -> bool {

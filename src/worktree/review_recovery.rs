@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use super::{Checkout, Directory};
@@ -16,6 +17,14 @@ use crate::{interrupt, progress, skills};
 const TOKEN: &str = ".thirdshift-review-token";
 const RECORD: &str = "thirdshift-review.json";
 const VERSION: u32 = 1;
+const OPERATION_MARKERS: [&str; 6] = [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -307,14 +316,7 @@ fn verify_retained(
     checkout.inspect(launch)?;
     evidence.verify(checkout)?;
     let git = Git::new(checkout.path());
-    for name in [
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "rebase-merge",
-        "rebase-apply",
-        "sequencer",
-    ] {
+    for name in OPERATION_MARKERS {
         match fs::symlink_metadata(checkout.admin.path.join(name)) {
             Ok(_) => bail!("retained Review worktree has an unfinished Git operation"),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -361,6 +363,68 @@ pub(in crate::worktree) fn restart_retained(
         verify_retained(launch, checkout, &evidence, start)
     })?;
     verify_retained(launch, checkout, &evidence, start)
+}
+
+/// Both caller locks cover admission and its private state fingerprint.
+pub(in crate::worktree) fn pull_request_conflict(
+    launch: &Git,
+    branch: &str,
+    commit: &str,
+) -> Result<Option<super::super::skill::ReviewConflict>> {
+    use super::super::{acquisition, local_head};
+    let entries = acquisition::registrations(launch)?;
+    let local = local_head(launch, branch)?;
+    let reference = format!("refs/heads/{branch}");
+    let occupied = entries
+        .iter()
+        .find(|entry| entry.branch.as_deref() == Some(&reference));
+    let Err(error) = acquisition::inspect_review(launch, branch, commit) else {
+        return Ok(None);
+    };
+    let mut digest = Sha256::new();
+    digest.update(format!("{branch:?}:{local:?}:{commit:?}:{error:#}"));
+    if let Some(entry) = occupied {
+        digest.update(format!("{:?}:{}", entry.path, entry.locked));
+        let git = Git::new(&entry.path);
+        for args in [
+            vec![
+                "-c",
+                "core.fsmonitor=false",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=no",
+            ],
+            vec!["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
+            vec!["diff", "--no-ext-diff", "--no-textconv", "--cached", "--"],
+        ] {
+            digest.update(format!("{:?}", git.run(&args)));
+        }
+        // Ref changes, dirty work, evidence and directory replacement each
+        // re-enable notification. Directory mtimes change during ordinary Git
+        // observations, so they are deliberately excluded from the fingerprint.
+        let admin = git.run(&["rev-parse", "--absolute-git-dir"]).ok();
+        for path in std::iter::once(entry.path.clone()).chain(admin.map(PathBuf::from)) {
+            for name in ["", TOKEN, RECORD].into_iter().chain(OPERATION_MARKERS) {
+                let metadata = fs::symlink_metadata(path.join(name));
+                digest.update(format!(
+                    "{:?}",
+                    metadata.map(|m| (
+                        m.dev(),
+                        m.ino(),
+                        if name.is_empty() {
+                            (0, 0, 0)
+                        } else {
+                            (m.mtime(), m.mtime_nsec(), m.len())
+                        }
+                    ))
+                ));
+            }
+        }
+    }
+    Ok(Some(super::super::skill::ReviewConflict {
+        fingerprint: format!("{:x}", digest.finalize()),
+        error,
+    }))
 }
 
 /// The caller holds one worktree lock through inspection, disposal and add.

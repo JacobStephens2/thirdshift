@@ -160,8 +160,9 @@ impl ReviewProcess {
                 &snapshot.head,
                 &snapshot.base_head,
             ])?;
-            let checkout =
-                SkillWorktree::on_pull_request(&launch, &snapshot.branch, &snapshot.head)?;
+            // Inspection holds no PR Reservation and must never adopt a live
+            // Review checkout. Resolve the plan in isolated detached scratch.
+            let checkout = SkillWorktree::at(&launch, &snapshot.head)?;
             let steps = self.resolve(checkout.path(), &mut command, security_review, &config)?;
             return Ok(steps
                 .iter()
