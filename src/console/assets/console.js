@@ -43,6 +43,7 @@ let folded = stored(foldKey, {});
 if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
 for (const section of document.querySelectorAll("details[data-group]")) {
   if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
+  else folded[section.dataset.group] = section.open;
 }
 window.addEventListener("pagehide", () => {
   // Navigation can discard a native toggle event before it saves the choice.

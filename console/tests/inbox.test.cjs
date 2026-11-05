@@ -286,17 +286,21 @@ test('Inbox group choices survive reload before the native toggle event', async 
 });
 
 test('reloading another Console tab preserves the newer Inbox group choice', async t => {
-  const inbox = await pageFor(t);
-  await inbox.goto(origin);
-  const resources = await inbox.context().newPage();
-  await resources.goto(`${origin}/resources`);
-  const ready = inbox.locator('#inbox > [data-group="ready for review"]');
-  await ready.locator(':scope > summary').click();
-  await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
-  await resources.reload();
-  assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
-  await inbox.reload();
-  await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
+  for (const path of ['/', '/resources']) {
+    await t.test(path, async t => {
+      const inbox = await pageFor(t);
+      await inbox.goto(origin);
+      const other = await inbox.context().newPage();
+      await other.goto(`${origin}${path}`);
+      const ready = inbox.locator('#inbox > [data-group="ready for review"]');
+      await ready.locator(':scope > summary').click();
+      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await other.reload();
+      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
+      await inbox.reload();
+      await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    });
+  }
 });
 
 test('folded Inbox groups keep live counts and choices through folders, hiding and reloads', async t => {
