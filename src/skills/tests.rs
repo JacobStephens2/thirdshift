@@ -188,3 +188,206 @@ fn replacement_and_new_links_use_the_checked_directory_after_its_path_changes() 
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
     }
 }
+
+/// The publish recipe must not upload a symlink target. Literal `/tmp`
+/// capture names are rewritten into this fixture so the proof does not use
+/// the shared predictable paths.
+#[test]
+fn pr_evidence_publish_recipe_does_not_upload_symlink_targets() {
+    let factory = publish_recipe("skills/thirdshift-pr/SKILL.md");
+    let day_shift = publish_recipe(".agents/skills/pr/SKILL.md");
+    assert_eq!(
+        factory, day_shift,
+        "factory and Day shift publish recipes diverged"
+    );
+    let fixture = tempfile::tempdir().unwrap();
+    let secret = fixture.path().join("secret-token");
+    fs::write(&secret, b"SECRET-MARKER-pr-evidence\n").unwrap();
+    let planted = fixture.path().join("before-desktop.png");
+    symlink(&secret, &planted).unwrap();
+    let after = fixture.path().join("after-desktop.png");
+    fs::write(&after, b"AFTER-REGULAR-ok\n").unwrap();
+    let published = fixture.path().join("published-symlink");
+    fs::create_dir(&published).unwrap();
+    let output = run_publish_recipe(&factory, &planted, &after, &published);
+    let dumped = format!(
+        "status {}\nstdout {}\nstderr {}\npublished {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        published_text(&published)
+    );
+    assert!(
+        !published_text(&published).contains("SECRET-MARKER-pr-evidence"),
+        "symlink target was published\n{dumped}"
+    );
+    assert!(
+        !output.status.success(),
+        "recipe accepted a symlink capture\n{dumped}"
+    );
+    assert_eq!(
+        fs::read(&secret).unwrap(),
+        b"SECRET-MARKER-pr-evidence\n",
+        "capture path was written through"
+    );
+
+    let ok = tempfile::tempdir().unwrap();
+    let before = ok.path().join("before-desktop.A1b2C3.png");
+    let after = ok.path().join("after-desktop.A1b2C3.png");
+    fs::write(&before, b"BEFORE-REGULAR-ok\n").unwrap();
+    fs::write(&after, b"AFTER-REGULAR-ok\n").unwrap();
+    let published = ok.path().join("published-regular");
+    fs::create_dir(&published).unwrap();
+    let output = run_publish_recipe(&factory, &before, &after, &published);
+    let text = published_text(&published);
+    assert!(
+        output.status.success(),
+        "regular captures were refused\nstatus {}\nstdout {}\nstderr {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(text.contains("BEFORE-REGULAR-ok"), "{text}");
+    assert!(text.contains("AFTER-REGULAR-ok"), "{text}");
+    assert!(!text.contains("SECRET-MARKER-pr-evidence"), "{text}");
+
+    for relative in [
+        "skills/thirdshift-implement/SKILL.md",
+        "skills/thirdshift-diagnosing-bugs/SKILL.md",
+        ".agents/skills/implement/SKILL.md",
+        ".agents/skills/diagnosing-bugs/SKILL.md",
+    ] {
+        let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
+            .unwrap_or_else(|error| panic!("{relative}: {error}"));
+        assert!(
+            text.contains("mktemp"),
+            "{relative} does not send captures through mktemp"
+        );
+    }
+}
+
+fn publish_recipe(relative: &str) -> String {
+    let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative))
+        .unwrap_or_else(|error| panic!("{relative}: {error}"));
+    let mut lines = text.lines();
+    let mut found = None;
+    while let Some(line) = lines.next() {
+        if line != "```sh" {
+            continue;
+        }
+        let mut block = String::new();
+        for line in lines.by_ref() {
+            if line == "```" {
+                break;
+            }
+            block.push_str(line);
+            block.push('\n');
+        }
+        if block.contains("gh gist create") {
+            found = Some(block);
+        }
+    }
+    found.unwrap_or_else(|| panic!("{relative} has no Gist publish recipe"))
+}
+
+fn run_publish_recipe(
+    recipe: &str,
+    before: &Path,
+    after: &Path,
+    publish: &Path,
+) -> std::process::Output {
+    let bin = tempfile::tempdir().unwrap();
+    let gitconfig = bin.path().join("gitconfig");
+    fs::write(&gitconfig, "[user]\nname = PoC\nemail = poc@example.com\n").unwrap();
+    fs::write(bin.path().join("git"), GIT_MOCK).unwrap();
+    fs::write(bin.path().join("gh"), GH_MOCK).unwrap();
+    for name in ["git", "gh"] {
+        let path = bin.path().join(name);
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+    }
+    let script = recipe
+        .replace("/tmp/before-desktop.png", before.to_str().unwrap())
+        .replace("/tmp/after-desktop.png", after.to_str().unwrap());
+    std::process::Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+        .env("HOME", bin.path())
+        .env("PUBLISH_DIR", publish)
+        .env("BEFORE_DESKTOP", before)
+        .env("AFTER_DESKTOP", after)
+        .env("GIT_CONFIG_GLOBAL", &gitconfig)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "PoC")
+        .env("GIT_AUTHOR_EMAIL", "poc@example.com")
+        .env("GIT_COMMITTER_NAME", "PoC")
+        .env("GIT_COMMITTER_EMAIL", "poc@example.com")
+        .output()
+        .unwrap()
+}
+
+fn published_text(dir: &Path) -> String {
+    let mut names: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    names.sort();
+    let mut text = String::new();
+    for path in names {
+        if path.is_file() {
+            text.push_str(&fs::read_to_string(&path).unwrap_or_default());
+        }
+    }
+    text
+}
+
+const GIT_MOCK: &str = r#"#!/bin/bash
+real=/usr/bin/git
+args=("$@")
+cmd=""
+c_dir=""
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  a=${args[$i]}
+  case "$a" in
+    -C)
+      i=$((i + 1))
+      c_dir=${args[$i]}
+      ;;
+    -c)
+      i=$((i + 1))
+      ;;
+    -*)
+      ;;
+    *)
+      cmd=$a
+      break
+      ;;
+  esac
+  i=$((i + 1))
+done
+if [ "$cmd" = "clone" ]; then
+  dest=${args[$((i + 2))]}
+  mkdir -p -- "$dest"
+  "$real" init -q "$dest"
+  exit 0
+fi
+if [ "$cmd" = "push" ]; then
+  root=${c_dir:-.}
+  mkdir -p -- "$PUBLISH_DIR"
+  find "$root" -mindepth 1 -maxdepth 1 -type f -exec cp -P -- {} "$PUBLISH_DIR/" \;
+  printf 'pushed\n' > "$PUBLISH_DIR/PUSHED"
+  exit 0
+fi
+exec "$real" "$@"
+"#;
+
+const GH_MOCK: &str = r#"#!/bin/bash
+case "$1" in
+  gist) printf '%s\n' 'https://gist.github.com/0123456789abcdef0123456789abcdef' ;;
+  api) printf '%s\n' 'poc-owner' ;;
+  *) printf 'unexpected gh\n' >&2; exit 1 ;;
+esac
+"#;
