@@ -145,6 +145,8 @@ Ready for review rows show the pull request's latest head CI as **CI green**, **
 
 A conflicting pull request also shows a separate **Merge conflict** pill beside CI, even when CI is green. It stays in Ready for review. The same GitHub read refreshes mergeability and wakes open pages when it changes; `status` prints **Merge conflict** too. `status --json` includes `github_mergeable` (`mergeable`, `conflicting` or `unknown`). Only `conflicting` shows the pill; unknown and older saved answers do not claim a conflict. Failed reads retain the last answer with the same freshness warning.
 
+Ready for review rows with a pull request and either **CI red** or **Merge conflict** show `thirdshift fix <PR URL>` and a **Copy fix command** button, both on the Inbox row and in Command details (Peek). Clicking it copies the command; run it from a clone of that repository to start a [Fix run](#fix-runs). A later Command on the same pull request URL takes up the earlier waiting row in Ready for review or Needs you, just as one on the same issue does, including when neither Command has a linked issue. The row says `taken up by a later Command started at <time>`, and retention counts from that later start.
+
 Each row with a kept answer also carries `github`: `subjects` maps its own or dispatched issue and pull request URLs to their `facts` and RFC 3339 `answered_at`. An unresolved URL has null facts; an older cache without an observation time has null `answered_at`. Finding rows include `github.findings` with per-URL waiting flags, the first observed `triaged_at`, and `answered_at`, without private write-ups. History freezes these observation times with its facts. The existing `github_state` and `github_at` fields still describe the row's own pull request and its merge or close event.
 
 The Inbox leaves the last of GitHub's quota to the factory. Both the Console and `status` skip their GitHub reads while the last observation showed fewer than 500 GraphQL points or 500 REST requests remaining, until that quota's reset time. The warning says which quota is low, how much remains and when it resets, even while the kept answer is fresh. Neither the reserve nor the 5-minute warning threshold is a User config setting.
@@ -2329,6 +2331,13 @@ A Spec PR closed, merged or retargeted while the Spec run is working through its
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
 
 ## Fix runs
+
+Use a **Fix run** when a delivered pull request needs its Base branch merged in,
+a merge conflict resolved or CI repaired. The Console offers **Copy fix command**
+on Ready for review rows with CI red or Merge conflict and in their Command
+details. Starting it takes up earlier waiting Inbox rows on that pull request,
+whether or not they name the same issue. Other later Commands on that pull
+request make the same hand-off.
 
 From a clone of the pull request's repository:
 
