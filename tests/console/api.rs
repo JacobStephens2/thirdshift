@@ -27,6 +27,82 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
 }
 
 #[test]
+fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let secret = "synthetic-credential-that-must-not-appear-in-openapi";
+    fs::write(
+        home.path().join(".thirdshift/credentials.toml"),
+        format!("[resend]\nkey = {secret:?}\n"),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let document = json(console.get("/api/v1/openapi.json"));
+    assert_eq!(document, cli(home.path(), &["console", "openapi"]));
+    assert_eq!(document["openapi"], "3.1.1");
+    let paths = document["paths"].as_object().unwrap();
+    for path in [
+        "/api/v1/status",
+        "/api/v1/peek",
+        "/api/v1/whoami",
+        "/api/v1/openapi.json",
+    ] {
+        assert!(paths.contains_key(path), "missing {path}");
+    }
+    for (path, methods) in paths {
+        assert!(path.starts_with("/api/v1/"));
+        for (_, operation) in methods.as_object().unwrap() {
+            assert!(
+                ["read", "security", "act", "run", "admin"]
+                    .contains(&operation["x-scope"].as_str().unwrap())
+            );
+            for twin in operation["x-cli-twins"].as_array().unwrap() {
+                assert!(twin.as_str().unwrap().starts_with("thirdshift "));
+            }
+            assert!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"].is_object()
+            );
+            assert!(operation["responses"]["403"].is_object());
+        }
+    }
+    let whoami = &paths["/api/v1/whoami"]["get"];
+    assert_eq!(
+        whoami["x-cli-twins"],
+        json!(["thirdshift console whoami --json"])
+    );
+    let properties =
+        &whoami["responses"]["200"]["content"]["application/json"]["schema"]["properties"];
+    for field in [
+        "hostname",
+        "thirdshift_version",
+        "api_version",
+        "identity",
+        "scopes",
+    ] {
+        assert!(
+            properties[field].is_object(),
+            "missing whoami field {field}"
+        );
+    }
+    assert_eq!(
+        document["security"],
+        json!([{"ConsoleSession": []}, {"ConsoleBearer": []}])
+    );
+    assert_eq!(
+        document["components"]["securitySchemes"]["ConsoleBearer"],
+        json!({"type": "http", "scheme": "bearer"})
+    );
+    assert!(!paths.contains_key("/api/v1/events"));
+    assert!(!paths.contains_key("/api/v1/set-password"));
+    assert!(
+        !serde_json::to_string(&document)
+            .unwrap()
+            .contains(&home.path().display().to_string())
+    );
+    assert!(!serde_json::to_string(&document).unwrap().contains(secret));
+}
+
+#[test]
 fn inbox_api_equals_status_json_without_sign_in() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

@@ -86,6 +86,13 @@ fn bearer_read_updates_last_use_and_revoke_takes_effect_on_the_next_request() {
         expected
     );
     assert!(list(home.path())[0]["last_use"].as_str().is_some());
+    let description = api::json(
+        request(&console, &token, "/api/v1/openapi.json")
+            .send()
+            .unwrap(),
+    );
+    assert_eq!(description, api::cli(home.path(), &["console", "openapi"]));
+    assert!(!description.to_string().contains(&token));
     assert!(
         cli(home.path(), &["console", "token", "revoke", "reader"])
             .status
@@ -109,14 +116,16 @@ fn route_scopes_refuse_a_token_missing_read_and_name_the_scope() {
         json!(["security", "act", "run", "admin"])
     );
     let console = server(home.path());
-    let response = request(&console, &token, "/api/v1/status").send().unwrap();
-    assert_eq!(response.status(), 403);
-    assert!(
-        response.json::<Value>().unwrap()["error"]
-            .as_str()
-            .unwrap()
-            .contains("read")
-    );
+    for path in ["/api/v1/status", "/api/v1/whoami", "/api/v1/openapi.json"] {
+        let response = request(&console, &token, path).send().unwrap();
+        assert_eq!(response.status(), 403, "{path}");
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("read")
+        );
+    }
 }
 
 #[test]

@@ -204,7 +204,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift console token <create|list|revoke> ...  Manage scoped API tokens; CLI-only
-       thirdshift console whoami [--json]             Identify this machine and caller
+       thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
@@ -320,6 +320,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
+        Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
             return match console::serve(no_sign_in) {
                 Ok(()) => ExitCode::SUCCESS,
