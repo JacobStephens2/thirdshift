@@ -6,8 +6,7 @@ use askama::Template;
 
 use super::filters;
 use axum::extract::RawQuery;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::Response;
 use axum::{Extension, Form};
 
 use super::auth::Viewer;
@@ -62,8 +61,11 @@ pub(super) async fn show(
     .await
 }
 
-pub(super) async fn submit(Form(form): Form<HashMap<String, String>>) -> Response {
-    let result = tokio::task::spawn_blocking(move || -> Result<()> {
+pub(super) async fn submit(
+    Extension(format): Extension<super::api::Format>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    super::api::action(format, "/scores", move || -> Result<serde_json::Value> {
         let target = form
             .get("pull_request")
             .context("a pull request is required")?;
@@ -86,12 +88,9 @@ pub(super) async fn submit(Form(form): Form<HashMap<String, String>>) -> Respons
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        scoring::save_mine(target, scores)
+        scoring::save_mine(target, scores)?;
+        let view = scoring::view(Some(target))?;
+        scoring::json_view(&view.weeks, &view.calibration)
     })
-    .await;
-    match result {
-        Ok(Ok(())) => Redirect::to("/scores").into_response(),
-        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        Err(error) => super::page(Err(error)),
-    }
+    .await
 }

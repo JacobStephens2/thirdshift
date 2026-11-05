@@ -14,10 +14,29 @@ struct WaterfallPage {
     data: String,
 }
 
-pub(super) async fn show(format: super::api::Format, query: Option<String>) -> Response {
+fn security_refusal(
+    viewer: &super::auth::Viewer,
+    format: super::api::Format,
+    config: &UserConfig,
+    command: &str,
+) -> anyhow::Result<Option<Response>> {
+    Ok((format == super::api::Format::Json
+        && !viewer.scopes.contains(&super::Scope::Security)
+        && super::api::security_command(config, command)?)
+    .then(|| super::api::error(axum::http::StatusCode::FORBIDDEN, "Missing scope: security")))
+}
+
+pub(super) async fn show(
+    viewer: super::auth::Viewer,
+    format: super::api::Format,
+    query: Option<String>,
+) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         let view = spans::load(&config, &super::query_value(&query, "command"))?;
+        if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)? {
+            return Ok(response);
+        }
         // JSON is data, never executable markup, even inside a script tag.
         let data = serde_json::to_string(&view.tree)?
             .replace('&', "\\u0026")
@@ -36,21 +55,28 @@ pub(super) async fn show(format: super::api::Format, query: Option<String>) -> R
 }
 
 pub(super) async fn data(
+    axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
     axum::Extension(format): axum::Extension<super::api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
     super::api::read(format, move || {
-        let value = (|| -> anyhow::Result<serde_json::Value> {
-            let view = spans::load(&UserConfig::load()?, &super::query_value(&query, "command"))?;
+        let value = (|| -> anyhow::Result<Response> {
+            let config = UserConfig::load()?;
+            let view = spans::load(&config, &super::query_value(&query, "command"))?;
+            if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)?
+            {
+                return Ok(response);
+            }
             let selected = super::query_value(&query, "span");
-            Ok(if selected.is_empty() {
+            let value = if selected.is_empty() {
                 serde_json::to_value(view.tree)?
             } else {
                 serde_json::to_value(view.tree.span(&selected)?)?
-            })
+            };
+            Ok(axum::Json(value).into_response())
         })();
         match value {
-            Ok(value) => Ok(axum::Json(value).into_response()),
+            Ok(response) => Ok(response),
             Err(error) if format == super::api::Format::Html => {
                 Ok((axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response())
             }

@@ -451,11 +451,12 @@ response. For example, with a token in the client's `THIRDSHIFT_TOKEN` variable:
 curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/whoami
 ```
 
-Each response equals its CLI twin's `--json` output, except that a caller
-without the `security` scope does not receive Security finding records or
-Security session traces. For example, `GET /api/v1/status` equals
+Each response equals its CLI twin's `--json` output. A caller with `read` sees
+Security run rows and stages, with finding records withheld. Security run
+details, the Security page and Security Session traces need `security`.
+For example, `GET /api/v1/status` equals
 `thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
-`thirdshift show widgets#7 --json`, aside from those withheld records.
+`thirdshift show widgets#7 --json`, subject to those scope checks.
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
 
@@ -482,10 +483,38 @@ by later Console API tickets appear when they are served.
 
 Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
 `--follow` stays a separate streaming option. Other-account Commands retain
-their account tags and remain read-only. CLI refusals return 422 JSON with an
-`error` message. Action endpoints arrive in later Console API tickets; actions
-on the signed-in page keep working as before. A signed-in session and
+their account tags and remain read-only: Stop and Dismissal refuse them and
+name the owning account. CLI refusals return 422 JSON with an `error` message.
+A signed-in session and
 `console --no-sign-in` hold every scope, so their JSON still matches the CLI.
+
+| Scope | Calls |
+| --- | --- |
+| `read` | The read calls above, including Security run rows and stages |
+| `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
+| `act` | The action POSTs below, including Theme and hidden sections |
+| `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
+
+Actions take `application/x-www-form-urlencoded` bodies, using the page's
+field names below. Bearer requests need no CSRF token; sign-in sessions and
+`--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
+The response is the CLI twin's JSON. Stop waits for cleanup to finish.
+
+| POST path under `/api/v1` | Fields | CLI twin (add `--json`) |
+| --- | --- | --- |
+| `/stop` | `command`, optional `requeue=true` | `stop <command> [--requeue]` |
+| `/dismiss`, `/dismiss/undo` | `command` | `dismiss <command> [--undo]` |
+| `/scores/mine` | `pull_request`, each of `Correct`, `Scoped`, `Tested`, `Honest`, `Standards` as `pass` or `fail`, and each corresponding `<criterion>_reason` | `scores <pull_request> --mine` |
+| `/bug-origins/settle` | `issue`, `action=confirm\|correct\|reject`, `pull_request` for a correction | `bug-origins <issue> --confirm\|--correct <pr>\|--none` |
+| `/experiments/proposals/<suite>/<task>/approve` | none | `evals approve <suite> <task>` |
+| `/theme` | `theme` | `console theme <name>` |
+| `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
+
+Every attempted API change records its holder or session address, endpoint and
+HTTP outcome in the Console log; reads add no events. Activity log lines for
+token Stops and Dismissals say `by token <holder>`, alongside the CLI and
+Console callers already recorded there. Token secrets and action bodies are
+never written to that audit record.
 
 #### Console on a server
 

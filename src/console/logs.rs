@@ -121,15 +121,20 @@ pub(super) async fn reader(
         if !viewer.scopes.contains(&super::Scope::Security) {
             let selected = id.clone();
             match tokio::task::spawn_blocking(move || -> Result<bool> {
-                let log = catalog::find(&UserConfig::load()?, &selected)?;
-                Ok(crate::logs::owner::security_session(&log.path))
+                let config = UserConfig::load()?;
+                let log = catalog::find(&config, &selected)?;
+                Ok(crate::logs::owner::security_session(&log.path)
+                    || super::api::security_command(&config, &log.selector)?)
             })
             .await
             {
                 Ok(Ok(true)) => {
                     return super::api::error(StatusCode::FORBIDDEN, "Missing scope: security");
                 }
-                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => {
+                    return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error);
+                }
                 Err(_) => {
                     return super::api::error(
                         StatusCode::INTERNAL_SERVER_ERROR,

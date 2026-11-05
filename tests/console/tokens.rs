@@ -9,7 +9,7 @@ fn cli(home: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn create(home: &Path, holder: &str, options: &[&str]) -> String {
+pub(super) fn create(home: &Path, holder: &str, options: &[&str]) -> String {
     let mut args = vec!["console", "token", "create", holder];
     args.extend(options);
     let output = cli(home, &args);
@@ -65,7 +65,11 @@ fn server(home: &Path) -> Console {
     Console::start_mode(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home, false)
 }
 
-fn request(console: &Console, token: &str, path: &str) -> reqwest::blocking::RequestBuilder {
+pub(super) fn request(
+    console: &Console,
+    token: &str,
+    path: &str,
+) -> reqwest::blocking::RequestBuilder {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -272,6 +276,89 @@ fn bearer_transport_refuses_cleartext_without_confirming_validity_or_recording_u
 }
 
 #[test]
+fn security_scope_covers_dispatched_fix_details_and_sessions() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut parent = record(home.path(), 2, Some("failed"), 0);
+    let directory = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = directory.join("7-20261105T120000-0500-implement.logs.jsonl");
+    super::support::session_trace::write(&session, "private-security-fix-session\n");
+    let mut fix = parent.clone();
+    fix["kind"] = json!("Run");
+    fix["name"] = json!("acme/widgets#7");
+    fix["issue"]["number"] = json!(7);
+    fix["issue"]["url"] = json!("https://github.com/acme/widgets/issues/7");
+    fix["cause"] = json!("private-security-fix-details");
+    fix["session_log"] = json!(session);
+    fix["stages"][0]["session_log"] = json!(session);
+    parent["kind"] = json!("Security run");
+    parent["name"] = json!("secure-fixture");
+    parent["issue"] = Value::Null;
+    parent["dispatched"] = json!([fix]);
+    write_record(home.path(), 2, &parent);
+    let reader = create(home.path(), "reader", &[]);
+    let reviewer = create(home.path(), "reviewer", &["--scopes", "read,security"]);
+    let console = server(home.path());
+    let logs = api::json(request(&console, &reader, "/api/v1/logs").send().unwrap());
+    let id = logs["logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|log| {
+            log["name"]
+                .as_str()
+                .unwrap()
+                .ends_with("implement.logs.jsonl")
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    for path in [
+        "/api/v1/peek?command=widgets%237".to_owned(),
+        "/api/v1/spans?command=widgets%237".to_owned(),
+        "/api/v1/waterfall?command=widgets%237".to_owned(),
+        "/api/v1/log?command=widgets%237&session=implement".to_owned(),
+        format!("/api/v1/logs/{id}"),
+    ] {
+        let response = request(&console, &reader, &path).send().unwrap();
+        assert_eq!(response.status(), 403, "{path}");
+        let error = response.json::<Value>().unwrap();
+        assert!(error["error"].as_str().unwrap().contains("security"));
+        assert!(!error.to_string().contains("private-security-fix"));
+        assert_eq!(
+            request(&console, &reviewer, &path).send().unwrap().status(),
+            200,
+            "{path}"
+        );
+    }
+    let scoring = home.path().join(".thirdshift/evals/scoring");
+    fs::create_dir_all(&scoring).unwrap();
+    fs::write(scoring.join("broken.json"), "{").unwrap();
+    for path in [
+        "/api/v1/log?command=widgets%237&session=implement".to_owned(),
+        format!("/api/v1/logs/{id}"),
+    ] {
+        let denied = request(&console, &reader, &path).send().unwrap();
+        assert_eq!(denied.status(), 403, "{path}");
+        assert!(
+            denied.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("security")
+        );
+        let allowed = api::json(request(&console, &reviewer, &path).send().unwrap());
+        assert!(
+            allowed["contents"]
+                .as_str()
+                .unwrap()
+                .contains("private-security-fix-session")
+        );
+    }
+}
+
+#[test]
 fn read_scope_cannot_read_security_findings() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -297,11 +384,7 @@ fn read_scope_cannot_read_security_findings() {
     write_record(home.path(), 2, &security);
     let token = create(home.path(), "reader", &[]);
     let console = server(home.path());
-    for path in [
-        "/api/v1/history",
-        "/api/v1/status?all=true",
-        "/api/v1/peek?command=secure-fixture",
-    ] {
+    for path in ["/api/v1/history", "/api/v1/status?all=true"] {
         let response = request(&console, &token, path).send().unwrap();
         let status = response.status();
         let body = response.text().unwrap();
@@ -313,6 +396,20 @@ fn read_scope_cannot_read_security_findings() {
         assert!(
             !body.contains("\"security_findings_waiting\":true"),
             "{path} told a read token that findings are waiting: {body}"
+        );
+    }
+    for path in [
+        "/api/v1/peek?command=secure-fixture",
+        "/api/v1/waterfall?command=secure-fixture",
+        "/api/v1/spans?command=secure-fixture",
+    ] {
+        let details = request(&console, &token, path).send().unwrap();
+        assert_eq!(details.status(), 403, "{path}");
+        assert!(
+            details.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("security")
         );
     }
     assert_eq!(
@@ -342,10 +439,10 @@ fn read_scope_cannot_read_security_findings() {
     )
     .send()
     .unwrap();
-    assert_eq!(ordinary_log.status(), 200);
+    assert_eq!(ordinary_log.status(), 403);
     let ordinary_body = ordinary_log.text().unwrap();
     assert!(
-        ordinary_body.contains("ordinary session marker"),
+        !ordinary_body.contains("ordinary session marker"),
         "{ordinary_body}"
     );
     assert!(!ordinary_body.contains("PoC finding title 1755"));
@@ -387,14 +484,22 @@ fn read_scope_cannot_read_security_findings() {
     let implement = request(&console, &token, &format!("/api/v1/logs/{implement_id}"))
         .send()
         .unwrap();
-    assert_eq!(implement.status(), 200);
+    assert_eq!(implement.status(), 403);
     let implement_body = implement.text().unwrap();
     assert!(
-        implement_body.contains("ordinary session marker"),
+        !implement_body.contains("ordinary session marker"),
         "{implement_body}"
     );
 
     let reviewer = create(home.path(), "reviewer", &["--scopes", "read,security"]);
+    assert_eq!(
+        api::json(
+            request(&console, &reviewer, "/api/v1/peek?command=secure-fixture")
+                .send()
+                .unwrap()
+        ),
+        api::cli(home.path(), &["show", "secure-fixture", "--json"])
+    );
     let visible = request(&console, &reviewer, "/api/v1/history")
         .send()
         .unwrap()

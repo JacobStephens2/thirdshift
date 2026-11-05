@@ -420,11 +420,12 @@ local caller with all scopes. In <code>--no-sign-in</code> mode its JSON matches
 response. For example, with a token in the client&#39;s <code>THIRDSHIFT_TOKEN</code> variable:</p>
 <pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; https://console.example.com/api/v1/whoami
 </code></pre>
-<p>Each response equals its CLI twin&#39;s <code>--json</code> output, except that a caller
-without the <code>security</code> scope does not receive Security finding records or
-Security session traces. For example, <code>GET /api/v1/status</code> equals
+<p>Each response equals its CLI twin&#39;s <code>--json</code> output. A caller with <code>read</code> sees
+Security run rows and stages, with finding records withheld. Security run
+details, the Security page and Security Session traces need <code>security</code>.
+For example, <code>GET /api/v1/status</code> equals
 <code>thirdshift status --json</code>, and <code>GET /api/v1/peek?command=widgets%237</code> equals
-<code>thirdshift show widgets#7 --json</code>, aside from those withheld records.
+<code>thirdshift show widgets#7 --json</code>, subject to those scope checks.
 Query arguments use the CLI flag names without <code>--</code>; positional Command
 selectors use <code>command</code>, and Scores selectors use <code>pull_request</code>.</p>
 <p><code>GET /api/v1/openapi.json</code> returns the OpenAPI description of the endpoints
@@ -499,10 +500,87 @@ by later Console API tickets appear when they are served.</p>
 </tbody></table>
 <p>Finite log reads support <code>--json</code>, returning <code>{&quot;version&quot;:1,&quot;contents&quot;:&quot;...&quot;}</code>;
 <code>--follow</code> stays a separate streaming option. Other-account Commands retain
-their account tags and remain read-only. CLI refusals return 422 JSON with an
-<code>error</code> message. Action endpoints arrive in later Console API tickets; actions
-on the signed-in page keep working as before. A signed-in session and
+their account tags and remain read-only: Stop and Dismissal refuse them and
+name the owning account. CLI refusals return 422 JSON with an <code>error</code> message.
+A signed-in session and
 <code>console --no-sign-in</code> hold every scope, so their JSON still matches the CLI.</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Calls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>read</code></td>
+<td>The read calls above, including Security run rows and stages</td>
+</tr>
+<tr>
+<td><code>security</code></td>
+<td><code>/api/v1/security</code>, Security run details and Waterfall, and Security Session traces</td>
+</tr>
+<tr>
+<td><code>act</code></td>
+<td>The action POSTs below, including Theme and hidden sections</td>
+</tr>
+<tr>
+<td><code>run</code>, <code>admin</code></td>
+<td>Reserved for starting Commands and other administration in later API tickets</td>
+</tr>
+</tbody></table>
+<p>Actions take <code>application/x-www-form-urlencoded</code> bodies, using the page&#39;s
+field names below. Bearer requests need no CSRF token; sign-in sessions and
+<code>--no-sign-in</code> requests must send the page&#39;s CSRF token in <code>X-CSRF-Token</code>.
+The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
+<table>
+<thead>
+<tr>
+<th>POST path under <code>/api/v1</code></th>
+<th>Fields</th>
+<th>CLI twin (add <code>--json</code>)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/stop</code></td>
+<td><code>command</code>, optional <code>requeue=true</code></td>
+<td><code>stop &lt;command&gt; [--requeue]</code></td>
+</tr>
+<tr>
+<td><code>/dismiss</code>, <code>/dismiss/undo</code></td>
+<td><code>command</code></td>
+<td><code>dismiss &lt;command&gt; [--undo]</code></td>
+</tr>
+<tr>
+<td><code>/scores/mine</code></td>
+<td><code>pull_request</code>, each of <code>Correct</code>, <code>Scoped</code>, <code>Tested</code>, <code>Honest</code>, <code>Standards</code> as <code>pass</code> or <code>fail</code>, and each corresponding <code>&lt;criterion&gt;_reason</code></td>
+<td><code>scores &lt;pull_request&gt; --mine</code></td>
+</tr>
+<tr>
+<td><code>/bug-origins/settle</code></td>
+<td><code>issue</code>, <code>action=confirm|correct|reject</code>, <code>pull_request</code> for a correction</td>
+<td><code>bug-origins &lt;issue&gt; --confirm|--correct &lt;pr&gt;|--none</code></td>
+</tr>
+<tr>
+<td><code>/experiments/proposals/&lt;suite&gt;/&lt;task&gt;/approve</code></td>
+<td>none</td>
+<td><code>evals approve &lt;suite&gt; &lt;task&gt;</code></td>
+</tr>
+<tr>
+<td><code>/theme</code></td>
+<td><code>theme</code></td>
+<td><code>console theme &lt;name&gt;</code></td>
+</tr>
+<tr>
+<td><code>/sections</code></td>
+<td>comma-separated <code>hide</code>, <code>show</code></td>
+<td><code>console sections --hide &lt;section&gt; --show &lt;section&gt;</code></td>
+</tr>
+</tbody></table>
+<p>Every attempted API change records its holder or session address, endpoint and
+HTTP outcome in the Console log; reads add no events. Activity log lines for
+token Stops and Dismissals say <code>by token &lt;holder&gt;</code>, alongside the CLI and
+Console callers already recorded there. Token secrets and action bodies are
+never written to that audit record.</p>
 </div></details>
 <details class="fold"><summary><h4>Console on a server</h4></summary>
 <div class="manual-content" id="console-on-a-server">

@@ -81,6 +81,14 @@ pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     )
 }
 
+/// API Stop has the CLI's quiet wait and exact JSON result.
+pub(crate) fn request_json(input: &str, request: Request) -> Result<serde_json::Value> {
+    let path = request_stop(input, request)?;
+    let mut output = Vec::new();
+    wait(&path, &mut WallClock(Instant::now()), &mut output, true)?;
+    Ok(serde_json::from_slice(&output)?)
+}
+
 /// Both callers publish and signal the same captured Command. Only the CLI
 /// blocks waiting; the Console observes cleanup through its existing stream.
 pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
@@ -109,6 +117,8 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    /// A dispatched Run keeps the privacy of its owning Security run.
+    pub security_details: bool,
     pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
@@ -119,6 +129,12 @@ pub(crate) struct Inspection {
     pub accepted_log_directory: Option<PathBuf>,
 }
 
+/// Read privacy from captured ownership, without Scoring or detail enrichment.
+pub(crate) fn security_details(config: &UserConfig, input: &str) -> Result<bool> {
+    let snapshot = Snapshot::for_user(config, chrono::Local::now())?;
+    Ok(snapshot.resolve(input)?.security_details())
+}
+
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let snapshot = Snapshot::details_for_user(config, chrono::Local::now(), input)?;
@@ -127,6 +143,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
     let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
+    let security_details = selected.security_details();
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
@@ -143,6 +160,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .accepted_log_directory()
         .map(Path::to_path_buf);
     Ok(Inspection {
+        security_details,
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,

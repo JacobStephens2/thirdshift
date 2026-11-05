@@ -82,6 +82,32 @@ fn proposal(home: &Path, suite: &str, task: &str) {
 }
 
 #[test]
+fn act_approval_returns_the_cli_json() {
+    let home = tempfile::tempdir().unwrap();
+    let twin = tempfile::tempdir().unwrap();
+    configure(home.path());
+    configure(twin.path());
+    proposal(home.path(), "code-review", "task");
+    proposal(twin.path(), "code-review", "task");
+    let token = tokens::create(home.path(), "curator", &["--scopes", "act"]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let actual = api::json(actions::post(
+        &console,
+        &token,
+        "/api/v1/experiments/proposals/code-review/task/approve",
+        &[],
+    ));
+    assert_eq!(
+        actual,
+        api::cli(
+            twin.path(),
+            &["evals", "approve", "code-review", "task", "--json"]
+        )
+    );
+    assert_eq!(actual["state"], "approved");
+}
+
+#[test]
 fn console_approval_pairs_with_cli_and_requires_csrf() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

@@ -162,32 +162,39 @@ enum View {
 }
 
 impl PageRoute {
-    // Account setup and actions stay page-only; streaming is not part of v1.
+    // Account setup stays CLI/page-only; streaming is not part of v1.
     fn serves_api(&self) -> bool {
-        self.method == Method::GET
-            && matches!(
-                self.view,
-                View::Whoami
-                    | View::BugOrigins
-                    | View::OpenApi
-                    | View::Scores
-                    | View::Experiments
-                    | View::Experiment
-                    | View::ExperimentSession
-                    | View::CronJobs
-                    | View::Resources
-                    | View::ResourceStatus
-                    | View::Metrics
-                    | View::Inbox
-                    | View::Inspect
-                    | View::Spans
-                    | View::Log
-                    | View::Logs
-                    | View::CommandLogs
-                    | View::Reader
-                    | View::ConsoleLog
-                    | View::ThemeExport
-            )
+        matches!(
+            self.view,
+            View::Whoami
+                | View::BugOrigins
+                | View::OpenApi
+                | View::Scores
+                | View::Experiments
+                | View::Experiment
+                | View::ExperimentSession
+                | View::CronJobs
+                | View::Resources
+                | View::ResourceStatus
+                | View::Metrics
+                | View::Inbox
+                | View::Inspect
+                | View::Spans
+                | View::Log
+                | View::Logs
+                | View::CommandLogs
+                | View::Reader
+                | View::ConsoleLog
+                | View::ThemeExport
+                | View::Stop
+                | View::Dismiss
+                | View::UndoDismissal
+                | View::HumanScores
+                | View::SettleBugOrigin
+                | View::ApproveEvalTask
+                | View::Theme
+                | View::Sections
+        )
     }
 }
 
@@ -709,7 +716,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
-        };
+        }
+        .route_layer(middleware::from_fn(auth::csrf_guard));
         if page.serves_api() {
             assert!(page.scope.is_some(), "API route needs a scope");
             router = router.route(
@@ -739,7 +747,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         })
         .method_not_allowed_fallback(|request: axum::extract::Request| async move {
             if api::is_path(request.uri().path()) {
-                api::error(StatusCode::METHOD_NOT_ALLOWED, "API reads require GET.")
+                api::error(
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "Method not allowed for this API endpoint.",
+                )
             } else {
                 StatusCode::METHOD_NOT_ALLOWED.into_response()
             }
@@ -888,7 +899,7 @@ async fn inbox(
         return logs::index(axum::Extension(format)).await;
     }
     if matches!(requested_page.as_str(), "waterfall" | "4") {
-        return waterfall::show(format, query).await;
+        return waterfall::show(viewer, format, query).await;
     }
     if matches!(requested_page.as_str(), "lanes" | "2" | "stages" | "3") {
         return time::show(
@@ -995,6 +1006,12 @@ async fn inspect(
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
+        if format == api::Format::Json
+            && details.security_details
+            && !viewer.scopes.contains(&Scope::Security)
+        {
+            return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));
+        }
         let document = status::inspect::envelope(details.details.clone());
         format.render(document, |_| {
             Ok(peek::Peek::new(command, details, viewer.csrf, &config).render()?)
@@ -1026,14 +1043,16 @@ async fn log(
                     &command_for_check,
                     (!session_for_check.is_empty()).then_some(session_for_check.as_str()),
                 )?;
-                Ok(crate::logs::owner::security_session(&path))
+                Ok(crate::logs::owner::security_session(&path)
+                    || api::security_command(&config, &command_for_check)?)
             })
             .await
             {
                 Ok(Ok(true)) => {
                     return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
                 }
-                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => return api::error(StatusCode::UNPROCESSABLE_ENTITY, error),
                 Err(_) => {
                     return api::error(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1305,8 +1324,14 @@ mod tests {
             + super::PAGES
                 .iter()
                 .filter(|page| page.serves_api() && page.api != page.path)
-                .count()
-                * get_methods
+                .map(|page| {
+                    if page.method == axum::http::Method::GET {
+                        get_methods
+                    } else {
+                        post_methods
+                    }
+                })
+                .sum::<usize>()
             + get_methods
             - shared_fallbacks;
         assert_eq!(

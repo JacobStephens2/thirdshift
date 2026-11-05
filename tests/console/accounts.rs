@@ -139,6 +139,47 @@ fn api_requires_a_current_sign_in_and_returns_json_instead_of_redirecting() {
 }
 
 #[test]
+fn api_session_actions_require_csrf_and_audit_the_address() {
+    let home = configured();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let look: Value = get(&console, "/look", &session).json().unwrap();
+    let post = |csrf: &str| {
+        client()
+            .post(format!("{}/api/v1/theme", console.address))
+            .header("cookie", &session)
+            .header("x-csrf-token", csrf)
+            .form(&[("theme", "press-dark")])
+            .send()
+            .unwrap()
+    };
+    assert_eq!(post("wrong").status(), 403);
+    let saved = api::json(post(look["csrf"].as_str().unwrap()));
+    assert_eq!(
+        saved,
+        api::cli(home.path(), &["console", "theme", "press-dark", "--json"])
+    );
+    let events = api::cli(home.path(), &["console", "log", "--json"]);
+    let calls: Vec<_> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event"] == "api-call")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["email"], EMAIL);
+    assert_eq!(calls[0]["outcome"], 403);
+    assert_eq!(calls[1]["email"], EMAIL);
+    assert_eq!(calls[1]["endpoint"], "/api/v1/theme");
+    assert_eq!(calls[1]["outcome"], 200);
+}
+
+#[test]
 fn account_pages_and_sign_in_follow_the_configured_theme() {
     let home = configured();
     assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());

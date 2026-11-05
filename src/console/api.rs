@@ -3,7 +3,7 @@ use anyhow::Result;
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use axum::http::header;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Serialize;
 
 pub(super) fn is_path(path: &str) -> bool {
@@ -35,6 +35,15 @@ pub(super) fn error(status: StatusCode, message: impl ToString) -> Response {
         axum::Json(serde_json::json!({"error": message.to_string()})),
     )
         .into_response()
+}
+
+/// Selecting a Security run opens details even when the selected Session has
+/// an ordinary kind (for example a dispatched fix's implementation Session).
+pub(super) fn security_command(config: &crate::config::UserConfig, command: &str) -> Result<bool> {
+    if command.is_empty() {
+        return Ok(false);
+    }
+    crate::logs::stop::security_details(config, command)
 }
 
 /// Extractor and routing refusals occur before a read handler can format them.
@@ -77,5 +86,26 @@ pub(super) async fn read(
         }
         Ok(Err(failure)) => super::page(Ok(Err(failure))),
         Err(failure) => super::page(Err(failure)),
+    }
+}
+
+/// Page actions keep their redirects; API actions return the shared CLI value.
+pub(super) async fn action<T: Serialize + Send + 'static>(
+    format: Format,
+    location: &'static str,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Response {
+    let result = tokio::task::spawn_blocking(work).await;
+    match result {
+        Ok(Ok(value)) if format == Format::Json => axum::Json(value).into_response(),
+        Ok(Ok(_)) => Redirect::to(location).into_response(),
+        Ok(Err(failure)) if format == Format::Json => {
+            error(StatusCode::UNPROCESSABLE_ENTITY, failure)
+        }
+        Ok(Err(failure)) => (StatusCode::BAD_REQUEST, failure.to_string()).into_response(),
+        Err(failure) => {
+            eprintln!("thirdshift Console: action failed: {failure}");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "Console action failed.")
+        }
     }
 }
