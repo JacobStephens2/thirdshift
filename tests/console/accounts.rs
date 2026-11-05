@@ -11,6 +11,9 @@ const PASSWORD: &str = "correct horse battery staple";
 #[path = "password_codes.rs"]
 mod password_codes;
 
+#[path = "rate_limit.rs"]
+mod rate_limit;
+
 #[path = "stop.rs"]
 mod stop;
 

@@ -75,6 +75,60 @@ fn request(console: &Console, token: &str, path: &str) -> reqwest::blocking::Req
 }
 
 #[test]
+fn failed_tokens_are_slowed_then_limited_per_forwarded_address() {
+    let home = tempfile::tempdir().unwrap();
+    let token = create(home.path(), "reader", &[]);
+    let console = server(home.path());
+    for attempt in 1..=8 {
+        let started = std::time::Instant::now();
+        let response = request(&console, "bad-token", "/api/v1/whoami")
+            .header("x-forwarded-proto", "https")
+            .header("x-forwarded-for", "192.0.2.1")
+            .send()
+            .unwrap();
+        if attempt == 3 {
+            assert!(
+                started.elapsed() >= Duration::from_millis(200),
+                "failed tokens must slow down"
+            );
+        }
+        if attempt < 8 {
+            assert_eq!(response.status(), 401, "attempt {attempt}");
+        } else {
+            assert_eq!(response.status(), 429);
+            let retry: u64 = response.headers()["retry-after"]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((1..=60).contains(&retry));
+            let body = response.json::<Value>().unwrap();
+            assert!(body["error"].is_string());
+            assert_eq!(body["retry_after"], retry);
+        }
+        // A successful request elsewhere must not erase this address's failures.
+        assert_eq!(
+            request(&console, &token, "/api/v1/whoami")
+                .header("x-forwarded-proto", "https")
+                .header("x-forwarded-for", "192.0.2.2")
+                .send()
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    assert_eq!(
+        request(&console, &token, "/api/v1/whoami")
+            .header("x-forwarded-proto", "https")
+            .header("x-forwarded-for", "192.0.2.1")
+            .send()
+            .unwrap()
+            .status(),
+        429
+    );
+}
+
+#[test]
 fn bearer_read_updates_last_use_and_revoke_takes_effect_on_the_next_request() {
     let home = tempfile::tempdir().unwrap();
     let token = create(home.path(), "reader", &[]);

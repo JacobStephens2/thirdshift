@@ -63,6 +63,15 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
                 operation["responses"]["200"]["content"]["application/json"]["schema"].is_object()
             );
             assert!(operation["responses"]["403"].is_object());
+            let limited = &operation["responses"]["429"];
+            assert_eq!(
+                limited["headers"]["Retry-After"]["schema"]["type"],
+                "integer"
+            );
+            assert_eq!(
+                limited["content"]["application/json"]["schema"]["properties"]["retry_after"]["type"],
+                "integer"
+            );
         }
     }
     let whoami = &paths["/api/v1/whoami"]["get"];
