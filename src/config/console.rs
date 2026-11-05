@@ -196,7 +196,16 @@ impl ConsoleSettings {
         if !self.address.is_empty() {
             self.hostname()?;
         }
-        for email in self.allowed_emails.iter().chain(self.address_scopes.keys()) {
+        let addresses = self
+            .allowed_emails
+            .iter()
+            .map(|email| ("allowed_emails", email))
+            .chain(
+                self.address_scopes
+                    .keys()
+                    .map(|email| ("address_scopes", email)),
+            );
+        for (key, email) in addresses {
             ensure!(
                 email.split_once('@').is_some_and(|(local, domain)| {
                     !local.is_empty()
@@ -205,7 +214,7 @@ impl ConsoleSettings {
                         && !domain.starts_with('.')
                         && !domain.ends_with('.')
                 }) && !email.chars().any(char::is_whitespace),
-                "console.allowed_emails or console.address_scopes: {email:?} is not an email address"
+                "console.{key}: {email:?} is not an email address"
             );
         }
         validate_theme(&self.theme)?;
