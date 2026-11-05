@@ -22,6 +22,14 @@ and declare an Issue-branch worktree. An issue with Tickets still starts a Spec
 run. The optional Security review and Self-merge keep
 their command and User config gates. Commands still appear as Ticket runs.
 
+`fix-run.toml` defines `delivery` → `self-merge` on a pull-request worktree.
+`thirdshift fix <PR URL or number>` enters the shared Repair loop directly,
+with no implementation or initial review session. Eligibility and the origin
+reservation precede Delivery. The Command remains a Fix run, using the PR's
+Base branch and the usual merge, Base fix, Harness and notification defaults.
+This compiled entry is specific to Fix runs; a Custom pull-request Process
+still requires `review-and-address` before Delivery.
+
 `architect-run.toml` defines `architecture-review` → `run-published-issue`.
 Architect runs execute it after the Command limit, the lock of their kind and
 the open-plan, waiting-idea and Ready-or-settling-issue gates. The review Step owns the session and the

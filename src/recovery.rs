@@ -108,6 +108,7 @@ pub struct Recovery {
     local_child_work: Vec<String>,
     /// The Spec PR changed under the Spec run, so no command resumes it.
     spec_pr_changed: bool,
+    fix_run: bool,
 }
 
 impl Recovery {
@@ -121,6 +122,7 @@ impl Recovery {
             security_review_harness: None,
             local_child_work: Vec::new(),
             spec_pr_changed: false,
+            fix_run: false,
         }
     }
 
@@ -151,6 +153,10 @@ impl Recovery {
             self.preservation = Preservation::Remote;
         }
         self.continuation = Some(context);
+    }
+
+    pub(crate) fn for_fix_run(&mut self) {
+        self.fix_run = true;
     }
 
     /// Add child Runs' retained `work`, after any already added.
@@ -207,6 +213,10 @@ impl Recovery {
             return lines;
         }
         lines.push(format!("{RECOVERY}{}", context.command));
+        if self.fix_run {
+            lines.push(format!("{LAUNCH}{} or another clone passing Origin match. The Fix run uses the pull request's Base branch {} and continues its Repair loop.", context.launch.display(), context.base));
+            return lines;
+        }
         if let Some(harness) = self.security_review_harness {
             lines.push(format!(
                 "{SECURITY_REVIEW}{}, chosen by security.harness in the User config.",

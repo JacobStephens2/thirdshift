@@ -127,6 +127,21 @@ impl<A: Adapter> PullRequest<A> {
         }
     }
 
+    /// Capture an explicit pull request before any publication or Repair.
+    pub fn on_pull_request(
+        pr: &crate::review::PullRequestUrl,
+        branch: &str,
+        base: &str,
+        adapter: A,
+    ) -> Self {
+        let mut target = Self::new(&pr.issue, branch, base, adapter);
+        target.identified = Some(Identified {
+            number: pr.issue.number,
+            url: pr.url.clone(),
+        });
+        target
+    }
+
     /// Resume accounting with an ordinary discovery, then draft the observed
     /// number only after a fresh numbered gate. Closed PRs allow a new landing.
     pub fn resume_spec(&mut self) -> Result<()> {

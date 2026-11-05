@@ -41,6 +41,8 @@ mod evals;
 #[cfg(target_os = "linux")]
 mod failed_run;
 #[cfg(target_os = "linux")]
+mod fix;
+#[cfg(target_os = "linux")]
 mod git;
 #[cfg(target_os = "linux")]
 mod github;
@@ -165,7 +167,6 @@ use run::StartedBy;
 
 #[cfg(target_os = "linux")]
 const HELP: &str = "\
-thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
@@ -180,9 +181,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
+       thirdshift fix <PR URL or number>             Repair conflicts and CI on an existing PR; merge when asked
        thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
-       thirdshift process [list]                   List Processes, marking Built-in processes (experimental)
+       thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
        thirdshift process <name> [issue <issue>]   Run a Custom process; pull-request <PR URL> selects a pull request (experimental)
        thirdshift process check <name> [issue <issue>]  Print Step choices and startup results; also accepts pull-request <PR URL> (experimental)
@@ -398,6 +400,7 @@ fn main() -> ExitCode {
         Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::Review(command)) => return printed(processes::review::run(command)),
+        Ok(Command::Fix(command)) => return fix(command),
         Ok(Command::Process(action)) => {
             let verbatim = matches!(action, args::ProcessAction::Show(_));
             return match processes::execute(action) {
@@ -460,6 +463,22 @@ fn main() -> ExitCode {
         .unwrap_or("ticket-run");
     let ended = run::run_process_to_end(&issue, &mut asks, started_by, process);
     started.built_with(&asks.harness);
+    started.finish(Ending::Run(ended))
+}
+
+#[cfg(target_os = "linux")]
+fn fix(args: args::FixArgs) -> ExitCode {
+    let (config, mut started) = match command::start(
+        Begin::FixRun,
+        |config| args.flags.notification(config),
+        About::FixRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = args.flags.harness(&config);
+    let ended = fix::run(&args, &config, &mut harness);
+    started.built_with(&harness);
     started.finish(Ending::Run(ended))
 }
 

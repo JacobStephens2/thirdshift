@@ -19,6 +19,8 @@ pub(crate) struct ReviewPullRequest {
 pub(crate) struct ReviewInput {
     pub markdown: String,
     pub body_alone: bool,
+    /// Closing issues whose title and body were copied into `markdown`.
+    pub closing_issues: Vec<crate::issue::IssueUrl>,
 }
 
 #[derive(serde::Deserialize)]
@@ -185,6 +187,19 @@ impl GitHub {
 
     /// Fail closed on missing metadata, before creating a worktree or session.
     pub fn review_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, false)
+    }
+
+    /// Fix runs also accept drafts, sharing every other eligibility check.
+    pub fn fix_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, true)
+    }
+
+    fn pull_request_for_work(
+        &self,
+        pr: &PullRequestUrl,
+        allow_draft: bool,
+    ) -> Result<ReviewPullRequest> {
         let node = self.gh_json(&[
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
@@ -207,7 +222,14 @@ impl GitHub {
             "pull request {} is closed",
             pr.url
         );
-        ensure_reviewable(pr, &node)?;
+        if allow_draft {
+            node["draft"]
+                .as_bool()
+                .context("pull request has no draft state")?;
+            ensure_owned_and_trusted(pr, &node)?;
+        } else {
+            ensure_reviewable(pr, &node)?;
+        }
         Ok(ReviewPullRequest {
             title: text(&node["title"])?,
             body: node["body"].as_str().unwrap_or("").into(),
@@ -244,6 +266,7 @@ impl GitHub {
         );
         let mut after = None;
         let mut issues = std::collections::BTreeSet::new();
+        let mut closing_issues = Vec::new();
         loop {
             let json = self.issue_query(&pr.issue, CLOSING_ISSUES, after.as_deref())?;
             let page = &json["data"]["repository"]["pullRequest"]["closingIssuesReferences"];
@@ -254,6 +277,7 @@ impl GitHub {
                 let url = node["url"].as_str().context("closing issue has no URL")?;
                 if issues.insert(url.to_owned()) {
                     let issue = crate::issue::IssueUrl::parse(url)?;
+                    closing_issues.push(issue.clone());
                     markdown.push_str("\n## Linked closing issue (Spec)\n\n");
                     markdown.push_str(&self.issue_for_session(&issue)?);
                 }
@@ -307,6 +331,7 @@ impl GitHub {
         Ok(ReviewInput {
             markdown,
             body_alone: issues.is_empty(),
+            closing_issues,
         })
     }
 }
@@ -334,6 +359,10 @@ fn ensure_reviewable(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()
         "pull request {} is a draft",
         pr.url
     );
+    ensure_owned_and_trusted(pr, node)
+}
+
+fn ensure_owned_and_trusted(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
     fn text(value: &serde_json::Value) -> Result<&str> {
         value
             .as_str()

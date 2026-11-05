@@ -66,6 +66,7 @@ mod architecture;
 pub(crate) mod builtin;
 mod catalog;
 mod findings;
+pub(crate) mod fix;
 mod identity;
 pub(crate) mod review;
 pub(crate) mod security;
@@ -2440,7 +2441,13 @@ fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
 /// and worktree rules after these shared choices and limits.
 fn load_inherited_builtin(name: &str) -> Result<ProcessFile> {
     let (path, text) = Catalog::installed()?.source(name)?;
-    let file = validated(&path, &text)?;
+    let file = if name == "fix-run" {
+        // This compiled adapter starts at Delivery without a review Step.
+        // Custom pull-request Processes retain their review requirement.
+        parse(&path, &text)?
+    } else {
+        validated(&path, &text)?
+    };
     ensure!(
         file.limits.repair_cap == delivery::MAX_REPAIRS
             && !file.limits.forbid_self_merge

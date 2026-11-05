@@ -641,7 +641,7 @@ fn withhold_private(
     }
 }
 
-fn write_review_input(path: &Path, markdown: &str) -> Result<()> {
+pub(crate) fn write_review_input(path: &Path, markdown: &str) -> Result<()> {
     let replacing = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             bail!(
