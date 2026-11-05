@@ -3,7 +3,7 @@ use askama::Template;
 use axum::Extension;
 use axum::extract::Path;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 
 use super::auth::Viewer;
 use super::filters::escaped;
@@ -75,12 +75,14 @@ async fn show(format: super::api::Format, id: Option<String>, csrf: String) -> R
     response
 }
 
-pub(super) async fn approve(Path((suite, task)): Path<(String, String)>) -> Response {
-    match tokio::task::spawn_blocking(move || approval::approve(&suite, &task)).await {
-        Ok(Ok(_)) => Redirect::to("/experiments").into_response(),
-        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        Err(error) => super::page(Err(error)),
-    }
+pub(super) async fn approve(
+    Path((suite, task)): Path<(String, String)>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    super::api::action(format, "/experiments", move || {
+        approval::approve(&suite, &task)
+    })
+    .await
 }
 
 pub(super) async fn session(

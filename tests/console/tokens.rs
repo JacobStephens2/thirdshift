@@ -9,7 +9,7 @@ fn cli(home: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn create(home: &Path, holder: &str, options: &[&str]) -> String {
+pub(super) fn create(home: &Path, holder: &str, options: &[&str]) -> String {
     let mut args = vec!["console", "token", "create", holder];
     args.extend(options);
     let output = cli(home, &args);
@@ -65,7 +65,11 @@ fn server(home: &Path) -> Console {
     Console::start_mode(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home, false)
 }
 
-fn request(console: &Console, token: &str, path: &str) -> reqwest::blocking::RequestBuilder {
+pub(super) fn request(
+    console: &Console,
+    token: &str,
+    path: &str,
+) -> reqwest::blocking::RequestBuilder {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -243,11 +247,7 @@ fn read_scope_cannot_read_security_findings() {
     write_record(home.path(), 2, &security);
     let token = create(home.path(), "reader", &[]);
     let console = server(home.path());
-    for path in [
-        "/api/v1/history",
-        "/api/v1/status?all=true",
-        "/api/v1/peek?command=secure-fixture",
-    ] {
+    for path in ["/api/v1/history", "/api/v1/status?all=true"] {
         let response = request(&console, &token, path).send().unwrap();
         let status = response.status();
         let body = response.text().unwrap();
@@ -259,6 +259,20 @@ fn read_scope_cannot_read_security_findings() {
         assert!(
             !body.contains("\"security_findings_waiting\":true"),
             "{path} told a read token that findings are waiting: {body}"
+        );
+    }
+    for path in [
+        "/api/v1/peek?command=secure-fixture",
+        "/api/v1/waterfall?command=secure-fixture",
+        "/api/v1/spans?command=secure-fixture",
+    ] {
+        let details = request(&console, &token, path).send().unwrap();
+        assert_eq!(details.status(), 403, "{path}");
+        assert!(
+            details.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("security")
         );
     }
     assert_eq!(
@@ -288,10 +302,10 @@ fn read_scope_cannot_read_security_findings() {
     )
     .send()
     .unwrap();
-    assert_eq!(ordinary_log.status(), 200);
+    assert_eq!(ordinary_log.status(), 403);
     let ordinary_body = ordinary_log.text().unwrap();
     assert!(
-        ordinary_body.contains("ordinary session marker"),
+        !ordinary_body.contains("ordinary session marker"),
         "{ordinary_body}"
     );
     assert!(!ordinary_body.contains("PoC finding title 1755"));
@@ -333,14 +347,22 @@ fn read_scope_cannot_read_security_findings() {
     let implement = request(&console, &token, &format!("/api/v1/logs/{implement_id}"))
         .send()
         .unwrap();
-    assert_eq!(implement.status(), 200);
+    assert_eq!(implement.status(), 403);
     let implement_body = implement.text().unwrap();
     assert!(
-        implement_body.contains("ordinary session marker"),
+        !implement_body.contains("ordinary session marker"),
         "{implement_body}"
     );
 
     let reviewer = create(home.path(), "reviewer", &["--scopes", "read,security"]);
+    assert_eq!(
+        api::json(
+            request(&console, &reviewer, "/api/v1/peek?command=secure-fixture")
+                .send()
+                .unwrap()
+        ),
+        api::cli(home.path(), &["show", "secure-fixture", "--json"])
+    );
     let visible = request(&console, &reviewer, "/api/v1/history")
         .send()
         .unwrap()

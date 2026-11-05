@@ -273,6 +273,16 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
         command
     });
     let token: Value = console.get("/look").json().unwrap();
+    let issued = machine.run(&[
+        "console",
+        "token",
+        "create",
+        "remote-operator",
+        "--scopes",
+        "act",
+    ]);
+    assert!(issued.status.success());
+    let bearer = String::from_utf8(issued.stdout).unwrap();
     for (action, ending) in [
         ("stop", "triage"),
         ("stop", "requeue"),
@@ -291,6 +301,26 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
             .unwrap();
         assert_eq!(response.status(), 409);
         assert!(response.text().unwrap().contains("account conductor"));
+        assert!(work.0.try_wait().unwrap().is_none());
+        let response = actions::post(
+            &console,
+            bearer.trim(),
+            &format!("/api/v1/{action}"),
+            &[
+                ("command", selector),
+                (
+                    "requeue",
+                    if ending == "requeue" { "true" } else { "false" },
+                ),
+            ],
+        );
+        assert_eq!(response.status(), 422);
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("account conductor")
+        );
         assert!(work.0.try_wait().unwrap().is_none());
     }
     let path = dir.join("7-fixture.command.json");

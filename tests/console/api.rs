@@ -305,15 +305,17 @@ fn api_errors_are_json_and_reads_cannot_invoke_actions() {
     assert_eq!(response.status(), 422);
     let error: Value = response.json().unwrap();
     assert!(String::from_utf8_lossy(&refused.stderr).contains(error["error"].as_str().unwrap()));
+    for path in ["/api/v1/sign-in", "/api/v1/absent", "/api/v1/events"] {
+        let response = console.get(path);
+        assert_eq!(response.status(), 404, "{path}");
+        assert!(response.json::<Value>().unwrap()["error"].is_string());
+    }
     for path in [
         "/api/v1/stop?command=widgets%237",
         "/api/v1/dismiss?command=widgets%237",
-        "/api/v1/sign-in",
-        "/api/v1/absent",
-        "/api/v1/events",
     ] {
         let response = console.get(path);
-        assert_eq!(response.status(), 404, "{path}");
+        assert_eq!(response.status(), 405);
         assert!(response.json::<Value>().unwrap()["error"].is_string());
     }
     let response = reqwest::blocking::Client::new()

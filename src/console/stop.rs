@@ -43,13 +43,30 @@ pub(super) struct StopForm {
     command: String,
     #[serde(default)]
     confirmed: String,
+    #[serde(default)]
     ending: String,
+    #[serde(default)]
+    requeue: bool,
 }
 
 pub(super) async fn submit(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Form(form): Form<StopForm>,
 ) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::action(format, "/stop", move || {
+            stop::request_json(
+                &form.command,
+                stop::Request {
+                    who: viewer.activity_actor(),
+                    requeue: form.requeue,
+                    from_console: true,
+                },
+            )
+        })
+        .await;
+    }
     if form.confirmed != "yes" || !matches!(form.ending.as_str(), "triage" | "requeue") {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -58,7 +75,7 @@ pub(super) async fn submit(
         stop::request_stop(
             &form.command,
             stop::Request {
-                who: viewer.caller_label,
+                who: viewer.activity_actor(),
                 requeue: form.ending == "requeue",
                 from_console: true,
             },

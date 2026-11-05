@@ -63,7 +63,7 @@ pub fn print_log(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&events)?);
     } else {
         for event in events {
-            println!("{} {} {}", event.time, event.email, event.event);
+            println!("{} {} {}", event.time, event.email, event.summary());
         }
     }
     Ok(())

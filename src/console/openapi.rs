@@ -34,6 +34,9 @@ pub(super) fn document() -> Value {
                 "500": refusal("The Console could not read this view.")
             }
         });
+        if route.method == axum::http::Method::POST {
+            paths.get_mut(route.api).unwrap()["post"]["requestBody"] = action_body(route.view);
+        }
     }
     json!({
         "openapi": "3.1.1",
@@ -188,28 +191,69 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::ThemeExport => object(json!({
             "name": text, "base": text, "tokens": {"type": "object", "additionalProperties": text}
         })),
-        View::SettleBugOrigin
-        | View::HumanScores
-        | View::ApproveEvalTask
-        | View::Changes
+        View::Stop => object(json!({"version": version, "name": text, "outcome": text,
+            "issue_branches": array(text.clone()), "pull_requests": array(text)})),
+        View::Dismiss | View::UndoDismissal => record,
+        View::HumanScores => array(record),
+        View::SettleBugOrigin => record,
+        View::ApproveEvalTask => {
+            object(json!({"suite": text, "task": text, "state": {"const": "approved"}}))
+        }
+        View::Theme | View::Sections => record,
+        View::Changes
         | View::LogStream
         | View::Account
         | View::SignOut
         | View::SignInPage
         | View::SignIn
         | View::Look
-        | View::Theme
         | View::ThemeImport
-        | View::Sections
         | View::StopPage
-        | View::Stop
-        | View::Dismiss
-        | View::UndoDismissal
         | View::SetPasswordPage
         | View::SendCode
         | View::SetPassword => unreachable!("page-only operation"),
     };
     (parameters, schema)
+}
+
+fn action_body(view: View) -> Value {
+    let text = json!({"type": "string"});
+    let (properties, required) = match view {
+        View::Stop => (
+            json!({"command": text, "requeue": {"type":"boolean", "default":false}}),
+            vec!["command"],
+        ),
+        View::Dismiss | View::UndoDismissal => (json!({"command": text}), vec!["command"]),
+        View::Theme => (json!({"theme": text}), vec!["theme"]),
+        View::Sections => (json!({"hide": text, "show": text}), vec![]),
+        View::SettleBugOrigin => (
+            json!({"issue": text, "action": {"enum":["confirm","correct","reject"]}, "pull_request": text}),
+            vec!["issue", "action"],
+        ),
+        View::HumanScores => {
+            let mut properties = json!({"pull_request": text});
+            let mut required = vec!["pull_request".to_owned()];
+            for criterion in crate::scoring::Criterion::ALL {
+                let name = criterion.name();
+                properties[name] = json!({"enum":["pass","fail"]});
+                properties[format!("{name}_reason")] = text.clone();
+                required.push(name.to_owned());
+                required.push(format!("{name}_reason"));
+            }
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":properties,"required":required
+            }}}});
+        }
+        View::ApproveEvalTask => (json!({}), vec![]),
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only served POST actions have bodies"
+        )]
+        _ => unreachable!("not a served action"),
+    };
+    json!({"required":!required.is_empty(),"content":{"application/x-www-form-urlencoded":{"schema":{
+        "type":"object", "properties":properties,"required":required
+    }}}})
 }
 
 fn tree() -> Value {

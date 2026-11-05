@@ -168,8 +168,15 @@ pub(super) struct SectionsForm {
 
 pub(super) async fn set_theme(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Form(form): Form<ThemeForm>,
 ) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::action(format, "/", move || {
+            write_theme(&form.theme, &viewer.caller_label)
+        })
+        .await;
+    }
     if let Err(error) = console::validate_theme(&form.theme) {
         return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
     }
@@ -180,6 +187,7 @@ pub(super) async fn set_theme(
 
 pub(super) async fn set_sections(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Form(form): Form<SectionsForm>,
 ) -> Response {
     let split = |value: &str| {
@@ -190,6 +198,12 @@ pub(super) async fn set_sections(
             .collect::<Vec<_>>()
     };
     let (hide, show) = (split(&form.hide), split(&form.show));
+    if format == super::api::Format::Json {
+        return super::api::action(format, "/", move || {
+            write_sections(&hide, &show, &viewer.caller_label)
+        })
+        .await;
+    }
     if let Err(error) =
         console::validate_sections(&hide).and_then(|()| console::validate_sections(&show))
     {

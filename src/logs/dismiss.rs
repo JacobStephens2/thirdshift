@@ -280,6 +280,18 @@ pub(crate) struct Change {
     dismissal: Option<DismissalView>,
 }
 
+impl Change {
+    pub(crate) fn json(&self) -> serde_json::Value {
+        match &self.dismissal {
+            Some(dismissal) => serde_json::json!({
+                "version": 1, "name": self.name, "group": self.group,
+                "dismissal": dismissal,
+            }),
+            None => serde_json::json!({"version": 1, "name": self.name, "undone": true}),
+        }
+    }
+}
+
 fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<()> {
     let path = config.logs_dir.join(repository).join(super::activity::FILE);
     let mut file = super::activity::open(&path)?;
@@ -301,23 +313,10 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
             from_console: false,
         },
     )?;
-    if let Some(dismissal) = change.dismissal {
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "version": 1, "name": change.name, "group": change.group,
-                    "dismissal": dismissal,
-                })
-            );
-        } else {
-            println!("dismissed {} from {}", change.name, change.group.title());
-        }
-    } else if json {
-        println!(
-            "{}",
-            serde_json::json!({"version": 1, "name": change.name, "undone": true})
-        );
+    if json {
+        println!("{}", change.json());
+    } else if change.dismissal.is_some() {
+        println!("dismissed {} from {}", change.name, change.group.title());
     } else {
         println!("took back the dismissal of {}", change.name);
     }

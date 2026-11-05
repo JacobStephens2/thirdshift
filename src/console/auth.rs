@@ -50,6 +50,14 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
+    pub fn activity_actor(&self) -> String {
+        match &self.identity {
+            Identity::Token { holder } => format!("token {holder}"),
+            Identity::Session { address } => address.clone(),
+            Identity::Local { .. } => self.caller_label.clone(),
+        }
+    }
+
     // Streams recheck on account changes without extending idle lifetime.
     pub fn still_allowed(&self) -> Result<bool> {
         match &self.token {
@@ -116,11 +124,7 @@ fn bearer_transport(request: &Request) -> bool {
     })
 }
 
-pub(super) async fn guard(
-    State(access): State<Access>,
-    mut request: Request,
-    next: Next,
-) -> Response {
+pub(super) async fn guard(State(access): State<Access>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let api = super::api::is_path(path);
     let unauthenticated = || {
@@ -211,13 +215,46 @@ pub(super) async fn guard(
             error => return failed(error),
         }
     };
-    if api && !matches!(*request.method(), Method::GET | Method::HEAD) {
-        return super::api::error(StatusCode::METHOD_NOT_ALLOWED, "API reads require GET.");
+    let mutation = api
+        && !matches!(
+            *request.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS
+        );
+    let endpoint = request.uri().path().to_owned();
+    let mut response = authorized(&viewer, request, next).await;
+    if mutation {
+        let actor = viewer.caller_label.clone();
+        let outcome = response.status().as_u16();
+        match tokio::task::spawn_blocking(move || {
+            Accounts::load()?.record_api(&actor, endpoint, outcome)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            failure => {
+                eprintln!("thirdshift Console: could not audit API call: {failure:?}");
+                return super::api::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not record the API call's outcome.",
+                );
+            }
+        }
     }
+    if let Some(token) = viewer.token
+        && !response.headers().contains_key(header::SET_COOKIE)
+    {
+        set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
+    }
+    response
+}
+
+async fn authorized(viewer: &Viewer, mut request: Request, next: Next) -> Response {
+    let api = super::api::is_path(request.uri().path());
     if !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
-    ) {
+    ) && !matches!(viewer.identity, Identity::Token { .. })
+    {
         let supplied = request
             .headers()
             .get("x-csrf-token")
@@ -242,11 +279,6 @@ pub(super) async fn guard(
     let withhold = api && !viewer.scopes.contains(&Scope::Security);
     request.extensions_mut().insert(viewer.clone());
     let mut response = next.run(request).await;
-    if let Some(token) = viewer.token
-        && !response.headers().contains_key(header::SET_COOKIE)
-    {
-        set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
-    }
     // Read routes embed the same Command records as `/api/v1/security`.
     // Callers without that scope keep the rest of the CLI JSON, minus the
     // finding records ADR 0026 reserves for `security`.

@@ -81,6 +81,14 @@ pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     )
 }
 
+/// API Stop has the CLI's quiet wait and exact JSON result.
+pub(crate) fn request_json(input: &str, request: Request) -> Result<serde_json::Value> {
+    let path = request_stop(input, request)?;
+    let mut output = Vec::new();
+    wait(&path, &mut WallClock(Instant::now()), &mut output, true)?;
+    Ok(serde_json::from_slice(&output)?)
+}
+
 /// Both callers publish and signal the same captured Command. Only the CLI
 /// blocks waiting; the Console observes cleanup through its existing stream.
 pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
