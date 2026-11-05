@@ -251,6 +251,58 @@ test('Inbox group headings fold independently by pointer and keyboard on desktop
   }
 });
 
+test('Inbox group choices survive reload before the native toggle event', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await t.test(`${viewport.width}px`, async t => {
+      const page = await pageFor(t, { viewport });
+      await page.goto(origin);
+      const ready = page.locator('#inbox > [data-group="ready for review"]');
+      const needs = page.locator('#inbox > [data-group="needs you"]');
+      await ready.locator(':scope > summary').click();
+      // Start with a saved, folded group before racing its next toggle.
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await page.reload();
+      assert.equal(await ready.getAttribute('open'), null);
+      await page.evaluate(() => {
+        const group = document.querySelector('#inbox > [data-group="ready for review"]');
+        // Model navigation discarding the queued event, regardless of whether
+        // this renderer would otherwise deliver it before leaving the page.
+        window.addEventListener('toggle', event => {
+          if (event.target === group) event.stopImmediatePropagation();
+        }, true);
+        // Mutation observers run before the queued native toggle event.
+        const observer = new MutationObserver(() => {
+          observer.disconnect();
+          location.reload();
+        });
+        observer.observe(group, { attributes: true, attributeFilter: ['open'] });
+      });
+      await ready.locator(':scope > summary').focus();
+      await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
+      assert.equal(await ready.getAttribute('open'), '');
+      assert.equal(await needs.getAttribute('open'), '');
+    });
+  }
+});
+
+test('reloading another Console tab preserves the newer Inbox group choice', async t => {
+  for (const path of ['/', '/resources']) {
+    await t.test(path, async t => {
+      const inbox = await pageFor(t);
+      await inbox.goto(origin);
+      const other = await inbox.context().newPage();
+      await other.goto(`${origin}${path}`);
+      const ready = inbox.locator('#inbox > [data-group="ready for review"]');
+      await ready.locator(':scope > summary').click();
+      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await other.reload();
+      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
+      await inbox.reload();
+      await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    });
+  }
+});
+
 test('folded Inbox groups keep live counts and choices through folders, hiding and reloads', async t => {
   const page = await pageFor(t);
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
