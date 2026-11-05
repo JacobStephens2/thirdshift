@@ -191,7 +191,7 @@ fn section<'a>(page: &'a str, group: &str) -> &'a str {
     page.split(&format!("class=\"group\" data-group=\"{group}\""))
         .nth(1)
         .expect(page)
-        .split("</section>")
+        .split("</details>")
         .next()
         .unwrap()
 }

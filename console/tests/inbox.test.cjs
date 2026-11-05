@@ -205,6 +205,116 @@ const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${gr
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
 const shownGroups = page => shownGroup(page).evaluateAll(groups => groups.map(group => group.dataset.group));
 const overviewGroups = ['needs you', 'ready for review', 'landing', 'working'];
+
+test('Inbox group headings fold independently by pointer and keyboard on desktop and phone', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, { viewport });
+    await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const ready = page.locator('#inbox > [data-group="ready for review"]');
+    const heading = needs.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await needs.getAttribute('open'), '');
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.getByRole('heading', { name: /^Needs you \d+$/, level: 3 }).waitFor();
+    const count = await heading.locator('.count').textContent();
+    await heading.click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await heading.locator('.count').textContent(), count);
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+    await page.keyboard.press('Space');
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('j');
+    await ready.locator(':scope > summary.is-selected').waitFor();
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="ready for review"]').open);
+    assert.equal(await needs.getAttribute('open'), null);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#inbox > [data-group="ready for review"]').open);
+    await page.reload();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await ready.getAttribute('open'), '');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
+      }
+    }
+  }
+});
+
+test('folded Inbox groups keep live counts and choices through folders, hiding and reloads', async t => {
+  const page = await pageFor(t);
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const config = join(home, '.thirdshift/config.toml');
+  const original = await readFile(path, 'utf8');
+  const originalConfig = await readFile(config, 'utf8');
+  await page.goto(origin);
+  const needs = page.locator('#inbox > [data-group="needs you"]');
+  const ready = page.locator('#inbox > [data-group="ready for review"]');
+  const done = page.locator('#inbox > [data-group="done"]');
+  const count = Number(await needs.locator(':scope > summary .count').textContent());
+  const active = await page.locator('.active-runs strong').textContent();
+  try {
+    await needs.locator('summary').click();
+    await ready.locator('summary').click();
+    await folder(page, 'done').click();
+    await done.locator('summary').click();
+    await folder(page, 'overview').click();
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="needs you"] > summary .count').textContent === String(expected), count - 1);
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('.active-runs strong').textContent(), active);
+    await folder(page, 'done').click();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await page.reload();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig + 'hidden_sections = ["needs-you"]\n');
+    await folder(page, 'needs you').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig);
+    await folder(page, 'needs you').waitFor({ state: 'visible' });
+    await folder(page, 'overview').click();
+    await needs.locator(':scope > summary').waitFor({ state: 'visible' });
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('#inbox > [data-group="landing"]').getAttribute('open'), '');
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(config, originalConfig);
+  }
+});
+
+test('every Inbox section folder has a native disclosure without JavaScript', async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await page.goto(origin);
+  for (const group of ['needs you', 'ready for review', 'landing', 'working', 'done', 'resolved']) {
+    await folder(page, group).click();
+    const section = shownGroup(page);
+    const heading = section.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await section.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await section.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])').open);
+  }
+});
+
 async function showDetails(page, row) {
   const group = await row.evaluate(node => node.closest('.group').dataset.group);
   if (await folder(page, group).getAttribute('aria-current') !== 'page') await folder(page, group).click();
@@ -338,6 +448,7 @@ test('j then d dismisses and selects the next row, respecting typing, dialogs an
   const rows = page.locator('#inbox > [data-group="needs you"] .command');
   const count = await rows.count();
   const next = await rows.nth(1).getAttribute('data-command');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   const command = await page.locator('.command[aria-current="true"]').getAttribute('data-command');
   for (const key of ['Control+d', 'Meta+d', 'Alt+d', 'Shift+d']) await page.keyboard.press(key);
@@ -1029,7 +1140,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.keyboard.press('w');
     await page.waitForURL('**/?section=working');
     assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
-    assert.equal(await page.locator('.is-selected').count(), 0);
+    await page.locator('#inbox > [data-group="working"] > summary.is-selected').waitFor();
+    assert.equal(await page.locator('.is-selected.command').count(), 0);
   } finally { await replaceRecord(path, original); }
 });
 
@@ -1126,27 +1238,36 @@ test("cutting the open stream falls back to polling and catches up", async t => 
   } finally { await replaceRecord(path, original); }
 });
 
-for (const storage of ['blocked', 'malformed']) {
+for (const storage of ['blocked', 'read-only', 'malformed']) {
   test(`live Inbox works with ${storage} browser storage`, async t => {
     const page = await pageFor(t);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(mode => {
       if (mode === 'blocked') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+      else if (mode === 'read-only') Storage.prototype.setItem = () => { throw new Error('Storage full'); };
       else {
         localStorage.setItem('thirdshift:console:folded', 'false');
         localStorage.setItem('thirdshift:console:last-look', '{broken');
       }
     }, storage);
     await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const count = Number(await needs.locator(':scope > summary .count').textContent());
+    await needs.locator(':scope > summary').click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
     const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
     const original = await readFile(path, 'utf8');
     try {
       const fixture = JSON.parse(original);
       fixture.issue.title = `Still live with ${storage} storage`;
       await replaceRecord(path, JSON.stringify(fixture));
-      await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await needs.getAttribute('open'), null);
+      assert.equal(Number(await needs.locator(':scope > summary .count').textContent()), count);
       assert.deepEqual(await shownGroups(page), overviewGroups);
+      await needs.locator(':scope > summary').click();
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor();
       assert.deepEqual(errors, []);
     } finally { await replaceRecord(path, original); }
   });
@@ -1350,7 +1471,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
         ['needs you', 'Needs you', 1], ['ready for review', 'Ready for review', 212],
         ['landing', 'Landing', 211], ['working', 'Working', 213]
       ]) {
-        const section = page.getByRole('region', { name: title, exact: true });
+        const section = page.getByRole('group', { name: title, exact: true });
         assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
         assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
       }
@@ -1567,6 +1688,8 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   assert.equal(await selected.count(), 0);
   assert.equal(await page.locator('#peek').isVisible(), false);
   await page.keyboard.press('j');
+  await page.locator('#inbox > [data-group="needs you"] > summary.is-selected').waitFor();
+  await page.keyboard.press('j');
   const first = await selected.getAttribute('id');
   await page.keyboard.press('Space');
   await detailsShow();
@@ -1576,7 +1699,10 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   await page.keyboard.press('k');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('k');
-  assert.equal(await selected.evaluate(el => el === el.parentElement.lastElementChild), true, 'k wraps to the last row');
+  assert.equal(await selected.evaluate(el => el.matches('summary')), true, 'k returns to the heading');
+  await page.keyboard.press('k');
+  assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), 'working', 'k wraps to the last visible heading');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('Space');
@@ -1953,6 +2079,9 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
     await write(separate, 224);
     await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    await page.locator('#inbox > [data-group="working"] > summary').click();
+    await page.locator('#inbox > [data-group="working"] > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await total.locator('strong').textContent(), '2 active runs');
     // Moving between folders, into and out of the live work, leaves the total alone.
     for (const group of ['working', 'needs you']) {
       await folder(page, group).click();
