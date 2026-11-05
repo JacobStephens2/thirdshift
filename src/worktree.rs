@@ -114,6 +114,7 @@ impl ForeignCommits {
 }
 
 pub struct Worktree {
+    failed_run_name: &'static str,
     checkout: ownership::Checkout,
     launch: Git,
     branch: String,
@@ -169,6 +170,7 @@ impl Worktree {
         ));
         let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
+            failed_run_name: "ticket run",
             checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
@@ -222,11 +224,20 @@ impl Worktree {
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Preserved> {
         self.cleanup = Cleanup::Retain;
-        let pushed = self
-            .checkout
-            .preserve_failed_run(&self.launch, base, reason, actionable)?;
+        let pushed = self.checkout.preserve_failed_run(
+            &self.launch,
+            base,
+            reason,
+            self.failed_run_name,
+            actionable,
+        )?;
         self.cleanup = Cleanup::Remove;
         Ok(pushed)
+    }
+
+    pub(crate) fn for_fix_run(mut self) -> Self {
+        self.failed_run_name = "fix run";
+        self
     }
 
     /// Keep the acquired checkout and local branch without publishing obsolete

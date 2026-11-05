@@ -31,6 +31,11 @@ pub struct ReviewArgs {
     pub mode: crate::review::Mode,
 }
 
+pub struct FixArgs {
+    pub pull_request: String,
+    pub flags: Flags,
+}
+
 /// A Custom process to check or run, with the Command's explicit choices.
 pub struct ProcessRun {
     pub name: String,
@@ -52,6 +57,7 @@ pub struct ProcessRun {
 
 /// What thirdshift was asked to do.
 pub enum Command {
+    Fix(FixArgs),
     Help,
     Version,
     Update,
@@ -397,6 +403,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("review") => return parse_review(&args[1..]).map(Command::Review),
+        Some("fix") => return parse_fix(&args[1..]).map(Command::Fix),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
         Some("bug-origins") => {
             return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
@@ -772,7 +779,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
             };
         }
-        Some("process") => return parse_process(&args[1..]).map(Command::Process),
+        Some("process" | "processes") => return parse_process(&args[1..]).map(Command::Process),
         Some("setup") => {
             return match &args[1..] {
                 [] => Ok(Command::Setup),
@@ -920,6 +927,46 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
             crate::review::Mode::Address
         },
     })
+}
+
+fn parse_fix(args: &[String]) -> Result<FixArgs> {
+    let Some(target) = args.first() else {
+        bail!("usage: thirdshift fix <PR URL or number> [options]");
+    };
+    if !target.bytes().all(|byte| byte.is_ascii_digit()) || target.is_empty() {
+        crate::review::PullRequestUrl::parse(target)?;
+    } else if target
+        .parse::<u64>()
+        .ok()
+        .filter(|number| *number > 0)
+        .is_none()
+    {
+        bail!("pull request number must be positive");
+    }
+    let mut flags = Flags::default();
+    let mut words = args[1..].iter().peekable();
+    while let Some(arg) = words.next() {
+        if !take_flag(&mut flags, arg, &mut words)? {
+            bail!("unexpected fix argument: {arg}");
+        }
+    }
+    if flags.parallel.is_some()
+        || flags.security_review.is_some()
+        || flags.security_fix.is_some()
+        || flags.security_close.is_some()
+    {
+        bail!("parallel and security flags do not apply to Fix runs");
+    }
+    Ok(FixArgs {
+        pull_request: target.clone(),
+        flags,
+    })
+}
+
+pub(crate) fn fix_retry(pr_url: &str, flags: &Flags) -> String {
+    let mut words = vec!["thirdshift".into(), "fix".into(), pr_url.into()];
+    public_flag_words(flags, &mut words);
+    shell_command(words)
 }
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {

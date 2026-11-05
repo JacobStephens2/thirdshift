@@ -185,6 +185,19 @@ impl GitHub {
 
     /// Fail closed on missing metadata, before creating a worktree or session.
     pub fn review_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, false)
+    }
+
+    /// Fix runs also accept drafts, sharing every other eligibility check.
+    pub fn fix_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, true)
+    }
+
+    fn pull_request_for_work(
+        &self,
+        pr: &PullRequestUrl,
+        allow_draft: bool,
+    ) -> Result<ReviewPullRequest> {
         let node = self.gh_json(&[
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
@@ -207,7 +220,14 @@ impl GitHub {
             "pull request {} is closed",
             pr.url
         );
-        ensure_reviewable(pr, &node)?;
+        if allow_draft {
+            node["draft"]
+                .as_bool()
+                .context("pull request has no draft state")?;
+            ensure_owned_and_trusted(pr, &node)?;
+        } else {
+            ensure_reviewable(pr, &node)?;
+        }
         Ok(ReviewPullRequest {
             title: text(&node["title"])?,
             body: node["body"].as_str().unwrap_or("").into(),
@@ -334,6 +354,10 @@ fn ensure_reviewable(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()
         "pull request {} is a draft",
         pr.url
     );
+    ensure_owned_and_trusted(pr, node)
+}
+
+fn ensure_owned_and_trusted(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
     fn text(value: &serde_json::Value) -> Result<&str> {
         value
             .as_str()

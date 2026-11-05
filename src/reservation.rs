@@ -24,6 +24,18 @@ impl Reservation {
         Self::take_ref(launch, reference(issue.number), &issue.url)
     }
 
+    /// Review and Fix runs elect one owner for a PR across machines.
+    pub(crate) fn pull_request(
+        launch: &Git,
+        pr: &crate::review::PullRequestUrl,
+    ) -> Result<Option<Self>> {
+        Self::take_ref(
+            launch,
+            format!("refs/thirdshift/reservations/{}", pr.issue.number),
+            &pr.url,
+        )
+    }
+
     /// Reserve `issue`, which this run published and is about to mark
     /// ready and dispatch itself, as a Pickup run reserves its Ready issue,
     /// so that an overlapping Pickup run passes it over. Fails if another

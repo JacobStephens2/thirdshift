@@ -17,6 +17,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 - **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
+- **[Fix run](#fix-runs)**, `thirdshift fix <PR URL or number>`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review.
 - **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
 Architect, Pickup and Security runs, and `review --author <login>`, are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
@@ -2326,6 +2327,51 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 A Spec PR closed, merged or retargeted while the Spec run is working through its Tickets, as when the Day shift reshapes the Spec onto another Base branch, ends the Ticket loop. The Spec run checks its captured Spec PR before it starts each Ticket and whenever it writes the Tickets checklist; once the check fails it starts no further Ticket, waits for the Tickets already running, and fails with `the Spec PR <url> was closed under this Spec run` (or `merged`, or `retargeted from <base> to <other>`). It prints no Recovery command, since one would resume the Spec branch the Spec just left: decide the Spec's Base branch and Spec branch before starting it again. A Ticket started once the Spec PR was open checks it again just before its Self-merge, as does a Base fix that Ticket starts into the Spec branch, and fails with the same cause, its pull request back to a draft, rather than merge into a Spec branch the Spec has left. A Ticket started before the first landing opened the Spec PR has nothing to check and Self-merges as before.
 
 Running the Spec again picks up where the last Spec run stopped. The Spec branch is on `origin`, so the Spec run continues it ([ADR-0002](adr/0002-existing-issue-branch-means-continue.md)) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a [Continuation](#continuation) into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with `every Ticket is closed and there is no Spec branch; nothing to do` and exits `1`, creating no branch or pull request and leaving the Spec open.
+
+## Fix runs
+
+From a clone of the pull request's repository:
+
+```sh
+thirdshift fix https://github.com/you/widgets/pull/42
+thirdshift fix 42 merge
+thirdshift fix 42 --no-merge base-fix harness codex model gpt-6.1-sol effort high
+```
+
+A Fix run accepts an open pull request by a Trusted account, ready or draft,
+with or without a linked closing issue. Origin match, fork, closed/merged and
+untrusted-author checks happen before work. The Launch directory's checked-out
+branch does not choose the Base branch: the pull request does.
+
+The Built-in process `fix-run` is `delivery` followed by `self-merge`.
+`thirdshift processes` lists it; `thirdshift process show fix-run` prints it.
+It reserves `refs/thirdshift/reservations/<PR number>` on origin and adds
+`in-progress` to the pull request until the run ends. Review runs use the same
+reservation. A busy reservation is refused; a crashed owner's reservation needs
+the Day shift to confirm it stopped before releasing it.
+
+Delivery checks out the head branch in a Worktree, marks a draft ready, merges
+the Base branch, pushes and watches CI. Conflict, CI-fix and Foreign-commit review
+Repairs receive `.thirdshift-review-input.md`: the PR title and body, linked
+closing issues and only Trusted account comments. The file is refreshed before
+each session, including a Resume. Repairs share the usual five-session cap,
+Check re-run and optional Base fix. A Fix run starts no implementation or initial
+Standards/Spec review session.
+
+`merge` / `--merge` and `no-merge` / `--no-merge` override `merge.always`.
+`base-fix` / `--base-fix` and `no-base-fix` / `--no-base-fix` override `base.fix`.
+`harness`, `model` and `effort` use the usual command and User config precedence.
+`email [<address>]`, `email-unless-merged [<address>]` and `no-email` (also with
+`--`) override `email.always` and `email.unless_merged`. Command records, logs,
+Activity log lines and Run notifications identify a **Fix run**.
+
+Success prints `PR <url> is ready for review` or `PR <url> is merged`.
+Failure or interruption preserves uncommitted work as
+`thirdshift: failed fix run (<reason>)`, pushes unpublished work and drafts the
+PR. A Self-merge refused with a mergeable, green PR leaves it ready.
+Recovery offers `thirdshift fix <PR URL>` with the original flags. An unchanged
+Repair creates no empty failure commit. A PR closed or merged during the run
+stops further publication; a PR made draft during Repair stays draft.
 
 ## Review runs
 

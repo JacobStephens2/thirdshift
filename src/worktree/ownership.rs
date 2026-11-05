@@ -113,6 +113,7 @@ impl Checkout {
         launch: &Git,
         base: &str,
         reason: &str,
+        run_name: &str,
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
@@ -132,10 +133,16 @@ impl Checkout {
         }
         operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
+        let has_work = if run_name == "fix run" {
+            // Existing PR commits are already published. A failed Fix run
+            // records only work the Repair left uncommitted.
+            !operation.succeeds(&["diff", "--cached", "--quiet"])?
+        } else {
+            !operation.succeeds(&["diff", "--cached", "--quiet", &base])?
+        };
         if has_work {
             let message = format!(
-                "thirdshift: failed ticket run ({reason})\n\n\
+                "thirdshift: failed {run_name} ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
                 timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 host = host::name().as_deref().unwrap_or("unknown"),
@@ -149,6 +156,10 @@ impl Checkout {
                 "-m",
                 &message,
             ])?;
+            operation.push_if_needed(branch, actionable)?;
+        }
+        if run_name == "fix run" && !has_work {
+            // A Repair may have committed without pushing before it failed.
             operation.push_if_needed(branch, actionable)?;
         }
         operation.inspect()?;

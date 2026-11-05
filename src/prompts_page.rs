@@ -20,7 +20,8 @@ use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
 use Sender::{
-    ArchitectRun, Experiment, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun, Trial, Units,
+    ArchitectRun, Experiment, FixRun, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun,
+    Trial, Units,
 };
 
 /// A press unit on the home page, which each prompt and skill links back to.
@@ -114,6 +115,7 @@ enum Sender {
     /// A Step of a Custom process.
     Process,
     ReviewRun,
+    FixRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -432,6 +434,43 @@ fn prompts() -> Vec<Prompt> {
                 BRANCH,
                 &failed_with_inherited,
                 &[],
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-conflict-repair",
+            title: "Fix run, conflict Repair",
+            when: "A Fix run resolves a merge conflict against its pull request's Base branch, using trusted pull request and closing-issue context.",
+            sender: FixRun,
+            text: prompt::conflict_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BASE,
+                BRANCH,
+                PR_URL,
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-ci-repair",
+            title: "Fix run, CI-fix Repair",
+            when: "A Fix run repairs its own failed checks, using trusted pull request and closing-issue context. Delivery owns Check re-run and CI watch.",
+            sender: FixRun,
+            text: prompt::ci_fix_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BASE,
+                BRANCH,
+                PR_URL,
+                &failed_with_inherited,
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-review-repair",
+            title: "Fix run, Foreign-commit review Repair",
+            when: "Before Self-merge, a Fix run reviews Foreign commits against its last known head using the pull request's trusted context.",
+            sender: FixRun,
+            text: prompt::review_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BRANCH,
+                PR_URL,
+                OWN_HEAD,
             ),
         },
         Prompt {
@@ -834,6 +873,7 @@ fn sent_by(sender: &Sender) -> String {
         Trial => "an Eval Trial, outside the Run's units".to_string(),
         Process => "a Custom process".to_string(),
         ReviewRun => "a Review run or a Custom pull-request Process".to_string(),
+        FixRun => "a Fix run".to_string(),
     }
 }
 
@@ -1009,6 +1049,9 @@ mod tests {
                     | "prompt-security-review"
                     | "prompt-pull-request-security-review"
                     | "prompt-pull-request-ci-fix-repair"
+                    | "prompt-fix-conflict-repair"
+                    | "prompt-fix-ci-repair"
+                    | "prompt-fix-review-repair"
                     | "prompt-conflict-repair"
                     | "prompt-foreign-conflict-repair"
                     | "prompt-review-repair"

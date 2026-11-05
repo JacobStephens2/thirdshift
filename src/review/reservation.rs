@@ -16,7 +16,7 @@ pub(crate) struct Reservation {
 
 impl Reservation {
     pub fn take(launch: &Git, github: &GitHub, pr: &PullRequestUrl) -> Result<Option<Self>> {
-        let Some(origin) = crate::reservation::Reservation::take(launch, &pr.issue)? else {
+        let Some(origin) = crate::reservation::Reservation::pull_request(launch, pr)? else {
             return Ok(None);
         };
         let labels = github.review_labels(pr)?;

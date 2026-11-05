@@ -101,6 +101,14 @@ impl Logs {
         }
     }
 
+    pub(crate) fn of_fix_run(repo: &Repo) -> Self {
+        Logs {
+            name: "fix".into(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
     /// A Custom process's review keeps the Security review session kind for
     /// fallback and Resume, with a distinct trace for each one-based Step.
     pub fn of_process_review(repo: &Repo, step_index: usize) -> Self {

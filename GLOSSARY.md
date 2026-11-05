@@ -58,17 +58,17 @@ _Avoid_: cleanup, garbage collection
 ### Repository and branches
 
 **Launch directory**:
-The directory a **Ticket run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. Base branch validation and optional pulling share one sampled origin commit; **Worktree** acquisition samples independently. A Ticket run works in its own worktree, never in the Launch directory.
+The directory a **Ticket run** or **Fix run** is started from. It must pass **Origin match**, and its checked-out branch is normally the **Base branch**. Base branch validation and optional pulling share one sampled origin commit; **Worktree** acquisition samples independently. Both runs work in their own worktrees, never in the Launch directory.
 _Avoid_: originating workspace, launch repo
 
 **Origin match**:
-The rule that the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
+The rule that the **Issue URL**, or a **Fix run**'s pull request, must belong to the same GitHub repository as the `origin` remote of the **Launch directory**. A mismatch stops the run before any work happens.
 
 **Base branch**:
-The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request, that pull request's base instead.
+The branch the work branches off and the pull request targets. Normally the branch checked out in the **Launch directory**; for an **Architect run** or a **Pickup run** whose command names a branch, that branch, whatever is checked out; for a **Ticket run** in a **Spec run**, the **Spec branch**; in a **Continuation** with an open pull request or a **Fix run**, that pull request's base instead.
 
 **Worktree**:
-A [factory-owned checkout](docs/guide.md#worktree-ownership-and-cleanup), on an **Issue branch** for a **Ticket run**, on a **Spec branch** for a **Spec run**, or detached for an **Architecture review**. It is retained whenever ownership is uncertain or the work could not be preserved elsewhere.
+A [factory-owned checkout](docs/guide.md#worktree-ownership-and-cleanup), on an **Issue branch** for a **Ticket run**, on a **Spec branch** for a **Spec run**, on a pull request's head branch for a **Fix run**, or detached for an **Architecture review**. It is retained whenever ownership is uncertain or the work could not be preserved elsewhere.
 
 **Issue branch**:
 A branch a **Ticket run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
@@ -100,7 +100,7 @@ A continuation of the same agent session, started once when that session ended i
 ### Factory work
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Review run**, a **Triage run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Ticket run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Review run**, a **Fix run**, a **Triage run**, a **Scoring run**, an **Experiment**, or a **Custom process**. A child Ticket run, whether for a **Spec**'s **Ticket** or a **Base fix**, and a **Ticket run** or **Spec run** a Custom process starts, are part of the command that started them, not commands of their own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed ticket run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Paused Command**:
@@ -122,6 +122,9 @@ _Avoid_: batch run, spec implementation
 One invocation of the factory on an open pull request by a **Trusted account**, reviewing its change on the Standards and Spec axes against its own base in a **Worktree** on its head branch. With `--recommend-only`, it posts its findings without changing the branch, ends with a **Run notification** and waits in the **Inbox** under Ready for review until the pull request is merged or closed.
 Started with `--author`, it is a **Pass** taking that author's lowest-numbered eligible waiting pull request, skipping reviewed or pushed heads, `in-progress` pull requests and those based on another open pull request whose current head is unreviewed; every Review run reserves its pull request with `in-progress` until it ends.
 _Avoid_: PR review (GitHub's feature), code review run
+
+**Fix run**:
+One **Command** on an open pull request by a **Trusted account**, ready or draft, that takes its head branch through **Delivery** and the **Repair loop** against its **Base branch**, without repeating implementation or the initial code review. It reserves the pull request until it ends, and leaves it ready for review or completes a **Self-merge** when asked; a failure preserves its work and offers **Recovery** on that pull request.
 
 **Architect run**:
 One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Ticket run** on the **Architect plan** it published. Its **Built-in process** owns the sequence of **Steps**, after the Pass has decided to go ahead. One pass per invocation. It reserves its plan across machines before marking it ready, as a **Pickup run** reserves its Ready issue, and holds the reservation through the dispatched run's ending. It is skipped, doing nothing, when the repository is at its **Command limit** on the machine or another Architect run is running there, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue** or an issue that meets every Ready issue condition except settling, including a **Spec** having a **Startable Ticket**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
