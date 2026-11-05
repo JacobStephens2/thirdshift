@@ -267,7 +267,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
     let endpoint = request.uri().path().to_owned();
     let refusal = name_person(&mut viewer, request.headers()).await.err();
     let mut response = if let Some(refusal) = refusal {
-        refusal
+        *refusal
     } else {
         authorized(&viewer, request, next).await
     };
@@ -300,7 +300,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
 async fn name_person(
     viewer: &mut Viewer,
     headers: &HeaderMap,
-) -> std::result::Result<(), Response> {
+) -> std::result::Result<(), Box<Response>> {
     let Identity::Token { holder, person } = &mut viewer.identity else {
         return Ok(());
     };
@@ -316,7 +316,8 @@ async fn name_person(
                 StatusCode::FORBIDDEN,
                 "Name exactly one person in X-Thirdshift-Person.",
             )
-        })?
+        })
+        .map_err(Box::new)?
         .to_owned();
     let email = selected.clone();
     let scopes = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -330,17 +331,17 @@ async fn name_person(
     let scopes = match scopes {
         Ok(Ok(Some(scopes))) => scopes,
         Ok(Ok(None)) => {
-            return Err(super::api::error(
+            return Err(Box::new(super::api::error(
                 StatusCode::FORBIDDEN,
                 "Named person is not on this machine's Console sign-in list.",
-            ));
+            )));
         }
         error => {
             eprintln!("thirdshift Console: address scopes read failed: {error:?}");
-            return Err(super::api::error(
+            return Err(Box::new(super::api::error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Can't read Console address scopes.",
-            ));
+            )));
         }
     };
     viewer.scopes.retain(|scope| scopes.contains(scope));
