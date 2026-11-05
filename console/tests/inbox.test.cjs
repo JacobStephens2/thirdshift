@@ -1471,7 +1471,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
         ['needs you', 'Needs you', 1], ['ready for review', 'Ready for review', 212],
         ['landing', 'Landing', 211], ['working', 'Working', 213]
       ]) {
-        const section = page.getByRole('region', { name: title, exact: true });
+        const section = page.getByRole('group', { name: title, exact: true });
         assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
         assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
       }
