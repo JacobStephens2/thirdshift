@@ -245,11 +245,38 @@ fn action_body(view: View) -> Value {
             }}}});
         }
         View::ApproveEvalTask => (json!({}), vec![]),
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "only served POST actions have bodies"
-        )]
-        _ => unreachable!("not a served action"),
+        View::Whoami
+        | View::OpenApi
+        | View::BugOrigins
+        | View::Scores
+        | View::Experiments
+        | View::Experiment
+        | View::ExperimentSession
+        | View::CronJobs
+        | View::Resources
+        | View::ResourceStatus
+        | View::Metrics
+        | View::Inbox
+        | View::Inspect
+        | View::Spans
+        | View::Log
+        | View::Changes
+        | View::Logs
+        | View::CommandLogs
+        | View::Reader
+        | View::LogStream
+        | View::ConsoleLog
+        | View::Account
+        | View::SignOut
+        | View::SignInPage
+        | View::SignIn
+        | View::Look
+        | View::ThemeImport
+        | View::ThemeExport
+        | View::StopPage
+        | View::SetPasswordPage
+        | View::SendCode
+        | View::SetPassword => unreachable!("not a served action"),
     };
     json!({"required":!required.is_empty(),"content":{"application/x-www-form-urlencoded":{"schema":{
         "type":"object", "properties":properties,"required":required
