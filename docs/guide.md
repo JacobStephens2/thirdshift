@@ -392,6 +392,13 @@ Each response equals its CLI twin's `--json` output. For example,
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
 
+`GET /api/v1/openapi.json` returns the OpenAPI description of the endpoints
+this Console serves. Its CLI twin, `thirdshift console openapi`, prints the same
+JSON without a running Console. Both generate it from the shared route table:
+each operation lists its declared scope, CLI twins, arguments and response
+schema. The description contains no credentials or local records. Routes added
+by later Console API tickets appear when they are served.
+
 | Read | API path | CLI twin (add `--json`) |
 | --- | --- | --- |
 | Inbox | `/api/v1/status` (`?all=true` includes History) | `status` (`--all`) |

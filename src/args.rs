@@ -87,6 +87,7 @@ pub enum Command {
     ConsoleLog {
         json: bool,
     },
+    ConsoleOpenApi,
     ConsoleTheme {
         name: Option<String>,
         json: bool,
@@ -507,11 +508,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Ok(Command::ConsolePassword(Some(email.clone())))
                 }
                 [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action] if action == "openapi" => Ok(Command::ConsoleOpenApi),
                 [action, flag] if action == "log" && flag == "--json" => {
                     Ok(Command::ConsoleLog { json: true })
                 }
                 _ => bail!(
-                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json] | openapi"
                 ),
             };
         }
