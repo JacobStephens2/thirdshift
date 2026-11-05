@@ -104,18 +104,22 @@ fn api_requires_a_current_sign_in_and_returns_json_instead_of_redirecting() {
     let home = configured();
     record(home.path(), 7, Some("merged"), 0);
     assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
-    let console = Console::start_mode(
-        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
-        home.path(),
-        false,
-    );
+    api::freeze_clock(home.path());
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console"])
+            .env("HOME", home.path())
+            .env_remove("RESEND_API_KEY")
+            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        command
+    });
     let response = get(&console, "/api/v1/status", "");
     assert_eq!(response.status(), 401);
     assert!(!response.headers().contains_key("location"));
     assert!(response.json::<Value>().unwrap()["error"].is_string());
     let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
-    let expected: Value =
-        serde_json::from_slice(&cli(home.path(), &["status", "--json"]).stdout).unwrap();
+    let expected = api::cli(home.path(), &["status", "--json"]);
     assert_eq!(
         api::json(get(&console, "/api/v1/status", &session)),
         expected

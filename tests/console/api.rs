@@ -129,13 +129,10 @@ fn inbox_api_equals_status_json_without_sign_in() {
     );
 }
 
-#[test]
-fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
-    let home = tempfile::tempdir().unwrap();
-    configure(home.path());
+pub(super) fn freeze_clock(home: &Path) {
     // Both processes observe the same wall clock, including the Waterfall's
     // `now`. Deadlines and waits still use the real monotonic clock.
-    let shim = home.path().join("api-clock.c");
+    let shim = home.join("api-clock.c");
     fs::write(
         &shim,
         format!(
@@ -158,11 +155,18 @@ int clock_gettime(clockid_t id, struct timespec *value) {{
             .args(["-shared", "-fPIC"])
             .arg(shim)
             .args(["-o"])
-            .arg(home.path().join("api-clock.so"))
+            .arg(home.join("api-clock.so"))
             .status()
             .unwrap()
             .success()
     );
+}
+
+#[test]
+fn read_api_equals_cli_for_command_trees_stages_waterfall_and_logs() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    freeze_clock(home.path());
     let mut parent = record(home.path(), 7, Some("merged"), 0);
     let mut child = record(home.path(), 8, Some("merged"), 0);
     let directory = home
