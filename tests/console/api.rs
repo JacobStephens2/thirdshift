@@ -180,6 +180,40 @@ int clock_gettime(clockid_t id, struct timespec *value) {{
 }
 
 #[test]
+fn api_path_extractor_refusals_are_json() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for path in [
+        "/api/v1/logs/%FF",
+        "/api/v1/logs/command/%FF",
+        "/api/v1/experiments/%FF",
+        "/api/v1/experiments/id/sessions/%FF",
+        "/api/v1/themes/%FF",
+    ] {
+        let response = console.get(path);
+        assert_eq!(response.status(), 400, "{path}");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json",
+            "{path}"
+        );
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid UTF-8")
+        );
+    }
+    let response = console.get("/logs/%FF");
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/plain; charset=utf-8"
+    );
+}
+
+#[test]
 fn api_errors_are_json_and_reads_cannot_invoke_actions() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

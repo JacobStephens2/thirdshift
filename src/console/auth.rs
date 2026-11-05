@@ -173,7 +173,11 @@ pub(super) async fn guard(
 }
 
 pub(super) async fn headers(request: Request, next: Next) -> Response {
+    let api = super::api::is_path(request.uri().path());
     let mut response = next.run(request).await;
+    if api {
+        response = super::api::json_errors(response).await;
+    }
     for (name, value) in [
         (
             header::CONTENT_SECURITY_POLICY,

@@ -1,6 +1,8 @@
 //! The JSON representation of the Console's shared read handlers.
 use anyhow::Result;
+use axum::body::to_bytes;
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Serialize;
 
@@ -33,6 +35,28 @@ pub(super) fn error(status: StatusCode, message: impl ToString) -> Response {
         axum::Json(serde_json::json!({"error": message.to_string()})),
     )
         .into_response()
+}
+
+/// Extractor and routing refusals occur before a read handler can format them.
+pub(super) async fn json_errors(response: Response) -> Response {
+    if !(response.status().is_client_error() || response.status().is_server_error())
+        || response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .is_some_and(|value| value == "application/json")
+    {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let message = match to_bytes(body, 16 * 1024).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => "Can't read this API error; check the Console's stderr.".into(),
+    };
+    let (json, body) = error(parts.status, message).into_parts();
+    parts.headers.remove(header::CONTENT_TYPE);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.extend(json.headers);
+    Response::from_parts(parts, body)
 }
 
 pub(super) async fn read(
