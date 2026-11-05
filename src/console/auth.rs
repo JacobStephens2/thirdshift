@@ -119,6 +119,13 @@ fn bearer_transport(request: &Request) -> bool {
     })
 }
 
+async fn bearer_refused(limiter: &rate_limit::Limiter, address: std::net::IpAddr) -> Response {
+    match limiter.failed(address).await {
+        Some(retry) => rate_limit::refusal(retry),
+        None => super::api::error(StatusCode::UNAUTHORIZED, "Sign in to the Console."),
+    }
+}
+
 pub(super) async fn guard(
     State(access): State<Access>,
     mut request: Request,
@@ -153,10 +160,7 @@ pub(super) async fn guard(
         }
         let headers = request.headers();
         if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
-            if let Some(retry) = access.limiter.failed(address).await {
-                return rate_limit::refusal(retry);
-            }
-            return unauthenticated();
+            return bearer_refused(&access.limiter, address).await;
         }
         let Some(secret) = headers
             .get(header::AUTHORIZATION)
@@ -169,10 +173,7 @@ pub(super) async fn guard(
             })
             .map(|(_, secret)| secret.to_owned())
         else {
-            if let Some(retry) = access.limiter.failed(address).await {
-                return rate_limit::refusal(retry);
-            }
-            return unauthenticated();
+            return bearer_refused(&access.limiter, address).await;
         };
         match tokio::task::spawn_blocking(move || super::tokens::authenticate(&secret)).await {
             Ok(Ok(Some(token))) => Viewer {
@@ -185,10 +186,7 @@ pub(super) async fn guard(
                 csrf: String::new(),
             },
             Ok(Ok(None)) => {
-                if let Some(retry) = access.limiter.failed(address).await {
-                    return rate_limit::refusal(retry);
-                }
-                return unauthenticated();
+                return bearer_refused(&access.limiter, address).await;
             }
             error => {
                 eprintln!("thirdshift Console: API token store read failed: {error:?}");
