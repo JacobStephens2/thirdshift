@@ -3,6 +3,30 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 
 #[test]
+fn session_failures_name_unix_signals() {
+    for (signal, name) in [
+        (libc::SIGKILL, Some("SIGKILL")),
+        (libc::SIGTERM, Some("SIGTERM")),
+        (libc::SIGABRT, Some("SIGABRT")),
+        (libc::SIGSEGV, Some("SIGSEGV")),
+        (libc::SIGINT, Some("SIGINT")),
+        (libc::SIGHUP, Some("SIGHUP")),
+        (libc::SIGPIPE, Some("SIGPIPE")),
+        (libc::SIGUSR1, None),
+    ] {
+        let error = stream(Harness::Codex, "")
+            .finish(Ok(std::process::ExitStatus::from_raw(signal)))
+            .outcome
+            .unwrap_err();
+        let expected = match name {
+            Some(name) => format!("codex exited by signal {signal} ({name})"),
+            None => format!("codex exited by signal {signal}"),
+        };
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
 fn stopping_windows_keep_their_own_reset_and_unknown_facts_stay_null() {
     for (harness, raw, expected) in [
         (

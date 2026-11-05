@@ -373,6 +373,68 @@ fn recording_uses_the_input_session_prompt_for_skill_warnings() {
 }
 
 #[test]
+fn recording_reports_scope_oom_only_on_failed_exits() {
+    for (script, oom, expected) in [
+        (
+            "kill -TERM $$",
+            true,
+            Some("claude exited by signal 15 (SIGTERM) (scope OOM-killed)"),
+        ),
+        (
+            "kill -TERM $$",
+            false,
+            Some("claude exited by signal 15 (SIGTERM)"),
+        ),
+        (
+            "exit 137",
+            true,
+            Some("claude exited 137 (scope OOM-killed)"),
+        ),
+        ("exit 1", false, Some("claude exited 1")),
+        ("exit 0", true, None),
+        (
+            "echo '{\"type\":\"result\",\"is_error\":true,\"result\":\"tool failed\"}'",
+            true,
+            Some("claude's turn failed: tool failed"),
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let scope = crate::scope::testing::Fixture::new();
+        scope.journal_kill.set(oom);
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script])
+            .current_dir(fixture.root.path());
+        let result = fixture.recording.run(
+            "implement",
+            &Choice::default(),
+            &mut scope.launch(command),
+            Input::default(),
+            &fixture.log("implement"),
+        );
+        assert_eq!(
+            result.err().map(|error| error.to_string()).as_deref(),
+            expected,
+            "{script}; OOM: {oom}"
+        );
+        let trace =
+            fs::read_to_string(fixture.log("implement").with_extension("spans.jsonl")).unwrap();
+        if let Some(expected) = expected {
+            assert!(
+                trace.contains(expected),
+                "trace lost failure cause: {trace}"
+            );
+        } else {
+            assert_eq!(
+                scope.journal_reads(),
+                0,
+                "success needs no OOM journal lookup"
+            );
+        }
+    }
+}
+
+#[test]
 fn private_recording_retains_live_scope_evidence_after_events_disappear() {
     let fixture = Fixture::new();
     let scope = crate::scope::testing::Fixture::new();
@@ -397,7 +459,10 @@ fn private_recording_retains_live_scope_evidence_after_events_disappear() {
         },
         &fixture.log("grader"),
     );
-    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "claude exited 137 (scope OOM-killed)"
+    );
     assert!(!scope.path("events").exists());
     assert!(launched.oom_killed());
     assert_eq!(scope.journal_reads(), 0);
