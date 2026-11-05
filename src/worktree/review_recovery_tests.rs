@@ -143,6 +143,47 @@ fn recovery_keeps_preexisting_local_branch_ownership() {
     assert_eq!(local_head(&launch, "feature").unwrap(), Some(head));
 }
 
+#[test]
+fn retained_conflict_inspection_does_not_run_repository_hooks() {
+    let (temp, launch) = super::tests::launch_directory();
+    let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
+    let owner = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+    let path = owner.path().to_path_buf();
+    let git = Git::new(&path);
+    fs::write(path.join("fix.txt"), "preserved repair\n").unwrap();
+    git.run(&["add", "fix.txt"]).unwrap();
+    git.run(&["commit", "-m", "Retained repair"]).unwrap();
+    drop(owner);
+    let marker = temp.path().join("hook-ran");
+    let marker_path = marker.to_str().unwrap();
+    assert!(
+        !marker_path.contains('\''),
+        "fixture path must be shell-safe"
+    );
+    crate::test_support::write_executable(
+        &temp.path().join("hooks").join("post-index-change"),
+        &format!("#!/bin/sh\nprintf ran > '{marker_path}'\n"),
+    );
+    // A stat change makes the inspection status rewrite the index, which is
+    // when Git runs post-index-change. Content stays committed.
+    fs::write(path.join("fix.txt"), "preserved repair\n").unwrap();
+
+    let outcome = SkillWorktree::on_pull_request(&launch, "feature", &start);
+    let adopted = outcome.is_ok();
+    // Disposal repeats its own status after recovery returns. Judge the
+    // recovery commands, then publish so disposal can remove the checkout.
+    let ran = marker.exists();
+    if let Ok(recovered) = outcome {
+        git.run(&["push", "origin", "feature"]).unwrap();
+        drop(recovered);
+    }
+
+    assert!(
+        !ran,
+        "inspection executed a repository hook (adopted: {adopted})"
+    );
+}
+
 struct StaleReview {
     _temp: tempfile::TempDir,
     launch: Git,

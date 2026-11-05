@@ -232,6 +232,19 @@ fn verify_file(path: &Path, file: &File) -> Result<()> {
     Ok(())
 }
 
+/// Repository hooks and fsmonitor run programs chosen by the checkout.
+/// Recovery and conflict inspection must not.
+fn without_repository_programs<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut guarded = vec![
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+    ];
+    guarded.extend_from_slice(args);
+    guarded
+}
+
 /// Pinned evidence is rechecked around every recovery mutation.
 struct Evidence {
     record_file: Artifact,
@@ -324,7 +337,7 @@ fn verify_retained(
         }
     }
     if super::super::uncommitted_changes(
-        |args| git.run(args),
+        |args| git.run(&without_repository_programs(args)),
         super::super::UntrackedFiles::DiscardValidationArtifacts,
     )? {
         bail!("retained Review worktree has uncommitted tracked changes");
@@ -359,9 +372,10 @@ pub(in crate::worktree) fn restart_retained(
     let _refs_lock = launch.lock_worktree_refs()?;
     let evidence = Evidence::read(checkout)?;
     let git = Git::new(checkout.path());
-    git.run_checked(&["reset", "--hard", start], || {
-        verify_retained(launch, checkout, &evidence, start)
-    })?;
+    git.run_checked(
+        &without_repository_programs(&["reset", "--hard", start]),
+        || verify_retained(launch, checkout, &evidence, start),
+    )?;
     verify_retained(launch, checkout, &evidence, start)
 }
 
@@ -387,17 +401,14 @@ pub(in crate::worktree) fn pull_request_conflict(
         digest.update(format!("{:?}:{}", entry.path, entry.locked));
         let git = Git::new(&entry.path);
         for args in [
-            vec![
-                "-c",
-                "core.fsmonitor=false",
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=no",
-            ],
+            vec!["status", "--porcelain=v1", "--untracked-files=no"],
             vec!["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"],
             vec!["diff", "--no-ext-diff", "--no-textconv", "--cached", "--"],
         ] {
-            digest.update(format!("{:?}", git.run(&args)));
+            digest.update(format!(
+                "{:?}",
+                git.run(&without_repository_programs(&args))
+            ));
         }
         // Ref changes, dirty work, evidence and directory replacement each
         // re-enable notification. Directory mtimes change during ordinary Git

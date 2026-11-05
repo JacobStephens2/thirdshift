@@ -303,9 +303,13 @@ impl ReviewProcess {
                                             == snapshot.branch
                                             && git
                                                 .run(&[
+                                                    "-c",
+                                                    "core.hooksPath=/dev/null",
+                                                    "-c",
+                                                    "core.fsmonitor=false",
                                                     "status",
                                                     "--porcelain",
-                                                    "--untracked-files=no"
+                                                    "--untracked-files=no",
                                                 ])?
                                                 .is_empty(),
                                         "recovered Review worktree changed before review"
