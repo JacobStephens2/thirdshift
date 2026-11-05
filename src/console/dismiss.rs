@@ -31,7 +31,7 @@ async fn change(viewer: Viewer, form: DismissForm, undo: bool) -> Response {
         dismiss::request(
             &form.command,
             dismiss::Request {
-                who: viewer.email,
+                who: viewer.caller_label,
                 undo,
                 from_console: true,
             },

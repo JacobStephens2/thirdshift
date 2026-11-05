@@ -42,7 +42,7 @@ impl Access {
 
 #[derive(Clone)]
 pub(super) struct Viewer {
-    pub email: String,
+    pub caller_label: String,
     pub scopes: Vec<Scope>,
     pub identity: Identity,
     token: Option<String>,
@@ -161,7 +161,7 @@ pub(super) async fn guard(
                 identity: Identity::Token {
                     holder: token.holder.clone(),
                 },
-                email: token.holder,
+                caller_label: token.holder,
                 scopes: token.scopes,
                 token: None,
                 csrf: String::new(),
@@ -177,7 +177,7 @@ pub(super) async fn guard(
         }
     } else if access.no_sign_in {
         Viewer {
-            email: "localhost (no sign-in)".into(),
+            caller_label: "localhost (no sign-in)".into(),
             scopes: Scope::ALL.to_vec(),
             identity: Identity::local(),
             token: None,
@@ -195,7 +195,7 @@ pub(super) async fn guard(
                 identity: Identity::Session {
                     address: email.clone(),
                 },
-                email,
+                caller_label: email,
                 scopes: Scope::ALL.to_vec(),
                 csrf: csrf(&token),
                 token: Some(token),
@@ -400,7 +400,7 @@ pub(super) async fn account(Extension(viewer): Extension<Viewer>) -> Response {
         tokio::task::spawn_blocking(move || -> Result<String> {
             let config = UserConfig::load()?;
             Ok(AccountPage {
-                email: viewer.email,
+                email: viewer.caller_label,
                 csrf: viewer.csrf,
                 signed_in: viewer.token.is_some(),
                 resources: super::resources::Status::new(&config),
@@ -417,7 +417,7 @@ pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let result = tokio::task::spawn_blocking(move || {
-        Accounts::load()?.sign_out(&viewer.email, Some(&token))
+        Accounts::load()?.sign_out(&viewer.caller_label, Some(&token))
     })
     .await;
     match result {

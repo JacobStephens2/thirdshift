@@ -51,7 +51,7 @@ pub(super) async fn import_document(
         Err(error) => return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
     };
     match tokio::task::spawn_blocking(move || {
-        save_theme(&theme, &viewer.email)?;
+        save_theme(&theme, &viewer.caller_label)?;
         Ok::<_, anyhow::Error>(theme)
     })
     .await
@@ -173,7 +173,9 @@ pub(super) async fn set_theme(
     if let Err(error) = console::validate_theme(&form.theme) {
         return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
     }
-    written(tokio::task::spawn_blocking(move || write_theme(&form.theme, &viewer.email)).await)
+    written(
+        tokio::task::spawn_blocking(move || write_theme(&form.theme, &viewer.caller_label)).await,
+    )
 }
 
 pub(super) async fn set_sections(
@@ -193,7 +195,10 @@ pub(super) async fn set_sections(
     {
         return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
     }
-    written(tokio::task::spawn_blocking(move || write_sections(&hide, &show, &viewer.email)).await)
+    written(
+        tokio::task::spawn_blocking(move || write_sections(&hide, &show, &viewer.caller_label))
+            .await,
+    )
 }
 
 fn written(
