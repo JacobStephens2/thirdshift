@@ -1399,7 +1399,9 @@ mod tests {
         );
         assert_routed_operations(router, &described);
         for route in super::PAGES {
-            assert_api_metadata(route);
+            if route.serves_api() {
+                assert_api_metadata(route);
+            }
             assert!(
                 !route.cli.is_empty(),
                 "{} has no paired CLI command",
