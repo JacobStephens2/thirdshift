@@ -1,4 +1,4 @@
-//! Durable authority for disposable review scratch, private to ownership.
+//! Durable authority for disposable scratch and retained pull-request checkouts.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, Write};
@@ -23,6 +23,12 @@ struct Record {
     version: u32,
     nonce: String,
     detached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    captured_head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_existed: Option<bool>,
     root: DirectoryRecord,
     admin: DirectoryRecord,
     common: DirectoryRecord,
@@ -73,7 +79,13 @@ pub(in crate::worktree) struct Publication {
 }
 
 impl Publication {
-    pub(in crate::worktree) fn publish(&mut self, launch: &Git, checkout: &Checkout) -> Result<()> {
+    pub(in crate::worktree) fn publish(
+        &mut self,
+        launch: &Git,
+        checkout: &Checkout,
+        start: &str,
+        branch_existed: bool,
+    ) -> Result<()> {
         let git = Git::new(checkout.path());
         if git.succeeds(&["ls-files", "--error-unmatch", "--", TOKEN])? {
             bail!("review token path is tracked; refusing to replace it");
@@ -117,7 +129,10 @@ impl Publication {
         let record = Record {
             version: VERSION,
             nonce,
-            detached: true,
+            detached: checkout.branch.is_none(),
+            branch: checkout.branch.clone(),
+            captured_head: checkout.branch.as_ref().map(|_| start.to_string()),
+            branch_existed: checkout.branch.as_ref().map(|_| branch_existed),
             root: DirectoryRecord::capture(&checkout.root)?,
             admin: DirectoryRecord::capture(&checkout.admin)?,
             common: DirectoryRecord::capture(&checkout.common)?,
@@ -208,6 +223,146 @@ fn verify_file(path: &Path, file: &File) -> Result<()> {
     Ok(())
 }
 
+/// Pinned evidence is rechecked around every recovery mutation.
+struct Evidence {
+    record_file: Artifact,
+    record_contents: Vec<u8>,
+    token: Artifact,
+    token_contents: Vec<u8>,
+    record: Record,
+}
+
+impl Evidence {
+    fn read(checkout: &Checkout) -> Result<Self> {
+        let record_file = Artifact::read(checkout.admin.path.join(RECORD))?;
+        let record_contents = record_file.contents()?;
+        let record: Record = serde_json::from_slice(&record_contents)
+            .context("invalid successful review acquisition record")?;
+        if record.version != VERSION
+            || record.nonce.is_empty()
+            || record.detached != checkout.branch.is_none()
+            || record.branch != checkout.branch
+        {
+            bail!("unsupported or inconsistent successful review acquisition record");
+        }
+        record.root.verify(&checkout.root)?;
+        record.admin.verify(&checkout.admin)?;
+        record.common.verify(&checkout.common)?;
+        let token = Artifact::read(checkout.path().join(TOKEN))?;
+        let token_contents = token.contents()?;
+        if token_contents != record.nonce.as_bytes() {
+            bail!("checkout token does not match successful review acquisition record");
+        }
+        Ok(Self {
+            record_file,
+            record_contents,
+            token,
+            token_contents,
+            record,
+        })
+    }
+
+    fn verify(&self, checkout: &Checkout) -> Result<()> {
+        self.record.root.verify(&checkout.root)?;
+        self.record.admin.verify(&checkout.admin)?;
+        self.record.common.verify(&checkout.common)?;
+        if self.token.contents()? != self.token_contents
+            || self.record_file.contents()? != self.record_contents
+        {
+            bail!("successful review disposal evidence changed; scratch retained");
+        }
+        Ok(())
+    }
+}
+
+/// Both acquisition locks are held. This observation grants adoption, never disposal.
+pub(in crate::worktree) fn retained_pull_request(
+    launch: &Git,
+    path: &Path,
+    branch: &str,
+    start: &str,
+) -> Result<Checkout> {
+    let mut checkout = Checkout::capture(launch, path, Some(branch))?;
+    let evidence = Evidence::read(&checkout)?;
+    if evidence.record.captured_head.as_deref() != Some(start) {
+        bail!("retained Review worktree captured a different pull request head");
+    }
+    let branch_existed = evidence
+        .record
+        .branch_existed
+        .context("missing Review branch ownership")?;
+    verify_retained(launch, &checkout, &evidence, start)?;
+    if branch_existed {
+        checkout.preserve_local_branch();
+    }
+    Ok(checkout)
+}
+
+fn verify_retained(
+    launch: &Git,
+    checkout: &Checkout,
+    evidence: &Evidence,
+    start: &str,
+) -> Result<()> {
+    checkout.inspect(launch)?;
+    evidence.verify(checkout)?;
+    let git = Git::new(checkout.path());
+    for name in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+    ] {
+        match fs::symlink_metadata(checkout.admin.path.join(name)) {
+            Ok(_) => bail!("retained Review worktree has an unfinished Git operation"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("cannot inspect retained Git operation"),
+        }
+    }
+    if super::super::uncommitted_changes(
+        |args| git.run(args),
+        super::super::UntrackedFiles::DiscardValidationArtifacts,
+    )? {
+        bail!("retained Review worktree has uncommitted tracked changes");
+    }
+    if !git.succeeds(&["merge-base", "--is-ancestor", start, "HEAD"])? {
+        bail!("retained Review worktree is not a descendant of the captured head");
+    }
+    evidence.verify(checkout)?;
+    checkout.inspect(launch)?;
+    Ok(())
+}
+
+pub(in crate::worktree) fn clean_retained(
+    launch: &Git,
+    checkout: &Checkout,
+    start: &str,
+) -> Result<()> {
+    let evidence = Evidence::read(checkout)?;
+    let git = Git::new(checkout.path());
+    git.run_checked(&["clean", "-fdx", "-e", TOKEN, "-e", RECORD], || {
+        verify_retained(launch, checkout, &evidence, start)
+    })?;
+    verify_retained(launch, checkout, &evidence, start)
+}
+
+/// The caller holds the worktree lock; reset requires the same clean evidence.
+pub(in crate::worktree) fn restart_retained(
+    launch: &Git,
+    checkout: &Checkout,
+    start: &str,
+) -> Result<()> {
+    let _refs_lock = launch.lock_worktree_refs()?;
+    let evidence = Evidence::read(checkout)?;
+    let git = Git::new(checkout.path());
+    git.run_checked(&["reset", "--hard", start], || {
+        verify_retained(launch, checkout, &evidence, start)
+    })?;
+    verify_retained(launch, checkout, &evidence, start)
+}
+
 /// The caller holds one worktree lock through inspection, disposal and add.
 pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
     let mut registered_head = None;
@@ -233,31 +388,9 @@ pub(in crate::worktree) fn recover(launch: &Git, path: &Path) -> Result<()> {
         // Capture pins the current directories, then the record must identify
         // those exact instances. HEAD may have advanced while detached.
         let checkout = Checkout::capture(launch, path, None)?;
-        let record_file = Artifact::read(checkout.admin.path.join(RECORD))?;
-        let record_contents = record_file.contents()?;
-        let record: Record = serde_json::from_slice(&record_contents)
-            .context("invalid successful review acquisition record")?;
-        if record.version != VERSION || !record.detached || record.nonce.is_empty() {
-            bail!("unsupported or inconsistent successful review acquisition record");
-        }
-        record.root.verify(&checkout.root)?;
-        record.admin.verify(&checkout.admin)?;
-        record.common.verify(&checkout.common)?;
-        let token = Artifact::read(checkout.path().join(TOKEN))?;
-        let token_contents = token.contents()?;
-        let nonce = std::str::from_utf8(&token_contents)?;
-        if nonce != record.nonce {
-            bail!("checkout token does not match successful review acquisition record");
-        }
-        token.verify()?;
-        record_file.verify()?;
+        let evidence = Evidence::read(&checkout)?;
         interrupt::check()?;
-        checkout.remove_locked(launch, || {
-            if token.contents()? != token_contents || record_file.contents()? != record_contents {
-                bail!("successful review disposal evidence changed; scratch retained");
-            }
-            Ok(())
-        })?;
+        checkout.remove_locked(launch, || evidence.verify(&checkout))?;
         progress::step(format_args!(
             "removed the leftover worktree {}",
             path.display()

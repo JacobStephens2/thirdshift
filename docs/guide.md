@@ -2347,6 +2347,11 @@ request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`
 without a session or Run notification. `--recommend-only` works on this form too.
+An unrecoverable local branch or occupied worktree is skipped so later waiting
+pull requests can run. The Pass saves a conflict fingerprint under
+`~/.thirdshift/review-conflicts/` and sends one failure notification per state;
+an unchanged conflict only logs a skip. Changed refs or checkout state allow a
+new notification. Naming the PR URL explicitly still fails with preservation advice.
 
 If a reviewed base received fixes that the upper pull request does not yet
 contain, the upper pull request's comment says it needs updating before merge.
@@ -2361,8 +2366,14 @@ from closed pull requests.
 A **Review run** refuses forks, drafts, closed or merged pull requests and
 authors who are not **Trusted accounts**, explaining why before starting a
 session. It checks out the pull request's captured head on its own branch in a
-worktree and reviews only its change against its own base. A locally changed or
-already checked-out head branch must be dealt with before the Review run can use it.
+worktree and reviews only its change against its own base. A retained Review
+worktree can be recovered when its durable ownership token and directory
+identities still match, its captured head is the PR's current head, and it has
+only clean committed fixes descending from that head. Recovery discards leftover
+untracked validation artifacts and reruns review and delivery with the preserved
+commits. Recommendation retries restart that owned checkout at the captured head.
+Uncommitted tracked edits, unfinished Git operations, locked checkouts, changed
+ownership evidence and other local branches are preserved for human attention.
 
 The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is

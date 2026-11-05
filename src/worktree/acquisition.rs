@@ -15,6 +15,7 @@ pub(super) fn add(
     path: &Path,
     start: &str,
 ) -> Result<super::ownership::Checkout> {
+    let _refs_lock = launch.lock_worktree_refs()?;
     acquire(launch, branch, path, start, false)
 }
 
@@ -26,7 +27,39 @@ pub(super) fn add_review(
     path: &Path,
     start: &str,
 ) -> Result<super::ownership::Checkout> {
+    let _refs_lock = launch.lock_worktree_refs()?;
     acquire(launch, Some(branch), path, start, true)
+}
+
+pub(super) fn recover_pull_request(
+    launch: &Git,
+    branch: &str,
+    start: &str,
+) -> Result<Option<Checkout>> {
+    let _refs_lock = launch.lock_worktree_refs()?;
+    if let Some(checkout) = inspect_review(launch, branch, start)? {
+        super::ownership::clean_retained(launch, &checkout, start)?;
+        return Ok(Some(checkout));
+    }
+    Ok(None)
+}
+
+/// Read-only admission and acquisition share exactly the same ownership checks.
+pub(super) fn inspect_review(launch: &Git, branch: &str, start: &str) -> Result<Option<Checkout>> {
+    let reference = format!("refs/heads/{branch}");
+    if let Some(entry) = registrations(launch)?
+        .into_iter()
+        .find(|entry| entry.branch.as_deref() == Some(&reference))
+    {
+        return super::ownership::retained_pull_request(launch, &entry.path, branch, start)
+            .map(Some)
+            .map_err(|error| {
+                super::advice::occupied_advice(launch, Some(branch), &entry.path, error)
+            });
+    }
+    super::check_local_branch(branch, local_head(launch, branch)?.as_deref(), Some(start))
+        .map_err(|error| super::local_branch_advice(launch, error))?;
+    Ok(None)
 }
 
 fn acquire(
@@ -36,7 +69,6 @@ fn acquire(
     start: &str,
     preserve_existing_branch: bool,
 ) -> Result<super::ownership::Checkout> {
-    let _refs_lock = launch.lock_worktree_refs()?;
     let mut owner = Acquisition::inspect(launch, branch, path, start)?;
     let mut args = vec!["worktree", "add"];
     match branch {
@@ -59,10 +91,13 @@ fn acquire(
     owner.armed = true;
     match launch.run(&args).and_then(|_| {
         owner.capture_checkout(launch)?;
-        if branch.is_none() {
-            owner
-                .publication
-                .publish(launch, owner.checkout.captured()?)?;
+        if branch.is_none() || preserve_existing_branch {
+            owner.publication.publish(
+                launch,
+                owner.checkout.captured()?,
+                start,
+                owner.branch_before.is_some(),
+            )?;
         }
         Ok(())
     }) {
