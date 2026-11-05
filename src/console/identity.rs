@@ -8,9 +8,17 @@ use super::{Scope, auth::Viewer};
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub(super) enum Identity {
-    Token { holder: String },
-    Session { address: String },
-    Local { uid: u32 },
+    Token {
+        holder: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        person: Option<String>,
+    },
+    Session {
+        address: String,
+    },
+    Local {
+        uid: u32,
+    },
 }
 
 impl Identity {

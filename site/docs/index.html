@@ -383,9 +383,9 @@ a true <code>security_findings_waiting</code> flag are omitted or cleared. It al
 read a Security session trace (<code>security-review</code>, <code>security-audit</code>,
 <code>security-reproduction-&lt;n&gt;</code>, <code>security-fix-publishing</code>, <code>security-close-check</code>,
 and their resumes); those log reads return 403 naming <code>security</code>. A token that
-has <code>security</code> receives the finding records and those traces. Action endpoints
-and their auditing arrive in later Console API tickets; granting a scope does
-not create an endpoint. A missing route scope returns 403 JSON naming that
+has <code>security</code> receives the finding records and those traces. The <code>act</code> endpoints
+and their auditing are described below; <code>run</code> and <code>admin</code> endpoints arrive in
+later Console API tickets. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.</p>
 <p>The machine stores only SHA-256 hashes in the owner-only
 <code>~/.thirdshift/console-tokens.json</code>, beside the Credentials. List shows holder,
@@ -394,6 +394,32 @@ Expiry accepts a UTC date (<code>YYYY-MM-DD</code>, expiring at its start) or an
 timestamp. Revocation deletes the record and takes effect on the next request.
 Last use updates on successful authentication. Token management is CLI-only;
 there is no API endpoint to create, list or revoke tokens.</p>
+<p>Each address in <code>console.allowed_emails</code> has all five scopes unless narrowed in
+<code>console.address_scopes</code>. Set and show an address&#39;s scopes from the machine&#39;s shell:</p>
+<pre><code class="language-sh">thirdshift console scopes --email reader@example.com --scopes read
+thirdshift console scopes --email reader@example.com --json
+</code></pre>
+<p>With exactly one allowed address, <code>--email</code> can be omitted. <code>--scopes &#39;&#39;</code> grants
+no scopes; omitting <code>--scopes</code> only shows the current scopes. Setup writes
+<code>address_scopes = {}</code> with its default stated and preserves existing entries.
+For example, under <code>[console]</code>:</p>
+<pre><code class="language-toml">allowed_emails = [&quot;owner@example.com&quot;, &quot;reader@example.com&quot;]
+address_scopes = { &quot;reader@example.com&quot; = [&quot;read&quot;] }
+</code></pre>
+<p>A sign-in session uses its address&#39;s current scopes on every request. The page
+hides controls it cannot use, and a refused API call returns 403 naming the
+missing scope. The sign-in list and address scopes are CLI-only settings: no
+page or API endpoint can write them, even with <code>admin</code>.</p>
+<p>A bearer request can name a person with <code>X-Thirdshift-Person: reader@example.com</code>.
+The owning machine requires that exact address on its own <code>allowed_emails</code> list,
+or returns 403. Its effective scopes are the intersection of the token&#39;s scopes
+and the address&#39;s scopes; neither can grant what the other lacks. For example:</p>
+<pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; \
+  -H &quot;X-Thirdshift-Person: reader@example.com&quot; \
+  https://console.example.com/api/v1/whoami
+</code></pre>
+<p>The header applies only to bearer authentication. A session always acts as the
+address that signed in. A token without the header acts as its holder.</p>
 <p>Send the token as <code>Authorization: Bearer &lt;token&gt;</code>. Tokens require HTTPS to the
 installed Caddy or Apache proxy, which sets <code>X-Forwarded-Proto: https</code>.
 The exception is a direct connection to <code>127.0.0.1</code> with no proxy headers.
@@ -579,7 +605,8 @@ The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <p>Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for
 token Stops and Dismissals say <code>by token &lt;holder&gt;</code>, alongside the CLI and
-Console callers already recorded there. Token secrets and action bodies are
+Console callers already recorded there. A token naming a person records
+<code>by &lt;person&gt; from the Console on &lt;holder&gt;</code>, naming both. Token secrets and action bodies are
 never written to that audit record.</p>
 </div></details>
 <details class="fold"><summary><h4>Console on a server</h4></summary>

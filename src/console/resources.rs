@@ -58,10 +58,11 @@ struct StatusFragment {
 }
 
 pub(super) async fn status(
+    axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
     axum::Extension(format): axum::Extension<super::api::Format>,
 ) -> Response {
     if format == super::api::Format::Json {
-        return show(axum::Extension(format)).await;
+        return show(axum::Extension(viewer), axum::Extension(format)).await;
     }
     super::page(
         tokio::task::spawn_blocking(|| -> Result<String> {
@@ -81,12 +82,15 @@ struct ResourcesPage {
     snapshot: Snapshot,
 }
 
-pub(super) async fn show(axum::Extension(format): axum::Extension<super::api::Format>) -> Response {
+pub(super) async fn show(
+    axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
+    axum::Extension(format): axum::Extension<super::api::Format>,
+) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         format.render(resources::observe(config.resources)?, |snapshot| {
             Ok(ResourcesPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 snapshot,
             }
             .render()?)

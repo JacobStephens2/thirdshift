@@ -25,6 +25,7 @@ use reply::Reply;
 
 const SESSION: &str = "__Host-thirdshift-session";
 const SIGN_IN: &str = "__Host-thirdshift-sign-in";
+pub(super) const PERSON_HEADER: &str = "x-thirdshift-person";
 
 #[derive(Clone)]
 pub(super) struct Access {
@@ -55,16 +56,40 @@ pub(super) struct Viewer {
 impl Viewer {
     pub fn activity_actor(&self) -> String {
         match &self.identity {
-            Identity::Token { holder } => format!("token {holder}"),
+            Identity::Token {
+                person: Some(person),
+                ..
+            } => person.clone(),
+            Identity::Token {
+                holder,
+                person: None,
+            } => format!("token {holder}"),
             Identity::Session { address } => address.clone(),
             Identity::Local { .. } => self.caller_label.clone(),
+        }
+    }
+
+    pub fn console_holder(&self) -> Option<String> {
+        match &self.identity {
+            Identity::Token {
+                holder,
+                person: Some(_),
+            } => Some(holder.clone()),
+            Identity::Token { person: None, .. }
+            | Identity::Session { .. }
+            | Identity::Local { .. } => None,
         }
     }
 
     // Streams recheck on account changes without extending idle lifetime.
     pub fn still_allowed(&self) -> Result<bool> {
         match &self.token {
-            Some(token) => Ok(Accounts::load()?.session(token, false)?.is_some()),
+            Some(token) => {
+                let Some(email) = Accounts::load()?.session(token, false)? else {
+                    return Ok(false);
+                };
+                Ok(UserConfig::load()?.console.scopes_for(&email) == self.scopes)
+            }
             None => Ok(true),
         }
     }
@@ -149,7 +174,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
     {
         return next.run(request).await;
     }
-    let viewer = if api && request.headers().contains_key(header::AUTHORIZATION) {
+    let mut viewer = if api && request.headers().contains_key(header::AUTHORIZATION) {
         if !bearer_transport(&request) {
             return unauthenticated();
         }
@@ -183,6 +208,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
             Ok(Ok(Some(token))) => Viewer {
                 identity: Identity::Token {
                     holder: token.holder.clone(),
+                    person: None,
                 },
                 caller_label: token.holder,
                 scopes: token.scopes,
@@ -213,15 +239,23 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
             return unauthenticated();
         };
         let selected = token.clone();
-        let result =
-            tokio::task::spawn_blocking(move || Accounts::load()?.session(&selected, true)).await;
+        let result = tokio::task::spawn_blocking(move || -> Result<_> {
+            Accounts::load()?
+                .session(&selected, true)?
+                .map(|email| {
+                    let scopes = UserConfig::load()?.console.scopes_for(&email);
+                    Ok((email, scopes))
+                })
+                .transpose()
+        })
+        .await;
         match result {
-            Ok(Ok(Some(email))) => Viewer {
+            Ok(Ok(Some((email, scopes)))) => Viewer {
                 identity: Identity::Session {
                     address: email.clone(),
                 },
                 caller_label: email,
-                scopes: Scope::ALL.to_vec(),
+                scopes,
                 csrf: csrf(&token),
                 token: Some(token),
             },
@@ -242,7 +276,12 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
             Method::GET | Method::HEAD | Method::OPTIONS
         );
     let endpoint = request.uri().path().to_owned();
-    let mut response = authorized(&viewer, request, next).await;
+    let refusal = name_person(&mut viewer, request.headers()).await.err();
+    let mut response = if let Some(refusal) = refusal {
+        refusal
+    } else {
+        authorized(&viewer, request, next).await
+    };
     if mutation {
         let actor = viewer.caller_label.clone();
         let outcome = response.status().as_u16();
@@ -267,6 +306,58 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
         set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
     }
     response
+}
+
+async fn name_person(
+    viewer: &mut Viewer,
+    headers: &HeaderMap,
+) -> std::result::Result<(), Response> {
+    let Identity::Token { holder, person } = &mut viewer.identity else {
+        return Ok(());
+    };
+    if !headers.contains_key(PERSON_HEADER) {
+        return Ok(());
+    }
+    let selected = headers
+        .get(PERSON_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && headers.get_all(PERSON_HEADER).iter().count() == 1)
+        .ok_or_else(|| {
+            super::api::error(
+                StatusCode::FORBIDDEN,
+                "Name exactly one person in X-Thirdshift-Person.",
+            )
+        })?
+        .to_owned();
+    let email = selected.clone();
+    let scopes = tokio::task::spawn_blocking(move || -> Result<_> {
+        let console = UserConfig::load()?.console;
+        Ok(console
+            .allowed_emails
+            .contains(&email)
+            .then(|| console.scopes_for(&email)))
+    })
+    .await;
+    let scopes = match scopes {
+        Ok(Ok(Some(scopes))) => scopes,
+        Ok(Ok(None)) => {
+            return Err(super::api::error(
+                StatusCode::FORBIDDEN,
+                "Named person is not on this machine's Console sign-in list.",
+            ));
+        }
+        error => {
+            eprintln!("thirdshift Console: address scopes read failed: {error:?}");
+            return Err(super::api::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't read Console address scopes.",
+            ));
+        }
+    };
+    viewer.scopes.retain(|scope| scopes.contains(scope));
+    viewer.caller_label = format!("{selected} from the Console on {holder}");
+    *person = Some(selected);
+    Ok(())
 }
 
 // Attach to routed methods, so unsupported methods keep the router's 404/405.
@@ -447,10 +538,14 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
 
 pub(super) async fn require_scope(
     State(scope): State<Scope>,
-    Extension(viewer): Extension<Viewer>,
+    viewer: Option<Extension<Viewer>>,
     request: Request,
     next: Next,
 ) -> Response {
+    // The guard allows anonymous sign-in and password recovery forms.
+    let Some(Extension(viewer)) = viewer else {
+        return next.run(request).await;
+    };
     if !viewer.scopes.contains(&scope) {
         return super::api::error(
             StatusCode::FORBIDDEN,
@@ -582,6 +677,7 @@ async fn sign_in_limited(retry: u64) -> Response {
 #[derive(Template)]
 #[template(path = "console/account.html")]
 struct AccountPage {
+    page: super::PageContext,
     email: String,
     csrf: String,
     signed_in: bool,
@@ -594,6 +690,7 @@ pub(super) async fn account(Extension(viewer): Extension<Viewer>) -> Response {
         tokio::task::spawn_blocking(move || -> Result<String> {
             let config = UserConfig::load()?;
             Ok(AccountPage {
+                page: super::PageContext::new(&config, &viewer.scopes),
                 email: viewer.caller_label,
                 csrf: viewer.csrf,
                 signed_in: viewer.token.is_some(),
@@ -627,16 +724,21 @@ pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
 #[derive(Template)]
 #[template(path = "console/account_log.html")]
 struct LogPage {
+    page: super::PageContext,
     events: Vec<accounts::Event>,
     theme: String,
     resources: super::resources::Status,
 }
 
-pub(super) async fn log(Extension(format): Extension<super::api::Format>) -> Response {
+pub(super) async fn log(
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         format.render(Accounts::load()?.events()?, |events| {
             Ok(LogPage {
+                page: super::PageContext::new(&config, &viewer.scopes),
                 events,
                 resources: super::resources::Status::new(&config),
                 theme: config.console.theme,

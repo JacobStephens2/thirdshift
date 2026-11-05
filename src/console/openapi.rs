@@ -101,6 +101,11 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             Some(parameter(name, "path", true, json!({"type": "string"})))
         })
         .collect();
+    parameters.push(json!({
+        "name": "X-Thirdshift-Person", "in": "header", "required": false,
+        "description": "Bearer calls only: an address on the owning machine's sign-in list. Effective scopes intersect the token's and this address's scopes.",
+        "schema": {"type": "string", "format": "email"}
+    }));
     let mut query = |name, required, schema| {
         parameters.push(parameter(name, "query", required, schema));
     };
@@ -113,7 +118,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             "version": version, "hostname": text, "thirdshift_version": text,
             "api_version": {"type": "string", "const": "v1"},
             "identity": {"oneOf": [
-                object(json!({"kind": {"const": "token"}, "holder": text})),
+                {"type": "object", "required": ["kind", "holder"], "properties": {
+                    "kind": {"const": "token"}, "holder": text, "person": text
+                }},
                 object(json!({"kind": {"const": "session"}, "address": text})),
                 object(json!({"kind": {"const": "local"}, "uid": integer}))
             ]},

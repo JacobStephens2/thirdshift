@@ -270,6 +270,7 @@ pub(super) fn action(
 
 pub(crate) struct Request {
     pub who: String,
+    pub console_holder: Option<String>,
     pub undo: bool,
     pub from_console: bool,
 }
@@ -309,6 +310,7 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
         input,
         Request {
             who,
+            console_holder: None,
             undo,
             from_console: false,
         },
@@ -330,8 +332,9 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         who,
         undo,
         from_console,
+        console_holder,
     } = request;
-    let source = if from_console { "Console" } else { "CLI" };
+    let attribution = super::activity::attribution(&who, from_console, console_holder.as_deref());
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
     let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
@@ -357,10 +360,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         activity_write(
             &config,
             &target.repository,
-            &format!(
-                "{} dismissal taken back from the {source} by {who}",
-                target.subject
-            ),
+            &format!("{} dismissal taken back {attribution}", target.subject),
         )?;
         return Ok(Change {
             name: target.name,
@@ -393,7 +393,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     activity_write(
         &config,
         &target.repository,
-        &format!("{} dismissed from the {source} by {who}", target.subject),
+        &format!("{} dismissed {attribution}", target.subject),
     )?;
     Ok(Change {
         name: target.name,

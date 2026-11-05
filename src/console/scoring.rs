@@ -50,7 +50,7 @@ pub(super) async fn show(
         }
         format.render(scoring::json_view(&view.weeks, &view.calibration)?, |_| {
             Ok(ScoresPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 view,
                 criteria: Criterion::ALL,
                 csrf: viewer.csrf,

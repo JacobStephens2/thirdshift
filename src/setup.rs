@@ -1274,6 +1274,7 @@ silent_minutes = 10
 address = \"\"
 port = 8711
 allowed_emails = []
+address_scopes = {}
 other_consoles = []
 other_accounts = \"none\"
 theme = \"focus-auto\"

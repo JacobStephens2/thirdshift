@@ -26,7 +26,7 @@ pub(super) async fn index(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
-    show(format, None, viewer.csrf).await
+    show(format, None, viewer).await
 }
 
 pub(super) async fn detail(
@@ -34,10 +34,10 @@ pub(super) async fn detail(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
-    show(format, Some(id), viewer.csrf).await
+    show(format, Some(id), viewer).await
 }
 
-async fn show(format: super::api::Format, id: Option<String>, csrf: String) -> Response {
+async fn show(format: super::api::Format, id: Option<String>, viewer: Viewer) -> Response {
     let detail = id.is_some();
     let response = super::api::read(format, move || {
         let config = UserConfig::load()?;
@@ -59,10 +59,10 @@ async fn show(format: super::api::Format, id: Option<String>, csrf: String) -> R
                 ("Experiments".into(), render::list(&views))
             };
             Ok(ExperimentsPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 title,
                 html,
-                csrf,
+                csrf: viewer.csrf,
                 proposals,
             }
             .render()?)
@@ -87,6 +87,7 @@ pub(super) async fn approve(
 
 pub(super) async fn session(
     Path((id, session)): Path<(String, String)>,
+    Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
     let response = super::api::read(format, move || {
@@ -99,7 +100,7 @@ pub(super) async fn session(
             super::conversation::render_trial_log(&log.contents)
         };
         let html = format!("<h1>{}</h1><p><a href=\"/experiments/{}\">Experiment</a></p><p><code>thirdshift experiments {} --session {}</code></p><section aria-label=\"Session evidence\">{evidence}</section>", if log.trace { "Session trace" } else { "Session log" }, escaped(&id), escaped(&id), escaped(&session));
-        Ok(ExperimentsPage { page: super::PageContext::new(&config), title: "Trial session".into(), html, csrf: String::new(), proposals: Vec::new() }.render()?)
+        Ok(ExperimentsPage { page: super::PageContext::new(&config, &viewer.scopes), title: "Trial session".into(), html, csrf: String::new(), proposals: Vec::new() }.render()?)
         })
     }).await;
     if format == super::api::Format::Html && !response.status().is_success() {

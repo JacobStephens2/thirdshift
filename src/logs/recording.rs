@@ -419,11 +419,7 @@ impl<O: Outside> Record<O> {
             if let Some(request) = self.stop_request() {
                 self.activity_write(
                     &root,
-                    &format!(
-                        "{subject} stopped from the {} by {}",
-                        request.source(),
-                        request.who
-                    ),
+                    &format!("{subject} stopped {}", request.attribution()),
                     None,
                 );
             }

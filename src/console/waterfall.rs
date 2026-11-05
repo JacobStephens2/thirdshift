@@ -16,12 +16,10 @@ struct WaterfallPage {
 
 fn security_refusal(
     viewer: &super::auth::Viewer,
-    format: super::api::Format,
     config: &UserConfig,
     command: &str,
 ) -> anyhow::Result<Option<Response>> {
-    Ok((format == super::api::Format::Json
-        && !viewer.scopes.contains(&super::Scope::Security)
+    Ok((!viewer.scopes.contains(&super::Scope::Security)
         && super::api::security_command(config, command)?)
     .then(|| super::api::error(axum::http::StatusCode::FORBIDDEN, "Missing scope: security")))
 }
@@ -34,7 +32,7 @@ pub(super) async fn show(
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         let view = spans::load(&config, &super::query_value(&query, "command"))?;
-        if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)? {
+        if let Some(response) = security_refusal(&viewer, &config, &view.tree.command)? {
             return Ok(response);
         }
         // JSON is data, never executable markup, even inside a script tag.
@@ -44,7 +42,7 @@ pub(super) async fn show(
             .replace('>', "\\u003e");
         format.render(serde_json::to_value(&view.tree)?, |_| {
             Ok(WaterfallPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 view,
                 data,
             }
@@ -63,8 +61,7 @@ pub(super) async fn data(
         let value = (|| -> anyhow::Result<Response> {
             let config = UserConfig::load()?;
             let view = spans::load(&config, &super::query_value(&query, "command"))?;
-            if let Some(response) = security_refusal(&viewer, format, &config, &view.tree.command)?
-            {
+            if let Some(response) = security_refusal(&viewer, &config, &view.tree.command)? {
                 return Ok(response);
             }
             let selected = super::query_value(&query, "span");

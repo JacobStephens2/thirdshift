@@ -88,6 +88,7 @@ pub enum Command {
         json: bool,
     },
     ConsoleToken(crate::console::tokens::Action),
+    ConsoleScopes(crate::console::Scopes),
     ConsoleWhoami {
         json: bool,
     },
@@ -414,6 +415,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "scopes") {
+                return crate::console::Scopes::parse(&args[2..]).map(Command::ConsoleScopes);
+            }
             if args.get(1).is_some_and(|action| action == "token") {
                 return crate::console::tokens::parse(&args[2..]).map(Command::ConsoleToken);
             }
@@ -524,7 +528,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Ok(Command::ConsoleLog { json: true })
                 }
                 _ => bail!(
-                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json] | token <create|list|revoke> | whoami [--json] | openapi"
+                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | scopes [--email <address>] [--scopes <scopes>] [--json] | log [--json] | token <create|list|revoke> | whoami [--json] | openapi"
                 ),
             };
         }

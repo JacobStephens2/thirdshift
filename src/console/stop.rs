@@ -25,7 +25,7 @@ pub(super) async fn show(
         let config = UserConfig::load()?;
         let inspection = stop::inspect(&config, &command)?;
         Ok(StopPage {
-            page: super::PageContext::new(&config),
+            page: super::PageContext::new(&config, &viewer.scopes),
             csrf: viewer.csrf.clone(),
             details: Peek::new(command, inspection, viewer.csrf, &config),
         }
@@ -60,6 +60,7 @@ pub(super) async fn submit(
                 &form.command,
                 stop::Request {
                     who: viewer.activity_actor(),
+                    console_holder: viewer.console_holder(),
                     requeue: form.requeue,
                     from_console: true,
                 },
@@ -76,6 +77,7 @@ pub(super) async fn submit(
             &form.command,
             stop::Request {
                 who: viewer.activity_actor(),
+                console_holder: viewer.console_holder(),
                 requeue: form.ending == "requeue",
                 from_console: true,
             },

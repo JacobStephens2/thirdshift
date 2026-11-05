@@ -21,14 +21,16 @@ pub enum Ending {
 #[derive(Deserialize, Serialize)]
 pub struct Request {
     pub who: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_holder: Option<String>,
     pub requeue: bool,
     #[serde(default)]
     pub from_console: bool,
 }
 
 impl Request {
-    pub(super) fn source(&self) -> &'static str {
-        if self.from_console { "Console" } else { "CLI" }
+    pub(super) fn attribution(&self) -> String {
+        super::activity::attribution(&self.who, self.from_console, self.console_holder.as_deref())
     }
 
     pub fn ending(&self) -> Ending {
@@ -69,6 +71,7 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let request = Request {
         who: super::unix_user("Stop")?,
+        console_holder: None,
         requeue,
         from_console: false,
     };

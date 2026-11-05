@@ -10,6 +10,7 @@ mod cronjobs;
 mod experiments;
 mod filters;
 mod github;
+pub(crate) use account_commands::Scopes;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
@@ -58,6 +59,7 @@ fn hostname() -> String {
 
 /// The machine identity and look shared by the Console's reader pages.
 struct PageContext {
+    scopes: Vec<Scope>,
     hostname: String,
     consoles: Vec<String>,
     theme: String,
@@ -65,13 +67,24 @@ struct PageContext {
 }
 
 impl PageContext {
-    fn new(config: &UserConfig) -> Self {
+    fn new(config: &UserConfig, scopes: &[Scope]) -> Self {
         Self {
+            scopes: scopes.to_vec(),
             hostname: hostname(),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),
         }
+    }
+
+    fn can_act(&self) -> bool {
+        self.scopes.contains(&Scope::Act)
+    }
+    fn can_read(&self) -> bool {
+        self.scopes.contains(&Scope::Read)
+    }
+    fn can_security(&self) -> bool {
+        self.scopes.contains(&Scope::Security)
     }
 }
 
@@ -98,7 +111,7 @@ pub(crate) enum Scope {
 }
 
 impl Scope {
-    const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Read,
         Self::Security,
         Self::Act,
@@ -106,7 +119,7 @@ impl Scope {
         Self::Admin,
     ];
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Read => "read",
             Self::Security => "security",
@@ -114,6 +127,22 @@ impl Scope {
             Self::Run => "run",
             Self::Admin => "admin",
         }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Vec<Self>> {
+        let mut scopes = Vec::new();
+        for name in value.split(',').filter(|_| !value.is_empty()) {
+            let scope = Self::ALL
+                .into_iter()
+                .find(|scope| scope.name() == name)
+                .with_context(|| {
+                    format!("unknown scope {name:?}; expected read,security,act,run,admin")
+                })?;
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
+        }
+        Ok(scopes)
     }
 }
 
@@ -356,7 +385,7 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/look",
         api: "/api/v1/look",
-        scope: Some(Scope::Act),
+        scope: Some(Scope::Read),
         cli: &[
             "thirdshift console theme list --json",
             "thirdshift console sections --json",
@@ -734,6 +763,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
                 continue;
             }
         }
+        let handler = if let Some(scope) = page.scope {
+            handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
+        } else {
+            handler
+        };
         router = router.route(page.path, handler);
     }
     router = router.route("/assets/{*path}", get(asset));
@@ -841,6 +875,8 @@ impl InboxPage {
             row,
             csrf: &self.csrf,
             can_copy,
+            can_act: self.page.can_act(),
+            can_security: self.page.can_security(),
         }
     }
 }
@@ -851,14 +887,26 @@ struct RowTemplate<'a> {
     row: &'a Row,
     csrf: &'a str,
     can_copy: bool,
+    can_act: bool,
+    can_security: bool,
 }
 
 impl RowTemplate<'_> {
+    fn gist(&self) -> String {
+        if !self.can_security && !self.row.findings.is_empty() {
+            self.row.now_line.clone()
+        } else {
+            self.row.gist()
+        }
+    }
+
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
             csrf: self.csrf,
             can_copy: false,
+            can_act: self.can_act,
+            can_security: self.can_security,
         }
     }
 }
@@ -896,13 +944,14 @@ async fn inbox(
         requested_page = path.trim_start_matches('/').into();
     }
     if matches!(requested_page.as_str(), "logs" | "6") {
-        return logs::index(axum::Extension(format)).await;
+        return logs::index(axum::Extension(viewer), axum::Extension(format)).await;
     }
     if matches!(requested_page.as_str(), "waterfall" | "4") {
         return waterfall::show(viewer, format, query).await;
     }
     if matches!(requested_page.as_str(), "lanes" | "2" | "stages" | "3") {
         return time::show(
+            viewer,
             format,
             matches!(requested_page.as_str(), "stages" | "3"),
             query,
@@ -915,7 +964,12 @@ async fn inbox(
         "" | "inbox" | "1" => None,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    render_page(format, cli, archive_page, query, viewer.csrf).await
+    if matches!(archive_page, Some(status::ArchivePage::Security))
+        && !viewer.scopes.contains(&Scope::Security)
+    {
+        return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+    }
+    render_page(format, cli, archive_page, query, viewer).await
 }
 
 async fn render_page(
@@ -923,7 +977,7 @@ async fn render_page(
     cli: &'static str,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
-    csrf: String,
+    viewer: auth::Viewer,
 ) -> Response {
     // The shared observations and templates stay blocking, off the async executor.
     api::read(format, move || {
@@ -942,8 +996,8 @@ async fn render_page(
         };
         format.render(read.json(&config, all)?, |_| {
             Ok(InboxPage {
-                page: PageContext::new(&config),
-                csrf,
+                page: PageContext::new(&config, &viewer.scopes),
+                csrf: viewer.csrf,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
                 inbox: read.inbox(&config)?,
@@ -1005,20 +1059,24 @@ async fn inspect(
     let command = query_value(&query, "command");
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
-        let details = crate::logs::stop::inspect(&config, &command)?;
-        if format == api::Format::Json
-            && details.security_details
-            && !viewer.scopes.contains(&Scope::Security)
-        {
+        let mut details = crate::logs::stop::inspect(&config, &command)?;
+        if details.security_details && !viewer.scopes.contains(&Scope::Security) {
             return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));
         }
         let document = status::inspect::envelope(details.details.clone());
+        if !viewer.scopes.contains(&Scope::Act) {
+            details.can_stop = false;
+            details.dismissal = None;
+        }
         format.render(document, |_| {
             Ok(peek::Peek::new(command, details, viewer.csrf, &config).render()?)
         })
     })
     .await;
-    if format == api::Format::Html && !response.status().is_success() {
+    if format == api::Format::Html
+        && !response.status().is_success()
+        && response.status() != StatusCode::FORBIDDEN
+    {
         (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response()
     } else {
         response

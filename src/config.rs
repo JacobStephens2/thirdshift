@@ -1128,6 +1128,7 @@ silent_minutes = 10   # minutes without growth in either log before a Ticket run
 address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
+address_scopes = {}  # an address absent here has all five scopes; CLI-only; default {}
 other_consoles = []   # http or https addresses linked in the header, never fetched; default []
 other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
@@ -1447,6 +1448,7 @@ mod tests {
                 "console.address",
                 "console.port",
                 "console.allowed_emails",
+                "console.address_scopes",
                 "console.other_consoles",
                 "console.other_accounts",
                 "console.theme",
