@@ -41,7 +41,12 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
     assert_eq!(document, cli(home.path(), &["console", "openapi"]));
     assert_eq!(document["openapi"], "3.1.1");
     let paths = document["paths"].as_object().unwrap();
-    for path in ["/api/v1/status", "/api/v1/peek", "/api/v1/openapi.json"] {
+    for path in [
+        "/api/v1/status",
+        "/api/v1/peek",
+        "/api/v1/whoami",
+        "/api/v1/openapi.json",
+    ] {
         assert!(paths.contains_key(path), "missing {path}");
     }
     for (path, methods) in paths {
@@ -57,8 +62,36 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
             assert!(
                 operation["responses"]["200"]["content"]["application/json"]["schema"].is_object()
             );
+            assert!(operation["responses"]["403"].is_object());
         }
     }
+    let whoami = &paths["/api/v1/whoami"]["get"];
+    assert_eq!(
+        whoami["x-cli-twins"],
+        json!(["thirdshift console whoami --json"])
+    );
+    let properties =
+        &whoami["responses"]["200"]["content"]["application/json"]["schema"]["properties"];
+    for field in [
+        "hostname",
+        "thirdshift_version",
+        "api_version",
+        "identity",
+        "scopes",
+    ] {
+        assert!(
+            properties[field].is_object(),
+            "missing whoami field {field}"
+        );
+    }
+    assert_eq!(
+        document["security"],
+        json!([{"ConsoleSession": []}, {"ConsoleBearer": []}])
+    );
+    assert_eq!(
+        document["components"]["securitySchemes"]["ConsoleBearer"],
+        json!({"type": "http", "scheme": "bearer"})
+    );
     assert!(!paths.contains_key("/api/v1/events"));
     assert!(!paths.contains_key("/api/v1/set-password"));
     assert!(

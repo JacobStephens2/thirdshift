@@ -203,9 +203,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console openapi                     Print the Console API's OpenAPI description
-       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
-       thirdshift console theme import <file> | export <name>  Import or export a Theme JSON document
+       thirdshift console token <create|list|revoke> ...  Manage scoped API tokens; CLI-only
+       thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
+       thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
@@ -313,6 +313,13 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::ConsoleToken(action)) => {
+            return match console::tokens::run(action) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
         Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
             return match console::serve(no_sign_in) {

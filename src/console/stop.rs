@@ -58,7 +58,7 @@ pub(super) async fn submit(
         stop::request_stop(
             &form.command,
             stop::Request {
-                who: viewer.email,
+                who: viewer.caller_label,
                 requeue: form.ending == "requeue",
                 from_console: true,
             },

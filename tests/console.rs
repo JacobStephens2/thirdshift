@@ -4,6 +4,9 @@ mod support;
 #[path = "console/api.rs"]
 mod api;
 
+#[path = "console/tokens.rs"]
+mod tokens;
+
 #[path = "console/resources.rs"]
 mod resources;
 

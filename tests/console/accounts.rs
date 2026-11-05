@@ -117,6 +117,15 @@ fn api_requires_a_current_sign_in_and_returns_json_instead_of_redirecting() {
         api::json(get(&console, "/api/v1/status", &session)),
         expected
     );
+    let identity = api::json(get(&console, "/api/v1/whoami", &session));
+    assert_eq!(
+        identity["identity"],
+        json!({"kind": "session", "address": EMAIL})
+    );
+    assert_eq!(
+        identity["scopes"],
+        json!(["read", "security", "act", "run", "admin"])
+    );
     assert!(cli(home.path(), &["console", "sign-out"]).status.success());
     assert_eq!(get(&console, "/api/v1/status", &session).status(), 401);
     assert_eq!(get(&console, "/", &session).status(), 303);

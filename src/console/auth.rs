@@ -4,7 +4,7 @@ use askama::Template;
 
 use super::filters;
 use axum::body::{Body, to_bytes};
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -12,7 +12,9 @@ use axum::{Extension, Form};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
+use super::Scope;
 use super::accounts::{self, Accounts, SignIn};
+use super::identity::Identity;
 use crate::config::UserConfig;
 
 mod password;
@@ -40,7 +42,9 @@ impl Access {
 
 #[derive(Clone)]
 pub(super) struct Viewer {
-    pub email: String,
+    pub caller_label: String,
+    pub scopes: Vec<Scope>,
+    pub identity: Identity,
     token: Option<String>,
     pub(super) csrf: String,
 }
@@ -85,6 +89,33 @@ fn set_cookie(response: &mut Response, name: &str, value: &str, age: i64) {
     );
 }
 
+// Only the installed loopback proxy may attest HTTPS. A direct localhost
+// exception must carry no forwarded/proxy headers at all.
+fn bearer_transport(request: &Request) -> bool {
+    let local = request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .is_some_and(|peer| peer.0.ip() == std::net::Ipv4Addr::LOCALHOST);
+    if !local {
+        return false;
+    }
+    let headers = request.headers();
+    if headers.get_all("x-forwarded-proto").iter().count() == 1
+        && headers
+            .get("x-forwarded-proto")
+            .is_some_and(|value| value == "https")
+    {
+        return true;
+    }
+    !headers.keys().any(|name| {
+        name.as_str().starts_with("x-forwarded-")
+            || matches!(
+                name.as_str(),
+                "forwarded" | "x-real-ip" | "via" | "proxy-connection"
+            )
+    })
+}
+
 pub(super) async fn guard(
     State(access): State<Access>,
     mut request: Request,
@@ -104,9 +135,51 @@ pub(super) async fn guard(
     {
         return next.run(request).await;
     }
-    let viewer = if access.no_sign_in {
+    let viewer = if api && request.headers().contains_key(header::AUTHORIZATION) {
+        if !bearer_transport(&request) {
+            return unauthenticated();
+        }
+        let headers = request.headers();
+        if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+            return unauthenticated();
+        }
+        let Some(secret) = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split_once(' '))
+            .filter(|(scheme, secret)| {
+                scheme.eq_ignore_ascii_case("bearer")
+                    && !secret.is_empty()
+                    && !secret.chars().any(char::is_whitespace)
+            })
+            .map(|(_, secret)| secret.to_owned())
+        else {
+            return unauthenticated();
+        };
+        match tokio::task::spawn_blocking(move || super::tokens::authenticate(&secret)).await {
+            Ok(Ok(Some(token))) => Viewer {
+                identity: Identity::Token {
+                    holder: token.holder.clone(),
+                },
+                caller_label: token.holder,
+                scopes: token.scopes,
+                token: None,
+                csrf: String::new(),
+            },
+            Ok(Ok(None)) => return unauthenticated(),
+            error => {
+                eprintln!("thirdshift Console: API token store read failed: {error:?}");
+                return super::api::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Can't read Console tokens.",
+                );
+            }
+        }
+    } else if access.no_sign_in {
         Viewer {
-            email: "localhost (no sign-in)".into(),
+            caller_label: "localhost (no sign-in)".into(),
+            scopes: Scope::ALL.to_vec(),
+            identity: Identity::local(),
             token: None,
             csrf: access.local_csrf,
         }
@@ -119,7 +192,11 @@ pub(super) async fn guard(
             tokio::task::spawn_blocking(move || Accounts::load()?.session(&selected, true)).await;
         match result {
             Ok(Ok(Some(email))) => Viewer {
-                email,
+                identity: Identity::Session {
+                    address: email.clone(),
+                },
+                caller_label: email,
+                scopes: Scope::ALL.to_vec(),
                 csrf: csrf(&token),
                 token: Some(token),
             },
@@ -162,6 +239,7 @@ pub(super) async fn guard(
         }
         request = Request::from_parts(parts, Body::from(bytes));
     }
+    let withhold = api && !viewer.scopes.contains(&Scope::Security);
     request.extensions_mut().insert(viewer.clone());
     let mut response = next.run(request).await;
     if let Some(token) = viewer.token
@@ -169,7 +247,116 @@ pub(super) async fn guard(
     {
         set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
     }
+    // Read routes embed the same Command records as `/api/v1/security`.
+    // Callers without that scope keep the rest of the CLI JSON, minus the
+    // finding records ADR 0026 reserves for `security`.
+    if withhold {
+        response = withhold_security_records(response).await;
+    }
     response
+}
+
+const SECURITY_RECORD_LIMIT: usize = 32 * 1024 * 1024;
+
+async fn withhold_security_records(response: Response) -> Response {
+    let (mut parts, body) = response.into_parts();
+    let Ok(bytes) = to_bytes(body, SECURITY_RECORD_LIMIT).await else {
+        return super::api::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't scope this response.",
+        );
+    };
+    let replacement = match redacted_security_records(&bytes) {
+        Redaction::Unchanged => return Response::from_parts(parts, Body::from(bytes)),
+        Redaction::Unreadable => {
+            return super::api::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't scope this response.",
+            );
+        }
+        Redaction::Rewritten(body) => body,
+    };
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.insert(
+        header::CONTENT_LENGTH,
+        replacement
+            .len()
+            .to_string()
+            .parse()
+            .expect("content length"),
+    );
+    Response::from_parts(parts, Body::from(replacement))
+}
+
+enum Redaction {
+    Unchanged,
+    Rewritten(Vec<u8>),
+    Unreadable,
+}
+
+fn redacted_security_records(bytes: &[u8]) -> Redaction {
+    let mut value: serde_json::Value = match serde_json::from_slice(bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return if security_record_marker(bytes) {
+                Redaction::Unreadable
+            } else {
+                Redaction::Unchanged
+            };
+        }
+    };
+    if !strip_security_records(&mut value) {
+        return Redaction::Unchanged;
+    }
+    match serde_json::to_vec(&value) {
+        Ok(body) => Redaction::Rewritten(body),
+        Err(_) => Redaction::Unreadable,
+    }
+}
+
+fn security_record_marker(bytes: &[u8]) -> bool {
+    const MARKERS: &[&[u8]] = &[
+        b"\"security_findings\"",
+        b"\"security_fix_findings\"",
+        b"\"security_findings_waiting\"",
+    ];
+    MARKERS
+        .iter()
+        .any(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
+}
+
+fn strip_security_records(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                changed |= strip_security_records(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            changed |= map.remove("security_findings").is_some();
+            changed |= map.remove("security_fix_findings").is_some();
+            if map
+                .get("security_findings_waiting")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                map.insert(
+                    "security_findings_waiting".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+                changed = true;
+            }
+            for child in map.values_mut() {
+                changed |= strip_security_records(child);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+    changed
 }
 
 pub(super) async fn headers(request: Request, next: Next) -> Response {
@@ -190,6 +377,21 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
         response.headers_mut().insert(name, value.parse().unwrap());
     }
     response
+}
+
+pub(super) async fn require_scope(
+    State(scope): State<Scope>,
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !viewer.scopes.contains(&scope) {
+        return super::api::error(
+            StatusCode::FORBIDDEN,
+            format!("Missing scope: {}", scope.name()),
+        );
+    }
+    next.run(request).await
 }
 
 #[derive(Template)]
@@ -308,7 +510,7 @@ pub(super) async fn account(Extension(viewer): Extension<Viewer>) -> Response {
         tokio::task::spawn_blocking(move || -> Result<String> {
             let config = UserConfig::load()?;
             Ok(AccountPage {
-                email: viewer.email,
+                email: viewer.caller_label,
                 csrf: viewer.csrf,
                 signed_in: viewer.token.is_some(),
                 resources: super::resources::Status::new(&config),
@@ -325,7 +527,7 @@ pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let result = tokio::task::spawn_blocking(move || {
-        Accounts::load()?.sign_out(&viewer.email, Some(&token))
+        Accounts::load()?.sign_out(&viewer.caller_label, Some(&token))
     })
     .await;
     match result {

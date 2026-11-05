@@ -381,14 +381,65 @@ Command details shows the last five lines of recent Command output above **Full 
 
 #### Console API
 
-The Console serves read views as JSON under `/api/v1`, using the same sign-in
-session as the page. `console --no-sign-in` also enables the API on localhost.
+The Console serves read views as JSON under `/api/v1`, using a bearer token or
+the same sign-in session as the page. `console --no-sign-in` also enables the API on localhost.
 An unauthenticated API request receives a 401 JSON error instead of the sign-in
 page. Reads use GET; these endpoints start no work and change no Commands.
 
-Each response equals its CLI twin's `--json` output. For example,
-`GET /api/v1/status` equals `thirdshift status --json`, and
-`GET /api/v1/peek?command=widgets%237` equals `thirdshift show widgets#7 --json`.
+Issue a token on the serving machine, from its owner's shell:
+
+```sh
+thirdshift console token create laptop
+thirdshift console token create automation --scopes read,security,act,run,admin --expires 2027-01-01
+thirdshift console token list
+thirdshift console token list --json
+thirdshift console token revoke laptop
+```
+
+Create prints the `ts_` token once; copy it into the client's Credentials.
+Holders are unique on this machine. The default scope is `read`. The five
+accepted scopes are `read` (views), `security` (Security run details and findings),
+`act` (actions), `run` (starting Commands) and `admin` (administration).
+A token without `security` still receives the other fields of a read route, but
+not Security finding records: `security_findings`, `security_fix_findings`, and
+a true `security_findings_waiting` flag are omitted or cleared. It also cannot
+read a Security session trace (`security-review`, `security-audit`,
+`security-reproduction-<n>`, `security-fix-publishing`, `security-close-check`,
+and their resumes); those log reads return 403 naming `security`. A token that
+has `security` receives the finding records and those traces. Action endpoints
+and their auditing arrive in later Console API tickets; granting a scope does
+not create an endpoint. A missing route scope returns 403 JSON naming that
+scope. An expired or revoked token returns 401.
+
+The machine stores only SHA-256 hashes in the owner-only
+`~/.thirdshift/console-tokens.json`, beside the Credentials. List shows holder,
+scopes, issue date, optional expiry and last use, never the token or its hash.
+Expiry accepts a UTC date (`YYYY-MM-DD`, expiring at its start) or an RFC 3339
+timestamp. Revocation deletes the record and takes effect on the next request.
+Last use updates on successful authentication. Token management is CLI-only;
+there is no API endpoint to create, list or revoke tokens.
+
+Send the token as `Authorization: Bearer <token>`. Tokens require HTTPS to the
+installed Caddy or Apache proxy, which sets `X-Forwarded-Proto: https`.
+The exception is a direct connection to `127.0.0.1` with no proxy headers.
+Other transports are refused before checking the token, with the same 401
+whether it was valid or not.
+
+`GET /api/v1/whoami` returns `hostname`, `thirdshift_version`, `api_version`,
+`identity` (token holder, session address or local caller), and effective
+`scopes`. Its CLI twin is `thirdshift console whoami [--json]`, reporting the
+local caller with all scopes. In `--no-sign-in` mode its JSON matches the HTTP
+response. For example, with a token in the client's `THIRDSHIFT_TOKEN` variable:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/whoami
+```
+
+Each response equals its CLI twin's `--json` output, except that a caller
+without the `security` scope does not receive Security finding records or
+Security session traces. For example, `GET /api/v1/status` equals
+`thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
+`thirdshift show widgets#7 --json`, aside from those withheld records.
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
 
@@ -401,6 +452,7 @@ by later Console API tickets appear when they are served.
 
 | Read | API path | CLI twin (add `--json`) |
 | --- | --- | --- |
+| Machine and caller | `/api/v1/whoami` | `console whoami` |
 | Inbox | `/api/v1/status` (`?all=true` includes History) | `status` (`--all`) |
 | History, Security, Lanes, Stages | `/api/v1/history`, `/api/v1/security`, `/api/v1/lanes`, `/api/v1/stages` | `status --all` |
 | Command details, child Ticket runs and stages | `/api/v1/peek?command=<selector>` | `show <selector>` |
@@ -415,8 +467,9 @@ by later Console API tickets appear when they are served.
 Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
 `--follow` stays a separate streaming option. Other-account Commands retain
 their account tags and remain read-only. CLI refusals return 422 JSON with an
-`error` message. Action endpoints, tokens and scope enforcement arrive in later
-Console API tickets; actions on the signed-in page keep working as before.
+`error` message. Action endpoints arrive in later Console API tickets; actions
+on the signed-in page keep working as before. A signed-in session and
+`console --no-sign-in` hold every scope, so their JSON still matches the CLI.
 
 #### Console on a server
 

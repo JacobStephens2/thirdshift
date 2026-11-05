@@ -24,11 +24,12 @@ pub(super) fn document() -> Value {
             "parameters": parameters,
             "responses": {
                 "200": {
-                    "description": "The CLI twin's JSON response.",
+                    "description": "The CLI twin's JSON response, filtered by the caller's scopes.",
                     "content": {"application/json": {"schema": schema}}
                 },
                 "400": refusal("Invalid path argument."),
-                "401": refusal("A Console sign-in is required."),
+                "401": refusal("A valid Console sign-in or bearer token is required."),
+                "403": refusal("The caller lacks the required scope."),
                 "422": refusal("The CLI twin refused the arguments or selected record."),
                 "500": refusal("The Console could not read this view.")
             }
@@ -39,13 +40,16 @@ pub(super) fn document() -> Value {
         "info": {
             "title": "thirdshift Console API",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "Currently served /api/v1 operations. Scopes are declarations; token scope enforcement arrives in a later Console API ticket. Local --no-sign-in needs no session."
+            "description": "Currently served /api/v1 operations. Each operation enforces its x-scope. Bearer tokens require HTTPS or a direct connection to 127.0.0.1 without proxy headers. Local --no-sign-in needs no session."
         },
         "paths": paths,
-        "security": [{"ConsoleSession": []}],
-        "components": {"securitySchemes": {"ConsoleSession": {
-            "type": "apiKey", "in": "cookie", "name": "__Host-thirdshift-session"
-        }}}
+        "security": [{"ConsoleSession": []}, {"ConsoleBearer": []}],
+        "components": {"securitySchemes": {
+            "ConsoleSession": {
+                "type": "apiKey", "in": "cookie", "name": "__Host-thirdshift-session"
+            },
+            "ConsoleBearer": {"type": "http", "scheme": "bearer"}
+        }}
     })
 }
 
@@ -91,6 +95,16 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Whoami => object(json!({
+            "version": version, "hostname": text, "thirdshift_version": text,
+            "api_version": {"type": "string", "const": "v1"},
+            "identity": {"oneOf": [
+                object(json!({"kind": {"const": "token"}, "holder": text})),
+                object(json!({"kind": {"const": "session"}, "address": text})),
+                object(json!({"kind": {"const": "local"}, "uid": integer}))
+            ]},
+            "scopes": array(json!({"type": "string", "enum": super::Scope::ALL}))
+        })),
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
             "info": record, "paths": record, "components": record, "security": array(record.clone())

@@ -13,6 +13,8 @@ mod github;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
+mod identity;
+pub use identity::whoami;
 mod live;
 mod logs;
 mod look;
@@ -28,6 +30,7 @@ mod scoring;
 mod stop;
 mod subscription;
 mod time;
+pub(crate) mod tokens;
 mod watching;
 mod waterfall;
 
@@ -84,16 +87,39 @@ struct PageRoute {
     view: View,
 }
 
-#[derive(Clone, Copy, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Scope {
+pub(crate) enum Scope {
     Read,
     Security,
     Act,
+    Run,
+    Admin,
+}
+
+impl Scope {
+    const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Security,
+        Self::Act,
+        Self::Run,
+        Self::Admin,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Security => "security",
+            Self::Act => "act",
+            Self::Run => "run",
+            Self::Admin => "admin",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 enum View {
+    Whoami,
     OpenApi,
     BugOrigins,
     SettleBugOrigin,
@@ -141,7 +167,8 @@ impl PageRoute {
         self.method == Method::GET
             && matches!(
                 self.view,
-                View::BugOrigins
+                View::Whoami
+                    | View::BugOrigins
                     | View::OpenApi
                     | View::Scores
                     | View::Experiments
@@ -165,6 +192,14 @@ impl PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/whoami",
+        api: "/api/v1/whoami",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console whoami --json"],
+        method: Method::GET,
+        view: View::Whoami,
+    },
     PageRoute {
         path: "/api/v1/openapi.json",
         api: "/api/v1/openapi.json",
@@ -582,7 +617,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             listener,
             router(no_sign_in, changes)
                 .layer(axum::Extension(notifier))
-                .layer(axum::Extension(assets)),
+                .layer(axum::Extension(assets))
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
             let mut accounts_revision = 0;
@@ -630,6 +666,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Whoami, Method::GET) => get(identity::show),
             (View::OpenApi, Method::GET) => get(openapi::serve),
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
@@ -673,12 +710,21 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
         };
-        if page.serves_api() && page.api != page.path {
+        if page.serves_api() {
             assert!(page.scope.is_some(), "API route needs a scope");
             router = router.route(
                 page.api,
-                handler.clone().layer(axum::Extension(api::Format::Json)),
+                handler
+                    .clone()
+                    .layer(axum::Extension(api::Format::Json))
+                    .layer(middleware::from_fn_with_state(
+                        page.scope.unwrap(),
+                        auth::require_scope,
+                    )),
             );
+            if page.api == page.path {
+                continue;
+            }
         }
         router = router.route(page.path, handler);
     }
@@ -963,12 +1009,39 @@ async fn inspect(
 }
 
 async fn log(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
     if format == api::Format::Json {
+        if !viewer.scopes.contains(&Scope::Security) {
+            let command_for_check = command.clone();
+            let session_for_check = session.clone();
+            match tokio::task::spawn_blocking(move || -> Result<bool> {
+                let config = UserConfig::load()?;
+                let path = status::inspect::log_path(
+                    &config,
+                    &command_for_check,
+                    (!session_for_check.is_empty()).then_some(session_for_check.as_str()),
+                )?;
+                Ok(crate::logs::owner::security_session(&path))
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+                }
+                Ok(Ok(false)) | Ok(Err(_)) => {}
+                Err(_) => {
+                    return api::error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Can't read this view; check the Console's stderr.",
+                    );
+                }
+            }
+        }
         return api::read(format, move || {
             let config = UserConfig::load()?;
             Ok(axum::Json(status::inspect::read_log(
@@ -995,7 +1068,9 @@ async fn log(
     })
     .await
     {
-        Ok(Ok(id)) => logs::reader(Path(id), axum::Extension(format)).await,
+        Ok(Ok(id)) => {
+            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
+        }
         _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
     }
 }
@@ -1293,6 +1368,24 @@ mod tests {
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
         assert_cli_parity(router());
+    }
+
+    #[test]
+    fn token_management_has_no_http_routes() {
+        for route in super::PAGES {
+            assert!(
+                !route
+                    .api
+                    .split('/')
+                    .any(|part| matches!(part, "token" | "tokens"))
+            );
+            assert!(
+                route
+                    .cli
+                    .iter()
+                    .all(|cli| !cli.starts_with("thirdshift console token "))
+            );
+        }
     }
 
     #[test]
