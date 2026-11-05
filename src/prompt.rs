@@ -493,6 +493,9 @@ fn review_validation_instructions(commands: &[String]) -> String {
         "run final validation as required by the repository's agent instructions in this Review run's worktree. \
         Also run every extra shell command in this JSON list, in order, in that worktree: {commands}. \
         An empty list still requires the repository's final validation. A failed command must not skip the remaining commands. \
+        Keep disposable validation logs inside the worktree, never in `/tmp`, so worktree cleanup can remove them. \
+        Do not re-run full test suites with `--debug` or verbose trace flags to isolate a failure; re-run the failing test file or filter instead. \
+        Inspect large logs with bounded streaming tools (`tail`, `head`, `grep`) rather than reading entire files into memory. \
         If the repository's agent instructions say a suite is invalid from a worktree, do not run it elsewhere as a substitute: report it as `not run against the branch`, with the reason, and never report it as passing. \
         In the final report that thirdshift posts as the review comment, list each exact command and what ran, what passed, what failed and what could not run, with exit status or the reason it could not run. \
         Check the pull request is still open before additional validation; stop if it is merged or closed.",
@@ -856,6 +859,46 @@ pub fn scoring_grader() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_validation_keeps_logs_in_the_worktree_and_bounds_diagnostics() {
+        let pr =
+            crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
+        let failed = FailedChecks {
+            own: Vec::new(),
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+        let earlier = || EarlierSteps {
+            results: &[],
+            first: true,
+        };
+        for prompt in [
+            pull_request_review(&pr, "main", crate::review::Mode::Address, &[], earlier()),
+            pull_request_review(
+                &pr,
+                "main",
+                crate::review::Mode::RecommendOnly,
+                &[],
+                earlier(),
+            ),
+            pull_request_validation(&pr, "abc123", &[]),
+            pull_request_ci_fix_repair(&pr, "main", "issue-7", &failed, &[]),
+        ] {
+            for instruction in [
+                "Keep disposable validation logs inside the worktree, never in `/tmp`",
+                "Do not re-run full test suites with `--debug` or verbose trace flags",
+                "re-run the failing test file or filter instead",
+                "Inspect large logs with bounded streaming tools",
+                "rather than reading entire files into memory",
+            ] {
+                assert!(
+                    prompt.contains(instruction),
+                    "missing {instruction}: {prompt}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn read_only_sessions_and_resumes_do_not_add_source_editing_guidance() {
