@@ -87,6 +87,10 @@ pub enum Command {
     ConsoleLog {
         json: bool,
     },
+    ConsoleToken(crate::console::tokens::Action),
+    ConsoleWhoami {
+        json: bool,
+    },
     ConsoleTheme {
         name: Option<String>,
         json: bool,
@@ -409,6 +413,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "token") {
+                return crate::console::tokens::parse(&args[2..]).map(Command::ConsoleToken);
+            }
             if args.get(1).is_some_and(|action| action == "other-accounts") {
                 let json = args.last().is_some_and(|arg| arg == "--json");
                 let end = args.len() - usize::from(json);
@@ -490,6 +497,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 return Ok(Command::ConsoleSignOut { email, json });
             }
             return match &args[1..] {
+                [action] if action == "whoami" => Ok(Command::ConsoleWhoami { json: false }),
+                [action, flag] if action == "whoami" && flag == "--json" => {
+                    Ok(Command::ConsoleWhoami { json: true })
+                }
                 [] => Ok(Command::Console { no_sign_in: false }),
                 [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
                 [action] if action == "install" => Ok(Command::ConsoleInstall { output: None }),
@@ -511,7 +522,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Ok(Command::ConsoleLog { json: true })
                 }
                 _ => bail!(
-                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json] | token <create|list|revoke> | whoami [--json]"
                 ),
             };
         }

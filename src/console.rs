@@ -13,6 +13,8 @@ mod github;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
+mod identity;
+pub use identity::whoami;
 mod live;
 mod logs;
 mod look;
@@ -26,6 +28,7 @@ mod scoring;
 mod stop;
 mod subscription;
 mod time;
+pub(crate) mod tokens;
 mod watching;
 mod waterfall;
 
@@ -82,15 +85,39 @@ struct PageRoute {
     view: View,
 }
 
-#[derive(Clone, Copy)]
-enum Scope {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Scope {
     Read,
     Security,
     Act,
+    Run,
+    Admin,
+}
+
+impl Scope {
+    const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Security,
+        Self::Act,
+        Self::Run,
+        Self::Admin,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Security => "security",
+            Self::Act => "act",
+            Self::Run => "run",
+            Self::Admin => "admin",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 enum View {
+    Whoami,
     BugOrigins,
     SettleBugOrigin,
     Scores,
@@ -137,7 +164,8 @@ impl PageRoute {
         self.method == Method::GET
             && matches!(
                 self.view,
-                View::BugOrigins
+                View::Whoami
+                    | View::BugOrigins
                     | View::Scores
                     | View::Experiments
                     | View::Experiment
@@ -160,6 +188,14 @@ impl PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/whoami",
+        api: "/api/v1/whoami",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console whoami --json"],
+        method: Method::GET,
+        view: View::Whoami,
+    },
     PageRoute {
         path: "/metrics",
         api: "/api/v1/metrics",
@@ -569,7 +605,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             listener,
             router(no_sign_in, changes)
                 .layer(axum::Extension(notifier))
-                .layer(axum::Extension(assets)),
+                .layer(axum::Extension(assets))
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
             let mut accounts_revision = 0;
@@ -617,6 +654,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Whoami, Method::GET) => get(identity::show),
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
@@ -663,7 +701,13 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             assert!(page.scope.is_some(), "API route needs a scope");
             router = router.route(
                 page.api,
-                handler.clone().layer(axum::Extension(api::Format::Json)),
+                handler
+                    .clone()
+                    .layer(axum::Extension(api::Format::Json))
+                    .layer(middleware::from_fn_with_state(
+                        page.scope.unwrap(),
+                        auth::require_scope,
+                    )),
             );
         }
         router = router.route(page.path, handler);
@@ -1201,6 +1245,24 @@ mod tests {
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
         assert_cli_parity(router());
+    }
+
+    #[test]
+    fn token_management_has_no_http_routes() {
+        for route in super::PAGES {
+            assert!(
+                !route
+                    .api
+                    .split('/')
+                    .any(|part| matches!(part, "token" | "tokens"))
+            );
+            assert!(
+                route
+                    .cli
+                    .iter()
+                    .all(|cli| !cli.starts_with("thirdshift console token "))
+            );
+        }
     }
 
     #[test]

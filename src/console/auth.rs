@@ -4,7 +4,7 @@ use askama::Template;
 
 use super::filters;
 use axum::body::{Body, to_bytes};
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -12,7 +12,9 @@ use axum::{Extension, Form};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
+use super::Scope;
 use super::accounts::{self, Accounts, SignIn};
+use super::identity::Identity;
 use crate::config::UserConfig;
 
 mod password;
@@ -41,6 +43,8 @@ impl Access {
 #[derive(Clone)]
 pub(super) struct Viewer {
     pub email: String,
+    pub scopes: Vec<Scope>,
+    pub identity: Identity,
     token: Option<String>,
     pub(super) csrf: String,
 }
@@ -85,6 +89,33 @@ fn set_cookie(response: &mut Response, name: &str, value: &str, age: i64) {
     );
 }
 
+// Only the installed loopback proxy may attest HTTPS. A direct localhost
+// exception must carry no forwarded/proxy headers at all.
+fn bearer_transport(request: &Request) -> bool {
+    let local = request
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .is_some_and(|peer| peer.0.ip() == std::net::Ipv4Addr::LOCALHOST);
+    if !local {
+        return false;
+    }
+    let headers = request.headers();
+    if headers.get_all("x-forwarded-proto").iter().count() == 1
+        && headers
+            .get("x-forwarded-proto")
+            .is_some_and(|value| value == "https")
+    {
+        return true;
+    }
+    !headers.keys().any(|name| {
+        name.as_str().starts_with("x-forwarded-")
+            || matches!(
+                name.as_str(),
+                "forwarded" | "x-real-ip" | "via" | "proxy-connection"
+            )
+    })
+}
+
 pub(super) async fn guard(
     State(access): State<Access>,
     mut request: Request,
@@ -104,9 +135,51 @@ pub(super) async fn guard(
     {
         return next.run(request).await;
     }
-    let viewer = if access.no_sign_in {
+    let viewer = if api && request.headers().contains_key(header::AUTHORIZATION) {
+        if !bearer_transport(&request) {
+            return unauthenticated();
+        }
+        let headers = request.headers();
+        if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+            return unauthenticated();
+        }
+        let Some(secret) = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split_once(' '))
+            .filter(|(scheme, secret)| {
+                scheme.eq_ignore_ascii_case("bearer")
+                    && !secret.is_empty()
+                    && !secret.chars().any(char::is_whitespace)
+            })
+            .map(|(_, secret)| secret.to_owned())
+        else {
+            return unauthenticated();
+        };
+        match tokio::task::spawn_blocking(move || super::tokens::authenticate(&secret)).await {
+            Ok(Ok(Some(token))) => Viewer {
+                identity: Identity::Token {
+                    holder: token.holder.clone(),
+                },
+                email: token.holder,
+                scopes: token.scopes,
+                token: None,
+                csrf: String::new(),
+            },
+            Ok(Ok(None)) => return unauthenticated(),
+            error => {
+                eprintln!("thirdshift Console: API token store read failed: {error:?}");
+                return super::api::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Can't read Console tokens.",
+                );
+            }
+        }
+    } else if access.no_sign_in {
         Viewer {
             email: "localhost (no sign-in)".into(),
+            scopes: Scope::ALL.to_vec(),
+            identity: Identity::local(),
             token: None,
             csrf: access.local_csrf,
         }
@@ -119,7 +192,11 @@ pub(super) async fn guard(
             tokio::task::spawn_blocking(move || Accounts::load()?.session(&selected, true)).await;
         match result {
             Ok(Ok(Some(email))) => Viewer {
+                identity: Identity::Session {
+                    address: email.clone(),
+                },
                 email,
+                scopes: Scope::ALL.to_vec(),
                 csrf: csrf(&token),
                 token: Some(token),
             },
@@ -190,6 +267,21 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
         response.headers_mut().insert(name, value.parse().unwrap());
     }
     response
+}
+
+pub(super) async fn require_scope(
+    State(scope): State<Scope>,
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !viewer.scopes.contains(&scope) {
+        return super::api::error(
+            StatusCode::FORBIDDEN,
+            format!("Missing scope: {}", scope.name()),
+        );
+    }
+    next.run(request).await
 }
 
 #[derive(Template)]

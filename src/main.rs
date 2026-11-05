@@ -203,6 +203,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
+       thirdshift console token create <holder> [--scopes <list>] [--expires <date>]  Issue a token once
+       thirdshift console token list [--json]         List token metadata
+       thirdshift console token revoke <holder>       Revoke a token immediately
+       thirdshift console whoami [--json]             Identify this machine and caller
        thirdshift console theme <name|list> [--json]  Choose or list Console Themes
        thirdshift console theme import <file>        Import a Theme JSON document
        thirdshift console theme export <name>        Export a Theme as JSON
@@ -313,6 +317,13 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::ConsoleToken(action)) => {
+            return match console::tokens::run(action) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
         Ok(Command::Console { no_sign_in }) => {
             return match console::serve(no_sign_in) {
                 Ok(()) => ExitCode::SUCCESS,
