@@ -31,6 +31,17 @@ pub(super) fn document() -> Value {
                 "401": refusal("A valid Console sign-in or bearer token is required."),
                 "403": refusal("The caller lacks the required scope."),
                 "422": refusal("The CLI twin refused the arguments or selected record."),
+                "429": {
+                    "description": "Too many failed authentications from this client address.",
+                    "headers": {"Retry-After": {
+                        "description": "Seconds until another authentication may be attempted.",
+                        "schema": {"type": "integer", "minimum": 1}
+                    }},
+                    "content": {"application/json": {"schema": object(json!({
+                        "error": {"type": "string"},
+                        "retry_after": {"type": "integer", "minimum": 1}
+                    }))}}
+                },
                 "500": refusal("The Console could not read this view.")
             }
         });

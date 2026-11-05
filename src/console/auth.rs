@@ -18,6 +18,7 @@ use super::identity::Identity;
 use crate::config::UserConfig;
 
 mod password;
+mod rate_limit;
 mod reply;
 pub(super) use password::{code, set_password, set_password_page};
 use reply::Reply;
@@ -29,6 +30,7 @@ const SIGN_IN: &str = "__Host-thirdshift-sign-in";
 pub(super) struct Access {
     pub no_sign_in: bool,
     local_csrf: String,
+    limiter: rate_limit::Limiter,
 }
 
 impl Access {
@@ -36,6 +38,7 @@ impl Access {
         Self {
             no_sign_in,
             local_csrf: accounts::random_token(),
+            limiter: rate_limit::Limiter::default(),
         }
     }
 }
@@ -124,6 +127,13 @@ fn bearer_transport(request: &Request) -> bool {
     })
 }
 
+async fn bearer_refused(limiter: &rate_limit::Limiter, address: std::net::IpAddr) -> Response {
+    match limiter.failed(address).await {
+        Some(retry) => rate_limit::refusal(retry),
+        None => super::api::error(StatusCode::UNAUTHORIZED, "Sign in to the Console."),
+    }
+}
+
 pub(super) async fn guard(State(access): State<Access>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     let api = super::api::is_path(path);
@@ -143,9 +153,18 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
         if !bearer_transport(&request) {
             return unauthenticated();
         }
+        let peer = request
+            .extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .expect("bearer transport requires a connected peer")
+            .0;
+        let address = rate_limit::address(peer, request.headers());
+        if let Some(retry) = access.limiter.retry_after(address) {
+            return rate_limit::refusal(retry);
+        }
         let headers = request.headers();
         if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
-            return unauthenticated();
+            return bearer_refused(&access.limiter, address).await;
         }
         let Some(secret) = headers
             .get(header::AUTHORIZATION)
@@ -158,7 +177,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
             })
             .map(|(_, secret)| secret.to_owned())
         else {
-            return unauthenticated();
+            return bearer_refused(&access.limiter, address).await;
         };
         match tokio::task::spawn_blocking(move || super::tokens::authenticate(&secret)).await {
             Ok(Ok(Some(token))) => Viewer {
@@ -170,7 +189,9 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
                 token: None,
                 csrf: String::new(),
             },
-            Ok(Ok(None)) => return unauthenticated(),
+            Ok(Ok(None)) => {
+                return bearer_refused(&access.limiter, address).await;
+            }
             error => {
                 eprintln!("thirdshift Console: API token store read failed: {error:?}");
                 return super::api::error(
@@ -512,6 +533,7 @@ pub(super) struct SignInForm {
 
 pub(super) async fn sign_in(
     Extension(access): Extension<Access>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<SignInForm>,
 ) -> Response {
@@ -524,6 +546,10 @@ pub(super) async fn sign_in(
     if !valid_csrf(&form.csrf, &csrf(&token)) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let address = rate_limit::address(peer, &headers);
+    if let Some(retry) = access.limiter.retry_after(address) {
+        return sign_in_limited(retry).await;
+    }
     let result =
         tokio::task::spawn_blocking(move || Accounts::load()?.sign_in(&form.email, &form.password))
             .await;
@@ -533,11 +559,24 @@ pub(super) async fn sign_in(
             set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
             response
         }
-        Ok(Ok(SignIn::Refused)) => Reply::SignInRefused.response().await,
+        Ok(Ok(SignIn::Refused)) => {
+            if let Some(retry) = access.limiter.failed(address).await {
+                return sign_in_limited(retry).await;
+            }
+            Reply::SignInRefused.response().await
+        }
         Ok(Ok(SignIn::Slowdown)) => Reply::SignInSlowdown.response().await,
         Ok(Err(error)) => failed(error),
         Err(error) => failed(error),
     }
+}
+
+async fn sign_in_limited(retry: u64) -> Response {
+    let mut response = Reply::SignInSlowdown.response().await;
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, retry.into());
+    response
 }
 
 #[derive(Template)]
