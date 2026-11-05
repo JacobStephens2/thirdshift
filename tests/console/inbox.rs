@@ -4,6 +4,81 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn ready_rows_prefer_pull_request_subjects_and_keep_issue_and_command_fallbacks() {
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for number in 1..=4 {
+        let mut fixture = record(home.path(), number, Some("ready for review"), 0);
+        fixture["name"] = json!(format!("review-fixture-{number}"));
+        fixture["tickets"] = json!([]);
+        if number == 1 || number == 4 {
+            fixture["issue"] = Value::Null;
+        }
+        fixture["pull_request"] = if number <= 2 {
+            json!(format!(
+                "https://github.com/acme/widgets/pull/{}",
+                number + 10
+            ))
+        } else {
+            Value::Null
+        };
+        super::write_record(home.path(), number, &fixture);
+    }
+    fs::write(
+        home.path().join(".thirdshift/logs/github-inbox.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "subjects": {
+                "https://github.com/acme/widgets/pull/11": {"state": "Open", "title": "Review <script>unsafe()</script> & ship", "merged_at": null, "closed_at": null},
+                "https://github.com/acme/widgets/pull/12": {"state": "Open", "title": "A distinct pull request title", "merged_at": null, "closed_at": null}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let ready = section(&html, "ready for review");
+    let heads: Vec<_> = ready
+        .split("<div class=\"row-head\">")
+        .skip(1)
+        .map(|head| head.split("</div>").next().unwrap())
+        .collect();
+    assert_eq!(heads.len(), 2, "{ready}");
+    for (number, title) in [
+        (
+            11,
+            "Review &#60;script&#62;unsafe()&#60;/script&#62; &#38; ship",
+        ),
+        (12, "A distinct pull request title"),
+    ] {
+        let head = heads
+            .iter()
+            .find(|head| {
+                head.contains(&format!(
+                    "href=\"https://github.com/acme/widgets/pull/{number}\""
+                ))
+            })
+            .unwrap_or_else(|| panic!("primary PR link {number} missing: {ready}"));
+        assert!(head.contains(title), "{head}");
+        assert!(
+            !head.contains("Widgets"),
+            "PR must win over issue title: {head}"
+        );
+    }
+    let done = section(&html, "done");
+    assert!(
+        done.contains("href=\"https://github.com/acme/widgets/issues/3\"")
+            && done.contains("Widgets &#60;script&#62;"),
+        "{done}"
+    );
+    assert!(done.contains("review-fixture-4 on acme/widgets"), "{done}");
+    assert!(!ready.contains("<script>unsafe()"), "{ready}");
+}
+
+#[test]
 fn a_live_review_run_links_its_pull_request_in_working() {
     let scenario = super::support::Scenario::new();
     scenario.user_config_is("[console]\nport = 0\n");
@@ -560,10 +635,14 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         (4, "ready for review", "Ready", false, false),
         (5, "needs you", "Failed", false, false),
     ] {
-        let issue_link = format!("href=\"https://github.com/acme/widgets/issues/{number}\"");
+        let subject_link = if group == "ready for review" {
+            "href=\"https://github.com/acme/widgets/pull/10\"".into()
+        } else {
+            format!("href=\"https://github.com/acme/widgets/issues/{number}\"")
+        };
         let row = html
             .split("<li class=\"command\"")
-            .find(|row| row.contains(&issue_link))
+            .find(|row| row.contains(&subject_link))
             .expect(&html);
         assert!(row.contains(&format!("data-live=\"{live}\"")), "{row}");
         assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
@@ -572,7 +651,7 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
             "{row}"
         );
         let section = section(&html, group);
-        assert!(section.contains(&issue_link), "{section}");
+        assert!(section.contains(&subject_link), "{section}");
         let item = json["commands"]
             .as_array()
             .unwrap()

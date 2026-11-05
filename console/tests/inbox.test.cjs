@@ -584,7 +584,9 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
       await page.goto(`${origin}/?page=inbox`);
       const section = page.locator(`#inbox > [data-group="${group}"]`);
       if (group === 'ready for review') await folder(page, group).click();
-      const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      const subjectUrl = group === 'ready for review'
+        ? 'https://github.com/acme/widgets/pull/224' : 'https://github.com/acme/widgets/issues/223';
+      const row = section.locator('.command').filter({ has: page.locator(`.subject a[href="${subjectUrl}"]`) });
       await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
       if (javaScriptEnabled) {
         await row.waitFor({ state: 'detached' });
@@ -599,7 +601,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await page.clock.fastForward(10001);
         await notice.waitFor({ state: 'detached' });
       } else await page.waitForURL(`${origin}/`);
-      assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+      assert.equal(await section.locator(`.subject a[href="${subjectUrl}"]`).count(), 0);
       assert.equal(await page.locator('#peek').isVisible(), false);
       await folder(page, 'done').click();
       const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
@@ -1350,7 +1352,7 @@ for (const storage of ['blocked', 'read-only', 'malformed']) {
   });
 }
 
-test('Ready rows show CI and merge conflicts across themes and widths and update live', async t => {
+test('Ready rows link PR subjects, show titles and CI across widths, and update live', async t => {
   const logs = join(home, '.thirdshift/logs');
   const dir = join(logs, 'acme/widgets/commands/issue');
   const cache = join(logs, 'github-inbox.json');
@@ -1374,13 +1376,14 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
       const url = `https://github.com/acme/widgets/pull/${number}`;
       await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
         cause: null, tickets: [], pull_request: url,
-        issue: { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'Review this pull request with a long issue title' } }));
+        issue: number === 229 ? null : { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'A distinct issue title that must not replace the PR title' } }));
       // Undefined represents an old cache; null represents an unread PR.
-      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable };
+      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable,
+        ...(ci === undefined ? {} : { title: `PR ${number}: safely show <script>unsafe()</script> & a long title on phones` }) };
     }
     await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
     await writeFile(changed, 'CI fixture');
-    const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href="https://github.com/acme/widgets/pull/${number}"])`);
     for (const javaScriptEnabled of [true, false]) {
       const page = await pageFor(t, { javaScriptEnabled });
       await page.goto(`${origin}/?section=ready-for-review`);
@@ -1388,9 +1391,14 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
         await page.setViewportSize({ width, height: 900 });
         for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
           await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-          for (const [number, , label, tag, mergeable] of states) {
+          for (const [number, ci, label, tag, mergeable] of states) {
             const row = rowFor(page, number);
             assert.equal(await row.getAttribute('data-state'), 'Ready');
+            assert.equal(await row.locator('.subject a').textContent(), `acme/widgets#${number}`);
+            assert.equal(await row.locator('.row-head > .issue-title').textContent(),
+              ci == null ? '(title unavailable)' : `PR ${number}: safely show <script>unsafe()</script> & a long title on phones`);
+            assert.equal(await row.locator('script').count(), 0);
+            assert.equal(await row.locator('.row-head > .issue-title').isVisible(), true);
             assert.equal(await row.locator('.merge-conflict').count(), mergeable === 'conflicting' ? 1 : 0);
             const badges = [[row.locator('.ci'), label, tag]];
             if (mergeable === 'conflicting') badges.push([row.locator('.merge-conflict'), 'Merge conflict', 'urgent']);
@@ -1430,6 +1438,24 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
     await writeFile(changed, 'CI changed');
     await row.locator('.ci').getByText('CI red', { exact: true }).waitFor();
     assert.equal(await row.getAttribute('data-state'), 'Ready');
+    subjects['https://github.com/acme/widgets/pull/229'].title = 'Renamed PR <title> & ship';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'Title changed');
+    await row.locator('.issue-title').getByText('Renamed PR <title> & ship', { exact: true }).waitFor();
+    // Both pointer and native keyboard activation follow GitHub directly.
+    // Fulfil the destination locally so this checks navigation without network.
+    const url = 'https://github.com/acme/widgets/pull/229';
+    await page.route(url, route => route.fulfill({ body: 'Pull request destination' }));
+    let peeks = 0;
+    page.on('request', request => { if (new URL(request.url()).pathname === '/peek') peeks++; });
+    for (const activation of ['pointer', 'keyboard']) {
+      await page.goto(`${origin}/?section=ready-for-review`);
+      const link = rowFor(page, 229).locator('.subject a');
+      if (activation === 'pointer') await link.click();
+      else { await link.focus(); await link.press('Enter'); }
+      await page.waitForURL(url);
+      assert.equal(peeks, 0, `${activation} PR activation must not open Details`);
+    }
   } finally {
     for (const path of paths) await rm(path, { force: true });
     if (previous === null) await rm(cache, { force: true });
@@ -1451,6 +1477,8 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
     212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
     213: live('implement'),
   };
+  const subjectUrl = number => number === 212
+    ? 'https://github.com/acme/widgets/pull/212' : `https://github.com/acme/widgets/issues/${number}`;
   const stop = join(dir, '213-fixture.command.stop.json');
   const paths = [stop];
   for (const [number, change] of Object.entries(fixtures)) {
@@ -1473,12 +1501,12 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
       ]) {
         const section = page.getByRole('group', { name: title, exact: true });
         assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
-        assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
+        assert.equal(await section.locator(`.subject a[href="${subjectUrl(number)}"]`).isVisible(), true, group);
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
-    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href="${subjectUrl(number)}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
       const probe = document.createElement('span');
       document.body.append(probe);

@@ -1710,22 +1710,26 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
         .skip(1)
         .map(|rest| rest.split('"').next().unwrap())
         .collect();
-    let expected: Vec<_> = status["commands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| {
-            format!(
-                "{}#{}",
-                item["repository"].as_str().unwrap(),
-                item["issue"]["number"]
-            )
-        })
-        .collect();
-    assert_eq!(subjects, expected);
+    assert_eq!(
+        subjects,
+        [
+            "acme/widgets#1",
+            "acme/widgets#10",
+            "acme/widgets#3",
+            "acme/widgets#4"
+        ]
+    );
     for item in status["commands"].as_array().unwrap() {
-        let number = item["issue"]["number"].as_u64().unwrap();
         let group = item["group"].as_str().unwrap();
+        let number = if group == "ready for review" {
+            assert_eq!(
+                item["pull_request"],
+                "https://github.com/acme/widgets/pull/10"
+            );
+            10
+        } else {
+            item["issue"]["number"].as_u64().unwrap()
+        };
         let section = section(&html, group);
         assert!(
             section.contains(&format!("acme/widgets#{number}")),

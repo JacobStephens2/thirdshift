@@ -1669,7 +1669,7 @@ impl InboxSubject {
             ),
             Self::PullRequest => (
                 "pullRequest",
-                "url state mergedAt closedAt mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+                "url title state mergedAt closedAt mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
             ),
         }
     }
@@ -1730,6 +1730,8 @@ impl IssueState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
+    #[serde(default)]
+    pub title: Option<String>,
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
     #[serde(default)]
@@ -1812,6 +1814,7 @@ impl PullRequestState {
         let at = |name: &str| json[name].as_str().map(String::from);
         Ok(PullRequestState {
             state,
+            title: at("title"),
             merged_at: at("mergedAt"),
             closed_at: at("closedAt"),
             ci: InboxCi::from_json(json),
