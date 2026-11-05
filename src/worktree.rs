@@ -37,6 +37,23 @@ enum UntrackedFiles {
     DiscardValidationArtifacts,
 }
 
+/// Failure preservation differs for a Ticket's implementation and an
+/// existing PR's Repairs, independently of their human-facing names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailedWork {
+    Ticket,
+    Fix,
+}
+
+impl FailedWork {
+    fn run_name(self) -> &'static str {
+        match self {
+            Self::Ticket => "ticket run",
+            Self::Fix => "fix run",
+        }
+    }
+}
+
 /// A successful preservation either published work or found no changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preserved {
@@ -114,7 +131,7 @@ impl ForeignCommits {
 }
 
 pub struct Worktree {
-    failed_run_name: &'static str,
+    failed_work: FailedWork,
     checkout: ownership::Checkout,
     launch: Git,
     branch: String,
@@ -170,7 +187,7 @@ impl Worktree {
         ));
         let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
-            failed_run_name: "ticket run",
+            failed_work: FailedWork::Ticket,
             checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
@@ -228,7 +245,7 @@ impl Worktree {
             &self.launch,
             base,
             reason,
-            self.failed_run_name,
+            self.failed_work,
             actionable,
         )?;
         self.cleanup = Cleanup::Remove;
@@ -236,7 +253,7 @@ impl Worktree {
     }
 
     pub(crate) fn for_fix_run(mut self) -> Self {
-        self.failed_run_name = "fix run";
+        self.failed_work = FailedWork::Fix;
         self
     }
 

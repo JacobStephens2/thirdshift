@@ -32,7 +32,7 @@ pub struct ReviewArgs {
 }
 
 pub struct FixArgs {
-    pub pull_request: String,
+    pub pull_request: crate::review::PullRequestInput,
     pub flags: Flags,
 }
 
@@ -933,16 +933,7 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
     let Some(target) = args.first() else {
         bail!("usage: thirdshift fix <PR URL or number> [options]");
     };
-    if !target.bytes().all(|byte| byte.is_ascii_digit()) || target.is_empty() {
-        crate::review::PullRequestUrl::parse(target)?;
-    } else if target
-        .parse::<u64>()
-        .ok()
-        .filter(|number| *number > 0)
-        .is_none()
-    {
-        bail!("pull request number must be positive");
-    }
+    let pull_request = crate::review::PullRequestInput::parse(target)?;
     let mut flags = Flags::default();
     let mut words = args[1..].iter().peekable();
     while let Some(arg) = words.next() {
@@ -958,7 +949,7 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
         bail!("parallel and security flags do not apply to Fix runs");
     }
     Ok(FixArgs {
-        pull_request: target.clone(),
+        pull_request,
         flags,
     })
 }

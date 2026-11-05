@@ -2,7 +2,8 @@
 
 use anyhow::{Result, bail, ensure};
 
-use crate::issue::IssueUrl;
+use crate::issue::{IssueUrl, Repo};
+use std::num::NonZeroU64;
 
 mod reservation;
 pub(crate) use reservation::Reservation;
@@ -10,6 +11,34 @@ pub(crate) use reservation::Reservation;
 pub(crate) enum Target {
     PullRequest(PullRequestUrl),
     Author(String),
+}
+
+/// A validated PR argument before shorthand is resolved against origin.
+pub(crate) enum PullRequestInput {
+    Url(PullRequestUrl),
+    Number(NonZeroU64),
+}
+
+impl PullRequestInput {
+    pub fn parse(input: &str) -> Result<Self> {
+        if !input.is_empty() && input.bytes().all(|byte| byte.is_ascii_digit()) {
+            let number = input.parse().map_err(|_| {
+                anyhow::anyhow!("pull request number must be positive and fit in u64")
+            })?;
+            Ok(Self::Number(number))
+        } else {
+            PullRequestUrl::parse(input).map(Self::Url)
+        }
+    }
+
+    pub fn resolve(&self, repo: &Repo) -> Result<PullRequestUrl> {
+        match self {
+            Self::Url(pr) => Ok(pr.clone()),
+            Self::Number(number) => {
+                PullRequestUrl::parse(&format!("https://github.com/{}/pull/{number}", repo.slug()))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

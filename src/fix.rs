@@ -16,7 +16,7 @@ use crate::issue::Repo;
 use crate::logs::{self, Work};
 use crate::pull_request::PullRequest;
 use crate::recovery::Continuation;
-use crate::review::{PullRequestUrl, Reservation};
+use crate::review::Reservation;
 use crate::run::Ended;
 use crate::session::Logs;
 use crate::worktree::Worktree;
@@ -27,19 +27,7 @@ pub(crate) fn run(command: &FixArgs, config: &UserConfig, harness: &mut Choice) 
         let launch = Git::new(std::env::current_dir().context("could not read Launch directory")?);
         let origin = launch.run(&["config", "remote.origin.url"])?;
         let repo = Repo::of_origin(&origin).context("fix needs a GitHub origin")?;
-        let pr = if command
-            .pull_request
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
-        {
-            PullRequestUrl::parse(&format!(
-                "https://github.com/{}/pull/{}",
-                repo.slug(),
-                command.pull_request
-            ))?
-        } else {
-            PullRequestUrl::parse(&command.pull_request)?
-        };
+        let pr = command.pull_request.resolve(&repo)?;
         if !pr.issue.matches_origin(&origin) {
             return Err(anyhow::anyhow!("origin mismatch: {} is not in {origin}", pr.url).into());
         }

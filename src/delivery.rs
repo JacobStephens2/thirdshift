@@ -184,6 +184,9 @@ impl Delivery<'_> {
                 outside.stage(Stage::PullRequestReadiness);
                 let pr = outside.mark_pr_ready(None)?;
                 outside.take_to_goal(&pr.url, self.goal)?;
+                if self.goal == Goal::Merged {
+                    delete_branch_after_merge(&mut outside, worktree.branch());
+                }
                 Ok(Resolution::PullRequest {
                     url: pr.url,
                     goal: self.goal,
@@ -630,16 +633,7 @@ impl Route<'_> {
     /// fails is tried once more if an interrupt was requested, then is a
     /// warning naming the fix to make by hand.
     fn after_merge(&self, outside: &mut impl Outside, pr: &Identified) {
-        let branch = self.branch;
-        if let Err(error) = retry_if_interrupted(outside, |outside| outside.delete_branch()) {
-            outside.warn(
-                &error,
-                format!(
-                    "could not delete {branch} on origin, so delete it by hand: \
-                     git push origin --delete {branch}"
-                ),
-            );
-        }
+        delete_branch_after_merge(outside, self.branch);
         let comment = format!(
             "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
@@ -669,6 +663,15 @@ impl Route<'_> {
         }
         outside.step(format!("closing issue #{}", self.issue.number));
         outside.close_issue(comment)
+    }
+}
+
+fn delete_branch_after_merge(outside: &mut impl Outside, branch: &str) {
+    if let Err(error) = retry_if_interrupted(outside, |outside| outside.delete_branch()) {
+        outside.warn(
+            &error,
+            format!("could not delete {branch} on origin, so delete it by hand: git push origin --delete {branch}"),
+        );
     }
 }
 
