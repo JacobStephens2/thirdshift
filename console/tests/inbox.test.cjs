@@ -473,7 +473,9 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
       await page.goto(`${origin}/?page=inbox`);
       const section = page.locator(`#inbox > [data-group="${group}"]`);
       if (group === 'ready for review') await folder(page, group).click();
-      const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      const subjectUrl = group === 'ready for review'
+        ? 'https://github.com/acme/widgets/pull/224' : 'https://github.com/acme/widgets/issues/223';
+      const row = section.locator('.command').filter({ has: page.locator(`.subject a[href="${subjectUrl}"]`) });
       await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
       if (javaScriptEnabled) {
         await row.waitFor({ state: 'detached' });
@@ -488,7 +490,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await page.clock.fastForward(10001);
         await notice.waitFor({ state: 'detached' });
       } else await page.waitForURL(`${origin}/`);
-      assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+      assert.equal(await section.locator(`.subject a[href="${subjectUrl}"]`).count(), 0);
       assert.equal(await page.locator('#peek').isVisible(), false);
       await folder(page, 'done').click();
       const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
@@ -1354,6 +1356,8 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
     212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
     213: live('implement'),
   };
+  const subjectUrl = number => number === 212
+    ? 'https://github.com/acme/widgets/pull/212' : `https://github.com/acme/widgets/issues/${number}`;
   const stop = join(dir, '213-fixture.command.stop.json');
   const paths = [stop];
   for (const [number, change] of Object.entries(fixtures)) {
@@ -1376,12 +1380,12 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
       ]) {
         const section = page.getByRole('region', { name: title, exact: true });
         assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
-        assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
+        assert.equal(await section.locator(`.subject a[href="${subjectUrl(number)}"]`).isVisible(), true, group);
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
-    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href="${subjectUrl(number)}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
       const probe = document.createElement('span');
       document.body.append(probe);
