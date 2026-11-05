@@ -5,6 +5,22 @@ mod support;
 use serde_json::json;
 use support::Scenario;
 
+fn recorded_review(scenario: &Scenario, branch: &str) {
+    let head = scenario.origin_git(&["rev-parse", branch]);
+    let mut state = scenario.gh_state();
+    let pr = state["prs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|pr| pr["head"] == branch)
+        .unwrap();
+    pr["comments"] = json!([{
+        "body": format!("<!-- thirdshift-review {} -->", json!({"reviewed_head":head.trim()})),
+        "author_association":"COLLABORATOR", "user":{"login":"runner"}
+    }]);
+    scenario.write_gh_state(&state);
+}
+
 #[test]
 fn draft_without_closing_issue_finishes_ready_without_an_agent_session() {
     let scenario = Scenario::new();
@@ -284,6 +300,7 @@ fn merge_defaults_and_explicit_no_merge_and_policy_refusal_are_honored() {
         scenario.user_config_is("[merge]\nalways = true\n");
         scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
         let url = scenario.github_has_pr("colleague", "main", "OPEN");
+        recorded_review(&scenario, "colleague");
         if refused {
             let mut state = scenario.gh_state();
             state["prs"][0]["reviewDecision"] = json!("REVIEW_REQUIRED");
@@ -386,6 +403,7 @@ fn foreign_commit_review_receives_pr_context_before_self_merge() {
     scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
     scenario.origin_has_branch("concurrent", "colleague", &["Author follow-up"]);
     let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    recorded_review(&scenario, "colleague");
     let foreign = scenario.origin_git(&["rev-parse", "concurrent"]);
     let mut state = scenario.gh_state();
     state["on_ci_read"] = json!({"times":1, "seen":[], "script":format!(

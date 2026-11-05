@@ -104,6 +104,8 @@ pub(crate) struct PullRequest<A = GitHub> {
     security_review_count: Option<usize>,
     /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
     spec_pr: Option<SpecPr>,
+    /// An adopted head needs recorded agent review before Self-merge.
+    merge_hold: Option<String>,
     adapter: A,
 }
 
@@ -123,6 +125,7 @@ impl<A: Adapter> PullRequest<A> {
             scope: CaptureScope::Delivery,
             security_review_count: None,
             spec_pr: None,
+            merge_hold: None,
             adapter,
         }
     }
@@ -140,6 +143,10 @@ impl<A: Adapter> PullRequest<A> {
             url: pr.url.clone(),
         });
         target
+    }
+
+    pub fn hold_self_merge(&mut self, reason: String) {
+        self.merge_hold = Some(reason);
     }
 
     /// Resume accounting with an ordinary discovery, then draft the observed
@@ -530,6 +537,12 @@ impl<A: Adapter> PullRequest<A> {
     pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
         self.ensure_spec_pr_allows_merge()?;
+        if let Some(reason) = &self.merge_hold {
+            return Err(crate::failed_run::MergeHold {
+                reason: reason.clone(),
+            }
+            .into());
+        }
         let number = self
             .identified
             .as_ref()

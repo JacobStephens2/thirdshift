@@ -2135,6 +2135,11 @@ Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.</p>
 <p><code>merge</code> / <code>--merge</code> and <code>no-merge</code> / <code>--no-merge</code> override <code>merge.always</code>.
+Self-merge also requires a Review-run marker by the GitHub account thirdshift
+acts as covering the adopted head. Without that evidence, Delivery still repairs
+the PR and checks CI, then holds Self-merge with the PR ready for review. Run
+<code>thirdshift review &lt;PR URL&gt;</code> before retrying the Fix run with <code>merge</code>; a Fix run
+never adds an opening review session. This preserves <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md">ADR 0004</a>&#39;s reviewed-code gate.
 <code>base-fix</code> / <code>--base-fix</code> and <code>no-base-fix</code> / <code>--no-base-fix</code> override <code>base.fix</code>.
 <code>harness</code>, <code>model</code> and <code>effort</code> use the usual command and User config precedence.
 <code>email [&lt;address&gt;]</code>, <code>email-unless-merged [&lt;address&gt;]</code> and <code>no-email</code> (also with

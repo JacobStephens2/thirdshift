@@ -177,7 +177,7 @@ impl GitHub {
         Ok(candidates)
     }
 
-    fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
+    pub(crate) fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
         Ok(self.review_markers(pr)?.iter().any(|marker| {
             marker.reviewed_head.as_deref() == Some(head)
                 || marker.pushed_head.as_deref() == Some(head)
