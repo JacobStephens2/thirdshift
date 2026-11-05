@@ -224,6 +224,16 @@ The ADR is drafted: `docs/adr/0026-each-console-serves-an-api-that-can-do-what-t
 
 *Answer:* agreed
 
+## Technology (2026-11-05, settled after Round 4)
+
+The Console's existing stack already covers the API, so no new web framework comes in (ADR 0016: async code lives only inside the Console):
+- **Server:** `axum` 0.8 on `tokio`, with `/api/v1` on the Console's existing router. The page and the API share handlers (Q3.6).
+- **Client:** `reqwest` 0.13 with rustls. The CLI (`status`, `--machine`, `fleet add`) uses its blocking client, and the Console's 15-second Fleet fetch uses its async client.
+- **Tokens:** generated from 32 random bytes with `rand`, and stored as their SHA-256 (`sha2`). A 256-bit random token needs no slow hash. `argon2` stays for passwords.
+- **JSON:** the CLI's own `--json` structs through `serde_json`, so the API and the CLI can't drift apart.
+- **OpenAPI:** Spec A publishes an OpenAPI description, generated (e.g. with `utoipa`) from the same route table the pairing test walks. A test keeps the description and the routes in step, so scripts and agents can discover the API.
+- **Rate limiting:** a small in-memory, per-address limiter written in thirdshift rather than a new dependency, covering failed tokens and failed passwords (see the Q3.2 correction).
+
 ## Settled by earlier answers (shout if any is wrong)
 
 - ~~From the issue and ADR 0015: a Security run's Session traces and finding write-ups never leave the machine that ran them.~~ Overturned by Q2.4. They're fetched live to the asking Console and never stored there (see the Q2.4 check).
@@ -245,7 +255,7 @@ The ADR is drafted: `docs/adr/0026-each-console-serves-an-api-that-can-do-what-t
 - From Q2.6: one list under `[console]` replaces `other_consoles`. An entry with a token is fetched, one without is a header link, and old `other_consoles` values read as link-only entries.
 - From Q2.7: each fleet machine is fetched every 15 seconds, only while a page is open. Each machine's rows show how old they are, and a machine silent for a minute shows as unreachable.
 - From Q3.1: there are five token scopes, `read`, `security`, `act`, `run` and `admin`, with `read` as the default.
-- From Q3.2: all eight token-handling rules stand, as recorded in ADR 0026.
+- From Q3.2: all eight token-handling rules stand, as recorded in ADR 0026. One correction to the brute-force rule: "like failed sign-ins" assumed a limiter that doesn't exist. Only an emailed sign-in code has a limit, 5 tries in 15 minutes per code (`src/console/accounts/codes.rs:79`), and failed passwords have none. Spec A adds a per-address limiter for failed tokens, and puts failed passwords behind the same one.
 - From Q3.3: the owning machine refuses a call naming a person missing from its own Console sign-in list.
 - From Q3.4: any named holder may have a token. A call with no person is attributed to the token's holder.
 - From Q3.5: issuing and revoking tokens, the Console sign-in list, `console install` and `setup` stay CLI-only on the machine itself.

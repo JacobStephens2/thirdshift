@@ -24,3 +24,4 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
 - A Security run's details, findings included, reach any Console holding a `security` token, fetched live and never stored there. They stay behind sign-ins and off GitHub, so ADR 0015 holds. #776's constraint that Security runs stay on their own machine does not.
 - **Other-account Commands** stay read-only (#1446). A machine acts as its serving account, whoever asks through the API.
 - The CLI-and-page pairing test (ADR 0016) covers three ways in: CLI, page and API.
+- The API runs on the Console's existing `axum` server, and a published OpenAPI description, generated from the same route table, is tested against the routes.
