@@ -19,6 +19,8 @@ pub(crate) struct ReviewPullRequest {
 pub(crate) struct ReviewInput {
     pub markdown: String,
     pub body_alone: bool,
+    /// Closing issues whose title and body were copied into `markdown`.
+    pub closing_issues: Vec<crate::issue::IssueUrl>,
 }
 
 #[derive(serde::Deserialize)]
@@ -264,6 +266,7 @@ impl GitHub {
         );
         let mut after = None;
         let mut issues = std::collections::BTreeSet::new();
+        let mut closing_issues = Vec::new();
         loop {
             let json = self.issue_query(&pr.issue, CLOSING_ISSUES, after.as_deref())?;
             let page = &json["data"]["repository"]["pullRequest"]["closingIssuesReferences"];
@@ -274,6 +277,7 @@ impl GitHub {
                 let url = node["url"].as_str().context("closing issue has no URL")?;
                 if issues.insert(url.to_owned()) {
                     let issue = crate::issue::IssueUrl::parse(url)?;
+                    closing_issues.push(issue.clone());
                     markdown.push_str("\n## Linked closing issue (Spec)\n\n");
                     markdown.push_str(&self.issue_for_session(&issue)?);
                 }
@@ -327,6 +331,7 @@ impl GitHub {
         Ok(ReviewInput {
             markdown,
             body_alone: issues.is_empty(),
+            closing_issues,
         })
     }
 }

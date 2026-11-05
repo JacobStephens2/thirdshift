@@ -166,7 +166,14 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             },
             |tracker, worktree, pull_request, sessions| {
-                hand_over_pull_request(pr, self.base, worktree.branch(), worktree.path(), false)?;
+                hand_over_pull_request(
+                    pr,
+                    self.base,
+                    worktree.branch(),
+                    worktree.path(),
+                    false,
+                    self.started,
+                )?;
                 let mut outside = InWorktree {
                     tracker,
                     issue: self.issue,
@@ -423,7 +430,7 @@ fn run_checked<T, S>(
     let branch = worktree.branch().to_string();
     let before_each = move || {
         if let Some(pr) = pull_request_context {
-            return hand_over_pull_request(pr, base, &branch, &path, true);
+            return hand_over_pull_request(pr, base, &branch, &path, true, started);
         }
         no_untrusted_edit_since(issue, started, "Ticket run")?;
         hand_over_issue(issue, &path)
@@ -883,6 +890,7 @@ fn hand_over_pull_request(
     branch: &str,
     worktree: &Path,
     ready: bool,
+    started: DateTime<Utc>,
 ) -> Result<()> {
     let github = GitHub::new();
     let snapshot = github.fix_pull_request(pr)?;
@@ -900,6 +908,12 @@ fn hand_over_pull_request(
         );
     }
     let input = github.review_input(pr, &snapshot)?;
+    // The Repair session works from these issues and can push. Stop before
+    // writing them when an untrusted account has edited one since the run
+    // started, the same gate a Ticket run applies to its own issue.
+    for issue in &input.closing_issues {
+        no_untrusted_edit_since(issue, started, "Fix run")?;
+    }
     skills::exclude(&Git::new(worktree), "/.thirdshift-review-input.md")?;
     crate::processes::review::write_review_input(
         &worktree.join(".thirdshift-review-input.md"),

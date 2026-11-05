@@ -2354,7 +2354,10 @@ Delivery checks out the head branch in a Worktree, marks a draft ready, merges
 the Base branch, pushes and watches CI. Conflict, CI-fix and Foreign-commit review
 Repairs receive `.thirdshift-review-input.md`: the PR title and body, linked
 closing issues and only Trusted account comments. The file is refreshed before
-each session, including a Resume. Repairs share the usual five-session cap,
+each session, including a Resume. A title or body edit to one of those closing
+issues by an account that is not a Trusted account, made since a few minutes
+before the Fix run started, fails the run instead of starting that session.
+Repairs share the usual five-session cap,
 Check re-run and optional Base fix. A Fix run starts no implementation or initial
 Standards/Spec review session.
 
