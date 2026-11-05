@@ -275,14 +275,14 @@ fn elapsed_time_updates_inbox_groups_and_retention_without_a_file_change() {
                 .to_rfc3339()
         );
         write_record(home.path(), 81, &fixture);
-        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
-        assert!(
-            console
-                .get("/")
-                .text()
-                .unwrap()
-                .contains("Elapsed boundary fixture")
+        let selector = format!(
+            "data-command=\"{}\"",
+            home.path()
+                .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.command.json")
+                .display()
         );
+        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+        assert!(console.get("/").text().unwrap().contains(&selector));
         let response = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -295,7 +295,7 @@ fn elapsed_time_updates_inbox_groups_and_retention_without_a_file_change() {
         loop {
             assert!(sse_event(&mut stream).contains("event: commands"));
             let html = console.get("/").text().unwrap();
-            match html.find("Elapsed boundary fixture") {
+            match html.find(&selector) {
                 None if !remains => break,
                 Some(at) if remains => {
                     let prefix = &html[..at];
