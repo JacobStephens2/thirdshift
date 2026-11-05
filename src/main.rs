@@ -203,13 +203,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console token create <holder> [--scopes <list>] [--expires <date>]  Issue a token once
-       thirdshift console token list [--json]         List token metadata
-       thirdshift console token revoke <holder>       Revoke a token immediately
+       thirdshift console token <create|list|revoke> ...  Manage scoped API tokens; CLI-only
        thirdshift console whoami [--json]             Identify this machine and caller
-       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
-       thirdshift console theme import <file>        Import a Theme JSON document
-       thirdshift console theme export <name>        Export a Theme as JSON
+       thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
