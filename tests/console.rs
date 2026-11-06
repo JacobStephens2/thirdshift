@@ -4,6 +4,15 @@ mod support;
 #[path = "console/api.rs"]
 mod api;
 
+#[path = "console/start.rs"]
+mod start;
+
+#[path = "console/user_config.rs"]
+mod user_config;
+
+#[path = "console/admin.rs"]
+mod admin;
+
 #[path = "console/actions.rs"]
 mod actions;
 

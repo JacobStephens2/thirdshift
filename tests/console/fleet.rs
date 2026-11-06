@@ -618,58 +618,63 @@ fn pairs_two_consoles_and_removes_the_entry_and_owner_only_token() {
 
 #[test]
 fn legacy_links_migrate_on_console_writes_including_inline_settings() {
-    for text in [
-        "[console]\nother_consoles = ['https://other.example.test/path?view=inbox#top', 'http://other.example.test:9000']\n# keep this\ntheme = 'focus-auto'\n",
-        "console = { other_consoles = ['https://other.example.test/path?view=inbox#top', 'http://other.example.test:9000'], theme = 'focus-auto' }\n",
+    for args in [
+        ["console", "theme", "press-dark", "--json"],
+        ["config", "console.theme", "press-dark", "--json"],
     ] {
-        let home = tempfile::tempdir().unwrap();
-        let root = home.path().join(".thirdshift");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("config.toml"), text).unwrap();
-        let listed = api::cli(home.path(), &["console", "fleet", "list", "--json"]);
-        assert_eq!(listed[0]["name"], "other.example.test");
-        assert_eq!(
-            listed[0]["address"],
-            "https://other.example.test/path?view=inbox#top"
-        );
-        assert_eq!(listed[0]["live"], false);
-        assert_eq!(listed[1]["name"], "other.example.test-2");
-        assert_eq!(listed[1]["live"], false);
-        assert_eq!(
-            fs::read_to_string(root.join("config.toml")).unwrap(),
-            text,
-            "reading does not write"
-        );
-        api::cli(home.path(), &["console", "theme", "press-dark", "--json"]);
-        let saved = fs::read_to_string(root.join("config.toml")).unwrap();
-        assert!(!saved.contains("other_consoles"), "{saved}");
-        assert!(saved.contains("fleet"));
-        if text.contains("# keep this") {
-            assert!(saved.contains("# keep this"));
+        for text in [
+            "[console]\nother_consoles = ['https://other.example.test/path?view=inbox#top', 'http://other.example.test:9000']\n# keep this\ntheme = 'focus-auto'\n",
+            "console = { other_consoles = ['https://other.example.test/path?view=inbox#top', 'http://other.example.test:9000'], theme = 'focus-auto' }\n",
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let root = home.path().join(".thirdshift");
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join("config.toml"), text).unwrap();
+            let listed = api::cli(home.path(), &["console", "fleet", "list", "--json"]);
+            assert_eq!(listed[0]["name"], "other.example.test");
+            assert_eq!(
+                listed[0]["address"],
+                "https://other.example.test/path?view=inbox#top"
+            );
+            assert_eq!(listed[0]["live"], false);
+            assert_eq!(listed[1]["name"], "other.example.test-2");
+            assert_eq!(listed[1]["live"], false);
+            assert_eq!(
+                fs::read_to_string(root.join("config.toml")).unwrap(),
+                text,
+                "reading does not write"
+            );
+            api::cli(home.path(), &args);
+            let saved = fs::read_to_string(root.join("config.toml")).unwrap();
+            assert!(!saved.contains("other_consoles"), "{saved}");
+            assert!(saved.contains("fleet"));
+            if text.contains("# keep this") {
+                assert!(saved.contains("# keep this"));
+            }
+            assert_eq!(
+                api::cli(home.path(), &["console", "fleet", "list", "--json"]),
+                listed
+            );
+            assert!(!root.join("credentials.toml").exists());
+            let setup = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+                .arg("setup")
+                .env("HOME", home.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                setup.status.success(),
+                "{}",
+                String::from_utf8_lossy(&setup.stderr)
+            );
+            assert_eq!(
+                api::cli(home.path(), &["console", "fleet", "list", "--json"]),
+                listed
+            );
+            let complete = fs::read_to_string(root.join("config.toml")).unwrap();
+            assert!(!complete.contains("other_consoles"));
+            assert!(complete.contains("hidden_sections"));
         }
-        assert_eq!(
-            api::cli(home.path(), &["console", "fleet", "list", "--json"]),
-            listed
-        );
-        assert!(!root.join("credentials.toml").exists());
-        let setup = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
-            .arg("setup")
-            .env("HOME", home.path())
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(
-            setup.status.success(),
-            "{}",
-            String::from_utf8_lossy(&setup.stderr)
-        );
-        assert_eq!(
-            api::cli(home.path(), &["console", "fleet", "list", "--json"]),
-            listed
-        );
-        let complete = fs::read_to_string(root.join("config.toml")).unwrap();
-        assert!(!complete.contains("other_consoles"));
-        assert!(complete.contains("hidden_sections"));
     }
 }
 

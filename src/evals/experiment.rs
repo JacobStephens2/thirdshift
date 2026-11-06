@@ -305,6 +305,10 @@ pub fn run(options: Options) -> Result<()> {
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
+        logs::start_notice::skipped(format!(
+            "Experiment {} is already completed",
+            experiment.description.id
+        ));
         return Ok(());
     }
     if let Err(error) = cost::confirm(&experiment, options.yes) {

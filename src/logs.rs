@@ -33,6 +33,7 @@ mod run_metrics;
 pub(crate) mod session;
 pub(crate) mod session_signals;
 pub(crate) mod spans;
+pub(crate) mod start_notice;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
@@ -54,6 +55,26 @@ pub use command_record::StageName as Stage;
 pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
+
+/// Find only a retained record owned by the process this Console just spawned.
+pub(crate) fn command_for_process(
+    config: &UserConfig,
+    repo: &Repo,
+    process_id: u32,
+    started_after: chrono::DateTime<chrono::Local>,
+) -> anyhow::Result<Option<String>> {
+    Ok(
+        reading::repository_records(&root_under(&config.logs_dir, repo))?
+            .into_values()
+            .find(|tree| {
+                tree.command.process_id == process_id
+                    && tree.command.parent_record.is_none()
+                    && chrono::DateTime::parse_from_rfc3339(&tree.command.started_at)
+                        .is_ok_and(|start| start >= started_after)
+            })
+            .map(|tree| tree.command.name),
+    )
+}
 
 /// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
 fn unix_user(action: &str) -> anyhow::Result<String> {
@@ -313,6 +334,7 @@ pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
+    start_notice::skipped(&reason);
     record().skipped(pass, repo, reason);
 }
 

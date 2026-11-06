@@ -29,6 +29,20 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+fn assert_config_preserved(completed: &str, original: &str) {
+    // A new root setting must precede the retained sections in valid TOML.
+    // Keep the original text byte-for-byte, allowing only that default before it.
+    let (prefix, _) = completed
+        .split_once(original)
+        .unwrap_or_else(|| panic!("the original config text changed:\n{completed}"));
+    let added: toml::Table = prefix.parse().unwrap();
+    assert_eq!(added.len(), 1, "{prefix}");
+    assert_eq!(
+        added["launch_directories"].as_array().map(Vec::is_empty),
+        Some(true)
+    );
+}
+
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
@@ -472,7 +486,7 @@ fn setup_preserves_repository_email_routes_and_their_spelling() {
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let text = user_config(&scenario).unwrap();
-        assert!(text.starts_with(routes), "{text}");
+        assert_config_preserved(&text, routes);
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(
             config["email"]["to_by_repo"]["Acme/Widgets"].as_str(),
@@ -501,7 +515,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let text = user_config(&scenario).unwrap();
-    assert!(text.starts_with(original), "{text}");
+    assert_config_preserved(&text, original);
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));
@@ -873,7 +887,7 @@ fn setup_can_enable_triage_readiness_keep_it_and_turn_it_off() {
             config["triage"]["allow_ready_for_agent"].as_bool(),
             Some(enabled)
         );
-        assert!(text.starts_with("[triage] # my triage settings\n"));
+        assert_config_preserved(&text, "[triage] # my triage settings\n");
         assert!(text.contains("# readiness\n"));
     }
 }
@@ -1001,7 +1015,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
         assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
-        assert!(text.starts_with("# my Security settings\n[security]\n"));
+        assert_config_preserved(&text, "# my Security settings\n[security]\n");
         assert!(text.contains("# keep this choice\n"));
         assert!(text.contains("harness = 'codex' # use Codex\n"));
     }

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Update thirdshift · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main><div class="page-title"><h1>Update thirdshift</h1><code>thirdshift update</code></div>
+{% if let Some(result) = result %}
+<p role="status">{{ result }}</p><p>The Console restarts when its binary changes. <a href="/update">Reload after restart</a>.</p>
+{% else %}
+<p>Current version: <strong>{{ env!("CARGO_PKG_VERSION") }}</strong></p>
+{% if let Some(latest) = latest %}<p>Latest stable version: <strong>{{ latest }}</strong></p>{% endif %}
+{% if let Some(failure) = failure %}<p role="alert">Could not check the latest release: {{ failure }}</p>{% endif %}
+<p><a href="/update">Reload</a> to check again. Update replaces the installed copy and restarts this Console. Source builds require a shell reinstall.</p>
+<form action="/update" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Update thirdshift</button></form>
+{% endif %}
+</main>{% include "console/chrome.html" %}</body></html>

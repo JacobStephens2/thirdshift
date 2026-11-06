@@ -114,6 +114,25 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::CheckProcess
+        | View::EmailTest => text,
+        View::Evals => array(record),
+        View::TouchedEvals => array(text),
+        View::VerifyEval => object(json!({"safe":{"const":true}})),
+        View::OtherAccounts | View::SetOtherAccounts => {
+            json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
+        }
+        View::RecordDifficulty => array(record),
+        View::RenameExperiment | View::PendingRechecks | View::Recheck => record,
+        View::Update => object(json!({"current": text, "latest": text})),
+        View::RunUpdate => text,
+        View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
+        View::Config => object(json!({"version": version, "settings": array(setting())})),
+        View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
             "version": version, "hostname": text, "thirdshift_version": text,
             "api_version": {"type": "string", "const": "v1"},
@@ -207,6 +226,14 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::CronJobs => object(json!({
             "jobs": array(object(json!({"schedule": text, "command": text}))), "pass_starts": array(record)
         })),
+        View::LaunchDirectories => object(json!({
+            "directories": array(object(json!({"repository": text, "path": text})))
+        })),
+        View::StartRun => json!({"oneOf": [
+            object(json!({"version": version, "name": text})),
+            object(json!({"version": version, "outcome": {"const":"skipped"}, "reason": text})),
+            object(json!({"version": version, "outcome": {"const":"started"}, "process_id": integer}))
+        ]}),
         View::Resources | View::ResourceStatus => object(json!({
             "host": object(json!({"total_memory_mb": integer, "available_memory_mb": integer,
                 "logical_cpus": integer, "load_one": {"type": "number"}})),
@@ -246,7 +273,52 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
+    let json_request = |properties, required| {
+        json!({"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,"properties":properties,"required":required
+        }}}})
+    };
     let (properties, required) = match view {
+        View::CheckProcess => {
+            let mut schema = start_schema()["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|schema| schema["properties"]["command"]["const"] == "process")
+                .unwrap()
+                .clone();
+            schema["required"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|value| value != "command");
+            return json!({"required":true,"content":{"application/json":{"schema":schema}}});
+        }
+        View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::VerifyEval => {
+            return json_request(
+                json!({"repository":text,"base":text}),
+                vec!["repository", "base"],
+            );
+        }
+        View::SetOtherAccounts => return json_request(json!({"value":text}), vec!["value"]),
+        View::EmailTest => return json_request(json!({"address":text}), vec![]),
+        View::RenameExperiment => return json_request(json!({"name":text}), vec!["name"]),
+        View::RecordDifficulty => (json!({}), vec![]),
+        View::Recheck => {
+            let mut body = json_request(
+                json!({"trial":text,"fingerprint":text,"decision":{"enum":["pass","fail"]},"reason":text,"wrong_finding":{"type":"boolean"}}),
+                vec!["decision", "reason"],
+            );
+            body["content"]["application/json"]["schema"]["oneOf"] = json!([
+                {"required":["trial"],"not":{"required":["fingerprint"]}},
+                {"required":["fingerprint"],"not":{"required":["trial"]}}
+            ]);
+            return body;
+        }
+        View::StartRun => {
+            return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
+        }
+        View::SetConfig => (json!({"value": text}), vec!["value"]),
         View::ThemeImport => {
             return json!({"required": true, "content": {"application/json": {"schema": {
                 "type": "object", "required": ["name"], "properties": {
@@ -280,8 +352,18 @@ fn action_body(view: View) -> Value {
                 "type":"object", "properties":properties,"required":required
             }}}});
         }
-        View::ApproveEvalTask => (json!({}), vec![]),
-        View::Whoami
+        View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::Evals
+        | View::OtherAccounts
+        | View::PendingRechecks
+        | View::Whoami
+        | View::Update
+        | View::Config
+        | View::ConfigSetting
         | View::OpenApi
         | View::BugOrigins
         | View::Scores
@@ -289,6 +371,7 @@ fn action_body(view: View) -> Value {
         | View::Experiment
         | View::ExperimentSession
         | View::CronJobs
+        | View::LaunchDirectories
         | View::Resources
         | View::ResourceStatus
         | View::Metrics
@@ -317,6 +400,71 @@ fn action_body(view: View) -> Value {
     json!({"required":!required.is_empty(),"content":{"application/x-www-form-urlencoded":{"schema":{
         "type":"object", "properties":properties,"required":required
     }}}})
+}
+
+fn start_schema() -> Value {
+    let text = json!({"type":"string"});
+    let boolean = json!({"type":"boolean"});
+    let fields = json!({
+        "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
+        "pull_request": text, "author": text, "name": text,
+        "base": text, "focus": text, "report": {"type":"string","minLength":1},
+        "order": {"enum":["lowest-first","highest-first"]},
+        "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
+        "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
+        "security_review": boolean, "security_fix": boolean, "security_close": boolean,
+        "parallel": {"type":"integer","minimum":1},
+        "harness": {"enum":["claude","codex","agy","grok","muse","opencode"]},
+        "model": text, "effort": text,
+        "email": {"oneOf":[
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"enum":["always","unless_merged"]},"address":text}},
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"const":"never"}}}
+        ]},
+        "experiment": {"type":"object","additionalProperties":false,"properties":super::start::experiment_properties()}
+    });
+    let mut variants = Vec::new();
+    for kind in super::start::Kind::ALL {
+        let command = kind.word();
+        let mut properties = serde_json::Map::new();
+        for key in ["repository"].into_iter().chain(kind.fields()) {
+            properties.insert(key.into(), fields[key].clone());
+        }
+        properties.insert("command".into(), json!({"const":command}));
+        let mut required: Vec<_> = kind
+            .required()
+            .iter()
+            .copied()
+            .chain(["repository"])
+            .collect();
+        if command != "ticket" {
+            required.push("command");
+        }
+        let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
+        if command == "review" {
+            variant["oneOf"] = json!([
+                {"required":["pull_request"],"not":{"required":["author"]}},
+                {"required":["author"],"not":{"required":["pull_request"]}}
+            ]);
+        } else if command == "process" {
+            variant["not"] = json!({"required":["issue","pull_request"]});
+        } else if command == "fix" {
+            variant["not"] = json!({"anyOf":[
+                {"required":["pull_request","base"]},
+                {"required":["pull_request","author"]}
+            ]});
+        }
+        variants.push(variant);
+    }
+    json!({"oneOf":variants})
+}
+
+fn setting() -> Value {
+    object(json!({
+        "key": {"type":"string"}, "value": {}, "default": {},
+        "editable": {"type":"boolean"}, "reason": {"type":["string","null"]}
+    }))
 }
 
 fn tree() -> Value {

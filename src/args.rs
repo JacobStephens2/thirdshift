@@ -60,8 +60,16 @@ pub enum Command {
     Fix(FixArgs),
     Help,
     Version,
-    Update,
+    Update {
+        check: bool,
+        json: bool,
+    },
     Setup,
+    Config {
+        key: Option<String>,
+        value: Option<String>,
+        json: bool,
+    },
     Score,
     Scores {
         pull_request: Option<String>,
@@ -74,6 +82,9 @@ pub enum Command {
     Experiments(Vec<String>),
     Recheck(Vec<String>),
     CronJobs {
+        json: bool,
+    },
+    LaunchDirectories {
         json: bool,
     },
     Resources {
@@ -313,7 +324,7 @@ pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {
 }
 
 /// Serialize public asks, never computed retry text or hidden child Run facts.
-fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
+pub(crate) fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
     match flags.goal {
         Some(Goal::Merged) => words.push("merge".into()),
         Some(Goal::ReadyForReview) => words.push("--no-merge".into()),
@@ -424,7 +435,39 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
-        Some("update") => return Ok(Command::Update),
+        Some("update") => {
+            let mut check = false;
+            let mut json = false;
+            for arg in &args[1..] {
+                match arg.as_str() {
+                    "--check" if !check => check = true,
+                    "--json" if !json => json = true,
+                    _ => bail!("usage: thirdshift update [--check] [--json]"),
+                }
+            }
+            return Ok(Command::Update { check, json });
+        }
+        Some("config") => {
+            let mut words = Vec::new();
+            let mut json = false;
+            for word in &args[1..] {
+                if word == "--json" {
+                    anyhow::ensure!(!json, "repeated argument: --json");
+                    json = true;
+                } else {
+                    words.push(word.clone());
+                }
+            }
+            anyhow::ensure!(
+                words.len() <= 2,
+                "usage: thirdshift config [<key> [<value>]] [--json]"
+            );
+            return Ok(Command::Config {
+                key: words.first().cloned(),
+                value: words.get(1).cloned(),
+                json,
+            });
+        }
         Some("review") => return parse_review(&args[1..]).map(Command::Review),
         Some("fix") => return parse_fix(&args[1..]).map(Command::Fix),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
@@ -779,6 +822,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [] => Ok(Command::CronJobs { json: false }),
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
+        }
+        Some("launch-directories") => {
+            return match &args[1..] {
+                [] => Ok(Command::LaunchDirectories { json: false }),
+                [flag] if flag == "--json" => Ok(Command::LaunchDirectories { json: true }),
+                _ => bail!("usage: thirdshift launch-directories [--json]"),
             };
         }
         Some("score") => {
@@ -1608,7 +1658,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
 /// Is `arg`, after `email` or `email-unless-merged`, the address to send to? Only if it looks like
 /// one, so the Issue URL is never taken for it, nor is an Architect run's
 /// focus unless it has an `@`.
-fn is_address(arg: &str) -> bool {
+pub(crate) fn is_address(arg: &str) -> bool {
     arg.contains('@') && !arg.starts_with("https://")
 }
 

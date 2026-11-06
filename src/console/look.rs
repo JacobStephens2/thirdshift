@@ -89,7 +89,7 @@ fn write_sections(hide: &[String], show: &[String], actor: &str) -> Result<Conso
     Ok(settings)
 }
 
-fn cli_actor() -> Result<String> {
+pub(super) fn cli_actor() -> Result<String> {
     let user = std::process::Command::new("id")
         .arg("-un")
         .output()

@@ -18,6 +18,9 @@ mod experiments;
 #[path = "release/recovery.rs"]
 mod recovery;
 
+#[path = "release/ancestry.rs"]
+mod ancestry;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

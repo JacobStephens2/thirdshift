@@ -3,6 +3,33 @@ const assert = require("node:assert/strict");
 const { readFile, stat } = require("node:fs/promises");
 const { resolve, dirname } = require("node:path");
 
+test("the architecture page describes machine administration as available", async () => {
+  const page = await readFile(resolve(__dirname, "../architecture/index.html"), "utf8");
+  assert.ok(!page.includes("Starting Commands and other administration follow in later tickets."),
+    "Architecture still describes administration as arriving in a later ticket");
+});
+
+test("the manual describes Console starts and the complete parity API", async () => {
+  for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
+    const source = await readFile(resolve(__dirname, file), "utf8");
+    const text = source.replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+    assert.ok(!text.includes("The Console never starts work; start Commands from the CLI"), `${file}: still forbids requested starts`);
+    assert.ok(!/Eval preparation, verification and Arm preparation .*? remain CLI-only/.test(text), `${file}: verification is not CLI-only`);
+    assert.ok(!/Actions take .*?form-urlencoded.*?except Theme import and starting a run, which take/.test(text), `${file}: JSON-body exceptions are incomplete`);
+    for (const command of ["ticket", "architect", "pickup", "secure", "review", "fix", "process", "skill", "score", "triage", "experiment"]) {
+      assert.ok(source.includes(file.endsWith(".md") ? `| \`${command}\` |` : `<td><code>${command}</code></td>`),
+        `${file}: start command table omits ${command}`);
+    }
+    const unescaped = source.replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+    assert.ok(text.replaceAll("`", "").includes("JSON value (none, readable, or account list)"),
+      `${file}: Other-account settings must document none as the disabled value`);
+    for (const route of ["/evals/touched", "/evals/verify", "/processes/check", "/other-accounts", "/email-test",
+      "/experiments/<id>/name", "/experiments/<id>/rechecks"]) {
+      assert.ok(unescaped.includes(route), `${file}: API inventory omits ${route}`);
+    }
+  }
+});
+
 test("the Setup defaults example includes the Trial and Grader caps", async () => {
   const { marked } = await import("marked");
   const source = await readFile(resolve(__dirname, "../../docs/guide.md"), "utf8");
