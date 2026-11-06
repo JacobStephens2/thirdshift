@@ -203,7 +203,6 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
-       thirdshift start --options --json [--machine <name>]  List start choices and Passes
        thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
@@ -223,8 +222,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON; --export <dir> writes its whole Trace
        thirdshift update [--check] [--json] [--machine <name>]  Update, or check the latest version
-       thirdshift version                             Print the version
-       thirdshift help                                Print this reference
+       thirdshift version | help                      Print the version or this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command; -- prefixes accepted, once each, without opposites):
