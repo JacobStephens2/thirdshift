@@ -29,6 +29,20 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+fn assert_config_preserved(completed: &str, original: &str) {
+    // A new root setting must precede the retained sections in valid TOML.
+    // Keep the original text byte-for-byte, allowing only that default before it.
+    let (prefix, _) = completed
+        .split_once(original)
+        .unwrap_or_else(|| panic!("the original config text changed:\n{completed}"));
+    let added: toml::Table = prefix.parse().unwrap();
+    assert_eq!(added.len(), 1, "{prefix}");
+    assert_eq!(
+        added["launch_directories"].as_array().map(Vec::is_empty),
+        Some(true)
+    );
+}
+
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
@@ -477,7 +491,7 @@ fn setup_preserves_repository_email_routes_and_their_spelling() {
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let text = user_config(&scenario).unwrap();
-        assert!(text.starts_with(routes), "{text}");
+        assert_config_preserved(&text, routes);
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(
             config["email"]["to_by_repo"]["Acme/Widgets"].as_str(),
@@ -506,7 +520,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let text = user_config(&scenario).unwrap();
-    assert!(text.starts_with(original), "{text}");
+    assert_config_preserved(&text, original);
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));

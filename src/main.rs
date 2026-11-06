@@ -58,6 +58,7 @@ mod issue;
 mod labels;
 #[cfg(target_os = "linux")]
 mod launch;
+#[cfg(target_os = "linux")]
 mod launch_directories;
 #[cfg(target_os = "linux")]
 mod local_time;
@@ -197,8 +198,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
-       thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
-       thirdshift launch-directories [--json]         List known Launch directories and repositories
+       thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
