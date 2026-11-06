@@ -126,9 +126,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::OtherAccounts | View::SetOtherAccounts => {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
-        View::RenameExperiment | View::RecordDifficulty | View::PendingRechecks | View::Recheck => {
-            record
-        }
+        View::RecordDifficulty => array(record),
+        View::RenameExperiment | View::PendingRechecks | View::Recheck => record,
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),

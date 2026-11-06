@@ -317,6 +317,11 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
     assert_eq!(document, cli(home.path(), &["console", "openapi"]));
     assert_eq!(document["openapi"], "3.1.1");
     let paths = document["paths"].as_object().unwrap();
+    assert_eq!(
+        paths["/api/v1/experiments/{id}/difficulty"]["post"]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["type"],
+        "array"
+    );
     for path in [
         "/api/v1/status",
         "/api/v1/peek",
