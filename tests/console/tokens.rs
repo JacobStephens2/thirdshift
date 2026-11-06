@@ -523,6 +523,98 @@ fn read_scope_cannot_read_security_findings() {
     );
 }
 
+/// A read token may see an ordinary Command's waterfall. A Security session
+/// attached to that Command is still a Security trace: the log route refuses
+/// it, and the span routes must not return its prompt or tool output either.
+#[test]
+fn read_scope_cannot_read_a_security_session_through_spans() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut command = record(home.path(), 7, Some("merged"), 0);
+    let directory = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let security = directory.join("7-20261105T120000-0500-security-review.logs.jsonl");
+    let ordinary = directory.join("7-20261105T120100-0500-implement.logs.jsonl");
+    write_session_prompt(&security, "CANARY-SECURITY-SESSION-PROMPT");
+    write_session_prompt(&ordinary, "CANARY-ORDINARY-SESSION-PROMPT");
+    let began_at = command["started_at"].clone();
+    command["session_log"] = json!(ordinary);
+    command["stages"][0]["session_log"] = json!(ordinary);
+    command["stages"].as_array_mut().unwrap().push(json!({
+        "name": "security review",
+        "began_at": began_at,
+        "session_log": security
+    }));
+    write_record(home.path(), 7, &command);
+    let reader = create(home.path(), "reader", &[]);
+    let reviewer = create(home.path(), "reviewer", &["--scopes", "read,security"]);
+    let console = server(home.path());
+
+    let denied = request(
+        &console,
+        &reader,
+        "/api/v1/log?command=widgets%237&session=security-review",
+    )
+    .send()
+    .unwrap();
+    assert_eq!(denied.status(), 403);
+    assert!(
+        !denied
+            .text()
+            .unwrap()
+            .contains("CANARY-SECURITY-SESSION-PROMPT")
+    );
+
+    for path in [
+        "/api/v1/spans?command=widgets%237",
+        "/api/v1/waterfall?command=widgets%237",
+    ] {
+        let response = request(&console, &reader, path).send().unwrap();
+        let status = response.status();
+        let body = response.text().unwrap();
+        assert_eq!(status, 200, "{path}: {body}");
+        assert!(
+            !body.contains("CANARY-SECURITY-SESSION-PROMPT"),
+            "{path} disclosed a security session trace to a read token: {body}"
+        );
+        assert!(
+            body.contains("CANARY-ORDINARY-SESSION-PROMPT"),
+            "{path} hid an ordinary session from a read token: {body}"
+        );
+        let allowed = request(&console, &reviewer, path).send().unwrap();
+        let allowed_status = allowed.status();
+        let allowed_body = allowed.text().unwrap();
+        assert_eq!(allowed_status, 200, "{path}: {allowed_body}");
+        assert!(
+            allowed_body.contains("CANARY-SECURITY-SESSION-PROMPT"),
+            "{path} hid a security session from a security token: {allowed_body}"
+        );
+    }
+}
+
+fn write_session_prompt(log: &Path, secret: &str) {
+    let spans = super::support::session_trace::artifact(log, "spans.jsonl");
+    fs::write(log, "").unwrap();
+    fs::write(
+        spans,
+        serde_json::to_vec(&json!({
+            "resourceSpans": [{"scopeSpans": [{"spans": [{
+                "spanId": "1111111111111111",
+                "name": "invoke_agent session",
+                "startTimeUnixNano": "1790856010000000000",
+                "endTimeUnixNano": "1790856050000000000",
+                "attributes": [
+                    {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                    {"key": "thirdshift.session.prompt", "value": {"stringValue": secret}}
+                ]
+            }]}]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn expired_tokens_are_refused_and_invalid_options_create_no_grant() {
     let home = tempfile::tempdir().unwrap();

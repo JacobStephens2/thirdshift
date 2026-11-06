@@ -405,7 +405,9 @@ not Security finding records: `security_findings`, `security_fix_findings`, and
 a true `security_findings_waiting` flag are omitted or cleared. It also cannot
 read a Security session trace (`security-review`, `security-audit`,
 `security-reproduction-<n>`, `security-fix-publishing`, `security-close-check`,
-and their resumes); those log reads return 403 naming `security`. A token that
+and their resumes); those log reads return 403 naming `security`. Span and
+waterfall responses keep the Command's other stages and omit those sessions,
+including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
 and their auditing are described below; `run` and `admin` endpoints arrive in
 later Console API tickets. A missing route scope returns 403 JSON naming that

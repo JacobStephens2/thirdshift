@@ -24,6 +24,19 @@ fn security_refusal(
     .then(|| super::api::error(axum::http::StatusCode::FORBIDDEN, "Missing scope: security")))
 }
 
+fn span_view(
+    viewer: &super::auth::Viewer,
+    config: &UserConfig,
+    query: &Option<String>,
+) -> anyhow::Result<View> {
+    let command = super::query_value(query, "command");
+    if viewer.scopes.contains(&super::Scope::Security) {
+        spans::load(config, &command)
+    } else {
+        spans::load_without_security_sessions(config, &command)
+    }
+}
+
 pub(super) async fn show(
     viewer: super::auth::Viewer,
     format: super::api::Format,
@@ -31,7 +44,7 @@ pub(super) async fn show(
 ) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
-        let view = spans::load(&config, &super::query_value(&query, "command"))?;
+        let view = span_view(&viewer, &config, &query)?;
         if let Some(response) = security_refusal(&viewer, &config, &view.tree.command)? {
             return Ok(response);
         }
@@ -60,7 +73,7 @@ pub(super) async fn data(
     super::api::read(format, move || {
         let value = (|| -> anyhow::Result<Response> {
             let config = UserConfig::load()?;
-            let view = spans::load(&config, &super::query_value(&query, "command"))?;
+            let view = span_view(&viewer, &config, &query)?;
             if let Some(response) = security_refusal(&viewer, &config, &view.tree.command)? {
                 return Ok(response);
             }
