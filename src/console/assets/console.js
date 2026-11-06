@@ -43,7 +43,18 @@ let folded = stored(foldKey, {});
 if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
 for (const section of document.querySelectorAll("details[data-group]")) {
   if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
+  else folded[section.dataset.group] = section.open;
 }
+window.addEventListener("pagehide", () => {
+  // Navigation can discard a native toggle event before it saves the choice.
+  const pending = {};
+  for (const section of document.querySelectorAll("details[data-group]")) {
+    if (folded[section.dataset.group] !== section.open) {
+      pending[section.dataset.group] = section.open;
+    }
+  }
+  if (Object.keys(pending).length) remember(foldKey, { ...stored(foldKey, {}), ...pending });
+});
 document.addEventListener("toggle", event => {
   const section = event.target;
   if (!section.matches("details[data-group]")) return;
@@ -54,6 +65,7 @@ document.addEventListener("toggle", event => {
 document.addEventListener("focusin", event => {
   const row = event.target.closest(".command");
   if (row) select(row, { scroll: false });
+  else if (event.target.matches('#inbox > .group > summary')) select(event.target, { scroll: false });
 });
 document.addEventListener("click", event => {
   if (!event.target.closest('a, button, input, select, textarea')) {
@@ -302,9 +314,10 @@ function openFolder(link, { push = true } = {}) {
   showFolder(link.dataset.group);
   if (push && link.href !== location.href) history.pushState(null, '', link.href);
   // A selected row that moved into this folder keeps its selection and focus.
-  const kept = selected?.closest('#inbox > .group:not([hidden])') && selected.matches('.command') ? selected : null;
-  const row = kept ?? document.querySelector('#inbox > .group:not([hidden]) .command');
-  select(row ?? null, { scroll: false });
+  const visible = items();
+  const kept = visible.includes(selected) && selected.matches('.command') ? selected : null;
+  const row = kept ?? visible.find(item => item.matches('.command'));
+  select(row ?? visible.find(item => item.matches('summary')) ?? null, { scroll: false });
   kept?.focus({ preventScroll: true });
   // Open Details move to the folder's row; closed ones stay closed.
   if (!row) closePeek();
@@ -558,7 +571,7 @@ document.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (document.querySelector('#copy-context[open]')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
-  if (event.target.matches('summary') && !event.target.closest('.group') && ['Enter', ' '].includes(event.key)) return;
+  if (event.target.matches('summary') && (!event.target.closest('.group') || event.target.closest('#inbox')) && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
   if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
@@ -589,6 +602,7 @@ document.addEventListener('keydown', event => {
     const next = index < 0 ? (event.key === 'j' ? 0 : visible.length - 1)
       : (index + (event.key === 'j' ? 1 : -1) + visible.length) % visible.length;
     select(visible[next] ?? null);
+    if (selected?.closest('#inbox')) selected.focus({ preventScroll: true });
     if (!peek.hidden && selected?.matches('.one-line .command')) showPeek(selected);
   } else if (event.key === 'd' && !event.shiftKey && selected) {
     const form = selected.querySelector(':scope > .row-head form[data-dismiss]');
@@ -607,7 +621,10 @@ document.addEventListener('keydown', event => {
     select(section.querySelector('summary'));
   } else if (event.key === 'Enter' && selected) {
     event.preventDefault();
-    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command, .log-row');
-    if (row?.dataset.log) location.assign(row.dataset.log);
+    if (selected.matches('#inbox > .group > summary')) selected.parentElement.open = !selected.parentElement.open;
+    else {
+      const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command, .log-row');
+      if (row?.dataset.log) location.assign(row.dataset.log);
+    }
   }
 });

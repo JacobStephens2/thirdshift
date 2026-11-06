@@ -138,6 +138,8 @@ Other-account Commands carry their OS account name in every Inbox section (inclu
 
 When GitHub cannot answer, each row keeps the group its last facts give it; a row never read goes by age. Once the last good read is more than 5 minutes old, `status` and the Console warn with when GitHub last answered and why the latest read failed. Before the first good read, the warning says GitHub has not answered yet. A successful read clears the failure warning. `status --json` carries `github_last_answered_at` (an RFC 3339 time, or null before the first answer) and `github_failure` (the latest read failure, or null after success), alongside `github_answer_age_seconds`.
 
+The Console's Ready for review subjects link to the recorded pull request and display its title, including Review runs without an issue. The existing batched GitHub refresh supplies titles for older records too, and title changes update open pages. Older caches or unavailable titles keep the PR link with **(title unavailable)**; failed reads retain the last title. Without a PR, rows use their issue subject and title, or the Command subject when neither exists. Activating the subject link opens GitHub directly without opening Command details.
+
 Ready for review rows show the pull request's latest head CI as **CI green**, **CI red**, **CI pending**, **No CI checks** or **CI unknown**, with text as well as colour. The same batched GitHub read refreshes CI; an older Command's ready outcome does not imply its pull request is still green. `status` shows the same label, and `status --json` includes `github_ci` (`green`, `red`, `pending`, `no_checks` or `unknown`) when the pull request has been read. Older saved answers and unread pull requests show CI unknown. Failed reads retain the last CI answer with the Inbox's existing freshness warning.
 
 A conflicting pull request also shows a separate **Merge conflict** pill beside CI, even when CI is green. It stays in Ready for review. The same GitHub read refreshes mergeability and wakes open pages when it changes; `status` prints **Merge conflict** too. `status --json` includes `github_mergeable` (`mergeable`, `conflicting` or `unknown`). Only `conflicting` shows the pill; unknown and older saved answers do not claim a conflict. Failed reads retain the last answer with the same freshness warning.
@@ -376,6 +378,8 @@ thirdshift console --no-sign-in
 ```
 
 Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+
+Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
 
@@ -2529,6 +2533,11 @@ request based on another open pull request until that base's current head has
 been reviewed. New commits make a head eligible
 again. With no waiting pull request, or at the Command limit, it exits `0`
 without a session or Run notification. `--recommend-only` works on this form too.
+An unrecoverable local branch or occupied worktree is skipped so later waiting
+pull requests can run. The Pass saves a conflict fingerprint under
+`~/.thirdshift/review-conflicts/` and sends one failure notification per state;
+an unchanged conflict only logs a skip. Changed refs or checkout state allow a
+new notification. Naming the PR URL explicitly still fails with preservation advice.
 
 If a reviewed base received fixes that the upper pull request does not yet
 contain, the upper pull request's comment says it needs updating before merge.
@@ -2543,8 +2552,14 @@ from closed pull requests.
 A **Review run** refuses forks, drafts, closed or merged pull requests and
 authors who are not **Trusted accounts**, explaining why before starting a
 session. It checks out the pull request's captured head on its own branch in a
-worktree and reviews only its change against its own base. A locally changed or
-already checked-out head branch must be dealt with before the Review run can use it.
+worktree and reviews only its change against its own base. A retained Review
+worktree can be recovered when its durable ownership token and directory
+identities still match, its captured head is the PR's current head, and it has
+only clean committed fixes descending from that head. Recovery discards leftover
+untracked validation artifacts and reruns review and delivery with the preserved
+commits. Recommendation retries restart that owned checkout at the captured head.
+Uncommitted tracked edits, unfinished Git operations, locked checkouts, changed
+ownership evidence and other local branches are preserved for human attention.
 
 The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is

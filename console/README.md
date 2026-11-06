@@ -188,8 +188,21 @@ motion and reduced motion hold the stripe still.
 
 The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
 show together, each under its heading and count, including empty groups.
+Every group starts open. Click its heading, or focus it and press Enter or Space,
+to fold its rows. The heading and count stay visible; counts and active runs
+still include folded rows. Each browser keeps its group choices through live
+updates, folder changes and reloads when storage is available. Without storage,
+folding still works through live updates. Keyboard row navigation skips folded
+rows, and the same controls work in every Theme and on phones. Without
+JavaScript, groups start open and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved.
-Rows show on one line each: state, subject, title, gist and age. On a desktop, issue
+Rows show on one line each: state, subject, title, gist and age. Ready for review
+subjects link to the recorded pull request and show its title from the batched
+GitHub refresh, including Review runs without an issue. Until a title is known,
+the PR link stays usable with “(title unavailable)”. Without a PR, rows keep
+the issue subject and title, or the Command subject when neither exists.
+Clicking the subject link opens GitHub directly; clicking elsewhere opens Details.
+On a desktop, issue and pull request
 numbers stay visible as long repository or Process subjects shrink; hover
 the subject for its full text. The gist is where the
 Command stands, such as `review failed`; a Pass without an issue adds the
@@ -204,9 +217,9 @@ open for the selected row as you move with `j` / `k` or switch folders. On a
 phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
-Command details open with the Inbox subject and the full issue title, before
+Command details open with the Command's issue subject and full issue title, before
 Stop and Dismiss. The subject links to the issue, and long titles wrap. A
-Command without an issue shows its Inbox subject alone; an unknown issue title
+Command without an issue shows its Command subject alone; an unknown issue title
 says “(title unavailable)”. The same recorded title is in
 `thirdshift show <command> --json`. An ended, unsuccessful Command shows its full
 failure reason immediately below the heading, before Stop and Dismiss, with URLs

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::harness::interpretation::{Ended, Interpretation};
+use crate::harness::interpretation::{Ended, Interpretation, SessionFailure};
 use crate::harness::{Choice, process};
 use crate::logs::owner::Owner;
 use crate::{logs, progress};
@@ -266,7 +266,15 @@ impl Recording {
             }
         };
 
-        let completion = executed.state.finish(executed.execution);
+        let mut completion = executed.state.finish(executed.execution);
+        if let Err(error) = &mut completion.outcome
+            && let Some(failure) = error.downcast_mut::<SessionFailure>()
+        {
+            failure.oom_killed = invocation
+                .parts()
+                .1
+                .is_some_and(crate::scope::Scope::oom_killed);
+        }
         let finished = (|| {
             let mut trace = trace.lock().unwrap();
             if let Some(report) = &completion.report {

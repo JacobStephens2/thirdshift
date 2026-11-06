@@ -205,6 +205,168 @@ const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${gr
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
 const shownGroups = page => shownGroup(page).evaluateAll(groups => groups.map(group => group.dataset.group));
 const overviewGroups = ['needs you', 'ready for review', 'landing', 'working'];
+
+test('Inbox group headings fold independently by pointer and keyboard on desktop and phone', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, { viewport });
+    await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const ready = page.locator('#inbox > [data-group="ready for review"]');
+    const heading = needs.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await needs.getAttribute('open'), '');
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.getByRole('heading', { name: /^Needs you \d+$/, level: 3 }).waitFor();
+    const count = await heading.locator('.count').textContent();
+    await heading.click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await heading.locator('.count').textContent(), count);
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+    await page.keyboard.press('Space');
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('j');
+    await ready.locator(':scope > summary.is-selected').waitFor();
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="ready for review"]').open);
+    assert.equal(await needs.getAttribute('open'), null);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#inbox > [data-group="ready for review"]').open);
+    await page.reload();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await ready.getAttribute('open'), '');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
+      }
+    }
+  }
+});
+
+test('Inbox group choices survive reload before the native toggle event', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await t.test(`${viewport.width}px`, async t => {
+      const page = await pageFor(t, { viewport });
+      await page.goto(origin);
+      const ready = page.locator('#inbox > [data-group="ready for review"]');
+      const needs = page.locator('#inbox > [data-group="needs you"]');
+      await ready.locator(':scope > summary').click();
+      // Start with a saved, folded group before racing its next toggle.
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await page.reload();
+      assert.equal(await ready.getAttribute('open'), null);
+      await page.evaluate(() => {
+        const group = document.querySelector('#inbox > [data-group="ready for review"]');
+        // Model navigation discarding the queued event, regardless of whether
+        // this renderer would otherwise deliver it before leaving the page.
+        window.addEventListener('toggle', event => {
+          if (event.target === group) event.stopImmediatePropagation();
+        }, true);
+        // Mutation observers run before the queued native toggle event.
+        const observer = new MutationObserver(() => {
+          observer.disconnect();
+          location.reload();
+        });
+        observer.observe(group, { attributes: true, attributeFilter: ['open'] });
+      });
+      await ready.locator(':scope > summary').focus();
+      await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
+      assert.equal(await ready.getAttribute('open'), '');
+      assert.equal(await needs.getAttribute('open'), '');
+    });
+  }
+});
+
+test('reloading another Console tab preserves the newer Inbox group choice', async t => {
+  for (const path of ['/', '/resources']) {
+    await t.test(path, async t => {
+      const inbox = await pageFor(t);
+      await inbox.goto(origin);
+      const other = await inbox.context().newPage();
+      await other.goto(`${origin}${path}`);
+      const ready = inbox.locator('#inbox > [data-group="ready for review"]');
+      await ready.locator(':scope > summary').click();
+      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await other.reload();
+      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
+      await inbox.reload();
+      await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    });
+  }
+});
+
+test('folded Inbox groups keep live counts and choices through folders, hiding and reloads', async t => {
+  const page = await pageFor(t);
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const config = join(home, '.thirdshift/config.toml');
+  const original = await readFile(path, 'utf8');
+  const originalConfig = await readFile(config, 'utf8');
+  await page.goto(origin);
+  const needs = page.locator('#inbox > [data-group="needs you"]');
+  const ready = page.locator('#inbox > [data-group="ready for review"]');
+  const done = page.locator('#inbox > [data-group="done"]');
+  const count = Number(await needs.locator(':scope > summary .count').textContent());
+  const active = await page.locator('.active-runs strong').textContent();
+  try {
+    await needs.locator('summary').click();
+    await ready.locator('summary').click();
+    await folder(page, 'done').click();
+    await done.locator('summary').click();
+    await folder(page, 'overview').click();
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="needs you"] > summary .count').textContent === String(expected), count - 1);
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('.active-runs strong').textContent(), active);
+    await folder(page, 'done').click();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await page.reload();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig + 'hidden_sections = ["needs-you"]\n');
+    await folder(page, 'needs you').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig);
+    await folder(page, 'needs you').waitFor({ state: 'visible' });
+    await folder(page, 'overview').click();
+    await needs.locator(':scope > summary').waitFor({ state: 'visible' });
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('#inbox > [data-group="landing"]').getAttribute('open'), '');
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(config, originalConfig);
+  }
+});
+
+test('every Inbox section folder has a native disclosure without JavaScript', async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await page.goto(origin);
+  for (const group of ['needs you', 'ready for review', 'landing', 'working', 'done', 'resolved']) {
+    await folder(page, group).click();
+    const section = shownGroup(page);
+    const heading = section.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await section.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await section.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])').open);
+  }
+});
+
 async function showDetails(page, row) {
   const group = await row.evaluate(node => node.closest('.group').dataset.group);
   if (await folder(page, group).getAttribute('aria-current') !== 'page') await folder(page, group).click();
@@ -338,6 +500,7 @@ test('j then d dismisses and selects the next row, respecting typing, dialogs an
   const rows = page.locator('#inbox > [data-group="needs you"] .command');
   const count = await rows.count();
   const next = await rows.nth(1).getAttribute('data-command');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   const command = await page.locator('.command[aria-current="true"]').getAttribute('data-command');
   for (const key of ['Control+d', 'Meta+d', 'Alt+d', 'Shift+d']) await page.keyboard.press(key);
@@ -473,7 +636,9 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
       await page.goto(`${origin}/?page=inbox`);
       const section = page.locator(`#inbox > [data-group="${group}"]`);
       if (group === 'ready for review') await folder(page, group).click();
-      const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      const subjectUrl = group === 'ready for review'
+        ? 'https://github.com/acme/widgets/pull/224' : 'https://github.com/acme/widgets/issues/223';
+      const row = section.locator('.command').filter({ has: page.locator(`.subject a[href="${subjectUrl}"]`) });
       await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
       if (javaScriptEnabled) {
         await row.waitFor({ state: 'detached' });
@@ -488,7 +653,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await page.clock.fastForward(10001);
         await notice.waitFor({ state: 'detached' });
       } else await page.waitForURL(`${origin}/`);
-      assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+      assert.equal(await section.locator(`.subject a[href="${subjectUrl}"]`).count(), 0);
       assert.equal(await page.locator('#peek').isVisible(), false);
       await folder(page, 'done').click();
       const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
@@ -1029,7 +1194,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.keyboard.press('w');
     await page.waitForURL('**/?section=working');
     assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
-    assert.equal(await page.locator('.is-selected').count(), 0);
+    await page.locator('#inbox > [data-group="working"] > summary.is-selected').waitFor();
+    assert.equal(await page.locator('.is-selected.command').count(), 0);
   } finally { await replaceRecord(path, original); }
 });
 
@@ -1126,27 +1292,36 @@ test("cutting the open stream falls back to polling and catches up", async t => 
   } finally { await replaceRecord(path, original); }
 });
 
-for (const storage of ['blocked', 'malformed']) {
+for (const storage of ['blocked', 'read-only', 'malformed']) {
   test(`live Inbox works with ${storage} browser storage`, async t => {
     const page = await pageFor(t);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(mode => {
       if (mode === 'blocked') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+      else if (mode === 'read-only') Storage.prototype.setItem = () => { throw new Error('Storage full'); };
       else {
         localStorage.setItem('thirdshift:console:folded', 'false');
         localStorage.setItem('thirdshift:console:last-look', '{broken');
       }
     }, storage);
     await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const count = Number(await needs.locator(':scope > summary .count').textContent());
+    await needs.locator(':scope > summary').click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
     const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
     const original = await readFile(path, 'utf8');
     try {
       const fixture = JSON.parse(original);
       fixture.issue.title = `Still live with ${storage} storage`;
       await replaceRecord(path, JSON.stringify(fixture));
-      await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await needs.getAttribute('open'), null);
+      assert.equal(Number(await needs.locator(':scope > summary .count').textContent()), count);
       assert.deepEqual(await shownGroups(page), overviewGroups);
+      await needs.locator(':scope > summary').click();
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor();
       assert.deepEqual(errors, []);
     } finally { await replaceRecord(path, original); }
   });
@@ -1229,7 +1404,7 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
-test('Ready rows show CI and merge conflicts across themes and widths and update live', async t => {
+test('Ready rows link PR subjects, show titles and CI across widths, and update live', async t => {
   const logs = join(home, '.thirdshift/logs');
   const dir = join(logs, 'acme/widgets/commands/issue');
   const cache = join(logs, 'github-inbox.json');
@@ -1253,13 +1428,14 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
       const url = `https://github.com/acme/widgets/pull/${number}`;
       await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
         cause: null, tickets: [], pull_request: url,
-        issue: { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'Review this pull request with a long issue title' } }));
+        issue: number === 229 ? null : { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'A distinct issue title that must not replace the PR title' } }));
       // Undefined represents an old cache; null represents an unread PR.
-      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable };
+      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable,
+        ...(ci === undefined ? {} : { title: `PR ${number}: safely show <script>unsafe()</script> & a long title on phones` }) };
     }
     await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
     await writeFile(changed, 'CI fixture');
-    const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href="https://github.com/acme/widgets/pull/${number}"])`);
     for (const javaScriptEnabled of [true, false]) {
       const page = await pageFor(t, { javaScriptEnabled });
       await page.goto(`${origin}/?section=ready-for-review`);
@@ -1267,9 +1443,14 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
         await page.setViewportSize({ width, height: 900 });
         for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
           await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-          for (const [number, , label, tag, mergeable] of states) {
+          for (const [number, ci, label, tag, mergeable] of states) {
             const row = rowFor(page, number);
             assert.equal(await row.getAttribute('data-state'), 'Ready');
+            assert.equal(await row.locator('.subject a').textContent(), `acme/widgets#${number}`);
+            assert.equal(await row.locator('.row-head > .issue-title').textContent(),
+              ci == null ? '(title unavailable)' : `PR ${number}: safely show <script>unsafe()</script> & a long title on phones`);
+            assert.equal(await row.locator('script').count(), 0);
+            assert.equal(await row.locator('.row-head > .issue-title').isVisible(), true);
             assert.equal(await row.locator('.merge-conflict').count(), mergeable === 'conflicting' ? 1 : 0);
             const badges = [[row.locator('.ci'), label, tag]];
             if (mergeable === 'conflicting') badges.push([row.locator('.merge-conflict'), 'Merge conflict', 'urgent']);
@@ -1309,6 +1490,24 @@ test('Ready rows show CI and merge conflicts across themes and widths and update
     await writeFile(changed, 'CI changed');
     await row.locator('.ci').getByText('CI red', { exact: true }).waitFor();
     assert.equal(await row.getAttribute('data-state'), 'Ready');
+    subjects['https://github.com/acme/widgets/pull/229'].title = 'Renamed PR <title> & ship';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'Title changed');
+    await row.locator('.issue-title').getByText('Renamed PR <title> & ship', { exact: true }).waitFor();
+    // Both pointer and native keyboard activation follow GitHub directly.
+    // Fulfil the destination locally so this checks navigation without network.
+    const url = 'https://github.com/acme/widgets/pull/229';
+    await page.route(url, route => route.fulfill({ body: 'Pull request destination' }));
+    let peeks = 0;
+    page.on('request', request => { if (new URL(request.url()).pathname === '/peek') peeks++; });
+    for (const activation of ['pointer', 'keyboard']) {
+      await page.goto(`${origin}/?section=ready-for-review`);
+      const link = rowFor(page, 229).locator('.subject a');
+      if (activation === 'pointer') await link.click();
+      else { await link.focus(); await link.press('Enter'); }
+      await page.waitForURL(url);
+      assert.equal(peeks, 0, `${activation} PR activation must not open Details`);
+    }
   } finally {
     for (const path of paths) await rm(path, { force: true });
     if (previous === null) await rm(cache, { force: true });
@@ -1330,6 +1529,8 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
     212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
     213: live('implement'),
   };
+  const subjectUrl = number => number === 212
+    ? 'https://github.com/acme/widgets/pull/212' : `https://github.com/acme/widgets/issues/${number}`;
   const stop = join(dir, '213-fixture.command.stop.json');
   const paths = [stop];
   for (const [number, change] of Object.entries(fixtures)) {
@@ -1350,14 +1551,14 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
         ['needs you', 'Needs you', 1], ['ready for review', 'Ready for review', 212],
         ['landing', 'Landing', 211], ['working', 'Working', 213]
       ]) {
-        const section = page.getByRole('region', { name: title, exact: true });
+        const section = page.getByRole('group', { name: title, exact: true });
         assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
-        assert.equal(await section.locator(`.subject a[href$="/issues/${number}"]`).isVisible(), true, group);
+        assert.equal(await section.locator(`.subject a[href="${subjectUrl(number)}"]`).isVisible(), true, group);
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }
     for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
-    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href="${subjectUrl(number)}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
       const probe = document.createElement('span');
       document.body.append(probe);
@@ -1567,6 +1768,8 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   assert.equal(await selected.count(), 0);
   assert.equal(await page.locator('#peek').isVisible(), false);
   await page.keyboard.press('j');
+  await page.locator('#inbox > [data-group="needs you"] > summary.is-selected').waitFor();
+  await page.keyboard.press('j');
   const first = await selected.getAttribute('id');
   await page.keyboard.press('Space');
   await detailsShow();
@@ -1576,7 +1779,10 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   await page.keyboard.press('k');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('k');
-  assert.equal(await selected.evaluate(el => el === el.parentElement.lastElementChild), true, 'k wraps to the last row');
+  assert.equal(await selected.evaluate(el => el.matches('summary')), true, 'k returns to the heading');
+  await page.keyboard.press('k');
+  assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), 'working', 'k wraps to the last visible heading');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('Space');
@@ -1953,6 +2159,9 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
     await write(separate, 224);
     await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    await page.locator('#inbox > [data-group="working"] > summary').click();
+    await page.locator('#inbox > [data-group="working"] > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await total.locator('strong').textContent(), '2 active runs');
     // Moving between folders, into and out of the live work, leaves the total alone.
     for (const group of ['working', 'needs you']) {
       await folder(page, group).click();

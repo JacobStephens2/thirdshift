@@ -46,7 +46,12 @@ fn events(console: &Console) -> BufReader<reqwest::blocking::Response> {
 fn wait_for(console: &Console, stream: &mut impl BufRead, name: &str) {
     loop {
         assert!(sse_event(stream).contains("event: commands"));
-        if group(&console.get("/").text().unwrap(), name).contains("acme/widgets#81") {
+        let subject = if name == "ready for review" {
+            "acme/widgets#10"
+        } else {
+            "acme/widgets#81"
+        };
+        if group(&console.get("/").text().unwrap(), name).contains(subject) {
             return;
         }
     }
@@ -119,6 +124,63 @@ fn assert_idle_events(console: &Console, duration: Duration) {
 }
 
 #[test]
+fn pull_request_titles_refresh_live_and_survive_failed_reads() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("ready for review"), 0);
+    pr_is(&scenario, "OPEN");
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["title"] = json!("First PR title");
+    scenario.write_gh_state(&gh);
+    assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+    let console = start(&scenario);
+    let ready = group(&console.get("/").text().unwrap(), "ready for review");
+    assert!(ready.contains("First PR title"), "{ready}");
+    let mut stream = events(&console);
+    assert!(sse_event(&mut stream).contains("event: commands"));
+    gh["prs"][0]["title"] = json!("Renamed <review> & ship");
+    scenario.write_gh_state(&gh);
+    loop {
+        assert!(sse_event(&mut stream).contains("event: commands"));
+        let ready = group(&console.get("/").text().unwrap(), "ready for review");
+        if ready.contains("Renamed &#60;review&#62; &#38; ship") {
+            break;
+        }
+    }
+    drop(stream);
+    stop(console, &scenario);
+    scenario.gh_fails("api graphql");
+    age_answer(&home, 600);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(status["github_failure"].is_string(), "{status}");
+    assert_eq!(
+        status["commands"][0]["github"]["subjects"]["https://github.com/acme/widgets/pull/10"]["facts"]
+            ["title"],
+        "Renamed <review> & ship"
+    );
+    let console = start(&scenario);
+    let ready = group(&console.get("/").text().unwrap(), "ready for review");
+    assert!(
+        ready.contains("Renamed &#60;review&#62; &#38; ship"),
+        "{ready}"
+    );
+    assert!(
+        ready.contains("href=\"https://github.com/acme/widgets/pull/10\""),
+        "{ready}"
+    );
+    let calls = stop(console, &scenario);
+    assert!(
+        calls
+            .iter()
+            .any(|args| args.iter().any(|arg| arg.contains("url title state"))),
+        "{calls:?}"
+    );
+}
+
+#[test]
 fn mergeability_changes_wake_ready_rows_independently_of_ci() {
     let scenario = Scenario::new();
     let home = scenario.path("home");
@@ -155,7 +217,7 @@ fn mergeability_changes_wake_ready_rows_independently_of_ci() {
             let ready = group(&page, "ready for review");
             if ready.contains("Merge conflict") == conflict {
                 assert!(ready.contains("CI green"), "{ready}");
-                assert!(ready.contains("acme/widgets#81"), "{ready}");
+                assert!(ready.contains("acme/widgets#10"), "{ready}");
                 assert_eq!(row["group"], "ready for review", "{row}");
                 assert_eq!(row["github_ci"], "green", "{row}");
                 let output = scenario.run(&["status"]);
@@ -244,7 +306,7 @@ fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
     pr_is(&scenario, "MERGED");
     wait_for(&console, &mut stream, "done");
     assert!(
-        !group(&console.get("/").text().unwrap(), "ready for review").contains("acme/widgets#81")
+        !group(&console.get("/").text().unwrap(), "ready for review").contains("acme/widgets#10")
     );
     // Stop the Console to distinguish status's reads from the background reads.
     drop(stream);
@@ -346,7 +408,7 @@ fn inbox_remains_responsive_during_a_blocked_github_read() {
     wait_until(|| scenario.path("gh-state.json.started").exists());
     let began = std::time::Instant::now();
     assert!(
-        group(&console.get("/").text().unwrap(), "ready for review").contains("acme/widgets#81")
+        group(&console.get("/").text().unwrap(), "ready for review").contains("acme/widgets#10")
     );
     let mut stream = events(&console);
     assert!(sse_event(&mut stream).contains("event: commands"));
@@ -485,7 +547,7 @@ fn failure_warning_wakes_open_inbox_and_recovers() {
                 page.contains("HTTP 401: Bad credentials &#60;signed out&#62;"),
                 "{page}"
             );
-            assert!(group(&page, "ready for review").contains("acme/widgets#81"));
+            assert!(group(&page, "ready for review").contains("acme/widgets#10"));
             break;
         }
     }
@@ -535,7 +597,7 @@ fn console_and_status_share_both_quota_reserves_and_resume_at_reset() {
         let page = console.get("/").text().unwrap();
         assert!(page.contains("499"));
         assert!(page.contains("until"));
-        assert!(group(&page, "ready for review").contains("acme/widgets#81"));
+        assert!(group(&page, "ready for review").contains("acme/widgets#10"));
         let before = scenario.gh_calls();
         let text = scenario.run(&["status"]);
         assert!(text.stdout.contains(description), "{}", text.stdout);

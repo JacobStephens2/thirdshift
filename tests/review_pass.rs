@@ -8,6 +8,159 @@ use support::Scenario;
 const NO_FINDINGS: &str = "printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"";
 
 #[test]
+fn author_pass_skips_local_conflicts_and_notifies_once_per_state() {
+    let scenario = Scenario::new();
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"accepted"}"#);
+    scenario.agent_does(NO_FINDINGS);
+    for branch in ["blocked", "waiting"] {
+        scenario.origin_has_branch(branch, "main", &["Feature"]);
+        scenario.github_has_pr(branch, "main", "OPEN");
+    }
+    // An unowned local branch must never be reset, even during a scheduled Pass.
+    scenario.launch_git(&["branch", "blocked", "main"]);
+    let env = [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", "re_test_1780"),
+    ];
+    let args = [
+        "review",
+        "--author",
+        "colleague",
+        "--recommend-only",
+        "--email",
+        "me@example.com",
+    ];
+    let first = scenario.run_with_env(&args, &env);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
+    assert_eq!(
+        scenario.gh_state()["prs"][1]["postedComments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        resend.requests().len(),
+        2,
+        "one conflict and one successful Review notification"
+    );
+
+    let second = scenario.run_with_env(&args, &env);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(
+        resend.requests().len(),
+        2,
+        "unchanged conflict must be silent"
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+
+    scenario.launch_git(&["update-ref", "refs/heads/blocked", "origin/waiting"]);
+    let changed = scenario.run_with_env(&args, &env);
+    assert_eq!(changed.code, Some(0), "{}", changed.stderr);
+    assert_eq!(
+        resend.requests().len(),
+        3,
+        "a changed local head must notify again"
+    );
+    let explicit = scenario.run_with_env(
+        &[
+            "review",
+            "https://github.com/acme/widgets/pull/1",
+            "--email",
+            "me@example.com",
+        ],
+        &env,
+    );
+    assert_eq!(explicit.code, Some(1), "{}", explicit.stderr);
+    assert!(
+        explicit.stderr.contains("differs from origin/blocked"),
+        "{}",
+        explicit.stderr
+    );
+    assert_eq!(
+        resend.requests().len(),
+        4,
+        "explicit targets always report conflicts"
+    );
+}
+
+#[test]
+fn occupied_checkout_changes_reenable_notification_and_clean_repairs_recover() {
+    let scenario = Scenario::new();
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"accepted"}"#);
+    for branch in ["blocked", "waiting"] {
+        scenario.origin_has_branch(branch, "main", &["Feature"]);
+        scenario.github_has_pr(branch, "main", "OPEN");
+    }
+    scenario.agent_does(NO_FINDINGS);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            r#"
+pwd > '{}'
+echo unfinished > repair.txt
+git add repair.txt
+exit 1
+"#,
+            scenario.path("retained-path").display()
+        ),
+    );
+    let failed = scenario.run(&["review", "https://github.com/acme/widgets/pull/1"]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    let retained = std::fs::read_to_string(scenario.path("retained-path")).unwrap();
+    let retained = retained.trim();
+    let env = [
+        ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ("RESEND_API_KEY", "re_test_1780"),
+    ];
+    let args = [
+        "review",
+        "--author",
+        "colleague",
+        "--email",
+        "me@example.com",
+    ];
+    let first = scenario.run_with_env(&args, &env);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert_eq!(resend.requests().len(), 2);
+    let second = scenario.run_with_env(&args, &env);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(
+        resend.requests().len(),
+        2,
+        "Git status refreshes must not change the fingerprint"
+    );
+    std::fs::write(
+        std::path::Path::new(retained).join("repair.txt"),
+        "changed work\n",
+    )
+    .unwrap();
+    let changed = scenario.run_with_env(&args, &env);
+    assert_eq!(changed.code, Some(0), "{}", changed.stderr);
+    assert_eq!(
+        resend.requests().len(),
+        3,
+        "dirty checkout changes must notify again"
+    );
+    scenario.launch_git(&["-C", retained, "add", "repair.txt"]);
+    scenario.launch_git(&["-C", retained, "commit", "-m", "Finish retained repair"]);
+    let recovered = scenario.run_with_env(&args, &env);
+    assert_eq!(recovered.code, Some(0), "{}", recovered.stderr);
+    assert_eq!(resend.requests().len(), 4);
+    assert_eq!(
+        scenario.origin_file("blocked", "repair.txt").as_deref(),
+        Some("changed work\n")
+    );
+    assert!(!std::path::Path::new(retained).exists());
+    let records = scenario.log_files("home/.thirdshift/review-conflicts", "json");
+    assert!(
+        records.is_empty(),
+        "cleared conflict must remove suppression: {records:?}"
+    );
+}
+
+#[test]
 fn author_pass_reviews_only_the_lowest_numbered_pr_by_that_author() {
     let scenario = Scenario::new();
     scenario.agent_does(NO_FINDINGS);

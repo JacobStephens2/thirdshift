@@ -2532,6 +2532,14 @@ fn inbox_states(state: &Json, query: &str) {
                         let at = |field: &str| pr.get(field).cloned().unwrap_or(Null);
                         object([
                             ("url", pr.at("url").clone()),
+                            (
+                                "title",
+                                if subject.contains("title") {
+                                    at("title")
+                                } else {
+                                    Null
+                                },
+                            ),
                             ("state", pr.at("state").clone()),
                             ("mergedAt", at("mergedAt")),
                             ("closedAt", at("closedAt")),

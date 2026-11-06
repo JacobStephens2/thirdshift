@@ -39,7 +39,7 @@ pub(crate) struct Row {
     pub can_dismiss: bool,
     pub logs_url: String,
     pub subject: String,
-    /// The issue's `https://` address, which the subject links to.
+    /// The pull request or issue's `https://` address, which the subject links to.
     pub subject_url: Option<String>,
     pub title: String,
     pub state: String,
@@ -303,6 +303,17 @@ pub(super) fn from_read(
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
+                        row.subject = crate::review::PullRequestUrl::parse(&row.pull_request)
+                            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
+                            .unwrap_or_else(|_| row.pull_request.clone());
+                        row.subject_url = Some(row.pull_request.clone())
+                            .filter(|url| url.starts_with("https://"));
+                        row.title = kept
+                            .pull_request(&row.selector, &row.pull_request)
+                            .and_then(|pr| pr.title.as_deref())
+                            .filter(|title| !title.trim().is_empty())
+                            .unwrap_or("(title unavailable)")
+                            .into();
                         row.ci = Some(item.github.ci.unwrap_or_default());
                         row.merge_conflict = item.github.mergeable
                             == Some(crate::github::InboxMergeable::Conflicting);
