@@ -205,9 +205,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console token <create|list|revoke> ... | scopes ...  Manage tokens or address scopes; CLI-only
+       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | scopes ...  Manage tokens, Fleet or address scopes; CLI-only
        thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
-       thirdshift console fleet <add|list|remove> ...  Pair and list the machines in this Console's Fleet
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
