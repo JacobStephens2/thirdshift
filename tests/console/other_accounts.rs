@@ -194,7 +194,7 @@ fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
         command.args(["console", "--no-sign-in"]);
         command
     });
-    assert_eq!(api::json(console.get("/api/v1/status")), status);
+    api::assert_status_facts_equal(api::json(console.get("/api/v1/status")), status);
     assert!(
         machine
             .home("serving")

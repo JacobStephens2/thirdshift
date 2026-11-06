@@ -783,7 +783,7 @@ fn security_lists_findings_and_sessions_from_the_cli_inventory() {
     assert!(html.contains("GHSA-test"));
     assert!(html.contains("2-fixture-security-audit.logs.jsonl"));
     assert!(!html.contains("acme/widgets#1"));
-    assert!(html.contains("thirdshift status --all --json"));
+    assert!(html.contains("thirdshift status --local --all --json"));
     assert!(html.contains("show"));
     let shown = Command::new(binary)
         .args(["show", "secure-fixture", "--json"])

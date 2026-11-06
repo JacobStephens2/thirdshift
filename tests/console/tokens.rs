@@ -138,10 +138,10 @@ fn bearer_read_updates_last_use_and_revoke_takes_effect_on_the_next_request() {
     let token = create(home.path(), "reader", &[]);
     let console = server(home.path());
     assert_eq!(list(home.path())[0]["last_use"], Value::Null);
-    let expected = api::cli(home.path(), &["status", "--json"]);
-    assert_eq!(
+    let expected = api::cli(home.path(), &["status", "--local", "--json"]);
+    api::assert_status_facts_equal(
         api::json(request(&console, &token, "/api/v1/status").send().unwrap()),
-        expected
+        expected,
     );
     assert!(list(home.path())[0]["last_use"].as_str().is_some());
     let description = api::json(

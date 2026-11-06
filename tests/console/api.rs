@@ -26,6 +26,21 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
     assert_eq!(json(console.get(path)), expected, "{path}");
 }
 
+pub(super) fn assert_status_facts_equal(mut actual: Value, mut expected: Value) {
+    // Each read has its own fetch instant; all other owning-machine facts match.
+    for status in [&mut actual, &mut expected] {
+        for machine in status["machines"].as_array_mut().unwrap() {
+            let fetched_at = machine
+                .as_object_mut()
+                .unwrap()
+                .remove("fetched_at")
+                .unwrap();
+            assert!(chrono::DateTime::parse_from_rfc3339(fetched_at.as_str().unwrap()).is_ok());
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn theme_import_is_available_through_the_versioned_api() {
     let home = tempfile::tempdir().unwrap();
