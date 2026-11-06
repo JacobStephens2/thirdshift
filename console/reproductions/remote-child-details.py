@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import selectors
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -48,7 +49,10 @@ with tempfile.TemporaryDirectory(prefix='thirdshift-child-details-') as tmp:
     child = {**base, 'kind':'Run', 'name':'child', 'parent_record':str(parent_path), 'issue':dict(number=99, url='https://github.com/acme/widgets/issues/99', title='Child issue'), 'stages':[dict(name='implement', began_at=now)]}
     parent_path.write_text(json.dumps(parent))
     child_path.write_text(json.dumps(child))
-    (folder / '7-fixture.log').write_text('Command output\n')
+    if '--utf8' in sys.argv:
+        (folder / '7-fixture.log').write_bytes(b'IMPORTANT failure cause: ' + b'\xff' * 2000 + b'\nlast remote line\n')
+    else:
+        (folder / '7-fixture.log').write_text('Command output\n')
     try:
         owner_url = start(owner)
         token = cli(owner, 'console', 'token', 'create', 'caller').strip()
@@ -70,9 +74,16 @@ with tempfile.TemporaryDirectory(prefix='thirdshift-child-details-') as tmp:
         assert get(owner_url + owner_path)[0] == 200
         status, body = get(caller_url + path)
         print('Remote child selector:', html.unescape(re.search(r'data-command="([^"]+)"', child_row).group(1)))
-        print('Remote response:', status, body)
+        print('Remote response:', status, body[:250])
         assert status == 200, 'A remote child Ticket row must open its own details in place'
         assert 'Child issue' in body
+        if '--utf8' in sys.argv:
+            def preview(value):
+                return value.split('aria-label="Recent Command output"')[1].split('<pre>')[1].split('</pre>')[0]
+            local_preview, remote_preview = preview(get(owner_url + owner_path)[1]), preview(body)
+            print('Owner contains failure cause:', 'IMPORTANT failure cause:' in local_preview)
+            print('Remote contains failure cause:', 'IMPORTANT failure cause:' in remote_preview)
+            assert local_preview == remote_preview, 'Remote preview must match the owning Console at UTF-8 tail boundaries'
     finally:
         for process in processes:
             process.terminate()

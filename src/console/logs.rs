@@ -146,7 +146,9 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
 }
 
 pub(super) fn recent_output(bytes: &[u8]) -> String {
-    let bytes = &bytes[bytes.len().saturating_sub(4 * 1024)..];
+    // The reader applies the raw byte budget before UTF-8 normalization.
+    // Applying it again to decoded text can discard readable output when
+    // replacement characters expanded invalid bytes in the owning tail.
     let text = String::from_utf8_lossy(bytes);
     // The byte window can cut the oldest line; keep that suffix too, so a
     // complete line at the window boundary and very long lines stay visible.
