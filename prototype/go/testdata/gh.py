@@ -26,7 +26,7 @@ elif args[:2] == ["issue", "edit"]:
         if arg == "--remove-label": labels.difference_update(args[index + 1].split(","))
     state["labels"] = [{"name": name} for name in sorted(labels)]
     (root / "state.json").write_text(json.dumps(state))
-    if "--add-label" in args and "in-progress" in args and state["mode"] == "interrupt-claim":
+    if "--add-label" in args and args[args.index("--add-label") + 1] == "in-progress" and state["mode"] == "interrupt-claim":
         os.kill(os.getppid(), signal.SIGINT)
         time.sleep(60)
 elif args[:2] == ["pr", "list"]:
