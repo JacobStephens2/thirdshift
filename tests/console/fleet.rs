@@ -50,6 +50,24 @@ fn cli_remote_dismiss_and_undo_use_only_the_owning_machine() {
         ],
     );
     assert_eq!(undone["undone"], true);
+    for (options, expected) in [
+        (
+            vec!["dismiss", "widgets#7", "--machine", "owner"],
+            "dismissed acme/widgets#7 from Needs you\n",
+        ),
+        (
+            vec!["dismiss", "widgets#7", "--machine", "owner", "--undo"],
+            "took back the dismissal of acme/widgets#7\n",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args(options)
+            .env("HOME", caller.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+    }
     assert_eq!(
         api::cli(caller.path(), &["console", "log", "--json"]),
         before

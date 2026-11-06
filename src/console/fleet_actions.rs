@@ -134,33 +134,8 @@ pub(crate) fn cli(machine: &str, command: &str, action: Action, json: bool) -> R
             answer.value
         );
     }
-    if json {
-        println!("{}", answer.value);
-    } else {
-        let name = answer.value["name"].as_str().unwrap_or(command);
-        match action {
-            Action::Stop { .. } => {
-                println!(
-                    "{name}: {}",
-                    answer.value["outcome"].as_str().unwrap_or("unknown")
-                );
-                for (key, label) in [
-                    ("issue_branches", "Issue branch left"),
-                    ("pull_requests", "Pull request left"),
-                ] {
-                    for value in answer.value[key].as_array().into_iter().flatten() {
-                        if let Some(value) = value.as_str() {
-                            println!("{label}: {value}");
-                        }
-                    }
-                }
-            }
-            Action::Dismiss { undo: true } => println!("took back the dismissal of {name}"),
-            Action::Dismiss { undo: false } => println!(
-                "dismissed {name} from {}",
-                answer.value["group"].as_str().unwrap_or("Inbox")
-            ),
-        }
+    match action {
+        Action::Stop { .. } => crate::logs::stop::print_remote(answer.value, json),
+        Action::Dismiss { .. } => crate::logs::dismiss::print_remote(answer.value, json),
     }
-    Ok(())
 }

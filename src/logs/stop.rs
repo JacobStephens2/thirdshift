@@ -212,36 +212,50 @@ fn print_ending(
     json: bool,
 ) -> Result<()> {
     let work = reading::retained_work(path, chrono::Local::now())?;
-    if json {
-        writeln!(
-            output,
-            "{}",
-            serde_json::json!({
-                "version": 1,
-                "name": tree.command.name,
-                "outcome": tree.command.outcome.as_deref().unwrap_or("died before recording an outcome"),
-                "issue_branches": work.branches,
-                "pull_requests": work.pull_requests,
-            })
-        )?;
-        return Ok(());
-    }
-    writeln!(
-        output,
-        "{}: {}",
-        tree.command.name,
-        tree.command
+    Completion {
+        version: 1,
+        name: tree.command.name.clone(),
+        outcome: tree
+            .command
             .outcome
             .as_deref()
             .unwrap_or("died before recording an outcome")
-    )?;
-    for branch in work.branches {
-        writeln!(output, "Issue branch left: {branch}")?;
+            .into(),
+        issue_branches: work.branches.into_iter().collect(),
+        pull_requests: work.pull_requests.into_iter().collect(),
     }
-    for pr in work.pull_requests {
-        writeln!(output, "Pull request left: {pr}")?;
+    .write(output, json)
+}
+
+#[derive(Deserialize, Serialize)]
+struct Completion {
+    version: u32,
+    name: String,
+    outcome: String,
+    issue_branches: Vec<String>,
+    pull_requests: Vec<String>,
+}
+
+impl Completion {
+    fn write(&self, output: &mut impl Write, json: bool) -> Result<()> {
+        if json {
+            writeln!(output, "{}", serde_json::to_string(self)?)?;
+        } else {
+            writeln!(output, "{}: {}", self.name, self.outcome)?;
+            for branch in &self.issue_branches {
+                writeln!(output, "Issue branch left: {branch}")?;
+            }
+            for pr in &self.pull_requests {
+                writeln!(output, "Pull request left: {pr}")?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+pub(crate) fn print_remote(value: serde_json::Value, json: bool) -> Result<()> {
+    let completion: Completion = serde_json::from_value(value)?;
+    completion.write(&mut std::io::stdout(), json)
 }
 
 #[cfg(test)]
