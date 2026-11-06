@@ -235,6 +235,7 @@ impl UserConfig {
                     .clone()
                     .try_into()
                     .with_context(|| format!("invalid [console] in {file}"))?;
+                config.console.migrate_fleet()?;
                 config
                     .console
                     .validate()
@@ -574,8 +575,10 @@ impl UserConfigDocument {
     }
 
     fn prepare(text: &str, path: &Path, home: &Path) -> Result<Self> {
-        UserConfig::parse(text, path, home)?;
-        let completed = complete(text)?;
+        let settings = UserConfig::parse(text, path, home)?;
+        let mut document: DocumentMut = text.parse()?;
+        console::fleet::migrate_document(&mut document, &settings.console.fleet);
+        let completed = complete(&document.to_string())?;
         let settings = UserConfig::parse(&completed, path, home)?;
         // Completion appends missing implicit sections after the original
         // text. Reparse that text so subsequent edits keep their placement.
@@ -1129,7 +1132,7 @@ address = ""        # HTTPS address for console install, e.g. https://console.ex
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 address_scopes = {}  # an address absent here has all five scopes; CLI-only; default {}
-other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+fleet = []           # named Console addresses; tokens live in Credentials; default []
 other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
@@ -1449,7 +1452,7 @@ mod tests {
                 "console.port",
                 "console.allowed_emails",
                 "console.address_scopes",
-                "console.other_consoles",
+                "console.fleet",
                 "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",

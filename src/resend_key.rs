@@ -2,12 +2,14 @@
 //! set and not empty, else `resend.key` in the Credentials,
 //! `~/.thirdshift/credentials.toml`. The email sender and Setup both find it
 //! here, so they can't disagree about whether there is one, and Setup saves
-//! the key it is given here too. Only they call it, so a broken Credentials
-//! file can't block a Run that sends no email, nor `update`, `version` or
+//! the key it is given here too. A broken Credentials file can't block a Run
+//! that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
 //! The same Credentials also keep `claude.setup_token` and `opencode.api_key`,
 //! reserved for Trials; ordinary Runs never receive them.
+//! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -93,6 +95,7 @@ struct Secrets {
     key: Option<String>,
     claude_setup_token: Option<String>,
     opencode_api_key: Option<String>,
+    fleet: BTreeMap<String, String>,
 }
 
 impl Credentials {
@@ -156,6 +159,25 @@ impl Credentials {
         self.secrets.opencode_api_key.clone()
     }
 
+    pub fn has_fleet_token(&self, name: &str) -> bool {
+        self.secrets.fleet.contains_key(name)
+    }
+
+    /// Fleet holders retain the raw token; issuers retain only its hash.
+    pub fn save_fleet_token(&self, name: &str, token: Option<&str>) -> Result<()> {
+        let text = self.text.as_deref().unwrap_or_default();
+        let text = if let Some(token) = token {
+            with_secret(text, "fleet", name, token)?
+        } else {
+            let mut document: DocumentMut = text.parse()?;
+            if let Some(table) = document.get_mut("fleet").and_then(Item::as_table_like_mut) {
+                table.remove(name);
+            }
+            document.to_string()
+        };
+        self.write(&text)
+    }
+
     /// Save the supplied secrets together, retaining omitted values and
     /// comments. New files and replacements have mode 0600.
     pub fn save(
@@ -174,13 +196,17 @@ impl Credentials {
         if let Some(api_key) = opencode_api_key {
             text = with_secret(&text, "opencode", "api_key", api_key)?;
         }
+        self.write(&text)
+    }
+
+    fn write(&self, text: &str) -> Result<()> {
         let written = match &self.text {
-            None => create(&self.path, &text),
+            None => create(&self.path, text),
             Some(_) => {
                 // config::replace preserves permissions; restrict them before
                 // replacing so neither the old nor new file remains exposed.
                 std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
-                    .and_then(|()| config::replace(&self.path, &text))
+                    .and_then(|()| config::replace(&self.path, text))
             }
         };
         written.with_context(|| format!("can't write {}", self.path.display()))
@@ -267,8 +293,8 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let mut found = Secrets::default();
     for (section, value) in &table {
         let settings = match (section.as_str(), value) {
-            ("resend" | "claude" | "opencode", Value::Table(settings)) => settings,
-            ("resend" | "claude" | "opencode", _) => {
+            ("resend" | "claude" | "opencode" | "fleet", Value::Table(settings)) => settings,
+            ("resend" | "claude" | "opencode" | "fleet", _) => {
                 bail!("{section} must be the section [{section}] in {file}")
             }
             (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
@@ -276,6 +302,12 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
         };
         for (key, value) in settings {
             match (section.as_str(), key.as_str(), value) {
+                ("fleet", name, Value::String(token)) => {
+                    if let Some(token) = nonempty(token) {
+                        found.fleet.insert(name.to_owned(), token);
+                    }
+                }
+                ("fleet", _, _) => bail!("fleet tokens must be quoted strings in {file}"),
                 ("resend", "key", Value::String(key)) => found.key = nonempty(key),
                 ("resend", "key", _) => {
                     bail!("resend.key must be a quoted Resend API key in {file}")

@@ -10,6 +10,9 @@ mod actions;
 #[path = "console/tokens.rs"]
 mod tokens;
 
+#[path = "console/fleet.rs"]
+mod fleet;
+
 #[path = "console/resources.rs"]
 mod resources;
 
@@ -190,7 +193,7 @@ fn sse_event(stream: &mut impl BufRead) -> String {
 fn configure(home: &Path) {
     fs::create_dir_all(home.join(".thirdshift")).unwrap();
     fs::write(home.join(".thirdshift/config.toml"),
-        "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
+        "[console]\nport = 0\nfleet = [{ name = 'other.example.test', address = 'https://other.example.test' }]\ntheme = \"focus-auto\"\n").unwrap();
 }
 
 /// How the Console shows `rfc3339` up to its zone name: this machine's date
@@ -1863,7 +1866,7 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
     for settings in [
         "port = -1",
         "port = 65536",
-        "other_consoles = ['javascript:alert(1)']",
+        "fleet = [{ name = 'unsafe', address = 'javascript:alert(1)' }]",
         "theme = 'typo'",
         "bind = '0.0.0.0'",
     ] {

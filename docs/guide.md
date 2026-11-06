@@ -386,6 +386,51 @@ Every Inbox group starts open. Click its heading, or focus it and press Enter or
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
 
+#### Fleet
+
+The Fleet lists the other machines known to this Console. To pair one, create
+a token on that machine, then supply it to the watching machine through standard
+input. Choose only the scopes that machine needs:
+
+```sh
+# On the machine to pair (prints the token once):
+thirdshift console token create watcher --scopes read,act
+# On the watching machine (paste the token at the hidden prompt):
+thirdshift console fleet add server https://console.example.com
+thirdshift console fleet list
+thirdshift console fleet list --json
+thirdshift console fleet remove server
+```
+
+The token is never an argument. Piped standard input works too. Pairing checks
+`/api/v1/whoami`, then saves the hostname, thirdshift version, scopes and last
+contact. An unreachable machine, a refused token or an older Console without
+that endpoint leaves the saved Fleet and Credentials unchanged. Pairing requires
+HTTPS, with an exception for `http://127.0.0.1` for local use. Redirects are refused.
+
+Tokens are stored under `[fleet]`, keyed by entry name, in the owner-only
+`~/.thirdshift/credentials.toml`. The User config holds no token. Removing an
+entry deletes its saved token too; revoke the token on its issuer separately
+when its access is no longer wanted. Adding an existing name pairs it again.
+
+`fleet list` reports saved metadata without contacting the machines. **Live**
+means Credentials hold a token for the entry's name; it does not promise the
+machine is reachable or the token still valid. **Last contact** is the last
+successful pairing, not a background health check. Entries without a token are
+**link-only**. Both kinds appear as named links in the Console header. These
+commands are CLI-only and have no API endpoints.
+
+Under `[console]`, a link-only entry can be written directly:
+
+```toml
+fleet = [{ name = "server", address = "https://console.example.com" }]
+```
+
+Existing `other_consoles` addresses are read as link-only Fleet entries named
+after each address's host. Names that collide receive `-2`, `-3`, and so on.
+Setup and Console settings writes replace `other_consoles` with `fleet`, keeping
+the links and other settings.
+
 #### Console API
 
 The Console serves read views as JSON under `/api/v1`, using a bearer token or

@@ -94,6 +94,7 @@ pub enum Command {
         json: bool,
     },
     ConsoleToken(crate::console::tokens::Action),
+    ConsoleFleet(crate::console::fleet::Action),
     ConsoleScopes(crate::console::Scopes),
     ConsoleWhoami {
         json: bool,
@@ -422,6 +423,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "fleet") {
+                return crate::console::fleet::Action::parse(&args[2..]).map(Command::ConsoleFleet);
+            }
             if args.get(1).is_some_and(|action| action == "scopes") {
                 return crate::console::Scopes::parse(&args[2..]).map(Command::ConsoleScopes);
             }
