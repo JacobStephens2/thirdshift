@@ -10,6 +10,7 @@ use axum::{Extension, Json, response::Response};
 use serde::{Deserialize, Serialize};
 
 use super::{api, auth::Viewer};
+mod experiment;
 use crate::logs::start_notice::EarlyOutcome;
 use crate::{
     asks::Flags,
@@ -20,6 +21,7 @@ use crate::{
     notification::NotificationAsk,
     run::Goal,
 };
+pub(super) use experiment::properties as experiment_properties;
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -97,6 +99,7 @@ pub(super) struct Request {
     report: Option<String>,
     read_machine: Option<bool>,
     allow_ready_for_agent: Option<bool>,
+    experiment: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -112,6 +115,7 @@ pub(super) enum Kind {
     Skill,
     Score,
     Triage,
+    Experiment,
 }
 
 #[derive(Deserialize)]
@@ -123,7 +127,7 @@ enum Order {
 }
 
 impl Kind {
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Ticket,
         Self::Architect,
         Self::Pickup,
@@ -133,6 +137,7 @@ impl Kind {
         Self::Skill,
         Self::Score,
         Self::Triage,
+        Self::Experiment,
     ];
 
     pub(super) fn word(self) -> &'static str {
@@ -146,6 +151,7 @@ impl Kind {
             Self::Skill => "skill",
             Self::Score => "score",
             Self::Triage => "triage",
+            Self::Experiment => "experiment",
         }
     }
 
@@ -161,6 +167,7 @@ impl Kind {
             Self::Process => &["name", "issue", "pull_request", "plan_only"],
             Self::Skill => &["name", "issue"],
             Self::Score => &[],
+            Self::Experiment => &["experiment"],
             Self::Triage => &[
                 "report",
                 "read_machine",
@@ -193,7 +200,7 @@ impl Kind {
                 "security_close",
             ],
             Self::Triage => &["email", "harness", "model", "effort"],
-            Self::Skill | Self::Score => &[],
+            Self::Skill | Self::Score | Self::Experiment => &[],
         };
         own.iter().chain(flags).copied()
     }
@@ -203,7 +210,12 @@ impl Kind {
             Self::Ticket => &["issue"],
             Self::Process | Self::Skill => &["name"],
             Self::Triage => &["report"],
-            Self::Architect | Self::Pickup | Self::Secure | Self::Review | Self::Score => &[],
+            Self::Architect
+            | Self::Pickup
+            | Self::Secure
+            | Self::Review
+            | Self::Score
+            | Self::Experiment => &[],
         }
     }
 }
@@ -237,6 +249,9 @@ impl Request {
             if let Some(issue) = issue {
                 args.extend(["issue".into(), issue]);
             }
+        }
+        if self.command == Kind::Experiment {
+            args.extend(experiment::arguments(self.experiment.as_ref())?);
         }
         if let Some(url) = &self.pull_request {
             let pr = crate::review::PullRequestUrl::parse(url)?;
@@ -289,6 +304,7 @@ impl Request {
             );
         }
         if self.command == Kind::Process {
+            super::commands::process_name(self.name.as_deref().context("name is required")?)?;
             let crate::args::Command::Process(crate::args::ProcessAction::Run(parsed)) = parsed
             else {
                 bail!("only a Process run can be started");
@@ -329,6 +345,7 @@ impl Request {
             (self.security_fix.is_some(), "security_fix"),
             (self.security_close.is_some(), "security_close"),
             (self.parallel.is_some(), "parallel"),
+            (self.experiment.is_some(), "experiment"),
         ] {
             ensure!(
                 !present || kind.fields().any(|allowed| allowed == field),
@@ -434,14 +451,42 @@ pub(super) async fn submit(
     api::action(api::Format::Json, "/", move || start(request, viewer)).await
 }
 
+pub(super) async fn check_process(Json(mut request): Json<Request>) -> Response {
+    api::action(api::Format::Json, "/", move || {
+        ensure!(
+            matches!(request.command, Kind::Ticket | Kind::Process),
+            "this endpoint checks a Process"
+        );
+        request.command = Kind::Process;
+        let (repo, mut args) = request.arguments()?;
+        args.insert(1, "check".into());
+        let directory = super::commands::directory(&repo.slug())?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command.args(args).current_dir(directory.path);
+        let output = crate::process::output_until(
+            &mut command,
+            None,
+            crate::process::Control {
+                name: "Process check",
+                interruption: crate::process::Interruption::Ordinary,
+                stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+            },
+            Instant::now() + Duration::from_secs(30),
+            &|| Ok(()),
+        )?;
+        ensure!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?)
+    })
+    .await
+}
+
 fn start(request: Request, viewer: Viewer) -> Result<Started> {
     let (repo, args) = request.arguments()?;
-    let inventory = crate::launch_directories::load()?;
-    let directory = inventory
-        .directories
-        .into_iter()
-        .find(|directory| directory.repository.eq_ignore_ascii_case(&repo.slug()))
-        .with_context(|| format!("no known Launch directory for {}", repo.slug()))?;
+    let directory = super::commands::directory(&repo.slug())?;
     let config = UserConfig::load()?;
     std::fs::create_dir_all(&config.logs_dir)?;
     let log_path = directory
@@ -490,7 +535,7 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             Ok(())
         });
     }
-    let record_repo = if request.command == Kind::Score {
+    let record_repo = if matches!(request.command, Kind::Score | Kind::Experiment) {
         crate::scoring::repository()
     } else {
         Repo::of_origin(&format!("https://github.com/{}", directory.repository))

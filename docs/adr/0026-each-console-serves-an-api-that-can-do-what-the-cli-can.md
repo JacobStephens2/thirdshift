@@ -8,7 +8,21 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
 - **Scopes:** `read`, `security` (Security run details and findings), `act` (Stop, Dismissal, the eval judgments), `run` (start Commands) and `admin` (User config, `update`). `read` is the default.
 - **Handling:** 256 random bits, shown once and kept by the issuer only as a hash. The holder keeps it in its **Credentials**. Tokens are accepted over HTTPS only (except 127.0.0.1), named and listed with their last use, revocable at once, optionally given an expiry, and rate-limited after failures. Every call that changes anything goes in the **Console log**.
 - **People:** each address on a Console's sign-in list carries scopes of its own, all five unless the User config narrows them (#1142 Q4.1, answering #952). A Console calling on someone's behalf names the person signed in. The owning machine refuses the call unless that person is on its own sign-in list with the scope the call needs, and its **Activity log** names both the person and the machine.
-- **CLI-only, even with `admin`:** issuing and revoking tokens, the Console sign-in list, `console install` and `setup`. The machine's own shell stays the root of trust, so the API can't widen its own access.
+- **CLI-only, even with `admin`:** the following exclusions are checked against the full CLI command inventory (#1775). The machine's own shell stays the root of trust, so the API can't widen its own access.
+  - `console token`: Token management stays in the shell so the API cannot widen its own access.
+  - `console scopes`: Address scopes stay in the shell so the API cannot widen its own access.
+  - The Console sign-in list and `console sign-out`: Console sign-in administration, including revoking sign-ins, stays in the shell.
+  - `console install`: Console installation writes the machine's proxy and service setup.
+  - `setup`: Interactive setup bootstraps the machine and its Console sign-in list.
+  - `console password`: Console passwords require the machine's shell or the separate sign-in flow.
+  - `logs --export`: Log export writes to a caller-selected local path.
+  - `evals prepare`: Eval preparation writes a repository to a caller-selected local path.
+  - `evals prepare-arms`: Arm preparation writes its record to a caller-selected local path.
+  - `console`: Console serving bootstraps the API listener itself; it is not a client operation.
+  - `--trial`: The hidden Trial protocol consumes a local request and writes local Trial artifacts.
+  - `--oom-exec`: The hidden OOM wrapper replaces its process inside an existing Trial scope.
+  - `--release-summary`: The hidden release-summary protocol belongs to the local release script's stdin exchange.
+  Fleet pairing is not implemented on this branch. When Spec B adds `console fleet add/remove`, those shell-only trust changes must join this list and the parity exclusions.
 
 ## Considered Options
 

@@ -17,6 +17,82 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn api_experiment_changes_and_rechecks_match_cli_views() {
+    use sha2::{Digest, Sha256};
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["state"] = json!("completed");
+    saved["candidate"] = saved["baseline"].clone();
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let key = format!("{:x}--baseline--0", Sha256::digest(b"code-review\0fixture"));
+    let trial = directory.join("results");
+    fs::create_dir_all(&trial).unwrap();
+    fs::write(trial.join(format!("{key}.json")), serde_json::to_vec(&json!({
+        "suite":"code-review", "task":"fixture", "arm":"baseline", "trial":0,
+        "outcome":"succeeded", "score":{"passed":true,"wrong_finding":false,"borderline":true,"checks":[],"model":null,"rechecks":[]}, "attempts":[]
+    })).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let admin = tokens::create(home.path(), "owner", &["--scopes", "admin"]);
+    let actor = tokens::create(home.path(), "reviewer", &["--scopes", "act"]);
+    let post = |suffix: &str, token: &str, body: Value| {
+        reqwest::blocking::Client::new()
+            .post(format!(
+                "{}/api/v1/experiments/{id}/{suffix}",
+                console.address
+            ))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    let renamed = api::json(post("name", &admin, json!({"name":"API name"})));
+    assert_eq!(renamed["name"], "API name");
+    assert_eq!(
+        renamed,
+        api::cli(home.path(), &["experiments", &id, "--json"])
+    );
+    assert_eq!(
+        api::json(post("difficulty", &admin, json!({}))),
+        api::cli(
+            home.path(),
+            &["experiments", &id, "--record-difficulty", "--json"]
+        )
+    );
+    let pending_path = format!("/api/v1/experiments/{id}/rechecks");
+    api::parity(
+        &console,
+        home.path(),
+        &pending_path,
+        &["recheck", &id, "--pending", "--json"],
+    );
+    let checked = api::json(post(
+        "rechecks",
+        &actor,
+        json!({"trial":key,"decision":"fail","reason":"Reviewed via API","wrong_finding":true}),
+    ));
+    assert_eq!(
+        checked,
+        api::cli(home.path(), &["experiments", &id, "--json"])
+    );
+    let history = &checked["results"][0]["score"]["rechecks"];
+    assert_eq!(history[0]["passed"], false);
+    assert_eq!(history[0]["reason"], "Reviewed via API");
+    let pending = api::json(console.get(&pending_path));
+    let response = post(
+        "rechecks",
+        &actor,
+        json!({"fingerprint":"stale","decision":"pass","reason":"Reviewed batch"}),
+    );
+    assert_eq!(response.status(), 422);
+    assert!(response.text().unwrap().contains("stale fingerprint"));
+    assert!(pending["fingerprint"].is_string());
+}
+
+#[test]
 fn legacy_paused_experiment_advertises_a_supported_resume_command() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
