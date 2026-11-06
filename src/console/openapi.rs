@@ -114,6 +114,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Config => object(json!({"version": version, "settings": array(setting())})),
+        View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
             "version": version, "hostname": text, "thirdshift_version": text,
             "api_version": {"type": "string", "const": "v1"},
@@ -236,6 +238,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
     let (properties, required) = match view {
+        View::SetConfig => (json!({"value": text}), vec!["value"]),
         View::ThemeImport => {
             return json!({"required": true, "content": {"application/json": {"schema": {
                 "type": "object", "required": ["name"], "properties": {
@@ -271,6 +274,8 @@ fn action_body(view: View) -> Value {
         }
         View::ApproveEvalTask => (json!({}), vec![]),
         View::Whoami
+        | View::Config
+        | View::ConfigSetting
         | View::OpenApi
         | View::BugOrigins
         | View::Scores
@@ -306,6 +311,13 @@ fn action_body(view: View) -> Value {
     json!({"required":!required.is_empty(),"content":{"application/x-www-form-urlencoded":{"schema":{
         "type":"object", "properties":properties,"required":required
     }}}})
+}
+
+fn setting() -> Value {
+    object(json!({
+        "key": {"type":"string"}, "value": {}, "default": {},
+        "editable": {"type":"boolean"}, "reason": {"type":["string","null"]}
+    }))
 }
 
 fn tree() -> Value {

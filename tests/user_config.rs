@@ -8,6 +8,177 @@ mod support;
 
 use support::{RunResult, Scenario};
 
+#[test]
+fn config_keeps_comments_of_removed_map_entries() {
+    let scenario = Scenario::new();
+    let path = scenario.user_config_is("[email.to_by_repo]\n# Important routing note\n'acme/old' = 'old@example.com' # Original team\n'acme/keep' = 'keep@example.com' # Retained team\n");
+    for value in ["{ 'acme/keep' = 'new@example.com' }", "{}"] {
+        let result = scenario.run(&["config", "email.to_by_repo", value]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for comment in [
+            "# Important routing note",
+            "# Original team",
+            "# Retained team",
+        ] {
+            assert!(saved.contains(comment), "{saved}");
+        }
+        assert!(!saved.contains("old@example.com"));
+    }
+}
+
+#[test]
+fn config_diagnostics_do_not_echo_credentials_from_malformed_toml() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[otlp]\nendpoint = 'https://private:export-secret@example.test/v1/traces\n",
+    );
+    for args in [
+        vec!["config", "--json"],
+        vec!["config", "spec.parallel"],
+        vec!["config", "spec.parallel", "6"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(1));
+        assert!(result.stderr.contains("config.toml"), "{}", result.stderr);
+        assert!(
+            !format!("{}{}", result.stdout, result.stderr).contains("export-secret"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn config_reads_defaults_and_sets_one_value_without_changing_layout() {
+    let scenario = Scenario::new();
+    let original =
+        "# My machine\n[spec]\nparallel = 3   # Tickets at once\n\n[merge]\nalways = false\n";
+    let path = scenario.user_config_is(original);
+    let all = scenario.run(&["config", "--json"]);
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    let all: serde_json::Value = serde_json::from_str(&all.stdout).unwrap();
+    let settings = all["settings"].as_array().unwrap();
+    let parallel = settings
+        .iter()
+        .find(|s| s["key"] == "spec.parallel")
+        .unwrap();
+    assert_eq!(parallel["value"], 3);
+    assert_eq!(parallel["default"], 3);
+    assert!(
+        settings
+            .iter()
+            .any(|s| s["key"] == "email.to" && s["default"].is_null())
+    );
+    assert!(settings.iter().any(|s| s["key"] == "harness.codex.model"));
+    let set = scenario.run(&["config", "spec.parallel", "6", "--json"]);
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let set: serde_json::Value = serde_json::from_str(&set.stdout).unwrap();
+    assert_eq!(set["value"], 6);
+    assert_eq!(set["default"], 3);
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        original.replace("parallel = 3", "parallel = 6")
+    );
+    let one = scenario.run(&["config", "spec.parallel"]);
+    assert_eq!(one.code, Some(0), "{}", one.stderr);
+    assert!(
+        one.stdout.contains("spec.parallel = 6") && one.stdout.contains("default: 3"),
+        "{}",
+        one.stdout
+    );
+    let text = scenario.run(&["config"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("spec.parallel = 6"));
+}
+
+#[test]
+fn config_preserves_dotted_inline_and_map_comments() {
+    for original in [
+        "# Machine\nspec.parallel = 3 # Tickets\n",
+        "# Machine\nspec = { parallel = 3 } # Tickets\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(original);
+        let set = scenario.run(&["config", "spec.parallel", "6"]);
+        assert_eq!(set.code, Some(0), "{}", set.stderr);
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            original.replace("parallel = 3", "parallel = 6")
+        );
+    }
+    let scenario = Scenario::new();
+    let original =
+        "# Recipients\n[email.to_by_repo] # Routing\n\"acme/widgets\" = 'old@example.com' # Team\n";
+    let path = scenario.user_config_is(original);
+    let set = scenario.run(&[
+        "config",
+        "email.to_by_repo",
+        "{ 'acme/widgets' = 'new@example.com' }",
+    ]);
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let saved = std::fs::read_to_string(path).unwrap();
+    for retained in ["# Recipients", "[email.to_by_repo] # Routing", "# Team"] {
+        assert!(saved.contains(retained), "missing {retained}: {saved}");
+    }
+    let value = scenario.run(&["config", "email.to_by_repo", "--json"]);
+    assert_eq!(value.code, Some(0), "{}", value.stderr);
+    let value: serde_json::Value = serde_json::from_str(&value.stdout).unwrap();
+    assert_eq!(value["value"]["acme/widgets"], "new@example.com");
+}
+
+#[test]
+fn config_refuses_access_settings_and_uses_setups_validation_without_leaking_credentials() {
+    let scenario = Scenario::new();
+    let original = "[spec]\nparallel = 3\n[otlp]\nendpoint = 'https://private:export-secret@example.test/v1/traces'\n";
+    let path = scenario.user_config_is(original);
+    std::fs::write(
+        scenario.path("home/.thirdshift/credentials.toml"),
+        "[resend]\napi_key = 'credential-secret'\n",
+    )
+    .unwrap();
+    for key in ["console.allowed_emails", "console.address_scopes"] {
+        for args in [vec!["config", key], vec!["config", key, "[]", "--json"]] {
+            let refused = scenario.run(&args);
+            assert_eq!(refused.code, Some(1));
+            assert!(
+                refused.stderr.contains("access") && refused.stderr.contains("machine"),
+                "{}",
+                refused.stderr
+            );
+        }
+    }
+    let invalid = scenario.run(&["config", "spec.parallel", "0"]);
+    assert_eq!(invalid.code, Some(1));
+    assert!(
+        invalid
+            .stderr
+            .contains("spec.parallel must be a whole number from 1 up")
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    let invalid_config = scenario.user_config_is("[spec]\nparallel = 0\n");
+    let setup = scenario.run(&["setup"]);
+    assert_eq!(setup.code, Some(1));
+    assert!(
+        setup
+            .stderr
+            .contains("spec.parallel must be a whole number from 1 up")
+    );
+    std::fs::write(invalid_config, original).unwrap();
+    for args in [
+        vec!["config"],
+        vec!["config", "--json"],
+        vec!["config", "otlp.endpoint", "--json"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !result.stdout.contains("export-secret")
+                && !result.stdout.contains("credential-secret")
+        );
+    }
+}
+
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
 const AGENT_OPENS_PR: &str = r#"

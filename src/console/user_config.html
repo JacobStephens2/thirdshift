@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>User config · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main class="user-config"><div class="page-title"><h1>User config</h1><code>thirdshift config --json</code></div>
+<p>This machine's defaults. Reload to see changes. Changes apply to future reads; restarting the Console applies a new listening port.</p>
+{% if admin %}<p>Edit one setting at a time. Strings can be bare text; arrays and maps use TOML. Each save is recorded in the Console log.</p>{% else %}<p>Read-only. The admin scope is required to change settings.</p>{% endif %}
+<p>Credentials are kept separately. Export endpoints are redacted; enter a replacement URL or leave blank to disable export.</p>
+{% for setting in settings.settings %}
+<section class="config-setting" aria-labelledby="setting-{{ loop.index }}">
+<h2 id="setting-{{ loop.index }}"><code>{{ setting.key }}</code></h2>
+<p>Default: <code>{{ setting.default }}</code></p>
+{% if let Some(reason) = setting.reason %}<p>{{ reason }}</p>
+{% else %}
+{% if admin && setting.editable %}
+{% if setting.key == "otlp.endpoint" %}<p>Value: <code>{{ setting.value }}</code></p>{% endif %}
+<form action="/config/{{ setting.key }}" method="post">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="value-{{ loop.index }}">Value for {{ setting.key }}</label>
+<textarea id="value-{{ loop.index }}" name="value" rows="2">{{ setting.input() }}</textarea>
+<button type="submit">Save {{ setting.key }}</button>
+</form>
+{% else %}<p>Value: <code>{{ setting.value }}</code></p>{% endif %}
+{% endif %}
+</section>
+{% endfor %}
+</main>{% include "console/chrome.html" %}</body></html>
