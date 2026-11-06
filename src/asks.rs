@@ -299,6 +299,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            launch_directories: Vec::new(),
             review: crate::config::review::Settings::default(),
             scoring: crate::config::scoring::Settings::default(),
             resources: crate::resources::Limits::default(),

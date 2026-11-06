@@ -165,9 +165,9 @@ fn value(input: &str, default: &Value) -> toml::Value {
 
 /// Insert only the requested key, retaining existing tables and value decor.
 fn put(document: &mut DocumentMut, key: &str, value: toml_edit::Value) -> Result<()> {
-    let (section, name) = key.rsplit_once('.').context("a setting has a section")?;
+    let (section, name) = key.rsplit_once('.').unwrap_or(("", key));
     let mut item = document.as_item_mut();
-    for part in section.split('.') {
+    for part in section.split('.').filter(|part| !part.is_empty()) {
         let table = item
             .as_table_like_mut()
             .context("a config section is a table")?;
@@ -190,8 +190,8 @@ fn put(document: &mut DocumentMut, key: &str, value: toml_edit::Value) -> Result
                 document.trailing().as_str().unwrap_or("")
             ));
         }
-    } else if table.get(name).is_some_and(Item::is_value) {
-        super::set(document, section, name, value);
+    } else if let Some(existing) = table.get_mut(name).and_then(Item::as_value_mut) {
+        super::set_value(existing, value);
     } else {
         table.insert(name, Item::Value(value));
     }

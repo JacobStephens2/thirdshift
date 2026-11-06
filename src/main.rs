@@ -59,6 +59,8 @@ mod labels;
 #[cfg(target_os = "linux")]
 mod launch;
 #[cfg(target_os = "linux")]
+mod launch_directories;
+#[cfg(target_os = "linux")]
 mod local_time;
 #[cfg(target_os = "linux")]
 mod logs;
@@ -196,7 +198,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
-       thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -282,6 +284,7 @@ fn main() -> ExitCode {
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
         Ok(Command::Config { key, value, json }) => {
             return printed(console::config(key.as_deref(), value.as_deref(), json));

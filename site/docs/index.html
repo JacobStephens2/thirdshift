@@ -388,8 +388,9 @@ and their resumes); those log reads return 403 naming <code>security</code>. Spa
 waterfall responses keep the Command&#39;s other stages and omit those sessions,
 including their prompts and tool output. A token that
 has <code>security</code> receives the finding records and those traces. The <code>act</code> endpoints
-and their auditing are described below. The <code>admin</code> scope reads and changes
-User config, updates thirdshift, imports Themes and manages Eval data; starting Commands arrives in a later Console API ticket. A missing route scope returns 403 JSON naming that
+and their auditing are described below. <code>run</code> starts Ticket and Spec runs;
+<code>admin</code> reads and changes User config, updates thirdshift, imports Themes and
+manages Eval data. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.</p>
 <p>The machine stores only SHA-256 hashes in the owner-only
 <code>~/.thirdshift/console-tokens.json</code>, beside the Credentials. List shows holder,
@@ -529,6 +530,11 @@ by later Console API tickets appear when they are served.</p>
 <td><code>cronjobs</code>, <code>resources</code>, <code>console log</code>, <code>console theme export &lt;name&gt;</code> (already JSON)</td>
 </tr>
 <tr>
+<td>Known Launch directories</td>
+<td><code>/api/v1/launch-directories</code></td>
+<td><code>launch-directories</code></td>
+</tr>
+<tr>
 <td>Selected Theme and hidden sections</td>
 <td><code>/api/v1/look</code></td>
 <td><code>console sections</code></td>
@@ -566,17 +572,17 @@ address&#39;s scopes, including the Security finding limits above.</p>
 <td>Stop, Dismissal, judgments, selecting a Theme and hidden sections</td>
 </tr>
 <tr>
+<td><code>run</code></td>
+<td><code>POST /api/v1/runs</code> starts a Ticket or Spec run</td>
+</tr>
+<tr>
 <td><code>admin</code></td>
 <td>GET <code>/api/v1/config</code>, GET and POST <code>/api/v1/config/&lt;key&gt;</code>, GET and POST <code>/api/v1/update</code>, POST <code>/api/v1/themes</code>, POST <code>/api/v1/evals/import-replays</code></td>
 </tr>
-<tr>
-<td><code>run</code></td>
-<td>Reserved for starting Commands in a later API ticket</td>
-</tr>
 </tbody></table>
 <p>Actions take <code>application/x-www-form-urlencoded</code> bodies, using the page&#39;s
-field names below, except Theme import, which takes an <code>application/json</code> Theme
-document. Bearer requests need no CSRF token; sign-in sessions and
+field names below, except Theme import and starting a run, which take
+<code>application/json</code>. Bearer requests need no CSRF token; sign-in sessions and
 <code>--no-sign-in</code> requests must send the page&#39;s CSRF token in <code>X-CSRF-Token</code>.
 The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <table>
@@ -667,6 +673,49 @@ token Stops and Dismissals say <code>by token &lt;holder&gt;</code>, alongside t
 Console callers already recorded there. A token naming a person records
 <code>by &lt;person&gt; from the Console on &lt;holder&gt;</code>, naming both. Token secrets and action bodies are
 never written to that audit record.</p>
+</div></details>
+<details class="fold"><summary><h4>Starting Ticket and Spec runs through the API</h4></summary>
+<div class="manual-content" id="starting-ticket-and-spec-runs-through-the-api">
+<p><code>GET /api/v1/launch-directories</code> and <code>thirdshift launch-directories --json</code>
+return the same <code>{&quot;directories&quot;:[{&quot;repository&quot;:&quot;acme/widgets&quot;,&quot;path&quot;:&quot;/srv/widgets&quot;}]}</code>
+inventory. Known Launch directories come from this account&#39;s thirdshift cron
+jobs with literal <code>cd &lt;directory&gt; &amp;&amp; ... thirdshift ...</code> commands, plus the
+top-level <code>launch_directories</code> list in User config. Paths may be absolute or
+start with <code>~/</code>; aliases of the same directory are listed once. Each directory
+is resolved through its GitHub <code>origin</code> remote. Stale cron directories are
+omitted; an invalid configured directory is an error. Cron shell text is never
+evaluated. For complex shell scripts or wrappers, list their directory explicitly.
+An account without <code>crontab</code> can use the config list alone.</p>
+<p>A client with <code>run</code> starts work with structured JSON:</p>
+<pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; \
+  -H &#39;Content-Type: application/json&#39; \
+  -d &#39;{&quot;repository&quot;:&quot;acme/widgets&quot;,&quot;issue&quot;:7,&quot;merge&quot;:false,&quot;email&quot;:{&quot;mode&quot;:&quot;never&quot;},&quot;harness&quot;:&quot;codex&quot;,&quot;model&quot;:&quot;gpt-6.1-sol&quot;,&quot;effort&quot;:&quot;high&quot;,&quot;base_fix&quot;:false,&quot;security_review&quot;:true,&quot;security_fix&quot;:false}&#39; \
+  https://console.example.com/api/v1/runs
+</code></pre>
+<p><code>issue</code> accepts a positive number, its decimal string or a full Issue URL in
+the named repository. <code>merge</code>, <code>base_fix</code>, <code>security_review</code> and <code>security_fix</code>
+are optional booleans; <code>harness</code>, <code>model</code> and <code>effort</code> are optional strings.
+<code>email</code> has <code>mode</code> <code>always</code>, <code>unless_merged</code> or <code>never</code>, with an optional
+<code>address</code> for the first two. Omitted options use the CLI&#39;s User config defaults.
+Unknown fields and invalid arguments are refused. A repository without a known
+Launch directory is refused before anything starts. If several directories
+name it, the first path in the inventory is used.</p>
+<p>The Console starts the same binary in that directory, in its own OS session
+with the account&#39;s login shell environment. Standard output and errors append
+to the cron command&#39;s literal <code>&gt;&gt;</code> or <code>&gt;</code> output path when present, otherwise
+to <code>&lt;logs.dir&gt;/cron.log</code>, the shared cron log used in the scheduling examples.
+It waits at most 30 seconds for the Command record and returns
+<code>{&quot;version&quot;:1,&quot;name&quot;:&quot;acme/widgets#7&quot;}</code>. An early exit returns an error naming
+the exit status and log; a timeout names the process and warns that it may still
+start, so check <code>status</code> before retrying. Follow the Command with the usual
+<code>show</code>, <code>status</code> and log views. It keeps running through a Console restart.
+The generated systemd service uses <code>KillMode=process</code> to preserve these
+Commands during a service restart; regenerate an older installed service to
+apply that setting.</p>
+<p>An issue with sub-issues starts a Spec run. As with a typed Issue URL, the
+Command limit never skips this work. The Command record and Activity log keep
+the token holder or the named person and calling machine. Every start attempt
+goes in the Console log. Cron and terminal starts keep their usual wording.</p>
 </div></details>
 <details class="fold"><summary><h4>Console on a server</h4></summary>
 <div class="manual-content" id="console-on-a-server">
@@ -1932,7 +1981,9 @@ ways in records the caller, key, old value and new value in the Console log,
 with sensitive values redacted. Reads and unchanged saves record no config
 change. New values apply on subsequent config reads; restart the Console
 after changing its listening port.</p>
-<pre><code class="language-toml">[merge]
+<pre><code class="language-toml">launch_directories = [&quot;~/repos/widgets&quot;]  # additional known Launch directories for API starts
+
+[merge]
 always = true   # every Ticket run Self-merges, without the merge word
 
 [base]
@@ -1988,7 +2039,9 @@ effort = &quot;medium&quot;
 </code></pre>
 <p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. <code>fix-findings</code> and <code>close-findings</code> likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
-<pre><code class="language-toml">[merge]
+<pre><code class="language-toml">launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
+
+[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]

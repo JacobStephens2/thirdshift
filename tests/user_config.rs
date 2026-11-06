@@ -9,6 +9,46 @@ mod support;
 use support::{RunResult, Scenario};
 
 #[test]
+fn config_edits_root_launch_directories_without_changing_other_settings() {
+    for original in [
+        "# My machine\n[spec]\nparallel = 3 # Tickets\n",
+        "# My machine\nlaunch_directories = [] # Repositories\n\n[spec]\nparallel = 3 # Tickets\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(original);
+        let result = scenario.run(&[
+            "config",
+            "launch_directories",
+            "['~/repos/widgets']",
+            "--json",
+        ]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let setting: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(setting["value"], serde_json::json!(["~/repos/widgets"]));
+        assert_eq!(setting["default"], serde_json::json!([]));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# My machine"), "{saved}");
+        assert!(
+            saved.contains("[spec]\nparallel = 3 # Tickets\n"),
+            "{saved}"
+        );
+        if original.contains("# Repositories") {
+            assert!(saved.contains("# Repositories"), "{saved}");
+        }
+        let read = scenario.run(&["config", "launch_directories", "--json"]);
+        assert_eq!(read.code, Some(0), "{}", read.stderr);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&read.stdout).unwrap(),
+            setting
+        );
+        let invalid = scenario.run(&["config", "launch_directories", "['relative/path']"]);
+        assert_eq!(invalid.code, Some(1));
+        assert!(invalid.stderr.contains("absolute paths or start with ~/"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+}
+
+#[test]
 fn config_keeps_comments_of_removed_map_entries() {
     let scenario = Scenario::new();
     let path = scenario.user_config_is("[email.to_by_repo]\n# Important routing note\n'acme/old' = 'old@example.com' # Original team\n'acme/keep' = 'keep@example.com' # Retained team\n");
