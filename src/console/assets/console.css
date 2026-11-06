@@ -179,6 +179,7 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @keyframes stopping { from { transform: scaleX(.2); } to { transform: scaleX(1); } }
 @media (prefers-reduced-motion: reduce) { .stopping-bar { animation: none; } }
 .log-list li { margin: 10px 0; overflow-wrap: anywhere; }
+.log-name { overflow-wrap: anywhere; }
 .log-list span { display: block; color: var(--dim); }
 .log-group > summary { padding: 8px 0; cursor: pointer; }
 .log-group > summary .live-count { margin-left: 8px; font-size: 13px; }
@@ -275,6 +276,12 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head [data-copy-status] { font-size: 12px; }
   .one-line .row-head [data-copy-status]:empty { display: none; }
 }
+.machine-filter select { max-width: 100%; }
+.machine-filter, .fleet-machines { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.one-line .command > .machine-tag { display: block; padding: 4px 10px 0; font-size: .8em; color: var(--dim); overflow-wrap: anywhere; }
+.command.stale, .command.stale .state, .command.stale .gist, .command.stale .issue-title, .command.stale a { color: var(--dim); filter: grayscale(1); }
+.command.stale .heartbeat { display: none; }
+
 @media (scripting: enabled) and (min-width: 761px) {
   .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
   .one-line .subject > .account-tag { flex: none; }

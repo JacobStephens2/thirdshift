@@ -199,7 +199,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
        thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
-       thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
@@ -208,18 +208,18 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console token <create|list|revoke> ... | scopes ...  Manage tokens or address scopes; CLI-only
+       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | scopes ...  Manage tokens, Fleet or address scopes; CLI-only
        thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
-       thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
-       thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
-       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
+       thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
-       thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
+       thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON; --export <dir> writes its whole Trace
        thirdshift update [--check] [--json]             Update to the latest release, or check its version
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -334,6 +334,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
+        Ok(Command::ConsoleFleet(action)) => return printed(action.run()),
         Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
         Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
@@ -344,9 +345,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Stop {
             command,
+            machine,
             requeue,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Stop { requeue },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::stop::stop(&command, requeue, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
@@ -354,9 +367,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Dismiss {
             command,
+            machine,
             undo,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Dismiss { undo },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
@@ -378,6 +403,9 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::RemoteDetails { machine, route }) => {
+            return printed(console::fleet::read::Remote::cli(&machine, &route));
+        }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -389,8 +417,15 @@ fn main() -> ExitCode {
             session,
             follow,
             json,
+            tail,
         }) => {
-            return match logs::status::inspect::logs(&command, session.as_deref(), follow, json) {
+            return match logs::status::inspect::logs(
+                &command,
+                session.as_deref(),
+                follow,
+                json,
+                tail,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -413,8 +448,13 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::Status { json, all }) => {
-            return match logs::status::show(json, all) {
+        Ok(Command::Status {
+            json,
+            all,
+            machine,
+            local,
+        }) => {
+            return match logs::status::show(json, all, machine.as_deref(), local) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

@@ -30,7 +30,7 @@ fn same_stamp_session_history_keeps_legacy_and_owned_inventories_disjoint() {
     let result = scenario.run(&["status", "--all", "--json"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
-    assert_eq!(status["version"], 1);
+    assert_eq!(status["version"], 2);
     let commands = status["commands"].as_array().unwrap();
     assert_eq!(commands.len(), 3, "{status}");
     for command in commands {
@@ -104,7 +104,7 @@ fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
     let status = scenario.run(&["status", "--all", "--json"]);
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
-    assert_eq!(status["version"], 1);
+    assert_eq!(status["version"], 2);
     let commands = status["commands"].as_array().unwrap();
     assert_eq!(commands.len(), 3, "{status}");
     for command in commands {

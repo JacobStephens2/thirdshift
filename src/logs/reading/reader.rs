@@ -134,9 +134,7 @@ impl Reader {
         Ok(true)
     }
 
-    /// Check eligibility, then observe completion before draining; a bounded
-    /// batch is done only at EOF.
-    pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
+    fn open(&self) -> Result<std::fs::File> {
         if let Some(root) = &self.inventory {
             ensure!(
                 catalog::still_listed(root, &self.path, self.other_account),
@@ -149,11 +147,26 @@ impl Reader {
                 "outside accepted log directory"
             );
         }
+        std::fs::File::open(&self.path)
+            .with_context(|| format!("could not open {}", self.path.display()))
+    }
+
+    /// A snapshot tail uses the same eligibility checks and an owning file
+    /// descriptor, and reads at most the requested byte budget.
+    pub(crate) fn tail(&self, budget: usize) -> Result<Vec<u8>> {
+        let mut file = self.open()?;
+        let offset = file.metadata()?.len().saturating_sub(budget as u64);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::new();
+        file.take(budget as u64).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Check eligibility, then observe completion before draining; a bounded
+    /// batch is done only at EOF.
+    pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
+        let mut file = BufReader::new(self.open()?);
         let complete = !self.live()?;
-        let mut file = BufReader::new(
-            std::fs::File::open(&self.path)
-                .with_context(|| format!("could not open {}", self.path.display()))?,
-        );
         let length = file.get_ref().metadata()?.len();
         ensure!(offset <= length, "log was truncated; reopen the reader");
         file.seek(SeekFrom::Start(offset))?;

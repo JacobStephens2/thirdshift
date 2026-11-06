@@ -3,9 +3,9 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ log.kind }} · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/logs.js" type="module"></script><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 {% match log.account %}{% when Some with (account) %}<p class="account-tag">{{ account }} · read-only</p>{% when None %}{% endmatch %}
-<main><h1>{{ log.kind }}</h1><p>{{ log.name }} {% if live %}<strong>live</strong>{% endif %}</p><p><code>thirdshift logs --file {{ log.id }}</code></p>
-<p class="log-row" data-command="{{ log.selector }}" data-peek="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}"><a class="peek-link" href="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}">Command details</a></p>
-<label><input id="follow-log" type="checkbox" checked> Follow newest line</label><p id="log-status" role="status">{% if live %}Live{% else %}Complete{% endif %}</p>
+<main><h1>{{ log.kind }}</h1><p class="log-name">{{ log.name }} {% if live %}<strong>live</strong>{% endif %}</p><p><code>{{ cli }}</code></p>
+<p class="log-row" data-command="{{ log.selector }}" data-peek="{{ details_url }}"><a class="peek-link" href="{{ details_url }}">Command details</a>{% match owning_console %}{% when Some with (url) %} · <a href="{{ url }}">Open the owning Console</a>{% when None %}{% endmatch %}</p>
+<label><input id="follow-log" type="checkbox" checked> Follow newest line</label><p id="log-status" role="status">{% if snapshot %}Snapshot · Reload for latest output{% else if live %}Live{% else %}Complete{% endif %}</p>
 {# Only the conversation renderer's escaped HTML is trusted. #}
-<section id="log-content" aria-label="Log" data-live="{{ live }}" data-stream="/logs/{{ log.id }}/stream/{{ offset }}" data-offset="{{ offset }}">{{ html|safe }}</section>
+<section id="log-content" aria-label="Log" data-live="{{ live }}" data-stream="{{ stream }}" data-offset="{{ offset }}">{{ html|safe }}</section>
 </main>{% include "console/chrome.html" %}</body></html>

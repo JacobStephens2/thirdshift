@@ -140,6 +140,7 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
             | args::Command::ConsoleSignOut { .. }
             | args::Command::ConsoleLog { .. }
             | args::Command::ConsoleToken(_)
+            | args::Command::ConsoleFleet(_)
             | args::Command::ConsoleScopes(_)
             | args::Command::ConsoleWhoami { .. }
             | args::Command::ConsoleOpenApi
@@ -150,6 +151,7 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
             | args::Command::ConsoleSections { .. }
             | args::Command::Status { .. }
             | args::Command::Show { .. }
+            | args::Command::RemoteDetails { .. }
             | args::Command::Metrics(_)
             | args::Command::Spans { .. }
             | args::Command::Stop { .. }

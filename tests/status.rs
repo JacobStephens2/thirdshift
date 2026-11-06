@@ -195,7 +195,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
     let ended = held.finish();
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
-    assert_eq!(status["version"], 1);
+    assert_eq!(status["version"], 2);
     assert_eq!(status["commands"].as_array().unwrap().len(), 2);
     assert_eq!(status["commands"][1]["state"], "ended");
     assert!(!status["hostname"].as_str().unwrap().is_empty());

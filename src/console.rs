@@ -9,6 +9,9 @@ pub(crate) mod conversation;
 mod cronjobs;
 mod experiments;
 mod filters;
+pub(crate) mod fleet;
+pub(crate) mod fleet_actions;
+mod fleet_inbox;
 mod github;
 pub(crate) use account_commands::Scopes;
 pub use account_commands::{password, print_log, sign_out};
@@ -70,7 +73,7 @@ fn hostname() -> String {
 struct PageContext {
     scopes: Vec<Scope>,
     hostname: String,
-    consoles: Vec<String>,
+    consoles: Vec<crate::config::console::fleet::Entry>,
     theme: String,
     resources: resources::Status,
 }
@@ -80,7 +83,7 @@ impl PageContext {
         Self {
             scopes: scopes.to_vec(),
             hostname: hostname(),
-            consoles: config.console.other_consoles.clone(),
+            consoles: config.console.fleet.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),
         }
@@ -755,7 +758,7 @@ const PAGES: &[PageRoute] = &[
         path: "/lanes",
         api: "/api/v1/lanes",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -763,7 +766,7 @@ const PAGES: &[PageRoute] = &[
         path: "/stages",
         api: "/api/v1/stages",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -771,7 +774,10 @@ const PAGES: &[PageRoute] = &[
         path: "/",
         api: "/api/v1/status",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status", "thirdshift status --json"],
+        cli: &[
+            "thirdshift status --local",
+            "thirdshift status --local --json",
+        ],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -779,7 +785,7 @@ const PAGES: &[PageRoute] = &[
         path: "/events",
         api: "/api/v1/events",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status"],
+        cli: &["thirdshift status --local"],
         method: Method::GET,
         view: View::Changes,
     },
@@ -787,7 +793,7 @@ const PAGES: &[PageRoute] = &[
         path: "/history",
         api: "/api/v1/history",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -795,7 +801,7 @@ const PAGES: &[PageRoute] = &[
         path: "/security",
         api: "/api/v1/security",
         scope: Some(Scope::Security),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -814,6 +820,7 @@ const PAGES: &[PageRoute] = &[
         cli: &[
             "thirdshift logs widgets#7 --json",
             "thirdshift logs widgets#7 --session implement --json",
+            "thirdshift logs widgets#7 --tail --json",
         ],
         method: Method::GET,
         view: View::Log,
@@ -915,6 +922,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
+        let fleet = fleet_inbox::Fleet::new();
+        let fleet_poller = fleet.follow(notifier.clone());
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
@@ -923,6 +932,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             router(no_sign_in, changes)
                 .layer(axum::Extension(notifier))
                 .layer(axum::Extension(assets))
+                .layer(axum::Extension(fleet))
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
@@ -955,6 +965,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             let _ = observer.await;
             github.abort();
             let _ = github.await;
+            fleet_poller.abort();
+            let _ = fleet_poller.await;
         })
         .await
         .context("Console server failed")?;
@@ -968,7 +980,6 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
 fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
     let mut router = Router::new();
     for page in PAGES {
-        let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
             (View::Help, Method::GET) => get(commands::help),
@@ -1009,7 +1020,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ResourceStatus, Method::GET) => get(resources::status),
             (View::Metrics, Method::GET) => get(metrics),
             (View::Inbox, Method::GET) => {
-                get(move |viewer, format, query| inbox(cli, path, viewer, format, query))
+                get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
@@ -1113,6 +1124,8 @@ struct InboxPage {
     repository: String,
     /// The `section` the URL asked for, as its slug.
     section: String,
+    machine: String,
+    machines: Vec<fleet_inbox::Machine>,
 }
 
 impl InboxPage {
@@ -1146,6 +1159,19 @@ impl InboxPage {
     fn slug(&self, group: &str) -> String {
         slug(group)
     }
+    fn folder_url(&self, group: &str) -> String {
+        let mut url = reqwest::Url::parse("http://localhost/").expect("fixed URL");
+        url.query_pairs_mut().append_pair("section", &slug(group));
+        if !self.machine.is_empty() {
+            url.query_pairs_mut().append_pair("machine", &self.machine);
+        }
+        format!(
+            "/{}",
+            url.query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default()
+        )
+    }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
     }
@@ -1173,7 +1199,7 @@ impl InboxPage {
         RowTemplate {
             row,
             csrf: &self.csrf,
-            can_copy,
+            can_copy: can_copy && row.console.is_empty(),
             can_act: self.page.can_act(),
             can_security: self.page.can_security(),
         }
@@ -1235,10 +1261,10 @@ async fn known_launch_directories() -> Response {
 }
 
 async fn inbox(
-    cli: &'static str,
     path: &'static str,
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
+    axum::Extension(fleet): axum::Extension<fleet_inbox::Fleet>,
     RawQuery(query): RawQuery,
 ) -> Response {
     let mut requested_page = if format == api::Format::Html {
@@ -1275,15 +1301,15 @@ async fn inbox(
     {
         return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
     }
-    render_page(format, cli, archive_page, query, viewer).await
+    render_page(format, archive_page, query, viewer, fleet).await
 }
 
 async fn render_page(
     format: api::Format,
-    cli: &'static str,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
     viewer: auth::Viewer,
+    fleet: fleet_inbox::Fleet,
 ) -> Response {
     // The shared observations and templates stay blocking, off the async executor.
     api::read(format, move || {
@@ -1293,14 +1319,23 @@ async fn render_page(
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
         let (title, cli) = match archive_page {
-            Some(status::ArchivePage::History) => ("History", "thirdshift status --all --json"),
+            Some(status::ArchivePage::History) => {
+                ("History", "thirdshift status --local --all --json")
+            }
             Some(status::ArchivePage::Security) => (
                 "Security",
-                "thirdshift status --all --json · thirdshift show <command> --json",
+                "thirdshift status --local --all --json · thirdshift show <command> --json",
             ),
-            None => ("Inbox", cli),
+            None => ("Inbox", "thirdshift status"),
         };
         format.render(read.json(&config, all)?, |_| {
+            let mut inbox = read.inbox(&config)?;
+            let machine = query_value(&query, "machine");
+            let machines = if archive_page.is_none() {
+                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())?
+            } else {
+                Vec::new()
+            };
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
                 start: (archive_page.is_none() && viewer.scopes.contains(&Scope::Run))
@@ -1308,7 +1343,7 @@ async fn render_page(
                 csrf: viewer.csrf,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
-                inbox: read.inbox(&config)?,
+                inbox,
                 title,
                 archive: archive_page
                     .map(|page| read.archive(&config, page, &outcome, &repository))
@@ -1316,6 +1351,8 @@ async fn render_page(
                 outcome,
                 repository,
                 section: query_value(&query, "section"),
+                machine,
+                machines,
             }
             .render()?)
         })
@@ -1364,9 +1401,27 @@ async fn inspect(
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
+    let machine = format.fleet_machine(&query);
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
+        if let Some(remote) = fleet::read::Remote::select(
+            &config,
+            &machine,
+            viewer.fleet_person().map(str::to_owned),
+        )? {
+            let document = remote.get(&status::inspect::url("/peek", &command, None))?;
+            return format.render(document, |document| {
+                let output = remote.preview(&command).ok();
+                Ok(
+                    peek::Peek::remote(command, document["command"].clone(), output, &remote)
+                        .render()?,
+                )
+            });
+        }
         let mut details = crate::logs::stop::inspect(&config, &command)?;
         if details.security_details && !viewer.scopes.contains(&Scope::Security) {
             return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));
@@ -1384,6 +1439,7 @@ async fn inspect(
     if format == api::Format::Html
         && !response.status().is_success()
         && response.status() != StatusCode::FORBIDDEN
+        && format.fleet_machine(&query).is_empty()
     {
         (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response()
     } else {
@@ -1391,13 +1447,36 @@ async fn inspect(
     }
 }
 
+fn machine_is_local(query: &Option<String>) -> bool {
+    let machine = query_value(query, "machine");
+    machine.is_empty() || machine == hostname()
+}
+
 async fn log(
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
+    let tail = query_value(&query, "tail") == "true";
+    let machine = format.fleet_machine(&query);
+    if !machine.is_empty() {
+        return api::read(format, move || {
+            let config = UserConfig::load()?;
+            let remote = fleet::read::Remote::select(
+                &config,
+                &machine,
+                viewer.fleet_person().map(str::to_owned),
+            )?
+            .expect("remote machine");
+            logs::remote(&remote, &config, &viewer, format, &command, &session)
+        })
+        .await;
+    }
     if format == api::Format::Json {
         if !viewer.scopes.contains(&Scope::Security) {
             let command_for_check = command.clone();
@@ -1433,6 +1512,7 @@ async fn log(
                 &config,
                 &command,
                 (!session.is_empty()).then_some(session.as_str()),
+                tail,
             )?)
             .into_response())
         })

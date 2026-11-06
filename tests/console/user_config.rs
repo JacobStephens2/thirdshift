@@ -57,7 +57,11 @@ fn admin_reads_and_sets_config_with_cli_parity_and_console_log_values() {
         fs::read_to_string(&path).unwrap(),
         original.replace("parallel = 3", "parallel = 6")
     );
-    for key in ["console.allowed_emails", "console.address_scopes"] {
+    for key in [
+        "console.allowed_emails",
+        "console.address_scopes",
+        "console.fleet",
+    ] {
         let refused = post(&admin, key, "[]");
         assert_eq!(refused.status(), 422);
         let message = refused.json::<Value>().unwrap()["error"]

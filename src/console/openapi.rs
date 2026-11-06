@@ -158,7 +158,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 query("all", false, json!({"type": "boolean", "default": false}));
             }
             object(json!({
-                "version": version, "hostname": text, "active_runs": integer,
+                "version": {"type": "integer", "const": 2}, "hostname": text, "active_runs": integer,
+                "machines": array(object(json!({
+                    "name": {"type": "string"}, "hostname": {"type": ["string", "null"]},
+                    "fetched_at": {"type": "string", "format": "date-time"},
+                    "reachability": {"enum": ["ok", "unreachable", "refused", "needs update"]},
+                    "active_runs": {"type": "integer"}, "error": {"type": ["string", "null"]}
+                }))),
                 "commands": array(record.clone()), "idle_passes": array(record.clone()),
                 "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
                 "github_last_answered_at": {"type": ["string", "null"]},
@@ -177,6 +183,11 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Log => {
             query("command", true, text.clone());
             query("session", false, text.clone());
+            query(
+                "tail",
+                false,
+                json!({"type": "boolean", "default": false, "description": "Read at most the final 4096 bytes."}),
+            );
             object(json!({"version": version, "contents": text}))
         }
         View::Reader => object(json!({"version": version, "contents": text})),

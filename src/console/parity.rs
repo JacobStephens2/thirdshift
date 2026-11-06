@@ -26,6 +26,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ConsoleSignOut", "console sign-out"),
     ("ConsoleLog", "console log"),
     ("ConsoleToken", "console token list"),
+    ("ConsoleFleet", "console fleet list"),
     ("ConsoleScopes", "console scopes"),
     ("ConsoleWhoami", "console whoami"),
     ("ConsoleOpenApi", "console openapi"),
@@ -36,6 +37,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ConsoleSections", "console sections"),
     ("Status", "status"),
     ("Show", "show widgets#7"),
+    (
+        "RemoteDetails",
+        "show widgets#7 --machine fleet-parity.example.invalid",
+    ),
     ("Metrics", "metrics"),
     ("Spans", "show widgets#7 --spans"),
     ("Stop", "stop widgets#7"),
@@ -82,6 +87,12 @@ const EVALS: &[(&str, &str)] = &[
     ),
 ];
 
+const FLEET: &[(&str, &str)] = &[
+    ("Add", "console fleet add other https://other.example.com"),
+    ("List", "console fleet list"),
+    ("Remove", "console fleet remove other"),
+];
+
 // Distinct actions represented by fields of a CLI command, rather than enums.
 const ACTIONS: &[&str] = &[
     "update --check",
@@ -112,6 +123,22 @@ const EXCLUSIONS: &[(&str, &str)] = &[
     (
         "console scopes",
         "Address scopes stay in the shell so the API cannot widen its own access.",
+    ),
+    (
+        "console fleet add other https://other.example.com",
+        "Fleet pairing stays in the shell so the API cannot change trusted destinations or their tokens.",
+    ),
+    (
+        "console fleet list",
+        "Fleet pairing metadata is inspected through the shell alongside pairing and removal.",
+    ),
+    (
+        "console fleet remove other",
+        "Fleet removal stays in the shell alongside pairing and its Credentials changes.",
+    ),
+    (
+        "show widgets#7 --machine fleet-parity.example.invalid",
+        "Fleet detail forwarding uses the owning machine's API directly; API reads stay local and never relay through saved Fleet tokens.",
     ),
     (
         "console sign-out",
@@ -180,6 +207,7 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
     let action = match &command {
         Command::Process(action) => format!("{:?}", discriminant(action)),
         Command::Evals(action) => format!("{:?}", discriminant(action)),
+        Command::ConsoleFleet(action) => format!("{:?}", discriminant(action)),
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
         Command::ConsoleOtherAccounts { value, .. } => value.is_some().to_string(),
@@ -280,6 +308,7 @@ fn every_cli_command_has_an_api_twin_or_reasoned_exclusion() {
     inventory(include_str!("../args.rs"), "Command", COMMANDS);
     inventory(include_str!("../args.rs"), "ProcessAction", PROCESSES);
     inventory(include_str!("../evals.rs"), "Action", EVALS);
+    inventory(include_str!("fleet.rs"), "Action", FLEET);
     let description = super::openapi::document();
     let twins = description["paths"]
         .as_object()
@@ -299,6 +328,7 @@ fn every_cli_command_has_an_api_twin_or_reasoned_exclusion() {
             .iter()
             .chain(PROCESSES)
             .chain(EVALS)
+            .chain(FLEET)
             .map(|(_, words)| words.to_string())
             .chain(ACTIONS.iter().map(|s| s.to_string())),
         twins,

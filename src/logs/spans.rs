@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context as _, Result, bail};
 use chrono::{DateTime, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::reading::{Command, Entry, Observation, Snapshot};
@@ -15,7 +15,7 @@ use super::trace::SpanKind;
 use super::trace::ancestry::{self, Fact, Node};
 use crate::config::UserConfig;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Span {
     pub id: String,
     pub parent_id: Option<String>,
@@ -54,7 +54,7 @@ impl Span {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub(crate) struct Tree {
     pub command: String,
     pub spans: Vec<Span>,

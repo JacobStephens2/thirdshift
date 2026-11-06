@@ -177,7 +177,11 @@ fn config_refuses_access_settings_and_uses_setups_validation_without_leaking_cre
         "[resend]\napi_key = 'credential-secret'\n",
     )
     .unwrap();
-    for key in ["console.allowed_emails", "console.address_scopes"] {
+    for key in [
+        "console.allowed_emails",
+        "console.address_scopes",
+        "console.fleet",
+    ] {
         for args in [vec!["config", key], vec!["config", key, "[]", "--json"]] {
             let refused = scenario.run(&args);
             assert_eq!(refused.code, Some(1));
