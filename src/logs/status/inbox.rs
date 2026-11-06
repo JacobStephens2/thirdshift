@@ -48,6 +48,7 @@ pub(crate) struct Row {
     pub count: usize,
     pub cause: String,
     pub resume_command: Option<String>,
+    pub fix_command: Option<String>,
     /// Why and when the row left Needs you or Ready for review, empty
     /// while it still waits or never waited.
     pub left: String,
@@ -260,6 +261,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 count: 1,
                 cause: String::new(),
                 resume_command: None,
+                fix_command: None,
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
@@ -303,6 +305,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
+                    row.fix_command = item.fix_command();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         row.subject = crate::review::PullRequestUrl::parse(&row.pull_request)
                             .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
@@ -467,6 +470,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
             .resume_command
             .clone()
             .filter(|_| facts.outcome.as_deref() == Some("paused")),
+        fix_command: None,
         left: String::new(),
         harness: format!(
             "{} · {} · {}",
