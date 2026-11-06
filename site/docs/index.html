@@ -388,8 +388,8 @@ and their resumes); those log reads return 403 naming <code>security</code>. Spa
 waterfall responses keep the Command&#39;s other stages and omit those sessions,
 including their prompts and tool output. A token that
 has <code>security</code> receives the finding records and those traces. The <code>act</code> endpoints
-and their auditing are described below; <code>run</code> and <code>admin</code> endpoints arrive in
-later Console API tickets. A missing route scope returns 403 JSON naming that
+and their auditing are described below. The <code>admin</code> scope reads and changes
+User config; starting Commands arrives in a later Console API ticket. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.</p>
 <p>The machine stores only SHA-256 hashes in the owner-only
 <code>~/.thirdshift/console-tokens.json</code>, beside the Credentials. List shows holder,
@@ -566,8 +566,12 @@ address&#39;s scopes, including the Security finding limits above.</p>
 <td>The action POSTs below, including Theme and hidden sections</td>
 </tr>
 <tr>
-<td><code>run</code>, <code>admin</code></td>
-<td>Reserved for starting Commands and other administration in later API tickets</td>
+<td><code>admin</code></td>
+<td>GET <code>/api/v1/config</code>, GET and POST <code>/api/v1/config/&lt;key&gt;</code></td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>Reserved for starting Commands in a later API ticket</td>
 </tr>
 </tbody></table>
 <p>Actions take <code>application/x-www-form-urlencoded</code> bodies, using the page&#39;s
@@ -1862,6 +1866,39 @@ skipped. While the repository is at its <a href="#the-command-limit">Command lim
 <details class="fold"><summary><h3>User config</h3></summary>
 <div class="manual-content" id="user-config">
 <p>A <strong>User config</strong> at <code>~/.thirdshift/config.toml</code> sets this machine&#39;s defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.</p>
+<p>Read every setting with its value and default, read one, or set one:</p>
+<pre><code class="language-sh">thirdshift config
+thirdshift config spec.parallel
+thirdshift config spec.parallel 6
+thirdshift config harness.codex.model gpt-6.1-sol --json
+thirdshift config console.hidden_sections &#39;[&quot;done&quot;, &quot;resolved&quot;]&#39;
+thirdshift config email.to_by_repo &#39;{ &quot;acme/widgets&quot; = &quot;team@example.com&quot; }&#39;
+</code></pre>
+<p>All three forms accept <code>--json</code>, before or after their arguments. The whole
+config returns <code>{&quot;version&quot;:1,&quot;settings&quot;:[...]}</code>; a read or write of one key
+returns its <code>key</code>, <code>value</code>, <code>default</code>, <code>editable</code> and <code>reason</code>. Strings accept
+bare text or TOML quotes; arrays and maps use TOML. <code>null</code> means no default
+for <code>email.to</code>. A write validates exactly as <code>setup</code> does and preserves the
+other settings, comments and layout. An invalid value leaves the file intact.</p>
+<p>Open <strong>User config</strong> in the Console navigation (<code>/config</code>) to see the same
+inventory. A session with <code>admin</code> can save one setting at a time; a <code>read</code>
+session sees values and defaults without edit controls. The API requires
+<code>admin</code> for both GET <code>/api/v1/config</code> and GET <code>/api/v1/config/&lt;key&gt;</code>, and for
+POST <code>/api/v1/config/&lt;key&gt;</code> with an <code>application/x-www-form-urlencoded</code>
+<code>value</code> field. Its response equals the CLI&#39;s JSON. Session writes need CSRF
+as other Console actions do; bearer writes do not.</p>
+<p>The sign-in list (<code>console.allowed_emails</code>) and address scopes
+(<code>console.address_scopes</code>) cannot be read or written with <code>config</code> or its API
+twins. The inventory names them with <code>null</code> values and explains the refusal:
+edit the sign-in list on the machine or use <code>setup</code>, and use <code>console scopes</code>
+for address scopes. They control who can get access. Credentials are never
+read by this command; nonempty <code>otlp.endpoint</code> values are redacted because
+export URLs can contain credentials. Enter a replacement URL to change one,
+or blank to disable export. Every actual config change through these three
+ways in records the caller, key, old value and new value in the Console log,
+with sensitive values redacted. Reads and unchanged saves record no config
+change. New values apply on subsequent config reads; restart the Console
+after changing its listening port.</p>
 <pre><code class="language-toml">[merge]
 always = true   # every Ticket run Self-merges, without the merge word
 

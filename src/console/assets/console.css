@@ -105,6 +105,13 @@ button, select { font: inherit; background: var(--panel); color: var(--text); bo
 form { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 form label { min-width: 0; }
 .judgment-form { display: block; max-width: 520px; }
+.user-config { max-width: 900px; }
+.config-setting { padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.config-setting h2 { font-size: 18px; overflow-wrap: anywhere; }
+.config-setting form { display: block; }
+.config-setting label { display: block; margin-bottom: 6px; }
+.config-setting textarea { display: block; box-sizing: border-box; width: 100%; max-width: 100%; resize: vertical; margin-bottom: 8px; padding: 8px; font: 13px/1.5 var(--font-mono); color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); }
+.config-setting button { max-width: 100%; overflow-wrap: anywhere; }
 .judgment-form fieldset { min-width: 0; margin: 12px 0; border: 1px solid var(--rule); border-radius: var(--radius); }
 .judgment-form label { display: block; margin: 8px 0; }
 .judgment-form textarea, .judgment-form input:not([type="hidden"]) { display: block; width: 100%; max-width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px; }

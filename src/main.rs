@@ -198,6 +198,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
+       thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -277,6 +278,9 @@ fn main() -> ExitCode {
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
+        Ok(Command::Config { key, value, json }) => {
+            return printed(console::config(key.as_deref(), value.as_deref(), json));
+        }
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {

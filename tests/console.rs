@@ -4,6 +4,9 @@ mod support;
 #[path = "console/api.rs"]
 mod api;
 
+#[path = "console/user_config.rs"]
+mod user_config;
+
 #[path = "console/actions.rs"]
 mod actions;
 

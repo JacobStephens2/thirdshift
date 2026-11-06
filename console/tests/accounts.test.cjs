@@ -38,6 +38,44 @@ after(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
+test("User config is editable for admin sessions and read-only for read sessions", async t => {
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
+  const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
+  t.after(() => scopes("read,security,act,run,admin"));
+  for (const scope of ["read", "admin"]) {
+    scopes(scope);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+      try {
+        const page = await context.newPage();
+        await page.goto(`${origin}/sign-in`);
+        await page.getByLabel("Email").fill("owner@example.test");
+        await page.getByLabel("Password", { exact: true }).fill("browser test password");
+        await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", { name: "Sign in", exact: true }).click()]);
+        const response = await page.goto(`${origin}/config`);
+        assert.equal(response.status(), 200);
+        await page.getByRole("heading", { name: "User config", exact: true }).waitFor();
+        await page.getByRole("link", { name: "User config", exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        const setting = page.locator("section").filter({ has: page.getByRole("heading", { name: "spec.parallel", exact: true }) });
+        await setting.getByText("Default: 3", { exact: true }).waitFor();
+        if (scope === "read") {
+          assert.equal(await page.locator('main textarea, main button[type="submit"]').count(), 0);
+          await setting.getByText("Value: 3", { exact: true }).waitFor();
+        } else {
+          const field = page.getByLabel("Value for spec.parallel", { exact: true });
+          await field.fill("6");
+          await Promise.all([page.waitForURL(`${origin}/config`), page.getByRole("button", { name: "Save spec.parallel", exact: true }).click()]);
+          assert.equal(await page.getByLabel("Value for spec.parallel", { exact: true }).inputValue(), "6");
+          const saved = JSON.parse(execFileSync(binary, ["config", "spec.parallel", "--json"], { env: { ...process.env, HOME: home } }));
+          assert.equal(saved.value, 6);
+        }
+        assert.equal(await page.locator('form[action="/config/console.allowed_emails"], form[action="/config/console.address_scopes"]').count(), 0);
+      } finally { await context.close(); }
+    }
+  }
+});
+
 test("sign-in and sign-out work on a phone without JavaScript using secure cookies", async t => {
   const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   t.after(() => context.close());

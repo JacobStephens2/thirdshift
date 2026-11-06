@@ -22,6 +22,7 @@ use crate::ready::PickupOrder;
 pub mod console;
 pub mod review;
 pub mod scoring;
+pub mod settings;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
@@ -748,6 +749,11 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    set_value(old, value);
+}
+
+/// Replace a value using the same comment and array edits as Setup.
+fn set_value(old: &mut toml_edit::Value, value: toml_edit::Value) {
     if let (Some(existing), Some(replacement)) = (old.as_array_mut(), value.as_array()) {
         edit_array(existing, replacement);
         return;
