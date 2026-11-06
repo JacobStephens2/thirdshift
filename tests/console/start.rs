@@ -41,6 +41,31 @@ fn launch_directories_api_and_cli_agree_on_cron_repositories() {
 }
 
 #[test]
+fn launch_directories_understand_adjacent_shell_operators() {
+    let scenario = fixture();
+    let expected = json!({"directories": [{
+        "repository": "acme/widgets", "path": scenario.launch_dir()
+    }]});
+    for separator in ["&& thirdshift", "&&thirdshift"] {
+        fs::write(
+            scenario.path("home/crontab"),
+            format!(
+                "*/5 * * * * cd '{}'{} pickup\n",
+                scenario.launch_dir().display(),
+                separator
+            ),
+        )
+        .unwrap();
+        let output = scenario.run(&["launch-directories", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output.stdout).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn launch_directories_merge_user_config_and_never_evaluate_cron_text() {
     let scenario = fixture();
     std::os::unix::fs::symlink(scenario.launch_dir(), scenario.path("home/repo")).unwrap();
@@ -128,6 +153,14 @@ fn wait_for(path: &Path) {
 #[test]
 fn run_token_starts_an_attributed_ticket_that_survives_console_restart() {
     let scenario = fixture();
+    fs::write(
+        scenario.path("home/crontab"),
+        format!(
+            "*/5 * * * * cd '{}' && thirdshift pickup 2>&1\n",
+            scenario.launch_dir().display()
+        ),
+    )
+    .unwrap();
     // The CLI checks an explicitly named Model before it records the Command.
     scenario.agent_does_in_session(1, "exit 0\n");
     scenario.agent_waits_for_release(&format!(
@@ -258,7 +291,7 @@ fn api_start_appends_to_the_repository_cron_log() {
     fs::write(
         scenario.path("home/crontab"),
         format!(
-            "*/5 * * * * cd '{}' && thirdshift pickup >> '{}' 2>&1\n",
+            "*/5 * * * * cd '{}' && thirdshift pickup >>'{}' 2>&1\n",
             scenario.launch_dir().display(),
             log.display()
         ),
@@ -394,4 +427,40 @@ fn api_start_does_not_return_an_old_record_after_pid_reuse() {
     wait_for(&scenario.path("completed"));
     let _ = scenario.run(&["stop", "acme/widgets#8", "--json"]);
     assert_eq!(response["name"], "acme/widgets#8");
+}
+
+#[test]
+fn structured_email_addresses_cannot_become_cli_flags() {
+    let scenario = fixture();
+    let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = server(&scenario);
+    support::write_executable(
+        &scenario.path("login-shell"),
+        &format!(
+            "#!/bin/sh\ntouch '{}'\nexit 92\n",
+            scenario.path("spawned").display()
+        ),
+    );
+    for mode in ["always", "unless_merged"] {
+        for address in ["--merge", "merge", "--security-review", "not-an-address"] {
+            let response = post(
+                &console,
+                &token,
+                &json!({
+                    "repository":"acme/widgets", "issue":7, "email":{"mode":mode,"address":address}
+                }),
+            );
+            assert_eq!(response.status(), 422);
+            assert!(
+                response.json::<Value>().unwrap()["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("email address")
+            );
+            assert!(
+                !scenario.path("spawned").exists(),
+                "{address} started a Command"
+            );
+        }
+    }
 }

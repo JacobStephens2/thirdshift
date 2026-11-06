@@ -300,7 +300,7 @@ pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {
 }
 
 /// Serialize public asks, never computed retry text or hidden child Run facts.
-fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
+pub(crate) fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
     match flags.goal {
         Some(Goal::Merged) => words.push("merge".into()),
         Some(Goal::ReadyForReview) => words.push("--no-merge".into()),
@@ -1451,7 +1451,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
 /// Is `arg`, after `email` or `email-unless-merged`, the address to send to? Only if it looks like
 /// one, so the Issue URL is never taken for it, nor is an Architect run's
 /// focus unless it has an `@`.
-fn is_address(arg: &str) -> bool {
+pub(crate) fn is_address(arg: &str) -> bool {
     arg.contains('@') && !arg.starts_with("https://")
 }
 

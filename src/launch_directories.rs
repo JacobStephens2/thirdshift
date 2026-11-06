@@ -70,7 +70,7 @@ fn resolve(path: &Path) -> Result<Directory> {
 
 // Parse literal shell words only. Never execute cron text to discover a path.
 fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
-    let words = shlex::split(cronjobs::shell_command(command))?;
+    let words = shell_words(cronjobs::shell_command(command))?;
     let [cd, path, and, rest @ ..] = words.as_slice() else {
         return None;
     };
@@ -89,7 +89,7 @@ fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf
     let path = config::expand_home(path, home)?;
     let output_log = thirdshift
         .windows(2)
-        .find(|pair| matches!(pair[0].as_str(), ">>" | ">"))
+        .find(|pair| matches!(pair[0].as_str(), ">>" | ">" | "&>" | "&>>"))
         .and_then(|pair| {
             let log = &pair[1];
             if log.contains(['$', '`']) {
@@ -98,6 +98,49 @@ fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf
             config::expand_home(log, home).or_else(|| Some(path.join(log)))
         });
     Some((path, output_log))
+}
+
+// shlex splits shell words, but leaves operators attached to those words.
+// Separate unquoted operators first, preserving quotes and escaped characters.
+fn shell_words(command: &str) -> Option<Vec<String>> {
+    let mut spaced = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut chars = command.chars().peekable();
+    while let Some(character) = chars.next() {
+        if escaped {
+            spaced.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote != Some('\'') {
+            spaced.push(character);
+            escaped = true;
+            continue;
+        }
+        if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() && matches!(character, '\'' | '"') {
+            quote = Some(character);
+        } else if quote.is_none() && "&|;<>".contains(character) {
+            spaced.push(' ');
+            spaced.push(character);
+            if chars.peek() == Some(&character)
+                || matches!(character, '>' | '<') && chars.peek() == Some(&'&')
+            {
+                spaced.push(chars.next()?);
+            } else if character == '&' && chars.peek() == Some(&'>') {
+                spaced.push(chars.next()?);
+                if chars.peek() == Some(&'>') {
+                    spaced.push(chars.next()?);
+                }
+            }
+            spaced.push(' ');
+            continue;
+        }
+        spaced.push(character);
+    }
+    shlex::split(&spaced)
 }
 
 pub fn show(json: bool) -> Result<String> {

@@ -10,8 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{api, auth::Viewer};
 use crate::{
+    asks::Flags,
+    base_fix::BaseFixAsk,
     config::UserConfig,
+    harness::{self, Harness, ModelAndEffort},
     issue::{IssueInput, IssueUrl, Repo},
+    notification::NotificationAsk,
+    run::Goal,
 };
 
 #[derive(Deserialize)]
@@ -27,6 +32,25 @@ enum Email {
     Always { address: Option<String> },
     UnlessMerged { address: Option<String> },
     Never,
+}
+
+impl Email {
+    fn ask(&self) -> Result<NotificationAsk> {
+        let address = |address: &Option<String>| -> Result<Option<String>> {
+            if let Some(address) = address {
+                ensure!(
+                    crate::args::is_address(address),
+                    "email address must be an address, not a CLI option"
+                );
+            }
+            Ok(address.clone())
+        };
+        Ok(match self {
+            Self::Always { address: to } => NotificationAsk::Send(address(to)?),
+            Self::UnlessMerged { address: to } => NotificationAsk::SendUnlessMerged(address(to)?),
+            Self::Never => NotificationAsk::Skip,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -86,42 +110,57 @@ impl Request {
         );
         let record_repo = issue.repo();
         let mut args = vec![issue.url];
-        for (value, yes, no) in [
-            (self.merge, "--merge", "--no-merge"),
-            (self.base_fix, "--base-fix", "--no-base-fix"),
-            (
-                self.security_review,
-                "--security-review",
-                "--no-security-review",
-            ),
-            (self.security_fix, "--security-fix", "--no-security-fix"),
-        ] {
-            if let Some(value) = value {
-                args.push(if value { yes } else { no }.into());
-            }
-        }
-        for (flag, value) in [
-            ("--harness", &self.harness),
-            ("--model", &self.model),
-            ("--effort", &self.effort),
-        ] {
-            if let Some(value) = value {
-                args.extend([flag.into(), value.clone()]);
-            }
-        }
-        if let Some(email) = &self.email {
-            let (flag, address) = match email {
-                Email::Always { address } => ("--email", address.as_ref()),
-                Email::UnlessMerged { address } => ("--email-unless-merged", address.as_ref()),
-                Email::Never => ("--no-email", None),
-            };
-            args.push(flag.into());
-            if let Some(address) = address {
-                args.push(address.clone());
-            }
-        }
+        crate::args::public_flag_words(&self.flags()?, &mut args);
         crate::args::parse(&args)?;
         Ok((record_repo, args))
+    }
+
+    fn flags(&self) -> Result<Flags> {
+        Ok(Flags {
+            goal: self.merge.map(|merge| {
+                if merge {
+                    Goal::Merged
+                } else {
+                    Goal::ReadyForReview
+                }
+            }),
+            email: self.email.as_ref().map(Email::ask).transpose()?,
+            base_fix: self.base_fix.map(|fix| {
+                if fix {
+                    BaseFixAsk::Allow
+                } else {
+                    BaseFixAsk::Forbid
+                }
+            }),
+            security_fix: self.security_fix.map(|fix| {
+                if fix {
+                    crate::security::FixAsk::Allow
+                } else {
+                    crate::security::FixAsk::Forbid
+                }
+            }),
+            security_review: self.security_review.map(|review| {
+                if review {
+                    crate::security::review::Ask::Allow
+                } else {
+                    crate::security::review::Ask::Forbid
+                }
+            }),
+            harness: harness::Asked {
+                harness: self
+                    .harness
+                    .as_deref()
+                    .map(|name| {
+                        Harness::named(name).with_context(|| format!("unknown Harness {name}"))
+                    })
+                    .transpose()?,
+                model_and_effort: ModelAndEffort {
+                    model: self.model.clone(),
+                    effort: self.effort.clone(),
+                },
+            },
+            ..Flags::default()
+        })
     }
 }
 
