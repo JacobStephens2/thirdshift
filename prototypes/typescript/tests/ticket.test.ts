@@ -203,7 +203,17 @@ print('{"type":"result","is_error":false,"result":"done"}', end='', flush=True)
     const file = join(directory, "issue.json");
     await writeFile(file, JSON.stringify({ ...object(JSON.parse(await readFile(file, "utf8"))), ...change }));
   }
-  return { directory, git, start, run, issueChange };
+  async function pr() {
+    return object(object(JSON.parse(await readFile(join(directory, "prs.json"), "utf8")))["issue-7"]);
+  }
+  async function conflict() {
+    await writeFile(join(directory, "shared.txt"), "Original\n");
+    git("add", "shared.txt");
+    git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "shared base");
+    git("push", "origin", "main");
+    await writeFile(join(directory, "conflict"), "yes");
+  }
+  return { directory, git, start, run, issueChange, pr, conflict };
 }
 
 test("green Delivery pushes the committed head and leaves a ready pull request", async () => {
@@ -211,7 +221,7 @@ test("green Delivery pushes the committed head and leaves a ready pull request",
   const result = await f.run();
   expect(result.code).toBe(0);
   expect(await Bun.file(join(f.directory, "prs.json")).exists()).toBe(true);
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(false);
   expect(pr.baseRefName).toBe("main");
   expect(pr.headRefOid).toBe(f.git("rev-parse", "issue-7"));
@@ -227,7 +237,7 @@ test("CI failure starts a Repair and watches the repaired head before readiness"
   const result = await f.run();
   expect(result.code).toBe(0);
   expect(await readFile(join(f.directory, "sessions"), "utf8")).toBe("2");
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(false);
   const head = f.git("rev-parse", "issue-7");
   expect(pr.headRefOid).toBe(head);
@@ -242,7 +252,7 @@ test("Failed ticket run salvages committed work as a draft and preserves the Cla
   const result = await f.run();
   expect(result.code).toBe(1);
   expect(await Bun.file(join(f.directory, "prs.json")).exists()).toBe(true);
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(true);
   expect(f.git("ls-remote", "--heads", "origin", "issue-7")).toContain(f.git("rev-parse", "issue-7"));
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
@@ -251,18 +261,14 @@ test("Failed ticket run salvages committed work as a draft and preserves the Cla
 
 test("merge-conflict Repair commits the Base branch merge and re-verifies CI", async () => {
   const f = await fixture();
-  await writeFile(join(f.directory, "shared.txt"), "Original\n");
-  f.git("add", "shared.txt");
-  f.git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "shared base");
-  f.git("push", "origin", "main");
-  await writeFile(join(f.directory, "conflict"), "yes");
+  await f.conflict();
   const result = await f.run();
   expect(result.code, result.stderr).toBe(0);
   expect(await readFile(join(f.directory, "sessions"), "utf8")).toBe("2");
   expect(f.git("show", "issue-7:shared.txt")).toBe("Resolved both changes");
   expect(f.git("rev-list", "--parents", "-n", "1", "issue-7").split(" ")).toHaveLength(3);
   f.git("merge-base", "--is-ancestor", "main", "issue-7");
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(false);
   expect(pr.headRefOid).toBe(f.git("rev-parse", "issue-7"));
   expect(await readFile(join(f.directory, "calls"), "utf8")).toContain(`commits/${String(pr.headRefOid)}/check-runs`);
@@ -275,7 +281,7 @@ test("Repair limit bounds permanently failing CI and keeps a draft with its Clai
   expect(result.code).toBe(1);
   expect(result.stderr).toContain("Repair limit reached (5)");
   expect(await readFile(join(f.directory, "sessions"), "utf8")).toBe("6");
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(true);
   expect(pr.headRefOid).toBe(f.git("rev-parse", "issue-7"));
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
@@ -288,17 +294,13 @@ test.each(["pending", "register", "status-recover", "absent"])("Delivery watches
   const result = await f.run();
   expect(result.code, result.stderr).toBe(0);
   expect(await readFile(join(f.directory, "sessions"), "utf8")).toBe(mode === "pending" || mode === "absent" ? "1" : "2");
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(false);
 }, 120_000);
 
 test("failed conflict Repair aborts the merge and salvages the original committed head", async () => {
   const f = await fixture();
-  await writeFile(join(f.directory, "shared.txt"), "Original\n");
-  f.git("add", "shared.txt");
-  f.git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "shared base");
-  f.git("push", "origin", "main");
-  await writeFile(join(f.directory, "conflict"), "yes");
+  await f.conflict();
   await writeFile(join(f.directory, "fail-repair"), "yes");
   const result = await f.run();
   expect(result.code).toBe(1);
@@ -308,7 +310,7 @@ test("failed conflict Repair aborts the merge and salvages the original committe
   expect(await Bun.file(resolve(session.cwd, mergeHead)).exists()).toBe(false);
   expect(f.git("-C", session.cwd, "status", "--porcelain")).toBe("");
   expect(f.git("show", "issue-7:shared.txt")).toBe("Issue branch change");
-  const pr = object(object(JSON.parse(await readFile(join(f.directory, "prs.json"), "utf8")))["issue-7"]);
+  const pr = await f.pr();
   expect(pr.isDraft).toBe(true);
   expect(pr.headRefOid).toBe(f.git("rev-parse", "issue-7"));
 }, 120_000);
@@ -558,4 +560,29 @@ issue['state'] = 'closed'
   expect((await f.run()).code).toBe(0);
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
   expect(issue.labels).toEqual([]);
+}, 120_000);
+
+test("Failed salvage drafts an existing ready PR even when repaired commits cannot push", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "ci"), "recover");
+  const gh = join(f.directory, "gh");
+  const header = "elif args[0] == 'api' and '/check-runs' in args[1]:\n";
+  await writeFile(gh, (await readFile(gh, "utf8")).replace(header, header + `
+    prs = json.loads((root / 'prs.json').read_text())
+    for pr in prs.values(): pr['isDraft'] = False
+    (root / 'prs.json').write_text(json.dumps(prs))
+`));
+  const git = join(f.directory, "git");
+  await writeFile(git, `#!/usr/bin/env python3
+import os, pathlib, sys
+root = pathlib.Path(os.environ['FIXTURE'])
+if sys.argv[1:2] == ['push'] and (root / 'sessions').exists() and int((root / 'sessions').read_text()) >= 2:
+    sys.exit('simulated transport failure publishing repaired head')
+os.execv('/usr/bin/git', ['git', *sys.argv[1:]])
+`);
+  await chmod(git, 0o755);
+  const result = await f.run();
+  expect(result.code).toBe(1);
+  const pr = await f.pr();
+  expect(pr.isDraft).toBe(true);
 }, 120_000);

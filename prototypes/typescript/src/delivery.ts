@@ -37,12 +37,16 @@ export class Delivery {
       const mergeHead = await this.runCommand(["git", "rev-parse", "--git-path", "MERGE_HEAD"]);
       if (await Bun.file(resolve(this.worktree, mergeHead)).exists()) await this.runCommand(["git", "merge", "--abort"]);
       const ahead = await this.runCommand(["git", "rev-list", "--count", `refs/heads/${this.ticket.base}..HEAD`]);
-      let pr = await this.findPR();
-      if (ahead !== "0") {
-        await this.push();
-        pr = await this.ensurePR();
+      try {
+        if (ahead !== "0") {
+          await this.push();
+          await this.ensurePR();
+        }
+      } finally {
+        // A publication error must still leave an existing PR as a draft.
+        const pr = await this.findPR();
+        if (pr && !pr.draft) await this.runCommand(["gh", "pr", "ready", String(pr.number), "--repo", this.ticket.repository, "--undo"]);
       }
-      if (pr && !pr.draft) await this.runCommand(["gh", "pr", "ready", String(pr.number), "--repo", this.ticket.repository, "--undo"]);
     } finally {
       this.finishing = false;
     }
