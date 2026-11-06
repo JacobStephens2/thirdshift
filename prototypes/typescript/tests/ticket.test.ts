@@ -116,6 +116,7 @@ elif args[:2] == ['pr', 'create']:
     pr = {'number': len(prs) + 1, 'state': 'OPEN', 'headRefName': head,
           'headRefOid': sha, 'baseRefName': args[args.index('--base') + 1],
           'isDraft': '--draft' in args, 'mergeable': 'MERGEABLE',
+          'isCrossRepository': False,
           'url': 'https://github.com/test/project/pull/' + str(len(prs) + 1)}
     prs[head] = pr
     (root / 'prs.json').write_text(json.dumps(prs))
@@ -215,6 +216,31 @@ print('{"type":"result","is_error":false,"result":"done"}', end='', flush=True)
   }
   return { directory, git, start, run, issueChange, pr, conflict };
 }
+
+test("Delivery does not adopt or mark ready a fork pull request for the Issue branch", async () => {
+  const f = await fixture();
+  // The branch exists on origin so a real view can resolve it, but the pull request
+  // head is a fork. An ancestor commit keeps the later publish a fast-forward.
+  f.git("push", "origin", "main:issue-7");
+  await writeFile(join(f.directory, "prs.json"), JSON.stringify({
+    "issue-7": {
+      number: 1, state: "OPEN", headRefName: "issue-7", headRefOid: "a".repeat(40),
+      baseRefName: "main", isDraft: true, mergeable: "MERGEABLE", isCrossRepository: true,
+      url: "https://github.com/test/project/pull/1",
+    },
+  }));
+  const result = await f.run();
+  expect(result.code, result.stderr).toBe(0);
+  const calls = await readFile(join(f.directory, "calls"), "utf8");
+  expect(calls).toContain('"pr", "create"');
+  expect(calls).not.toContain('"pr", "view", "1"');
+  expect(calls).not.toContain('"pr", "ready", "1"');
+  const pr = await f.pr();
+  expect(pr.isCrossRepository).toBe(false);
+  expect(pr.isDraft).toBe(false);
+  expect(pr.number).not.toBe(1);
+  expect(pr.headRefOid).toBe(f.git("rev-parse", "issue-7"));
+}, 120_000);
 
 test("green Delivery pushes the committed head and leaves a ready pull request", async () => {
   const f = await fixture();

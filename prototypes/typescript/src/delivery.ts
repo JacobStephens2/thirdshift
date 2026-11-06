@@ -145,26 +145,35 @@ export class Delivery {
     const existing = await this.findPR();
     if (existing) return existing;
     const { repository, branch, base, title, number } = this.ticket;
-    await this.runCommand(["gh", "pr", "create", "--repo", repository, "--head", branch, "--base", base, "--draft", "--title", title, "--body", `Closes #${number}`]);
-    const created = await this.findPR();
-    if (!created) throw new Error("Created pull request was not found");
-    return created;
+    const createdUrl = await this.runCommand(["gh", "pr", "create", "--repo", repository, "--head", branch, "--base", base, "--draft", "--title", title, "--body", `Closes #${number}`]);
+    // Bind the PR we just opened. A later list is not authoritative: fork PRs
+    // for the same branch name can fill the page and hide this one.
+    const createdNumber = /^https:\/\/github.com\/[^/]+\/[^/]+\/pull\/([1-9][0-9]*)$/.exec(createdUrl)?.[1];
+    if (!createdNumber) throw new Error("Created pull request was not found");
+    return this.view(Number(createdNumber));
   }
 
   private async findPR(): Promise<PullRequest | undefined> {
     const { repository, branch } = this.ticket;
-    const prs: unknown = JSON.parse(await this.runCommand(["gh", "pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--json", "number"]));
-    if (!Array.isArray(prs) || prs.length > 1) throw new Error("Ambiguous pull request for Issue branch");
-    if (prs.length === 0) return undefined;
-    const pr: unknown = prs[0];
-    if (!record(pr) || typeof pr.number !== "number") throw new Error("Invalid pull request number");
-    return this.view(pr.number);
+    // Fork pull requests share the head branch name but not this repository's
+    // branch. Listing them would publish, draft, or mark ready the wrong PR.
+    const listed: unknown = JSON.parse(await this.runCommand(["gh", "pr", "list", "--repo", repository, "--head", branch, "--state", "all", "--limit", "1000", "--json", "number,isCrossRepository"]));
+    if (!Array.isArray(listed)) throw new Error("Ambiguous pull request for Issue branch");
+    const numbers: number[] = [];
+    for (const pr of listed) {
+      if (!record(pr) || typeof pr.number !== "number" || typeof pr.isCrossRepository !== "boolean") throw new Error("Invalid pull request number");
+      if (!pr.isCrossRepository) numbers.push(pr.number);
+    }
+    if (numbers.length > 1) throw new Error("Ambiguous pull request for Issue branch");
+    const number = numbers[0];
+    return number === undefined ? undefined : this.view(number);
   }
 
   private async view(number: number): Promise<PullRequest> {
     const value: unknown = JSON.parse(await this.runCommand(["gh", "pr", "view", String(number), "--repo", this.ticket.repository,
-      "--json", "number,state,headRefName,baseRefName,headRefOid,isDraft,mergeable"]));
+      "--json", "number,state,headRefName,baseRefName,headRefOid,isDraft,mergeable,isCrossRepository"]));
     if (!record(value) || value.number !== number || value.state !== "OPEN" || value.headRefName !== this.ticket.branch || value.baseRefName !== this.ticket.base) throw new Error("Pull request is no longer open with the expected Issue branch and Base branch");
+    if (value.isCrossRepository !== false) throw new Error("Pull request is from a fork");
     if (typeof value.headRefOid !== "string" || typeof value.isDraft !== "boolean" || (value.mergeable !== "MERGEABLE" && value.mergeable !== "CONFLICTING" && value.mergeable !== "UNKNOWN")) throw new Error("Invalid pull request response");
     return { number, head: value.headRefOid, draft: value.isDraft, mergeable: value.mergeable };
   }
