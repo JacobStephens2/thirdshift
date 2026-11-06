@@ -3,6 +3,54 @@ use std::time::Instant;
 
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+#[test]
+fn api_experiment_release_skip_and_repository_verification_use_known_launch_directories() {
+    let scenario = fixture();
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let result = api::json(post(
+        &console,
+        &runner,
+        &json!({"repository":"acme/widgets", "command":"experiment", "experiment":{"candidate":"HEAD", "baseline":"HEAD", "release":true}}),
+    ));
+    assert_eq!(result["outcome"], "skipped");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no Eval suite touched")
+    );
+    let invalid = post(
+        &console,
+        &runner,
+        &json!({"repository":"acme/widgets", "command":"experiment", "experiment":{"file":"/etc/passwd"}}),
+    );
+    assert_eq!(invalid.status(), 422);
+    assert!(
+        invalid
+            .text()
+            .unwrap()
+            .contains("unknown Experiment option")
+    );
+    let base = Command::new("git")
+        .current_dir(scenario.launch_dir())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(base.status.success());
+    let base = String::from_utf8(base.stdout).unwrap();
+    let client = reqwest::blocking::Client::new();
+    let verify = |repository| {
+        client
+            .post(format!("{}/api/v1/evals/verify", console.address))
+            .json(&json!({"repository":repository,"base":base.trim()}))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(api::json(verify("acme/widgets")), json!({"safe":true}));
+    assert_eq!(verify("/etc").status(), 422);
+}
+
 fn fixture() -> support::Scenario {
     let scenario = support::Scenario::new();
     scenario.user_config_is("[console]\nport = 0\n");

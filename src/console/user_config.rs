@@ -12,7 +12,7 @@ use crate::config::{
     settings::{self, Setting, Settings},
 };
 
-fn change(key: &str, value: &str, actor: &str) -> Result<Setting> {
+pub(super) fn change(key: &str, value: &str, actor: &str) -> Result<Setting> {
     let accounts = Accounts::load()?;
     let change = settings::write(key, value).map_err(|error| anyhow::anyhow!("{error:#}"))?;
     if change.changed {

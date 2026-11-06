@@ -114,6 +114,21 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::CheckProcess
+        | View::EmailTest => text,
+        View::Evals => array(record),
+        View::TouchedEvals => array(text),
+        View::VerifyEval => object(json!({"safe":{"const":true}})),
+        View::OtherAccounts | View::SetOtherAccounts => {
+            json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
+        }
+        View::RenameExperiment | View::RecordDifficulty | View::PendingRechecks | View::Recheck => {
+            record
+        }
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
@@ -248,7 +263,48 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
+    let json_request = |properties, required| {
+        json!({"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,"properties":properties,"required":required
+        }}}})
+    };
     let (properties, required) = match view {
+        View::CheckProcess => {
+            let mut schema = start_schema()["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|schema| schema["properties"]["command"]["const"] == "process")
+                .unwrap()
+                .clone();
+            schema["required"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|value| value != "command");
+            return json!({"required":true,"content":{"application/json":{"schema":schema}}});
+        }
+        View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::VerifyEval => {
+            return json_request(
+                json!({"repository":text,"base":text}),
+                vec!["repository", "base"],
+            );
+        }
+        View::SetOtherAccounts => return json_request(json!({"value":text}), vec!["value"]),
+        View::EmailTest => return json_request(json!({"address":text}), vec![]),
+        View::RenameExperiment => return json_request(json!({"name":text}), vec!["name"]),
+        View::RecordDifficulty => (json!({}), vec![]),
+        View::Recheck => {
+            let mut body = json_request(
+                json!({"trial":text,"fingerprint":text,"decision":{"enum":["pass","fail"]},"reason":text,"wrong_finding":{"type":"boolean"}}),
+                vec!["decision", "reason"],
+            );
+            body["content"]["application/json"]["schema"]["oneOf"] = json!([
+                {"required":["trial"],"not":{"required":["fingerprint"]}},
+                {"required":["fingerprint"],"not":{"required":["trial"]}}
+            ]);
+            return body;
+        }
         View::StartRun => {
             return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
         }
@@ -287,7 +343,14 @@ fn action_body(view: View) -> Value {
             }}}});
         }
         View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
-        View::Whoami
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::Evals
+        | View::OtherAccounts
+        | View::PendingRechecks
+        | View::Whoami
         | View::Update
         | View::Config
         | View::ConfigSetting
@@ -348,7 +411,8 @@ fn start_schema() -> Value {
              "properties":{"mode":{"enum":["always","unless_merged"]},"address":text}},
             {"type":"object","required":["mode"],"additionalProperties":false,
              "properties":{"mode":{"const":"never"}}}
-        ]}
+        ]},
+        "experiment": {"type":"object","additionalProperties":false,"properties":super::start::experiment_properties()}
     });
     let mut variants = Vec::new();
     for kind in super::start::Kind::ALL {
