@@ -44,7 +44,7 @@ const commit = (await command(["git", "rev-parse", "--verify", `${options.ref}^{
 const temporary = await mkdtemp(join(tmpdir(), "thirdshift-benchmark-"));
 const worktree = join(temporary, "worktree");
 const measurements: {
-  language: string; operation: string; cache: string; command: string[]; cwd: string;
+  language: string; operation: string; cache: string; commands: string[][]; cwd: string;
   seconds: number; exitCode: number; output: string;
 }[] = [];
 const binaryBytes: Record<string, number> = {};
@@ -64,50 +64,59 @@ try {
   // Installation/downloads are setup, outside measured wall time.
   await command(["bun", "install", "--frozen-lockfile"], ts);
   await command(["cargo", "fetch", "--locked"], worktree);
-  async function pair(language: "typescript" | "rust", operation: string, args: string[], target?: string) {
+  async function pair(language: "typescript" | "rust", operation: string, commands: string[][], target?: string) {
     const cwd = language === "typescript" ? ts : worktree;
     const env = target ? {
       ...process.env, CARGO_TARGET_DIR: target, CARGO_BUILD_JOBS: "4",
       RUSTC_WRAPPER: "", RUSTC_WORKSPACE_WRAPPER: "", RUSTFLAGS: "", CARGO_ENCODED_RUSTFLAGS: "",
     } : process.env;
     for (const cache of ["cold", "incremental"]) {
-      console.log(`${language} ${operation} ${cache}: ${args.join(" ")}`);
+      console.log(`${language} ${operation} ${cache}: ${commands.map(args => args.join(" ")).join("; ")}`);
       const log = join(logs, `${language}-${operation}-${cache}.log`);
       const start = performance.now();
       let output: string;
-      try { output = await command(args, cwd, env); }
+      try {
+        const outputs = [];
+        for (const args of commands) outputs.push(`$ ${args.join(" ")}\n${await command(args, cwd, env)}`);
+        output = outputs.join("\n");
+      }
       catch (error) {
         await writeFile(log, String(error) + "\n");
         throw new Error(`Measurement failed; retained output: ${log}`, { cause: error });
       }
       const seconds = (performance.now() - start) / 1000;
       await writeFile(log, output);
-      measurements.push({ language, operation, cache, command: args, cwd: language === "typescript" ? "prototypes/typescript" : ".",
+      measurements.push({ language, operation, cache, commands, cwd: language === "typescript" ? "prototypes/typescript" : ".",
         seconds, exitCode: 0, output });
       console.log(`  ${measurements.at(-1)?.seconds.toFixed(3)}s`);
     }
   }
   await mkdir(join(ts, "build"), { recursive: true });
-  await pair("typescript", "typecheck", ["bun", "node_modules/typescript/bin/tsc", "--noEmit", "--incremental", "--tsBuildInfoFile", "build/typecheck.tsbuildinfo"]);
+  await pair("typescript", "typecheck", [["bun", "node_modules/typescript/bin/tsc", "--noEmit", "--incremental", "--tsBuildInfoFile", "build/typecheck.tsbuildinfo"]]);
   await rm(join(ts, "build"), { recursive: true, force: true });
-  await pair("typescript", "build", ["bun", "run", "build.ts"]);
+  await pair("typescript", "build", [["bun", "run", "build.ts"]]);
   binaryBytes.typescript = (await stat(join(ts, "build/thirdshift"))).size;
   await rm(join(ts, "build"), { recursive: true, force: true });
   // Explicit slice tests avoid recursively benchmarking this runner's own tests.
-  await pair("typescript", "test", ["bun", "test", "tests/ticket.test.ts", "tests/ready.test.ts", "tests/console.test.ts", "tests/pickup-model.test.ts"]);
-  await pair("typescript", "model", ["bun", "test", "tests/pickup-model.test.ts"]);
+  await pair("typescript", "test", [["bun", "test", "tests/ticket.test.ts", "tests/ready.test.ts", "tests/console.test.ts", "tests/pickup-model.test.ts"]]);
+  await pair("typescript", "model", [["bun", "test", "tests/pickup-model.test.ts"]]);
 
   const targets = join(temporary, "targets");
   const checkTarget = join(targets, "check");
-  await pair("rust", "typecheck", ["cargo", "check", "--locked", "--bin", "thirdshift"], checkTarget);
+  await pair("rust", "typecheck", [["cargo", "check", "--locked", "--bin", "thirdshift"]], checkTarget);
   await rm(checkTarget, { recursive: true, force: true });
   const buildTarget = join(targets, "build");
-  await pair("rust", "build", ["cargo", "build", "--release", "--locked", "--bin", "thirdshift"], buildTarget);
+  await pair("rust", "build", [["cargo", "build", "--release", "--locked", "--bin", "thirdshift"]], buildTarget);
   binaryBytes.rust = (await stat(join(buildTarget, "release/thirdshift"))).size;
   await rm(buildTarget, { recursive: true, force: true });
   const testTarget = join(targets, "test");
-  await pair("rust", "test", ["cargo", "test", "--locked", "--test", "fresh_run", "--test", "pickup_run", "--test", "console", "--test", "pickup_model", "--", "--test-threads=3"], testTarget);
-  await pair("rust", "model", ["cargo", "test", "--locked", "--test", "pickup_model", "--", "--test-threads=1", "--nocapture"], testTarget);
+  await pair("rust", "test", [
+    ["cargo", "test", "--locked", "--test", "fresh_run", "--test", "pickup_run", "--test", "pickup_model", "--", "--test-threads=3"],
+    ["cargo", "test", "--locked", "--test", "console", "api::inbox_api_equals_status_json_without_sign_in", "--", "--exact", "--test-threads=1"],
+    ["cargo", "test", "--locked", "--test", "console", "api::openapi_equals_cli_and_describes_operations_without_local_secrets", "--", "--exact", "--test-threads=1"],
+    ["cargo", "test", "--locked", "--test", "console", "dismiss", "--", "--test-threads=3"],
+  ], testTarget);
+  await pair("rust", "model", [["cargo", "test", "--locked", "--test", "pickup_model", "--", "--test-threads=1", "--nocapture"]], testTarget);
 
   const sources = {
     typescript: {
@@ -152,7 +161,7 @@ try {
       incremental: "Immediate no-edit repeat in the same worktree, retaining that operation's outputs. tsc explicitly enables incremental metadata; Bun rebuilds/retests; Cargo reuses artifacts.",
       model: "Two standalone process runs after test compilation; excludes Rust compilation, includes runner startup and all model assertions/mutations. Not a cold compilation measurement.",
       rust: "Full production binary, release size/build; dev check/test; four build jobs; three test threads, one model thread; compiler wrappers and Rust flags cleared.",
-      scope: "TypeScript Ticket/Pickup/Console slice versus broader Rust fresh_run/pickup_run/console/pickup_model suites. Not feature-equivalent workloads.",
+      scope: "TypeScript Ticket/Pickup/Console slice versus Rust fresh_run/pickup_run/pickup_model plus Console status/OpenAPI/Dismissal tests. Not feature-equivalent workloads; TypeScript also runs Playwright.",
       samples: 1,
     },
     measurements, binaryBytes, sources, slices,

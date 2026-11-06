@@ -86,7 +86,8 @@ test("empirical research report covers measured commands, sizes, scope and archi
         const row = matches[0];
         expect(row.exitCode).toBe(0);
         expect(Number.isFinite(row.seconds) && row.seconds > 0).toBe(true);
-        expect(row.command.length).toBeGreaterThan(1);
+        expect(row.commands.length).toBeGreaterThan(0);
+        expect(row.commands.every((args: string[]) => args.length > 1)).toBe(true);
         expect(report).toContain(row.seconds.toFixed(3));
       }
     }

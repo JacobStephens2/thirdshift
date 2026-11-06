@@ -174,7 +174,9 @@ standalone compilation and the ADR-0017 model tests. Each operation gets a cold
 build-output run and an immediate no-edit repeat; the model runs use compiled
 test artifacts. TypeScript explicitly enables `tsc` incremental metadata. Rust
 uses four build jobs and separate empty target directories for check, release
-build and test. OS and dependency-download caches stay warm. Allow several
+build and test. Rust's test bundle covers fresh Ticket runs, Pickup, the model,
+and Console status/OpenAPI/Dismissal tests. TypeScript also runs Playwright.
+OS and dependency-download caches stay warm. Allow several
 minutes and several GB of temporary disk space. Rust compiles the full production
 binary, so these workloads are not feature-equivalent. The JSON retains exact
 commands, output, host/tool versions, per-file physical line counts and owner-file
