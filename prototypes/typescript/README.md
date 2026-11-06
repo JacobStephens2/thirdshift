@@ -1,7 +1,8 @@
 # TypeScript Ticket run prototype
 
-This isolated experiment implements the opening half of a Ticket run for #1836
-under Spec #1831. It does not replace the Rust executable or change ADR-0001.
+This isolated experiment implements a Ticket run through Delivery and bounded
+CI/conflict Repair for #1836 and #1837 under Spec #1831. It does not replace the
+Rust executable or change ADR-0001.
 
 On Linux, with Bun 1.4.4, Git and GitHub CLI installed:
 
@@ -38,12 +39,35 @@ SIGINT, SIGTERM and SIGHUP record interruption. The active subprocess group gets
 SIGINT, then SIGTERM after one second, then SIGKILL after another second, even
 if its leader has exited. Claim ending runs after cancellation: a new Claim
 is restored to its prior labels when neither an Issue branch on origin nor a
-pull request exists, and otherwise retained. The prototype ends after one
-Harness session; Delivery, CI Repair and Pickup belong to later tickets.
+pull request exists, and otherwise retained.
+
+After the opening Harness session commits, Delivery pushes the Issue branch,
+opens or verifies a draft pull request against the Base branch, merges Base
+branch updates, and watches check runs and commit statuses on the exact head.
+It waits briefly for initially absent checks to register. Passing or absent CI
+and a mergeable, unchanged head allow Delivery to mark the pull request ready
+for review. Conflicts and failed CI start follow-up Harness sessions, up to
+five Repairs per Ticket run. Delivery bounds reconciliation to ten rounds and
+CI/mergeability waiting to ten minutes (subprocess durations are separate).
+
+Failed ticket run salvage aborts an unfinished merge, pushes commits ahead of
+the Launch directory's Base branch, and opens or keeps a draft pull request.
+Salvage and Claim ending finish even after interruption. Published work retains
+the Claim; nothing on origin releases a new Claim and restores prior readiness.
+Worktrees and local commits remain available if publication fails.
+
+Run outcomes, Claim transitions, Delivery stages and CI check states use tagged
+unions with exhaustive `satisfies never`/`assertNever` branches, checked by
+`bun run typecheck`. The prototype deliberately covers the core Repair loop:
+Continuation, Self-merge, inherited-failure/Base fix detection, Check re-runs,
+Abandoned job recovery and Foreign commit reconciliation remain Rust behavior;
+an unexpected PR head or identity fails safely here. Pickup belongs to #1838.
 
 `bun test` compiles the binary and exercises it with real temporary Git
 repositories and fake `gh` and `claude` executables, including a signal-resistant
-forked Harness. Tests run the executable with no Bun on PATH. Test waits have
+forked Harness, green Delivery, CI and merge-conflict Repair recovery, bounded
+Repair exhaustion, pending/delayed checks, commit statuses and draft salvage.
+Tests run the executable with no Bun on PATH. Test waits have
 generous overall bounds; the one-second escalation intervals are production
 behavior, not test deadlines.
 
