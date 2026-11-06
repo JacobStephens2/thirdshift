@@ -25,12 +25,18 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 
 | Changed paths | Checks |
 | --- | --- |
+| `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires `bun install --frozen-lockfile` in that directory first |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
 | `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
-| Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
+| Several existing areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
+
+The TypeScript prototype is isolated: prototype-only changes run no Rust
+checks, and changes outside its directory do not select its checks. Mixed
+changes add the prototype checks independently, without broadening the existing
+areas' Rust selection. See [the prototype README](../prototypes/typescript/README.md).
 
 Unknown paths print the reason for selecting the full Rust suite, and Console
 paths print the reason for selecting the Console browser tests. The mappings
