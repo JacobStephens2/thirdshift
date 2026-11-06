@@ -183,6 +183,10 @@ impl Inbox {
                 continue;
             };
             row.children.retain(|child| !listed.contains(&child.id));
+            // `row.html` shows repository and issue number as the link text.
+            // A received document chooses `issue.url` independently, so keep
+            // the href only when it names that same GitHub issue or pull request.
+            bind_subject_link(&mut row);
             row.tag_machine(&entry.name, &entry.address, stale);
             let subject = row.subject.clone();
             section.rows.push(row);
@@ -221,6 +225,39 @@ impl Inbox {
         }
         Ok(())
     }
+}
+
+/// Drop a subject href that is not the GitHub issue or pull request named
+/// by the row's visible repository and number. The text stays either way.
+fn bind_subject_link(row: &mut Row) {
+    if !subject_link_matches(&row.subject, row.subject_url.as_deref()) {
+        row.subject_url = None;
+    }
+    for child in &mut row.children {
+        bind_subject_link(child);
+    }
+}
+
+fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
+    let Some(url) = url else {
+        return true;
+    };
+    let label = subject
+        .rsplit_once(" · ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(subject);
+    let Some((repository, number)) = label.rsplit_once('#') else {
+        return false;
+    };
+    let Ok(number) = number.parse::<u64>() else {
+        return false;
+    };
+    if let Ok(issue) = crate::issue::IssueUrl::parse(url) {
+        return issue.repo_slug().eq_ignore_ascii_case(repository) && issue.number == number;
+    }
+    crate::review::PullRequestUrl::parse(url).is_ok_and(|pull| {
+        pull.issue.repo_slug().eq_ignore_ascii_case(repository) && pull.issue.number == number
+    })
 }
 
 pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
@@ -821,5 +858,181 @@ mod tests {
         ] {
             assert_eq!(outcome_kind(text), kind, "{text}");
         }
+    }
+
+    /// `row.html` puts `subject_url` in the subject link while the visible
+    /// text is the row's repository and issue number. A Fleet document chooses
+    /// those independently, so a mismatched URL must not become that href.
+    #[test]
+    fn a_fleet_issue_link_stays_on_the_repository_the_row_names() {
+        use crate::config::console::fleet::Entry;
+
+        let command = |title: &str, url: &str, child: &str| {
+            serde_json::json!({
+                "machine_name": "remote",
+                "group": "needs you",
+                "landing": false,
+                "stopping": false,
+                "count": 1,
+                "repository": "acme/widgets",
+                "kind": "Run",
+                "name": "fixture",
+                "state": "failed",
+                "started_at": "2026-01-01T00:00:00Z",
+                "issue": { "number": 1, "url": url, "title": title },
+                "children": [{
+                    "repository": "acme/widgets",
+                    "kind": "Run",
+                    "name": "child",
+                    "state": "failed",
+                    "started_at": "2026-01-02T00:00:00Z",
+                    "issue": { "number": 2, "url": child, "title": "Child" }
+                }]
+            })
+        };
+        let document: crate::logs::status::fleet::Document = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "hostname": "remote-host",
+            "active_runs": 0,
+            "commands": [
+                command("Off GitHub", "https://evil.example/phish", "https://github.com/attacker/phish/issues/2"),
+                command("Wrong number", "https://github.com/acme/widgets/issues/99", "https://github.com/acme/widgets/issues/2"),
+                command("Matching", "https://github.com/acme/widgets/issues/1", "https://github.com/acme/widgets/issues/2"),
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "notacme/widgets",
+                    "kind": "Run",
+                    "name": "suffix",
+                    "state": "failed",
+                    "started_at": "2026-01-03T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Suffix"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "acme/widgets",
+                    "kind": "Process",
+                    "name": "build",
+                    "process_name": "build",
+                    "state": "failed",
+                    "started_at": "2026-01-04T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Process"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "ready for review",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "ignored/repo",
+                    "kind": "Run",
+                    "name": "review",
+                    "state": "done",
+                    "started_at": "2026-01-05T00:00:00Z",
+                    "pull_request": "https://github.com/acme/widgets/pull/7"
+                }
+            ],
+            "machines": []
+        }))
+        .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: vec![
+                super::Section {
+                    group: "needs you",
+                    title: "Needs you",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+                super::Section {
+                    group: "ready for review",
+                    title: "Ready for review",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+            ],
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            warning: None,
+            github_warning: None,
+        };
+        inbox
+            .merge_remote(
+                &document,
+                &Entry {
+                    name: "remote".into(),
+                    address: "https://fleet.example".into(),
+                    hostname: None,
+                    thirdshift_version: None,
+                    scopes: Vec::new(),
+                    last_contact: None,
+                },
+                false,
+            )
+            .unwrap();
+        let rows = &inbox.sections[0].rows;
+        assert_eq!(rows.len(), 5);
+        let row = |title: &str| {
+            rows.iter()
+                .find(|row| row.title == title)
+                .unwrap_or_else(|| panic!("missing {title}"))
+        };
+        let off_github = row("Off GitHub");
+        assert_eq!(off_github.subject, "acme/widgets#1");
+        assert_eq!(off_github.subject_url, None, "off-GitHub URL");
+        assert_eq!(off_github.children[0].subject, "acme/widgets#2");
+        assert_eq!(off_github.children[0].subject_url, None, "other repository");
+        let wrong_number = row("Wrong number");
+        assert_eq!(wrong_number.subject, "acme/widgets#1");
+        assert_eq!(
+            wrong_number.subject_url, None,
+            "same repository, different issue"
+        );
+        assert_eq!(
+            wrong_number.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        let matching = row("Matching");
+        assert_eq!(
+            matching.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        assert_eq!(
+            matching.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        assert_eq!(row("Suffix").subject, "notacme/widgets#1");
+        assert_eq!(
+            row("Suffix").subject_url,
+            None,
+            "repository is not a suffix of another"
+        );
+        assert_eq!(row("Process").subject, "Process build · acme/widgets#1");
+        assert_eq!(
+            row("Process").subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        let ready = &inbox.sections[1].rows;
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].subject, "acme/widgets#7");
+        assert_eq!(
+            ready[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/7")
+        );
     }
 }
