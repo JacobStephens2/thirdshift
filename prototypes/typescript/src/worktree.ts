@@ -1,4 +1,4 @@
-import { appendFile, lstat, mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Commands } from "./process";
 
@@ -30,7 +30,14 @@ export async function createWorktree(commands: Commands, launch: string, branch:
   const links = join(worktree, ".claude/skills");
   await directory(links);
   const names = new Set(skills.map(([path]) => path.split("/")[0]).filter((name): name is string => name !== undefined && name.startsWith("thirdshift-")));
-  await appendFile(join(common, "info/exclude"), "\n/.thirdshift-issue.md\n" + [...names].map(name => `/.claude/skills/${name}\n`).join(""));
+  const exclude = join(common, "info/exclude");
+  const existing = await readFile(exclude, "utf8").catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+    throw error;
+  });
+  const patterns = new Set(existing.split("\n"));
+  const missing = ["/.thirdshift-issue.md", ...[...names].map(name => `/.claude/skills/${name}`)].filter(pattern => !patterns.has(pattern));
+  if (missing.length > 0) await appendFile(exclude, "\n" + missing.join("\n") + "\n");
   for (const name of names) await symlink(join(extracted, name), join(links, name));
   return worktree;
 }

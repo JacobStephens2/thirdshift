@@ -87,9 +87,9 @@ root = pathlib.Path(os.environ['FIXTURE'])
 args = sys.argv[1:]
 with (root / 'calls').open('a') as log: log.write(json.dumps(args) + '\\n')
 issue = json.loads((root / 'issue.json').read_text())
-if args[:2] == ['api', 'repos/test/project/issues/7']:
+if args[:2] in [['api', 'repos/test/project/issues/7'], ['api', 'repos/test/project/issues/8']]:
     print(json.dumps(issue))
-elif args[:2] == ['api', 'repos/test/project/issues/7/comments']:
+elif args[:2] in [['api', 'repos/test/project/issues/7/comments'], ['api', 'repos/test/project/issues/8/comments']]:
     print(json.dumps([issue['comments']]))
 elif args[:2] == ['issue', 'edit']:
     labels = [x['name'] for x in issue['labels']]
@@ -102,6 +102,8 @@ elif args[:2] == ['issue', 'edit']:
         import time
         (root / 'claim-ready').write_text('ready')
         while True: time.sleep(10)
+elif args[:2] == ['label', 'list']: print('[{"name":"in-progress"}]')
+elif args[:2] == ['label', 'create']: (root / 'label-created').write_text('yes')
 elif args[:2] == ['pr', 'list']: print('[]')
 else: sys.exit('unexpected gh arguments: ' + repr(args))
 `);
@@ -319,4 +321,42 @@ test("closed and untrusted issues fail before applying a Claim", async () => {
     expect(await readFile(join(f.directory, "calls"), "utf8")).not.toContain('"edit"');
     expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
   }
+}, 120_000);
+
+test("shared skill exclusions are added once across Ticket runs", async () => {
+  const f = await fixture();
+  expect((await f.run()).code).toBe(0);
+  expect((await f.run("https://github.com/test/project/issues/8")).code).toBe(0);
+  const exclusions = await readFile(join(f.directory, ".git/info/exclude"), "utf8");
+  expect(exclusions.split("\n").filter(line => line === "/.claude/skills/thirdshift-implement")).toHaveLength(1);
+  expect(exclusions.split("\n").filter(line => line === "/.thirdshift-issue.md")).toHaveLength(1);
+}, 120_000);
+
+test("missing repository Claim label is created before applying it", async () => {
+  const f = await fixture();
+  const gh = join(f.directory, "gh");
+  await writeFile(gh, (await readFile(gh, "utf8")).replace(
+    "elif args[:2] == ['issue', 'edit']:",
+    `elif args[:2] == ['label', 'list']: print('[]')
+elif args[:2] == ['label', 'create']:
+    (root / 'label-created').write_text('yes')
+elif args[:2] == ['issue', 'edit']:
+    if '--add-label' in args and args[args.index('--add-label') + 1] == 'in-progress' and not (root / 'label-created').exists():
+        sys.exit("'in-progress' not found")`
+  ));
+  expect((await f.run()).code).toBe(0);
+}, 120_000);
+
+test("closed issue clears an existing Claim", async () => {
+  const f = await fixture();
+  await f.issueChange({ labels: [{ name: "in-progress" }] });
+  const harness = join(f.directory, "claude");
+  await writeFile(harness, (await readFile(harness, "utf8")) + `
+issue = json.loads((root / 'issue.json').read_text())
+issue['state'] = 'closed'
+(root / 'issue.json').write_text(json.dumps(issue))
+`);
+  expect((await f.run()).code).toBe(0);
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([]);
 }, 120_000);
