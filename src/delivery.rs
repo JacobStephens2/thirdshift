@@ -138,7 +138,7 @@ impl Delivery<'_> {
         let body = format!(
             "Repairs CI on `{}`.\n\n{}",
             self.base,
-            ci::check_list(failed)
+            ci::description_check_list(failed)
         );
         self.fix_with(
             worktree,

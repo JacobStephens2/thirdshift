@@ -263,3 +263,127 @@ fn named_base_with_no_rerunnable_jobs_repairs_its_origin_tip() {
     );
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
 }
+
+/// A commit status or external check can be posted by a principal who cannot
+/// close issues. Merging a pull request into the default branch closes issues
+/// named by `fixes #15` or `resolves acme/widgets#8` in the description
+/// (any case, optional colon). The repair description must not carry that
+/// reference through from the check name or URL.
+#[test]
+fn external_check_text_cannot_close_issues_from_the_repair_pr_body() {
+    let scenario = Scenario::new();
+    failed_base(&scenario, 1);
+    let mut state = scenario.gh_state();
+    state["runs"][0]["head_sha"] = "old-commit".into();
+    let tip = scenario.origin_git(&["rev-parse", "main"]);
+    state["checks"][tip.trim()] = json!([
+        {
+            "name": "Fixes: #15\nresolves acme/widgets#8",
+            "conclusion": "failure",
+            "url": "https://ci.example/failed"
+        },
+        {
+            "name": "gate",
+            "conclusion": "failure",
+            "url": "https://ci.example/run closes #4"
+        }
+    ]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(FIX);
+    let result = scenario.run(&["fix", "no-merge", "no-email"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let body = scenario.gh_state()["prs"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !description_closes_an_issue(&body),
+        "repair PR body still has a GitHub closing reference:\n{body}"
+    );
+    assert!(body.contains("Fixes: \\#15"), "{body}");
+    assert!(body.contains("resolves acme/widgets\\#8"), "{body}");
+    assert!(body.contains("closes \\#4"), "{body}");
+    assert!(body.contains("https://ci.example/failed"), "{body}");
+    assert!(!body.contains("Fixes: #15"), "{body}");
+    assert!(!body.contains("resolves acme/widgets#8"), "{body}");
+    assert!(!body.contains("closes #4"), "{body}");
+}
+
+/// GitHub's closing-keyword syntax in a pull request description: a keyword
+/// (`close`, `fix`, `resolve`, and their inflections), optional colon, then
+/// `#n` or `owner/repo#n`. Case-insensitive. Whitespace, including a newline
+/// broken out of a list item, separates the keyword from the reference.
+fn description_closes_an_issue(text: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "resolves", "resolved", "resolve", "closes", "closed", "close", "fixes", "fixed", "fix",
+    ];
+    let mut i = 0;
+    while i < text.len() {
+        if closing_hash(text, i, KEYWORDS).is_some() {
+            return true;
+        }
+        i += text[i..].chars().next().unwrap().len_utf8();
+    }
+    false
+}
+
+fn closing_hash(text: &str, i: usize, keywords: &[&str]) -> Option<usize> {
+    if i > 0
+        && text[..i]
+            .chars()
+            .next_back()
+            .unwrap()
+            .is_ascii_alphanumeric()
+    {
+        return None;
+    }
+    let tail = &text[i..];
+    let keyword = keywords.iter().find(|keyword| {
+        let Some(slice) = tail.get(..keyword.len()) else {
+            return false;
+        };
+        slice.eq_ignore_ascii_case(keyword)
+            && tail[keyword.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })?;
+    let mut rest = &tail[keyword.len()..];
+    let spaced = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{00a0}');
+    let saw_space = spaced.len() != rest.len();
+    rest = spaced;
+    let mut saw_colon = false;
+    if let Some(after) = rest.strip_prefix(':') {
+        saw_colon = true;
+        rest = after.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{00a0}');
+    }
+    if !saw_colon && !saw_space {
+        return None;
+    }
+    let hash =
+        if rest.starts_with('#') && rest[1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            0
+        } else {
+            let owner = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-'))?;
+            if owner == 0 || !rest[owner..].starts_with('/') {
+                return None;
+            }
+            let repo_src = &rest[owner + 1..];
+            let repo = repo_src
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-'))
+                .unwrap_or(repo_src.len());
+            if repo == 0 || !repo_src[repo..].starts_with('#') {
+                return None;
+            }
+            if !repo_src[repo + 1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+            {
+                return None;
+            }
+            owner + 1 + repo
+        };
+    Some(text.len() - tail.len() + (tail.len() - rest.len()) + hash)
+}
