@@ -20,6 +20,9 @@ mod stop;
 #[path = "dismiss.rs"]
 mod dismiss;
 
+#[path = "address_scopes.rs"]
+mod address_scopes;
+
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

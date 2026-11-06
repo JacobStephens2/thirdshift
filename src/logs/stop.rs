@@ -20,17 +20,12 @@ pub enum Ending {
 
 #[derive(Deserialize, Serialize)]
 pub struct Request {
-    pub who: String,
+    #[serde(flatten)]
+    pub actor: super::Actor,
     pub requeue: bool,
-    #[serde(default)]
-    pub from_console: bool,
 }
 
 impl Request {
-    pub(super) fn source(&self) -> &'static str {
-        if self.from_console { "Console" } else { "CLI" }
-    }
-
     pub fn ending(&self) -> Ending {
         if self.requeue {
             Ending::Requeue
@@ -68,9 +63,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let request = Request {
-        who: super::unix_user("Stop")?,
+        actor: super::Actor::cli("Stop")?,
         requeue,
-        from_console: false,
     };
     let path = request_stop(input, request)?;
     wait(

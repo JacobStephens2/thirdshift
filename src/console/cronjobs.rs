@@ -14,12 +14,15 @@ struct CronJobsPage {
     inventory: CronJobs,
 }
 
-pub(super) async fn show(axum::Extension(format): axum::Extension<super::api::Format>) -> Response {
+pub(super) async fn show(
+    axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
+    axum::Extension(format): axum::Extension<super::api::Format>,
+) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         format.render(cronjobs::load()?, |inventory| {
             Ok(CronJobsPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 inventory,
             }
             .render()?)

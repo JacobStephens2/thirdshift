@@ -25,7 +25,7 @@ pub(super) async fn show(
         let config = UserConfig::load()?;
         format.render(origins::view()?, |origins| {
             Ok(BugOriginsPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 origins,
                 csrf: viewer.csrf,
             }

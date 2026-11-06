@@ -562,7 +562,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
   if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
-  if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]').click(); return; }
+  if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]')?.click(); return; }
   if (event.key === 'Escape') {
     event.preventDefault();
     if (help.open) help.close();

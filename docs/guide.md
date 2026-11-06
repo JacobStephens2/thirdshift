@@ -406,9 +406,9 @@ a true `security_findings_waiting` flag are omitted or cleared. It also cannot
 read a Security session trace (`security-review`, `security-audit`,
 `security-reproduction-<n>`, `security-fix-publishing`, `security-close-check`,
 and their resumes); those log reads return 403 naming `security`. A token that
-has `security` receives the finding records and those traces. Action endpoints
-and their auditing arrive in later Console API tickets; granting a scope does
-not create an endpoint. A missing route scope returns 403 JSON naming that
+has `security` receives the finding records and those traces. The `act` endpoints
+and their auditing are described below; `run` and `admin` endpoints arrive in
+later Console API tickets. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -418,6 +418,44 @@ Expiry accepts a UTC date (`YYYY-MM-DD`, expiring at its start) or an RFC 3339
 timestamp. Revocation deletes the record and takes effect on the next request.
 Last use updates on successful authentication. Token management is CLI-only;
 there is no API endpoint to create, list or revoke tokens.
+
+Each address in `console.allowed_emails` has all five scopes unless narrowed in
+`console.address_scopes`. Set and show an address's scopes from the machine's shell:
+
+```sh
+thirdshift console scopes --email reader@example.com --scopes read
+thirdshift console scopes --email reader@example.com --json
+```
+
+With exactly one allowed address, `--email` can be omitted. `--scopes ''` grants
+no scopes; omitting `--scopes` only shows the current scopes. Setup writes
+`address_scopes = {}` with its default stated and preserves existing entries.
+For example, under `[console]`:
+
+```toml
+allowed_emails = ["owner@example.com", "reader@example.com"]
+address_scopes = { "reader@example.com" = ["read"] }
+```
+
+A sign-in session uses its address's current scopes on every request. The page
+hides controls it cannot use, and a refused API call returns 403 naming the
+missing scope. The sign-in list and address scopes are CLI-only settings: no
+page or API endpoint can write them, even with `admin`.
+Signing out of your own browser remains available even with no scopes.
+
+A bearer request can name a person with `X-Thirdshift-Person: reader@example.com`.
+The owning machine requires that exact address on its own `allowed_emails` list,
+or returns 403. Its effective scopes are the intersection of the token's scopes
+and the address's scopes; neither can grant what the other lacks. For example:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
+  -H "X-Thirdshift-Person: reader@example.com" \
+  https://console.example.com/api/v1/whoami
+```
+
+The header applies only to bearer authentication. A session always acts as the
+address that signed in. A token without the header acts as its holder.
 
 Send the token as `Authorization: Bearer <token>`. Tokens require HTTPS to the
 installed Caddy or Apache proxy, which sets `X-Forwarded-Proto: https`.
@@ -513,7 +551,8 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for
 token Stops and Dismissals say `by token <holder>`, alongside the CLI and
-Console callers already recorded there. Token secrets and action bodies are
+Console callers already recorded there. A token naming a person records
+`by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
 
 #### Console on a server

@@ -269,9 +269,8 @@ pub(super) fn action(
 }
 
 pub(crate) struct Request {
-    pub who: String,
+    pub actor: super::Actor,
     pub undo: bool,
-    pub from_console: bool,
 }
 
 pub(crate) struct Change {
@@ -304,13 +303,11 @@ fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<(
 }
 
 pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
-    let who = super::unix_user("dismissal")?;
     let change = request(
         input,
         Request {
-            who,
+            actor: super::Actor::cli("dismissal")?,
             undo,
-            from_console: false,
         },
     )?;
     if json {
@@ -326,12 +323,7 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
 /// Shared mutation: Console callers supply their authenticated account; the CLI
 /// supplies its Unix user. Neither caller changes GitHub or the live Command.
 pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
-    let Request {
-        who,
-        undo,
-        from_console,
-    } = request;
-    let source = if from_console { "Console" } else { "CLI" };
+    let Request { actor, undo } = request;
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
     let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
@@ -357,10 +349,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         activity_write(
             &config,
             &target.repository,
-            &format!(
-                "{} dismissal taken back from the {source} by {who}",
-                target.subject
-            ),
+            &format!("{} dismissal taken back {actor}", target.subject),
         )?;
         return Ok(Change {
             name: target.name,
@@ -382,9 +371,9 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
             selector: selector.clone(),
             kind: target.kind.clone(),
             kinds,
-            who: who.clone(),
+            who: actor.who().to_owned(),
             at: at.clone(),
-            from_console,
+            from_console: actor.is_console(),
         };
         dismissal.get_or_insert_with(|| row.view(None));
         file.rows.push(row);
@@ -393,7 +382,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     activity_write(
         &config,
         &target.repository,
-        &format!("{} dismissed from the {source} by {who}", target.subject),
+        &format!("{} dismissed {actor}", target.subject),
     )?;
     Ok(Change {
         name: target.name,

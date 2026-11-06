@@ -9,9 +9,9 @@
 {% if let Some(settlement) = origin.settlement %}<p><a href="{{ settlement.pull_request.url }}">{{ settlement.pull_request.url }}</a>{% if settlement.corrected %} (corrected){% endif %}</p><p>{{ settlement.pull_request.attribution() }}</p><p>Eval task: {{ settlement.eval_task.suite }} / {{ settlement.eval_task.task }}</p>
 {% else %}<ul>{% for pr in origin.pull_requests %}<li><a href="{{ pr.url }}">{{ pr.url }}</a> · {{ pr.attribution() }}</li>{% endfor %}</ul>{% endif %}
 <p><code>thirdshift bug-origins {{ origin.issue }} --confirm --json</code><br><code>thirdshift bug-origins {{ origin.issue }} --none --json</code></p>
-<form action="/bug-origins/settle" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="issue" value="{{ origin.issue }}"><button name="action" value="confirm">Confirm</button><button name="action" value="reject">Reject</button></form>
+{% if page.can_act() %}<form action="/bug-origins/settle" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="issue" value="{{ origin.issue }}"><button name="action" value="confirm">Confirm</button><button name="action" value="reject">Reject</button></form>{% endif %}
 <p><code>thirdshift bug-origins {{ origin.issue }} --correct &lt;pull request&gt; --json</code></p>
-<form class="judgment-form" action="/bug-origins/settle" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="issue" value="{{ origin.issue }}"><label>Correct pull request <input name="pull_request" required placeholder="Pull request URL or number"></label><button name="action" value="correct">Correct</button></form>
+{% if page.can_act() %}<form class="judgment-form" action="/bug-origins/settle" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="issue" value="{{ origin.issue }}"><label>Correct pull request <input name="pull_request" required placeholder="Pull request URL or number"></label><button name="action" value="correct">Correct</button></form>{% endif %}
 </article></li>{% endfor %}</ul>
 {% if origins.is_empty() %}<p>No Bug origins yet.</p>{% endif %}
 </main>{% include "console/chrome.html" %}</body></html>

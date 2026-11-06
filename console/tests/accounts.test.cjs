@@ -1,8 +1,8 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const { once } = require("node:events");
-const { mkdtemp, mkdir, writeFile, rm } = require("node:fs/promises");
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require("node:fs/promises");
 const { tmpdir, hostname } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
@@ -72,4 +72,61 @@ test("sign-in and sign-out work on a phone without JavaScript using secure cooki
   await page.goto(origin);
   assert.equal(new URL(page.url()).pathname, "/sign-in");
   assert.ok(!(await context.cookies()).some(cookie => cookie.name === "__Host-thirdshift-session"));
+});
+
+test("read-only sessions hide actions on desktop and phone with and without JavaScript", async t => {
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
+  const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
+  scopes("read");
+  t.after(() => scopes("read,security,act,run,admin"));
+  const folder = join(home, ".thirdshift/logs/acme/widgets/commands/issue");
+  await mkdir(folder, { recursive: true });
+  const stat = await readFile(`/proc/${process.pid}/stat`, "utf8");
+  const ticks = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/)[19];
+  const identity = `${(await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()}:${ticks}`;
+  for (const number of [7, 8]) {
+    await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify({
+      version: 1, kind: "Run", name: `acme/widgets#${number}`, repository: "acme/widgets", hostname: "fixture",
+      issue: { number, url: `https://github.com/acme/widgets/issues/${number}`, title: "Check address scopes" },
+      process_id: number === 7 ? process.pid : 0, process_start: number === 7 ? identity : "gone", harness: "codex",
+      started_at: new Date().toISOString(), ended_at: number === 7 ? null : new Date().toISOString(),
+      stages: [], outcome: number === 7 ? null : "failed"
+    }));
+    await writeFile(join(folder, `${number}-fixture.log`), "Checking Console access\n");
+  }
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    for (const javaScriptEnabled of [false, true]) {
+      const context = await browser.newContext({ viewport, javaScriptEnabled, reducedMotion: "reduce" });
+      try {
+        const page = await context.newPage();
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.goto(origin);
+        await page.getByLabel("Email").fill("owner@example.test");
+        await page.getByLabel("Password", { exact: true }).fill("browser test password");
+        await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", { name: "Sign in", exact: true }).click()]);
+        await page.getByRole("heading", { name: "Inbox", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Dismiss", exact: true }).waitFor({ state: "hidden" });
+        if (javaScriptEnabled) {
+          await page.locator('.command[data-live="true"] .state').first().click();
+          await page.locator("#peek-content h2").waitFor();
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
+          await page.keyboard.press("Escape");
+          await page.keyboard.press("Shift+T");
+          await page.locator("#themes[open]").waitFor({ state: "hidden" });
+        } else {
+          await page.goto(`${origin}/peek?command=widgets%237`);
+          await page.getByRole("heading", { name: /acme\/widgets#7/ }).waitFor();
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
+        }
+        for (const route of ["/", "/lanes", "/stages", "/logs", "/resources", "/experiments", "/scores", "/bug-origins", "/console-log"]) {
+          assert.equal((await page.goto(`${origin}${route}`)).status(), 200, route);
+          await page.locator("main").waitFor();
+          await page.locator('button[data-open-themes], button[data-open-sections], form[action="/scores/mine"], form[action="/bug-origins/settle"]').waitFor({ state: "hidden" });
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, route);
+        }
+        assert.deepEqual(errors, []);
+      } finally { await context.close(); }
+    }
+  }
 });

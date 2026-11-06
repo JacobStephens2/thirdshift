@@ -85,24 +85,32 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
     Ok(lines.join("\n"))
 }
 
-pub(super) async fn index(Extension(format): Extension<super::api::Format>) -> Response {
-    inventory(format, None).await
+pub(super) async fn index(
+    Extension(viewer): Extension<super::auth::Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    inventory(viewer, format, None).await
 }
 pub(super) async fn command(
     Path(id): Path<String>,
+    Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
-    inventory(format, Some(id)).await
+    inventory(viewer, format, Some(id)).await
 }
 
-async fn inventory(format: super::api::Format, owner: Option<String>) -> Response {
+async fn inventory(
+    viewer: super::auth::Viewer,
+    format: super::api::Format,
+    owner: Option<String>,
+) -> Response {
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         let logs = catalog::load(&config, owner.as_deref())?;
         let value = serde_json::json!({"version": 1, "logs": logs});
         format.render(value, |_| {
             Ok(LogsPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 groups: by_repository(logs),
                 owner: owner.unwrap_or_default(),
             }
@@ -112,37 +120,41 @@ async fn inventory(format: super::api::Format, owner: Option<String>) -> Respons
     .await
 }
 
+async fn security_refusal(viewer: &super::auth::Viewer, id: &str) -> Option<Response> {
+    if viewer.scopes.contains(&super::Scope::Security) {
+        return None;
+    }
+    let selected = id.to_owned();
+    match tokio::task::spawn_blocking(move || -> Result<bool> {
+        let config = UserConfig::load()?;
+        let log = catalog::find(&config, &selected)?;
+        Ok(crate::logs::owner::security_session(&log.path)
+            || super::api::security_command(&config, &log.selector)?)
+    })
+    .await
+    {
+        Ok(Ok(true)) => Some(super::api::error(
+            StatusCode::FORBIDDEN,
+            "Missing scope: security",
+        )),
+        Ok(Ok(false)) => None,
+        Ok(Err(error)) => Some(super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)),
+        Err(_) => Some(super::api::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't read this view; check the Console's stderr.",
+        )),
+    }
+}
+
 pub(super) async fn reader(
     Path(id): Path<String>,
     Extension(viewer): Extension<super::auth::Viewer>,
     Extension(format): Extension<super::api::Format>,
 ) -> Response {
+    if let Some(response) = security_refusal(&viewer, &id).await {
+        return response;
+    }
     if format == super::api::Format::Json {
-        if !viewer.scopes.contains(&super::Scope::Security) {
-            let selected = id.clone();
-            match tokio::task::spawn_blocking(move || -> Result<bool> {
-                let config = UserConfig::load()?;
-                let log = catalog::find(&config, &selected)?;
-                Ok(crate::logs::owner::security_session(&log.path)
-                    || super::api::security_command(&config, &log.selector)?)
-            })
-            .await
-            {
-                Ok(Ok(true)) => {
-                    return super::api::error(StatusCode::FORBIDDEN, "Missing scope: security");
-                }
-                Ok(Ok(false)) => {}
-                Ok(Err(error)) => {
-                    return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error);
-                }
-                Err(_) => {
-                    return super::api::error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Can't read this view; check the Console's stderr.",
-                    );
-                }
-            }
-        }
         return super::api::read(format, move || {
             let log = catalog::find(&UserConfig::load()?, &id)?;
             Ok(Json(catalog::contents(&log.reader)?).into_response())
@@ -161,7 +173,7 @@ pub(super) async fn reader(
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
             ReaderPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 log,
                 html,
                 offset: lines.offset,
@@ -204,6 +216,9 @@ pub(super) async fn stream(
 ) -> Response {
     // A finite request uses the same reader and offset as SSE when a proxy
     // cannot keep streams open. It still crosses the normal account guard.
+    if let Some(response) = security_refusal(&viewer, &id).await {
+        return response;
+    }
     if headers
         .get("accept")
         .is_some_and(|value| value == "application/json")

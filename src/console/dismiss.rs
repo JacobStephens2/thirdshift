@@ -38,9 +38,8 @@ async fn change(
         dismiss::request(
             &form.command,
             dismiss::Request {
-                who: viewer.activity_actor(),
+                actor: viewer.activity_actor(),
                 undo,
-                from_console: true,
             },
         )
     })

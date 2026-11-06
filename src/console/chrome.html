@@ -7,7 +7,8 @@
     <textarea id="copy-context-text" rows="12" readonly spellcheck="false"></textarea>
     <form method="dialog"><button>Close</button></form>
   </dialog>
-  <footer><button type="button" data-open-keys>Keyboard help (?)</button> <button type="button" data-open-themes>Themes (Shift+T)</button> <button type="button" data-open-sections>Sections</button> <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
+  <footer><button type="button" data-open-keys>Keyboard help (?)</button> {% if page.can_act() %}<button type="button" data-open-themes>Themes (Shift+T)</button> <button type="button" data-open-sections>Sections</button>{% endif %} <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
+  {% if page.can_act() %}
   <dialog id="themes" aria-labelledby="themes-title">
     <h2 id="themes-title">Themes</h2><p><code>thirdshift console theme &lt;name&gt;</code></p>
     <form id="theme-form"><label>Theme <select id="theme-name" name="theme"></select></label><button>Apply Theme</button></form>
@@ -26,11 +27,12 @@
     <form id="sections-form"><fieldset id="section-options"><legend>Visible Inbox sections</legend></fieldset><button>Save sections</button></form>
     <button type="button" data-close-sections>Close Sections</button>
   </dialog>
+  {% endif %}
   <aside id="jumps" hidden role="tooltip" aria-label="Jump to"><p>Jump to… (Esc to cancel)</p></aside>
   <dialog id="keys" aria-labelledby="keys-title">
     <h2 id="keys-title">Keyboard</h2>
     <dl><dt>j / k</dt><dd>Next / previous row or heading, wrapping</dd>
-    <dt>d</dt><dd>Dismiss the selected row when available, then select the next row</dd>
+    {% if page.can_act() %}<dt>d</dt><dd>Dismiss the selected row when available, then select the next row</dd>{% endif %}
     <dt>Space</dt><dd>Toggle a row's Details, or fold a heading</dd>
     <dt>Enter</dt><dd>Open the full Command log</dd>
     <dt>Esc</dt><dd>Close one layer, then clear selection</dd>
@@ -38,6 +40,6 @@
     <dt>g, then a letter</dt><dd>Open an Inbox section or a page; g lists the letters</dd>
     <dt>z</dt><dd>Fold the current History or Security section</dd>
     <dt>?</dt><dd>Show this help</dd></dl>
-    <p>Shift+T opens Themes. Sections and Pause motion are in the footer.</p>
+    <p>{% if page.can_act() %}Shift+T opens Themes. Sections and {% endif %}Pause motion is in the footer.</p>
     <button type="button" data-close-keys>Close (Esc)</button>
   </dialog>
