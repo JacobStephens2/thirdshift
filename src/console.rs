@@ -426,6 +426,7 @@ const PAGES: &[PageRoute] = &[
             "thirdshift pickup",
             "thirdshift secure",
             "thirdshift review https://github.com/acme/widgets/pull/1",
+            "thirdshift fix https://github.com/acme/widgets/pull/1",
             "thirdshift process inspect issue 7",
             "thirdshift skill to-spec",
             "thirdshift score",

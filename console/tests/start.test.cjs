@@ -121,13 +121,15 @@ test('Run now recognizes all Pass kinds and leaves shell expressions display-onl
     `*/5 * * * * cd '${fixture.repo}' && thirdshift architect 'Console starts' base main --plan-only >> /tmp/fixture-cron.log 2>&1`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift secure base main no-security-fix`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift review --author fixture --recommend-only`,
+    `*/5 * * * * cd '${fixture.repo}' && thirdshift fix base main author fixture no-merge no-base-fix no-email harness claude`,
+    `*/5 * * * * cd '${fixture.repo}' && thirdshift fix https://github.com/acme/widgets/pull/1`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base "$BRANCH"`
   ].join('\n'));
   const page = await fixture.page();
   t.after(() => page.context().close());
   await page.goto(`${fixture.origin}/cronjobs`);
-  assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 3);
-  for (const [index, kind, harness] of [[0, 'architect', 'codex'], [1, 'secure', 'codex'], [2, 'review', 'codex']]) {
+  assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 4);
+  for (const [index, kind, harness] of [[0, 'architect', 'codex'], [1, 'secure', 'codex'], [2, 'review', 'codex'], [3, 'fix', 'claude']]) {
     await page.getByRole('button', { name: 'Run now', exact: true }).nth(index).click();
     const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
     await confirm.waitFor();
@@ -136,6 +138,11 @@ test('Run now recognizes all Pass kinds and leaves shell expressions display-onl
     if (kind === 'architect') { assert.equal(request.focus, 'Console starts'); assert.equal(request.plan_only, true); }
     if (kind === 'secure') assert.equal(request.security_fix, false);
     if (kind === 'review') { assert.equal(request.author, 'fixture'); assert.equal(request.recommend_only, true); }
+    if (kind === 'fix') {
+      assert.equal(request.base, 'main'); assert.equal(request.author, 'fixture');
+      assert.equal(request.merge, false); assert.equal(request.base_fix, false);
+      assert.deepEqual(request.email, { mode: 'never' });
+    }
     await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
 });

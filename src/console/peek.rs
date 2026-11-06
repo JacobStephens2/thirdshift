@@ -29,6 +29,7 @@ pub(super) struct Peek {
     pub failure_reason: Option<String>,
     pub pause_reason: Option<String>,
     pub resume_command: Option<String>,
+    pub fix_command: Option<String>,
     pub output: Option<String>,
 }
 
@@ -123,6 +124,7 @@ impl Peek {
         );
         Self {
             output,
+            fix_command: inspection.fix_command,
             failure_reason: failure_reason(&value),
             pause_reason: (value["outcome"] == "paused")
                 .then(|| value["cause"].as_str().map(str::to_owned))
@@ -348,6 +350,7 @@ mod tests {
                 "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7",
                     "title": "Widgets <script>alert(1)</script>"}
             }),
+            fix_command: None,
             dismissal: Some(crate::logs::dismiss::Action::Dismiss),
             can_stop: true,
             stopping: false,
@@ -385,6 +388,7 @@ mod tests {
         let inspection = crate::logs::stop::Inspection {
             security_details: false,
             details,
+            fix_command: None,
             dismissal: None,
             can_stop: false,
             stopping: false,

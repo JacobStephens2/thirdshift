@@ -113,6 +113,7 @@ impl Checkout {
         launch: &Git,
         base: &str,
         reason: &str,
+        failed_work: super::FailedWork,
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
@@ -128,14 +129,39 @@ impl Checkout {
             .with_context(|| operation.context.clone())?;
         operation.inspect()?;
         if operation.merge_in_progress()? {
-            operation.run(&["merge", "--abort"])?;
+            if failed_work == super::FailedWork::Fix {
+                // Abort clears the Repair's resolution along with the merge.
+                // Capture its complete working tree first, then restore those
+                // files on the pre-merge head for the failure commit. A retry
+                // still has to reconcile the Base branch through Delivery.
+                operation.run(&["add", "-A"])?;
+                let snapshot = operation.run(&["write-tree"])?;
+                let restore = || {
+                    format!(
+                        "Repair work is saved in tree {snapshot}; restore it in the retained worktree before retrying"
+                    )
+                };
+                operation.run(&["merge", "--abort"]).with_context(restore)?;
+                operation
+                    .run(&["read-tree", "--reset", "-u", &snapshot])
+                    .with_context(restore)?;
+            } else {
+                operation.run(&["merge", "--abort"])?;
+            }
         }
         operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
+        let has_work = if failed_work == super::FailedWork::Fix {
+            // Existing PR commits are already published. A failed Fix run
+            // records only work the Repair left uncommitted.
+            !operation.succeeds(&["diff", "--cached", "--quiet"])?
+        } else {
+            !operation.succeeds(&["diff", "--cached", "--quiet", &base])?
+        };
         if has_work {
+            let run_name = failed_work.run_name();
             let message = format!(
-                "thirdshift: failed ticket run ({reason})\n\n\
+                "thirdshift: failed {run_name} ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
                 timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 host = host::name().as_deref().unwrap_or("unknown"),
@@ -149,6 +175,10 @@ impl Checkout {
                 "-m",
                 &message,
             ])?;
+            operation.push_if_needed(branch, actionable)?;
+        }
+        if failed_work == super::FailedWork::Fix && !has_work {
+            // A Repair may have committed without pushing before it failed.
             operation.push_if_needed(branch, actionable)?;
         }
         operation.inspect()?;

@@ -19,15 +19,92 @@ pub(crate) struct ReviewPullRequest {
 pub(crate) struct ReviewInput {
     pub markdown: String,
     pub body_alone: bool,
+    /// Closing issues whose title and body were copied into `markdown`.
+    pub closing_issues: Vec<crate::issue::IssueUrl>,
 }
 
 #[derive(serde::Deserialize)]
 struct ReviewMarker {
     reviewed_head: Option<String>,
     pushed_head: Option<String>,
+    authored_head: Option<String>,
+}
+
+impl ReviewMarker {
+    fn reviewed(&self, head: &str) -> bool {
+        self.reviewed_head.as_deref() == Some(head) || self.pushed_head.as_deref() == Some(head)
+    }
 }
 
 impl GitHub {
+    /// Enumerate every open PR, then order eligible Fix candidates locally.
+    /// Mergeability and head CI are read separately, never from a search cache.
+    pub fn fix_candidates(
+        &self,
+        repo: &crate::issue::Repo,
+        base: &str,
+        author: Option<&str>,
+    ) -> Result<Vec<PullRequestUrl>> {
+        if let Some(author) = author {
+            ensure!(
+                self.trusted_login(repo, author)?,
+                "{author} is not a Trusted account on {}",
+                repo.slug()
+            );
+        }
+        let nodes = self.gh_api_items(
+            &format!("repos/{}/pulls?state=open&per_page=100", repo.slug()),
+            "",
+        )?;
+        let mut candidates = Vec::new();
+        for node in nodes {
+            let pr = PullRequestUrl::parse(
+                node["html_url"]
+                    .as_str()
+                    .context("pull request has no URL")?,
+            )?;
+            if fix_candidate(&pr, &node, base, author, false)? {
+                candidates.push(pr);
+            }
+        }
+        candidates.sort_by_key(|pr| pr.issue.number);
+        Ok(candidates)
+    }
+
+    /// Recheck admission both before reserving and while our label is held.
+    pub fn needs_fix(
+        &self,
+        pr: &PullRequestUrl,
+        base: &str,
+        author: Option<&str>,
+        reserved: bool,
+    ) -> Result<bool> {
+        let node = self.gh_json(&[
+            "api",
+            &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
+        ])?;
+        if !fix_candidate(pr, &node, base, author, reserved)? {
+            return Ok(false);
+        }
+        let Some(snapshot) = self.pr_snapshot(&pr.issue, &pr.issue.number.to_string())? else {
+            return Ok(false);
+        };
+        if snapshot.pr.state != super::PrState::Open
+            || snapshot.pr.is_draft
+            || snapshot.from_fork
+            || snapshot.pr.base != base
+            || node["head"]["sha"].as_str() != Some(&snapshot.head_commit)
+        {
+            return Ok(false);
+        }
+        if snapshot.mergeable == super::Mergeable::No {
+            return Ok(true);
+        }
+        Ok(crate::ci::needs_repair(
+            &self.checks_on(&pr.issue, &snapshot.head_commit)?,
+        ))
+    }
+
     pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {
         let labels = self.gh_api_items(
             &format!(
@@ -107,11 +184,24 @@ impl GitHub {
         Ok(candidates)
     }
 
-    fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
-        Ok(self.review_markers(pr)?.iter().any(|marker| {
-            marker.reviewed_head.as_deref() == Some(head)
-                || marker.pushed_head.as_deref() == Some(head)
-        }))
+    pub(crate) fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
+        Ok(self
+            .review_markers(pr)?
+            .iter()
+            .any(|marker| marker.reviewed(head)))
+    }
+
+    /// Authored Delivery evidence permits Fix Self-merge without claiming that
+    /// a Review run has already reviewed the pull request.
+    pub(crate) fn authored_or_reviewed_head(
+        &self,
+        pr: &PullRequestUrl,
+        head: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .review_markers(pr)?
+            .iter()
+            .any(|marker| marker.reviewed(head) || marker.authored_head.as_deref() == Some(head)))
     }
 
     /// Fix commits delivered to the open pull request that owns this base.
@@ -185,6 +275,19 @@ impl GitHub {
 
     /// Fail closed on missing metadata, before creating a worktree or session.
     pub fn review_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, false)
+    }
+
+    /// Fix runs also accept drafts, sharing every other eligibility check.
+    pub fn fix_pull_request(&self, pr: &PullRequestUrl) -> Result<ReviewPullRequest> {
+        self.pull_request_for_work(pr, true)
+    }
+
+    fn pull_request_for_work(
+        &self,
+        pr: &PullRequestUrl,
+        allow_draft: bool,
+    ) -> Result<ReviewPullRequest> {
         let node = self.gh_json(&[
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
@@ -207,7 +310,14 @@ impl GitHub {
             "pull request {} is closed",
             pr.url
         );
-        ensure_reviewable(pr, &node)?;
+        if allow_draft {
+            node["draft"]
+                .as_bool()
+                .context("pull request has no draft state")?;
+            ensure_owned_and_trusted(pr, &node)?;
+        } else {
+            ensure_reviewable(pr, &node)?;
+        }
         Ok(ReviewPullRequest {
             title: text(&node["title"])?,
             body: node["body"].as_str().unwrap_or("").into(),
@@ -244,6 +354,7 @@ impl GitHub {
         );
         let mut after = None;
         let mut issues = std::collections::BTreeSet::new();
+        let mut closing_issues = Vec::new();
         loop {
             let json = self.issue_query(&pr.issue, CLOSING_ISSUES, after.as_deref())?;
             let page = &json["data"]["repository"]["pullRequest"]["closingIssuesReferences"];
@@ -254,6 +365,7 @@ impl GitHub {
                 let url = node["url"].as_str().context("closing issue has no URL")?;
                 if issues.insert(url.to_owned()) {
                     let issue = crate::issue::IssueUrl::parse(url)?;
+                    closing_issues.push(issue.clone());
                     markdown.push_str("\n## Linked closing issue (Spec)\n\n");
                     markdown.push_str(&self.issue_for_session(&issue)?);
                 }
@@ -307,6 +419,7 @@ impl GitHub {
         Ok(ReviewInput {
             markdown,
             body_alone: issues.is_empty(),
+            closing_issues,
         })
     }
 }
@@ -334,6 +447,28 @@ fn ensure_reviewable(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()
         "pull request {} is a draft",
         pr.url
     );
+    ensure_owned_and_trusted(pr, node)
+}
+
+fn fix_candidate(
+    pr: &PullRequestUrl,
+    node: &serde_json::Value,
+    base: &str,
+    author: Option<&str>,
+    reserved: bool,
+) -> Result<bool> {
+    Ok(node["state"] == "open"
+        && node["base"]["ref"].as_str() == Some(base)
+        && author.is_none_or(|author| {
+            node["user"]["login"]
+                .as_str()
+                .is_some_and(|login| login.eq_ignore_ascii_case(author))
+        })
+        && ensure_reviewable(pr, node).is_ok()
+        && (reserved || !super::labels_of(node)?.has(crate::claim::IN_PROGRESS)))
+}
+
+fn ensure_owned_and_trusted(pr: &PullRequestUrl, node: &serde_json::Value) -> Result<()> {
     fn text(value: &serde_json::Value) -> Result<&str> {
         value
             .as_str()

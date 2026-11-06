@@ -48,6 +48,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("Skill", "skill to-spec"),
     ("Process", "process list"),
     ("Review", "review https://github.com/acme/widgets/pull/1"),
+    ("Fix", "fix https://github.com/acme/widgets/pull/1"),
     ("Trial", "--trial request.json"),
     ("OomExec", "--oom-exec true"),
     ("EmailTest", "email-test"),

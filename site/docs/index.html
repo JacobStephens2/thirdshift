@@ -42,6 +42,7 @@
 <li><a href="#continuation">Continuation</a></li>
 <li><a href="#failed-ticket-runs">Failed ticket runs</a></li>
 <li><a href="#spec-runs">Spec runs</a></li>
+<li><a href="#fix-runs">Fix runs</a></li>
 <li><a href="#review-runs">Review runs</a></li>
 <li><a href="#architect-runs">Architect runs</a></li>
 <li><a href="#security-runs">Security runs</a></li>
@@ -66,9 +67,10 @@
 <li><strong><a href="#pickup-runs">Pickup run</a></strong>, <code>thirdshift pickup</code>: takes the lowest-numbered <strong>Ready issue</strong> by default, the highest-numbered with <code>pickup.order = &quot;highest-first&quot;</code> or <code>highest-first</code> on the command, and runs it.</li>
 <li><strong><a href="#security-runs">Security run</a></strong>, <code>thirdshift secure</code>: audits the <strong>Base branch</strong> and records each <strong>Security finding</strong> privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.</li>
 <li><strong><a href="#review-runs">Review run</a></strong>, <code>thirdshift review &lt;PR URL&gt;</code>: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add <code>--recommend-only</code> to get findings without fixes.</li>
+<li><strong><a href="#fix-runs">Fix run</a></strong>, <code>thirdshift fix [&lt;PR URL or number&gt;]</code>: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass first checks Base branch CI unless scoped by author, then selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.</li>
 <li><strong><a href="#triage-runs">Triage run</a></strong>, <code>thirdshift triage</code>: investigates a <strong>Report</strong> and files shaped issues, or recommends them with <code>--recommend-only</code>.</li>
 </ul>
-<p>Architect, Pickup and Security runs, and <code>review --author &lt;login&gt;</code>, are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
+<p>Architect, Pickup and Security runs, <code>review --author &lt;login&gt;</code>, and <code>fix</code> with no PR target are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
 <p>Every session runs on the <strong>Harness</strong> you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See <a href="#harness-model-and-effort">Harness, Model and Effort</a>.</p>
 </div></details>
 <details class="fold"><summary><h2>What a Ticket run does</h2></summary>
@@ -181,6 +183,7 @@ thirdshift console other-accounts none
 <p>The Console&#39;s Ready for review subjects link to the recorded pull request and display its title, including Review runs without an issue. The existing batched GitHub refresh supplies titles for older records too, and title changes update open pages. Older caches or unavailable titles keep the PR link with <strong>(title unavailable)</strong>; failed reads retain the last title. Without a PR, rows use their issue subject and title, or the Command subject when neither exists. Activating the subject link opens GitHub directly without opening Command details.</p>
 <p>Ready for review rows show the pull request&#39;s latest head CI as <strong>CI green</strong>, <strong>CI red</strong>, <strong>CI pending</strong>, <strong>No CI checks</strong> or <strong>CI unknown</strong>, with text as well as colour. The same batched GitHub read refreshes CI; an older Command&#39;s ready outcome does not imply its pull request is still green. <code>status</code> shows the same label, and <code>status --json</code> includes <code>github_ci</code> (<code>green</code>, <code>red</code>, <code>pending</code>, <code>no_checks</code> or <code>unknown</code>) when the pull request has been read. Older saved answers and unread pull requests show CI unknown. Failed reads retain the last CI answer with the Inbox&#39;s existing freshness warning.</p>
 <p>A conflicting pull request also shows a separate <strong>Merge conflict</strong> pill beside CI, even when CI is green. It stays in Ready for review. The same GitHub read refreshes mergeability and wakes open pages when it changes; <code>status</code> prints <strong>Merge conflict</strong> too. <code>status --json</code> includes <code>github_mergeable</code> (<code>mergeable</code>, <code>conflicting</code> or <code>unknown</code>). Only <code>conflicting</code> shows the pill; unknown and older saved answers do not claim a conflict. Failed reads retain the last answer with the same freshness warning.</p>
+<p>Ready for review rows with a pull request and either <strong>CI red</strong> or <strong>Merge conflict</strong> show <code>thirdshift fix &lt;PR URL&gt;</code> and a <strong>Copy fix command</strong> button, both on the Inbox row and in Command details (Peek). Clicking it copies the command; run it from a clone of that repository to start a <a href="#fix-runs">Fix run</a>. A later Command on the same pull request URL takes up the earlier waiting row in Ready for review or Needs you, just as one on the same issue does, including when neither Command has a linked issue. The row says <code>taken up by a later Command started at &lt;time&gt;</code>, and retention counts from that later start.</p>
 <p>Each row with a kept answer also carries <code>github</code>: <code>subjects</code> maps its own or dispatched issue and pull request URLs to their <code>facts</code> and RFC 3339 <code>answered_at</code>. An unresolved URL has null facts; an older cache without an observation time has null <code>answered_at</code>. Finding rows include <code>github.findings</code> with per-URL waiting flags, the first observed <code>triaged_at</code>, and <code>answered_at</code>, without private write-ups. History freezes these observation times with its facts. The existing <code>github_state</code> and <code>github_at</code> fields still describe the row&#39;s own pull request and its merge or close event.</p>
 <p>The Inbox leaves the last of GitHub&#39;s quota to the factory. Both the Console and <code>status</code> skip their GitHub reads while the last observation showed fewer than 500 GraphQL points or 500 REST requests remaining, until that quota&#39;s reset time. The warning says which quota is low, how much remains and when it resets, even while the kept answer is fresh. Neither the reserve nor the 5-minute warning threshold is a User config setting.</p>
 <p>A row a later Command took up says so wherever it goes: <code>status</code> prints <code>left needs you: taken up by a later Command started at &lt;time&gt;</code> (or <code>left ready for review: …</code>), <code>status --json</code> carries <code>left_from</code>, <code>left_reason</code> and <code>left_at</code>, and the Console shows the same line on the row. A row GitHub moved out of Ready for review says <code>left ready for review: pull request merged at &lt;time&gt;</code> (or <code>pull request closed at &lt;time&gt;</code>); a Needs you row says <code>left needs you: issue closed at &lt;time&gt;</code>, <code>pull request merged at &lt;time&gt;</code> or <code>needs-triage removed at &lt;time&gt;</code>. <code>status</code> batches these rows&#39; issues and pull requests in the same read. A dismissed row says so the same way: <code>status</code> prints <code>dismissed by &lt;who&gt; from the CLI at &lt;time&gt;</code>, <code>status --json</code> carries <code>dismissal</code> with <code>who</code>, <code>dismissed_at</code>, <code>source</code>, <code>kind</code> and all covered <code>kinds</code>, and the Console shows the same line on the row. A Command that never waited still goes by when it ended.</p>
@@ -840,6 +843,10 @@ which also starts a Spec run when the issue has Tickets. Every request names
 <tr>
 <td><code>review</code></td>
 <td>Required <code>pull_request</code> URL or <code>author</code> login; optional <code>recommend_only</code>, <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code>, <code>security_review</code></td>
+</tr>
+<tr>
+<td><code>fix</code></td>
+<td>Optional <code>pull_request</code> URL for a targeted Fix run, or <code>base</code> and <code>author</code> for a Fix Pass; optional <code>merge</code>, <code>base_fix</code>, <code>email</code>, <code>harness</code>, <code>model</code>, <code>effort</code></td>
 </tr>
 <tr>
 <td><code>process</code></td>
@@ -2665,6 +2672,94 @@ thirdshift: 03:12:40 Tickets not done: #21 (failed: claude exited 1), #22 (block
 </code></pre>
 <p>A Spec PR closed, merged or retargeted while the Spec run is working through its Tickets, as when the Day shift reshapes the Spec onto another Base branch, ends the Ticket loop. The Spec run checks its captured Spec PR before it starts each Ticket and whenever it writes the Tickets checklist; once the check fails it starts no further Ticket, waits for the Tickets already running, and fails with <code>the Spec PR &lt;url&gt; was closed under this Spec run</code> (or <code>merged</code>, or <code>retargeted from &lt;base&gt; to &lt;other&gt;</code>). It prints no Recovery command, since one would resume the Spec branch the Spec just left: decide the Spec&#39;s Base branch and Spec branch before starting it again. A Ticket started once the Spec PR was open checks it again just before its Self-merge, as does a Base fix that Ticket starts into the Spec branch, and fails with the same cause, its pull request back to a draft, rather than merge into a Spec branch the Spec has left. A Ticket started before the first landing opened the Spec PR has nothing to check and Self-merges as before.</p>
 <p>Running the Spec again picks up where the last Spec run stopped. The Spec branch is on <code>origin</code>, so the Spec run continues it (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0002-existing-issue-branch-means-continue.md">ADR-0002</a>) and updates its draft Spec PR rather than opening another. Closed Tickets are done and not run again, and a Ticket that failed still has its Issue branch and draft pull request, so its Ticket run is a <a href="#continuation">Continuation</a> into the Spec branch. With every Ticket closed, the Spec run goes straight to the Spec review and the Spec PR. With every Ticket closed and no Spec branch, as when the Spec was done some other way, it stops with <code>every Ticket is closed and there is no Spec branch; nothing to do</code> and exits <code>1</code>, creating no branch or pull request and leaving the Spec open.</p>
+</div></details>
+<details class="fold"><summary><h2>Fix runs</h2></summary>
+<div class="manual-content" id="fix-runs">
+<p>Use a <strong>Fix run</strong> when a delivered pull request needs its Base branch merged in,
+a merge conflict resolved or CI repaired. The Console offers <strong>Copy fix command</strong>
+on Ready for review rows with CI red or Merge conflict and in their Command
+details. Starting it takes up earlier waiting Inbox rows on that pull request,
+whether or not they name the same issue. Other later Commands on that pull
+request make the same hand-off.</p>
+<p>From a clone of the pull request&#39;s repository:</p>
+<pre><code class="language-sh">thirdshift fix https://github.com/you/widgets/pull/42
+thirdshift fix 42 merge
+thirdshift fix 42 --no-merge base-fix harness codex model gpt-6.1-sol effort high
+thirdshift fix
+thirdshift fix base main --author colleague
+</code></pre>
+<p>A Fix run accepts an open pull request by a Trusted account, ready or draft,
+with or without a linked closing issue. Origin match, fork, closed/merged and
+untrusted-author checks happen before work. The Launch directory&#39;s checked-out
+branch does not choose the Base branch: the pull request does.</p>
+<p>With no pull request target, <code>thirdshift fix</code> is a <strong>Pass</strong>. It searches open,
+non-draft, same-repository pull requests targeting the Launch directory&#39;s
+checked-out branch, or <code>base &lt;branch&gt;</code> / <code>--base &lt;branch&gt;</code>, in ascending number
+order. Only Trusted accounts are eligible; <code>--author &lt;login&gt;</code> / <code>author &lt;login&gt;</code>
+restricts selection to that account, which must itself be trusted. Neither
+<code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
+<p>Without <code>--author</code>, the Pass first checks the selected Base branch&#39;s tip on
+<code>origin</code>. A failed first push-workflow attempt with failed jobs gets one
+failed-jobs re-run; the Pass logs it on stderr and skips while CI runs. Pending
+Base branch checks, including external checks, also skip before PR selection.
+Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
+in a Worktree on <code>fix-&lt;base&gt;-&lt;short-sha&gt;</code>, from that origin tip. Delivery opens
+<code>Fix CI on &lt;base&gt;: &lt;check&gt;[, &lt;check&gt;…]</code> targeting the Base branch, treats every
+red check as its own to fix, and follows the usual merge and email flags and
+User config. A PR already opened from that branch, including an <code>in-progress</code>
+or failed draft PR, prevents another repair for that commit. An existing repair
+branch also prevents another attempt if PR creation failed. When the opening
+session fails after leaving work, preservation publishes it as a draft repair
+PR and offers its Fix Recovery command. Overlapping hosts
+share the Base branch CI reservation. A successful Self-merge closes open
+<code>CI red on &lt;base&gt;</code> reports and Base fix issues naming that Base branch.</p>
+<p>The Pass selects the first PR with a Merge conflict or CI red on its current
+head. It skips <code>in-progress</code> PRs, pending CI without a Merge conflict, and
+mergeable PRs with green or absent CI. It reserves and rechecks each candidate;
+if another machine reserved it first, it continues to the next candidate.
+At the repository&#39;s Command limit, or with no eligible PR it can reserve,
+it exits <code>0</code>, prints a skip reason on stderr, records an Activity log skip
+when the reason changes, and sends no Run notification. A failed Fix run
+leaves a draft, so later Passes skip it until the Day shift makes it ready.</p>
+<p>The Built-in process <code>fix-run</code> is <code>delivery</code> followed by <code>self-merge</code>.
+<code>thirdshift processes</code> lists it; <code>thirdshift process show fix-run</code> prints it.
+It reserves <code>refs/thirdshift/reservations/&lt;PR number&gt;</code> on origin and adds
+<code>in-progress</code> to the pull request until the run ends. Review runs use the same
+reservation. A busy reservation is refused; a crashed owner&#39;s reservation needs
+the Day shift to confirm it stopped before releasing it.</p>
+<p>Delivery checks out the head branch in a Worktree, marks a draft ready, merges
+the Base branch, pushes and watches CI. Conflict, CI-fix and Foreign-commit review
+Repairs receive <code>.thirdshift-review-input.md</code>: the PR title and body, linked
+closing issues and only Trusted account comments. The file is refreshed before
+each session, including a Resume. A title or body edit to one of those closing
+issues by an account that is not a Trusted account, made since a few minutes
+before the Fix run started, fails the run instead of starting that session.
+Repairs share the usual five-session cap,
+Check re-run and optional Base fix. A Fix run starts no implementation or initial
+Standards/Spec review session.</p>
+<p><code>merge</code> / <code>--merge</code> and <code>no-merge</code> / <code>--no-merge</code> override <code>merge.always</code>.
+Self-merge also requires recorded agent authorship or review by the GitHub
+account thirdshift acts as, covering the exact adopted head. A completed Ticket,
+Spec or Base CI Delivery records its delivered head for later Fix runs, as a
+Review run records the head it reviewed. Simply repairing an adopted PR without
+an opening review does not grant that evidence. Without it, Delivery still repairs
+the PR and checks CI, then holds Self-merge with the PR ready for review. Run
+<code>thirdshift review &lt;PR URL&gt;</code> before retrying the Fix run with <code>merge</code>; a Fix run
+never adds an opening review session for an existing PR. A newly authored Base
+branch CI fix has its own CI-fix session instead of adopting another PR&#39;s head.
+This preserves <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md">ADR 0004</a>&#39;s reviewed-code gate.
+<code>base-fix</code> / <code>--base-fix</code> and <code>no-base-fix</code> / <code>--no-base-fix</code> override <code>base.fix</code>.
+<code>harness</code>, <code>model</code> and <code>effort</code> use the usual command and User config precedence.
+<code>email [&lt;address&gt;]</code>, <code>email-unless-merged [&lt;address&gt;]</code> and <code>no-email</code> (also with
+<code>--</code>) override <code>email.always</code> and <code>email.unless_merged</code>. Command records, logs,
+Activity log lines and Run notifications identify a <strong>Fix run</strong>.</p>
+<p>Success prints <code>PR &lt;url&gt; is ready for review</code> or <code>PR &lt;url&gt; is merged</code>.
+Failure or interruption preserves uncommitted work as
+<code>thirdshift: failed fix run (&lt;reason&gt;)</code>, pushes unpublished work and drafts the
+PR. A Self-merge refused with a mergeable, green PR leaves it ready.
+Recovery offers <code>thirdshift fix &lt;PR URL&gt;</code> with the original flags. An unchanged
+Repair creates no empty failure commit. A PR closed or merged during the run
+stops further publication; a PR made draft during Repair stays draft.</p>
 </div></details>
 <details class="fold"><summary><h2>Review runs</h2></summary>
 <div class="manual-content" id="review-runs">

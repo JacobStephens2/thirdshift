@@ -253,6 +253,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .command > :not(.row-head) { display: none; }
   .one-line .command[data-state="Paused"] > .cause { display: block; }
   .one-line .command[data-state="Paused"] > .peek-cli { display: flex; }
+  .one-line .command > .fix-command { display: flex; margin: 4px 10px 8px; }
   .one-line .command:hover { background: var(--sel-bg); }
   .one-line .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) auto fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
   .one-line .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

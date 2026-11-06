@@ -111,6 +111,7 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    pub fix_command: Option<String>,
     /// A dispatched Run keeps the privacy of its owning Security run.
     pub security_details: bool,
     pub dismissal: Option<super::dismiss::Action>,
@@ -154,6 +155,12 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         .accepted_log_directory()
         .map(Path::to_path_buf);
     Ok(Inspection {
+        fix_command: snapshot
+            .evaluate_inbox(config.inbox_days, &github)
+            .into_rows(false)
+            .iter()
+            .find(|row| row.command.selector() == selected.observation.selector())
+            .and_then(|row| row.fix_command()),
         security_details,
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,

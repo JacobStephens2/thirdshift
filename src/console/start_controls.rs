@@ -92,6 +92,16 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
                     false,
                 )
             }
+            args::Command::Fix(fix) => {
+                let crate::fix::Target::Pass { base, author } = fix.target else {
+                    continue;
+                };
+                (
+                    json!({"command":"fix", "base":base, "author":author}),
+                    fix.flags,
+                    false,
+                )
+            }
             args::Command::Process(args::ProcessAction::Run(process))
                 if process.issue.is_none() && process.pull_request.is_none() =>
             {

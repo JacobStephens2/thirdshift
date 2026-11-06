@@ -16,6 +16,7 @@ const COMMAND_PREFIXES: &[(&str, &str)] = &[
     ("Security run", "secure"),
     ("Triage run", "triage"),
     ("Review run", "review"),
+    ("Fix run", "fix"),
     ("Scoring run", "scoring"),
     ("Experiment", "experiment"),
     ("Process", "process"),

@@ -748,6 +748,73 @@ fn resolved_counts_superseded_rows_from_the_later_command_start() {
 }
 
 #[test]
+fn later_commands_take_up_waiting_rows_on_the_same_pull_request() {
+    let scenario = Scenario::new();
+    let stamp = |hours| {
+        (chrono::Local::now() - chrono::Duration::hours(hours))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    };
+    let old = stamp(72);
+    let later = stamp(12);
+    for (number, outcome, pr, started) in [
+        (20, "ready for review", 40, &old),
+        (21, "failed", 41, &old),
+        (22, "ready for review", 42, &old),
+        (30, "merged", 40, &later),
+        (31, "merged", 41, &later),
+    ] {
+        write_record(&scenario, number, started, Some(started));
+        change_record(&scenario, number, |record| {
+            if pr == 40 || pr == 42 {
+                record["issue"] = Value::Null;
+            }
+            record["kind"] = if number == 30 {
+                "Fix run"
+            } else {
+                "Review run"
+            }
+            .into();
+            record["outcome"] = outcome.into();
+            record["pull_request"] = github_pr_url(pr).into();
+            record["cause"] = format!("fixture {number}").into();
+        });
+    }
+    for pr in [40, 41, 42] {
+        github_pr_is(&scenario, pr, "OPEN", None, None);
+    }
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    for (pr, from) in [(40, "ready for review"), (41, "needs you")] {
+        let row = commands
+            .iter()
+            .find(|row| row["pull_request"] == github_pr_url(pr) && row["started_at"] == old)
+            .unwrap();
+        assert_eq!(row["group"], "resolved", "{row}");
+        assert_eq!(row["left_from"], from, "{row}");
+        assert_eq!(row["left_reason"], "taken up by a later Command", "{row}");
+        assert_eq!(row["left_at"], later, "{row}");
+    }
+    let unrelated = commands
+        .iter()
+        .find(|row| row["pull_request"] == github_pr_url(42))
+        .unwrap();
+    assert_eq!(unrelated["group"], "ready for review", "{unrelated}");
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    for from in ["needs you", "ready for review"] {
+        assert!(
+            text.stdout.contains(&format!(
+                "left {from}: taken up by a later Command started at"
+            )),
+            "{}",
+            text.stdout
+        );
+    }
+}
+
+#[test]
 fn a_row_superseded_while_still_live_carries_no_left_reason() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();

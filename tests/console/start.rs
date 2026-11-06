@@ -739,6 +739,7 @@ fn api_starts_other_commands_with_cli_options_and_requester() {
     for kind in [
         "architect",
         "review",
+        "fix",
         "process",
         "skill",
         "score",
@@ -754,10 +755,12 @@ fn api_starts_other_commands_with_cli_options_and_requester() {
                 body["base"] = json!("main");
                 body["plan_only"] = json!(true);
             }
-            "review" => {
+            "review" | "fix" => {
                 scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
                 body["pull_request"] = json!(scenario.github_has_pr("colleague", "main", "OPEN"));
-                body["recommend_only"] = json!(true);
+                if kind == "review" {
+                    body["recommend_only"] = json!(true);
+                }
             }
             "process" => {
                 let directory = scenario.path("home/.thirdshift/processes");
@@ -852,6 +855,14 @@ fn api_rejects_paths_and_options_its_cli_twin_cannot_take_before_spawning() {
         json!({"command":"review","author":"--merge"}),
         json!({"command":"review","pull_request":"https://github.com/acme/other/pull/1"}),
         json!({"command":"review","author":"jacob","merge":true}),
+        json!({"command":"fix","pull_request":"https://github.com/acme/other/pull/1"}),
+        json!({"command":"fix","pull_request":"https://github.com/acme/widgets/pull/1","base":"main"}),
+        json!({"command":"fix","pull_request":"https://github.com/acme/widgets/pull/1","author":"jacob"}),
+        json!({"command":"fix","author":"--merge"}),
+        json!({"command":"fix","parallel":2}),
+        json!({"command":"fix","security_review":false}),
+        json!({"command":"fix","security_fix":false}),
+        json!({"command":"fix","security_close":false}),
         json!({"command":"process","name":"list"}),
         json!({"command":"process","name":"inspect","issue":7,"pull_request":"https://github.com/acme/widgets/pull/1"}),
         json!({"command":"skill","name":"to-spec","model":"opus"}),
@@ -915,7 +926,7 @@ fn api_passes_return_quiet_skips_and_review_by_author_uses_the_cli_gate() {
     };
     let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
     let console = server(&scenario);
-    for kind in ["pickup", "architect", "secure", "review"] {
+    for kind in ["pickup", "architect", "secure", "review", "fix"] {
         let mut body = json!({"repository":"acme/widgets","command":kind});
         if kind == "review" {
             body["author"] = json!("colleague");
@@ -939,6 +950,7 @@ fn api_options_reach_each_cli_parser_as_literal_words() {
         "pickup",
         "secure",
         "review",
+        "fix",
         "process",
         "triage",
     ] {
@@ -977,6 +989,11 @@ fn api_options_reach_each_cli_parser_as_literal_words() {
                 body["author"] = json!("colleague");
                 body["recommend_only"] = json!(true);
                 expected.extend(["--author", "colleague", "--recommend-only"].map(String::from));
+            }
+            "fix" => {
+                body["base"] = json!("main");
+                body["author"] = json!("acme");
+                expected.extend(["--author", "acme", "--base", "main"].map(String::from));
             }
             "process" => {
                 let directory = scenario.path("home/.thirdshift/processes");
@@ -1028,6 +1045,23 @@ fn api_options_reach_each_cli_parser_as_literal_words() {
                     "no-security-fix",
                     "no-security-close",
                     "no-security-review",
+                    "harness",
+                    "claude",
+                    "model",
+                    "opus",
+                    "effort",
+                    "high",
+                    "no-base-fix",
+                ]
+                .map(String::from),
+            );
+        } else if kind == "fix" {
+            body["merge"] = json!(false);
+            body["base_fix"] = json!(false);
+            expected.extend(
+                [
+                    "--no-merge",
+                    "--no-email",
                     "harness",
                     "claude",
                     "model",

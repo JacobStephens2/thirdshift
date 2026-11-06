@@ -16,7 +16,7 @@ test("the manual describes Console starts and the complete parity API", async ()
     assert.ok(!text.includes("The Console never starts work; start Commands from the CLI"), `${file}: still forbids requested starts`);
     assert.ok(!/Eval preparation, verification and Arm preparation .*? remain CLI-only/.test(text), `${file}: verification is not CLI-only`);
     assert.ok(!/Actions take .*?form-urlencoded.*?except Theme import and starting a run, which take/.test(text), `${file}: JSON-body exceptions are incomplete`);
-    for (const command of ["ticket", "architect", "pickup", "secure", "review", "process", "skill", "score", "triage", "experiment"]) {
+    for (const command of ["ticket", "architect", "pickup", "secure", "review", "fix", "process", "skill", "score", "triage", "experiment"]) {
       assert.ok(source.includes(file.endsWith(".md") ? `| \`${command}\` |` : `<td><code>${command}</code></td>`),
         `${file}: start command table omits ${command}`);
     }

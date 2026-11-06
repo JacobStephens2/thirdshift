@@ -438,6 +438,11 @@ fn start_schema() -> Value {
             ]);
         } else if command == "process" {
             variant["not"] = json!({"required":["issue","pull_request"]});
+        } else if command == "fix" {
+            variant["not"] = json!({"anyOf":[
+                {"required":["pull_request","base"]},
+                {"required":["pull_request","author"]}
+            ]});
         }
         variants.push(variant);
     }

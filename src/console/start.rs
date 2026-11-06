@@ -111,6 +111,7 @@ pub(super) enum Kind {
     Pickup,
     Secure,
     Review,
+    Fix,
     Process,
     Skill,
     Score,
@@ -127,12 +128,13 @@ enum Order {
 }
 
 impl Kind {
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::Ticket,
         Self::Architect,
         Self::Pickup,
         Self::Secure,
         Self::Review,
+        Self::Fix,
         Self::Process,
         Self::Skill,
         Self::Score,
@@ -147,6 +149,7 @@ impl Kind {
             Self::Pickup => "pickup",
             Self::Secure => "secure",
             Self::Review => "review",
+            Self::Fix => "fix",
             Self::Process => "process",
             Self::Skill => "skill",
             Self::Score => "score",
@@ -164,6 +167,7 @@ impl Kind {
             Self::Pickup => &["base", "order"],
             Self::Secure => &["base"],
             Self::Review => &["pull_request", "author", "recommend_only"],
+            Self::Fix => &["pull_request", "base", "author"],
             Self::Process => &["name", "issue", "pull_request", "plan_only"],
             Self::Skill => &["name", "issue"],
             Self::Score => &[],
@@ -189,6 +193,7 @@ impl Kind {
                 "parallel",
             ],
             Self::Review => &["email", "harness", "model", "effort", "security_review"],
+            Self::Fix => &["merge", "email", "harness", "model", "effort", "base_fix"],
             Self::Process => &[
                 "merge",
                 "email",
@@ -214,6 +219,7 @@ impl Kind {
             | Self::Pickup
             | Self::Secure
             | Self::Review
+            | Self::Fix
             | Self::Score
             | Self::Experiment => &[],
         }
@@ -499,6 +505,7 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             | Kind::Pickup
             | Kind::Secure
             | Kind::Review
+            | Kind::Fix
             | Kind::Process
             | Kind::Skill
             | Kind::Triage => {
