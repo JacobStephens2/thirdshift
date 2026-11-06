@@ -1,0 +1,31 @@
+name: Go prototype
+
+on:
+  pull_request:
+    paths: ['prototype/go/**', '.github/workflows/go-prototype.yml']
+  push:
+    branches: [main]
+    paths: ['prototype/go/**', '.github/workflows/go-prototype.yml']
+
+concurrency:
+  group: go-prototype-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-prototype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: prototype/go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: prototype/go/go.mod
+          cache: false
+      - run: python3 bundle-skills.py --check
+      - run: test -z "$(gofmt -l *.go)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/thirdshift-go" .

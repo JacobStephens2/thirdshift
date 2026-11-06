@@ -25,12 +25,13 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 
 | Changed paths | Checks |
 | --- | --- |
+| `prototype/go/**` only | `go test ./...` from `prototype/go/`; no Rust suite |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
 | `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
-| Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
+| Several areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks. Go is independent: add its suite only when `prototype/go/**` changes, without broadening the other selections. |
 
 Unknown paths print the reason for selecting the full Rust suite, and Console
 paths print the reason for selecting the Console browser tests. The mappings
@@ -78,7 +79,10 @@ and the Linux Rust suite. CI uses only Linux runners: x86_64 on every PR and
 aarch64 on `main` pushes, nightly and manual runs, plus PRs into `main` labelled
 `test:linux-arm`. See [CI performance](ci-performance.md). This script selects
 Rust, site, Console browser and release checks; it does not replace CI's
-coverage of both Linux architectures. Run local checks in Linux, including
+coverage of both Linux architectures. The isolated Go prototype has its own
+path-filtered CI workflow; ordinary Rust changes require no Go toolchain.
+See [its README](../prototype/go/README.md) for setup and static builds.
+Run local checks in Linux, including
 an ARM Linux VM when contributing from an Apple Silicon Mac.
 
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
