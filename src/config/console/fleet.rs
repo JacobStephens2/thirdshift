@@ -65,7 +65,27 @@ pub(crate) fn link_address(address: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 
-pub(crate) fn write_document(document: &mut DocumentMut, entries: &[Entry]) -> Result<()> {
+/// Pair or replace one named machine without exposing the config's TOML.
+pub(crate) fn pair(entry: &Entry) -> Result<()> {
+    change_entry(&entry.name, Some(entry))
+}
+
+pub(crate) fn remove(name: &str) -> Result<()> {
+    change_entry(name, None)
+}
+
+fn change_entry(name: &str, entry: Option<&Entry>) -> Result<()> {
+    super::update(|settings, document| {
+        settings.fleet.retain(|saved| saved.name != name);
+        if let Some(entry) = entry {
+            settings.fleet.push(entry.clone());
+        }
+        write_document(document, &settings.fleet)
+    })?;
+    Ok(())
+}
+
+fn write_document(document: &mut DocumentMut, entries: &[Entry]) -> Result<()> {
     if !document.contains_key("console") {
         document["console"] = Item::Table(Table::new());
     }

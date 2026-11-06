@@ -355,7 +355,7 @@ fn edit(
 }
 
 /// Serialize comment-preserving Console writes, including Fleet migration.
-pub(crate) fn update(
+fn update(
     change: impl FnOnce(&mut ConsoleSettings, &mut toml_edit::DocumentMut) -> Result<()>,
 ) -> Result<ConsoleSettings> {
     use std::fs::{self, OpenOptions};

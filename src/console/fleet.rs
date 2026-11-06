@@ -51,21 +51,14 @@ impl Action {
                 let entry = check(name, address, &token)?;
                 let _lock = lock()?;
                 let credentials = Credentials::read()?;
-                config::console::update(|settings, document| {
-                    settings.fleet.retain(|saved| saved.name != entry.name);
-                    settings.fleet.push(entry.clone());
-                    fleet::write_document(document, &settings.fleet)
-                })?;
+                fleet::pair(&entry)?;
                 credentials.save_fleet_token(&entry.name, Some(&token))?;
                 Ok(format!("Paired {} ({})", entry.name, entry.address))
             }
             Self::Remove(name) => {
                 let _lock = lock()?;
                 let credentials = Credentials::read()?;
-                config::console::update(|settings, document| {
-                    settings.fleet.retain(|entry| entry.name != name);
-                    fleet::write_document(document, &settings.fleet)
-                })?;
+                fleet::remove(&name)?;
                 credentials.save_fleet_token(&name, None)?;
                 Ok(format!("Removed {name}"))
             }
