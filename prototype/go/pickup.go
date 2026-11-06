@@ -8,7 +8,7 @@ import (
 	"strconv"
 )
 
-func pickupRun(ctx context.Context) error {
+func pickupRun(ctx context.Context, repairLimit int) error {
 	launch, origin, err := launchOrigin(ctx)
 	if err != nil {
 		return err
@@ -47,7 +47,7 @@ func pickupRun(ctx context.Context) error {
 		if r == nil {
 			continue
 		}
-		dispatched, err := pickupReserved(ctx, launch, issue, generation, r)
+		dispatched, err := pickupReserved(ctx, launch, issue, generation, r, repairLimit)
 		if err != nil || dispatched {
 			return err
 		}
@@ -56,13 +56,13 @@ func pickupRun(ctx context.Context) error {
 	return nil
 }
 
-func pickupReserved(ctx context.Context, launch string, issue issueURL, generation int, r *reservation) (dispatched bool, runErr error) {
+func pickupReserved(ctx context.Context, launch string, issue issueURL, generation int, r *reservation, repairLimit int) (dispatched bool, runErr error) {
 	defer func() { runErr = errors.Join(runErr, r.release()) }()
 	data, current, ready, err := readReady(ctx, launch, issue)
 	if err != nil || !ready || current != generation {
 		return false, err
 	}
-	err = runTicket(ctx, launch, issue, data)
+	err = runTicket(ctx, launch, issue, data, repairLimit)
 	if errors.Is(err, errStaleClaim) {
 		return false, nil
 	}

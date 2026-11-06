@@ -11,6 +11,7 @@ root = Path(os.environ["FIXTURE"])
 assert sys.stdin.read() == ""
 assert sys.argv[1:7] == ["-p", "--permission-mode", "auto", "--output-format", "stream-json", "--verbose"]
 assert sys.argv[-1].startswith("/thirdshift-implement ")
+repair = "Repair session" in sys.argv[-1]
 skill = Path(".claude/skills/thirdshift-implement")
 assert skill.is_symlink() and "Implement" in (skill / "SKILL.md").read_text()
 issue = Path(".thirdshift-issue.md").read_text()
@@ -22,7 +23,7 @@ with (root / "sessions.jsonl").open("a") as sessions:
     sessions.write(json.dumps({"cwd": str(Path.cwd()), "prompt": sys.argv[-1]}) + "\n")
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "fixture"}), flush=True)
 mode = state["mode"]
-if mode == "reservation":
+if mode == "reservation" or os.environ.get("EXPECT_PICKUP_RESERVATION") == "1":
     number = sys.argv[-1].split("/issues/")[1].split()[0]
     ref = "refs/heads/thirdshift/pickup/" + number
     token = subprocess.check_output(["git", "ls-remote", "origin", ref], text=True).split()[0]
@@ -60,6 +61,18 @@ if mode == "no-result":
 if mode == "error-result":
     print(json.dumps({"type": "result", "is_error": True}), flush=True)
     sys.exit(0)
+if mode in {"delivery", "ci-repair", "conflict-repair", "salvage", "ci-still-red", "pending-check", "pending-status", "no-ci", "checks-disappear", "pr-closes", "partial-register", "open-workflow"}:
+    Path("widget.txt").write_text(("resolved\n" if mode == "conflict-repair" else "repaired\n") if repair else "broken\n")
+    if mode == "ci-still-red":
+        Path("widget.txt").write_text(f"attempt {len((root / 'sessions.jsonl').read_text().splitlines())}\n")
+    subprocess.run(["git", "add", "widget.txt"], check=True)
+    subprocess.run(["git", "commit", "-m", "Add widget"], stdout=sys.stderr, check=True)
+    if mode == "salvage":
+        sys.exit(1)
+    if mode == "conflict-repair" and not repair:
+        (root / "repo" / "widget.txt").write_text("base\n")
+        subprocess.run(["git", "-C", str(root / "repo"), "commit", "-am", "Base branch update"], stdout=sys.stderr, check=True)
+        subprocess.run(["git", "-C", str(root / "repo"), "push", "origin", "main"], stdout=sys.stderr, check=True)
 if mode in {"push", "push-fail"}:
     subprocess.run(["git", "push", "origin", "HEAD"], check=True)
     if mode == "push-fail":
