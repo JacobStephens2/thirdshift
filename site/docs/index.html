@@ -430,7 +430,9 @@ thirdshift update --check --json --machine server
 thirdshift update --machine server
 </code></pre>
 <p>Remote <code>config</code> and <code>update</code> return the owner&#39;s JSON. Unknown and link-only
-machines are refused. Omitting <code>--machine</code>, or giving this machine&#39;s hostname,
+machines are refused. Omitting <code>--machine</code> selects local work. A configured
+Fleet name always selects its owner, even when the name matches the local
+hostname; local choices then say <code>(local)</code>. An unpaired local hostname also
 selects local work. <code>/api/v1/start-options</code> requires <code>run</code> and returns known
 repositories and startable Passes; <code>whoami</code> accepts any authenticated scope so
 <code>run</code>-only and <code>admin</code>-only tokens can pair without general read access.</p>

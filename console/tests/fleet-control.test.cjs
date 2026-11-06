@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
+const { hostname } = require('node:os');
 const { startFixture } = require('./start-fixture.cjs');
 
 test('Fleet starts, Passes and config keep their machine through confirmation and scopes', async t => {
@@ -59,4 +60,28 @@ test('Fleet starts, Passes and config keep their machine through confirmation an
   assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 0);
   await page.goto(`${caller.origin}/config?machine=owner`);
   assert.match(await page.textContent('body'), /403/);
+});
+
+test('a Fleet name matching the local hostname keeps config changes on the owner', async t => {
+  const owner = await startFixture();
+  t.after(() => owner.close());
+  const caller = await startFixture();
+  t.after(() => caller.close());
+  const machine = hostname();
+  const token = owner.cli(['console', 'token', 'create', 'caller', '--scopes', 'admin']).trim();
+  caller.cli(['console', 'fleet', 'add', machine, owner.origin], `${token}\n`);
+  const page = await caller.page({ viewport: { width: 390, height: 844 } });
+  t.after(() => page.context().close());
+  await page.getByText('Start work', { exact: true }).click();
+  assert.match(await page.locator('#start-repository option').first().textContent(), /\(local\)/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.goto(`${caller.origin}/config?machine=${encodeURIComponent(machine)}`);
+  await page.getByLabel('Value for spec.parallel', { exact: true }).fill('5');
+  await page.getByRole('button', { name: 'Save spec.parallel', exact: true }).click();
+  await page.waitForLoadState();
+  assert.equal(JSON.parse(owner.cli(['config', 'spec.parallel', '--json'])).value, 5);
+  assert.equal(JSON.parse(caller.cli(['config', 'spec.parallel', '--json'])).value, 3);
+  caller.cli(['config', 'spec.parallel', '6', '--machine', machine, '--json']);
+  assert.equal(JSON.parse(owner.cli(['config', 'spec.parallel', '--json'])).value, 6);
+  assert.equal(JSON.parse(caller.cli(['config', 'spec.parallel', '--json'])).value, 3);
 });

@@ -464,7 +464,9 @@ thirdshift update --machine server
 ```
 
 Remote `config` and `update` return the owner's JSON. Unknown and link-only
-machines are refused. Omitting `--machine`, or giving this machine's hostname,
+machines are refused. Omitting `--machine` selects local work. A configured
+Fleet name always selects its owner, even when the name matches the local
+hostname; local choices then say `(local)`. An unpaired local hostname also
 selects local work. `/api/v1/start-options` requires `run` and returns known
 repositories and startable Passes; `whoami` accepts any authenticated scope so
 `run`-only and `admin`-only tokens can pair without general read access.

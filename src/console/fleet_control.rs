@@ -17,13 +17,8 @@ pub(super) struct Selection {
 
 impl Selection {
     pub fn query(query: &Option<String>) -> Self {
-        let machine = super::query_value(query, "machine");
         Self {
-            machine: if crate::host::name().is_some_and(|name| name == machine) {
-                String::new()
-            } else {
-                machine
-            },
+            machine: super::query_value(query, "machine"),
         }
     }
     pub fn remote(
@@ -32,7 +27,7 @@ impl Selection {
         viewer: &Viewer,
         format: api::Format,
     ) -> Result<Option<Remote>> {
-        if self.machine.is_empty() || crate::host::name().is_some_and(|name| name == self.machine) {
+        if local_machine(config, &self.machine) {
             return Ok(None);
         }
         ensure!(
@@ -58,6 +53,26 @@ impl Selection {
     }
 }
 
+fn local_machine(config: &UserConfig, name: &str) -> bool {
+    name.is_empty()
+        || (name == super::hostname()
+            && !config.console.fleet.iter().any(|entry| entry.name == name))
+}
+
+pub(super) fn local_name(config: &UserConfig) -> String {
+    let hostname = super::hostname();
+    if config
+        .console
+        .fleet
+        .iter()
+        .any(|entry| entry.name == hostname)
+    {
+        format!("{hostname} (local)")
+    } else {
+        hostname
+    }
+}
+
 pub(super) struct Target {
     pub machine: String,
     pub name: String,
@@ -79,7 +94,7 @@ fn choices(config: &UserConfig, viewer: &Viewer, required: &[Scope]) -> Vec<Targ
     if required.iter().any(|scope| viewer.scopes.contains(scope)) {
         targets.push(Target {
             machine: String::new(),
-            name: super::hostname(),
+            name: local_name(config),
             suffix: String::new(),
             run: viewer.scopes.contains(&Scope::Run),
             admin: viewer.scopes.contains(&Scope::Admin),
@@ -240,9 +255,7 @@ impl Cli {
 
     pub fn run(self) -> Result<String> {
         let config = UserConfig::load()?;
-        let machine = self
-            .machine
-            .filter(|name| !crate::host::name().is_some_and(|host| host == *name));
+        let machine = self.machine.filter(|name| !local_machine(&config, name));
         let remote = machine
             .as_deref()
             .map(|name| Remote::select(&config, name, None)?.context("select a Fleet machine"))

@@ -52,7 +52,10 @@ impl Form {
                 form.repositories = repositories
                     .into_iter()
                     .map(|repository| Repository {
-                        label: format!("{repository} · {}", super::hostname()),
+                        label: format!(
+                            "{repository} · {}",
+                            super::fleet_control::local_name(config)
+                        ),
                         repository,
                         machine: String::new(),
                     })
