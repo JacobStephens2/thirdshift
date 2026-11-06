@@ -2,6 +2,7 @@ import { activity, loadLook, motionAllowed, showFolder } from './look.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
+import { initStarts } from './start.js';
 let spanTree;
 
 // Elapsed Pass ages keep advancing even when no Command or file changes.
@@ -192,6 +193,7 @@ function startUpdates() {
 }
 const observesCommands = document.getElementById('inbox') || timePage;
 if (observesCommands) startUpdates();
+initStarts(() => observesCommands ? refresh() : Promise.resolve());
 
 function stopPeekUpdates() {
   if (observesCommands) return;
@@ -574,7 +576,7 @@ document.addEventListener('keydown', event => {
   if (event.target.matches('summary') && (!event.target.closest('.group') || event.target.closest('#inbox')) && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
-  if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
+  if (document.querySelector('#themes[open], #sections-chooser[open], #start-confirm[open]')) return;
   if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]')?.click(); return; }
   if (event.key === 'Escape') {
     event.preventDefault();

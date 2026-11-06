@@ -209,7 +209,7 @@ impl Kind {
 }
 
 impl Request {
-    fn arguments(&self) -> Result<(Repo, Vec<String>)> {
+    pub(super) fn arguments(&self) -> Result<(Repo, Vec<String>)> {
         let parts: Vec<_> = self.repository.split('/').collect();
         ensure!(
             parts.len() == 2

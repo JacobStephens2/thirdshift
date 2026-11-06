@@ -30,6 +30,7 @@ mod resources;
 mod restart;
 mod scoring;
 mod start;
+mod start_controls;
 mod stop;
 mod subscription;
 mod time;
@@ -90,6 +91,9 @@ impl PageContext {
     }
     fn can_admin(&self) -> bool {
         self.scopes.contains(&Scope::Admin)
+    }
+    fn can_run(&self) -> bool {
+        self.scopes.contains(&Scope::Run)
     }
     fn can_security(&self) -> bool {
         self.scopes.contains(&Scope::Security)
@@ -925,6 +929,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[template(path = "console/inbox.html")]
 struct InboxPage {
     page: PageContext,
+    start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
@@ -1125,6 +1130,8 @@ async fn render_page(
         format.render(read.json(&config, all)?, |_| {
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
+                start: (archive_page.is_none() && viewer.scopes.contains(&Scope::Run))
+                    .then(|| start_controls::Form::load(&config)),
                 csrf: viewer.csrf,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,

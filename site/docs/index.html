@@ -688,6 +688,20 @@ omitted; an invalid configured directory is an error. Cron shell text is never
 evaluated. For complex shell scripts or wrappers, list their directory explicitly.
 An account without <code>crontab</code> can use the config list alone.</p>
 <p>A client with <code>run</code> starts work with structured JSON:</p>
+<p>On the Console&#39;s Inbox, a signed-in person with <code>run</code> can open <strong>Start work</strong>,
+choose a repository from the known Launch directories and enter an issue number
+or URL. <strong>Shared options</strong> offers merge, email, Harness, Model, Effort, parallel
+Tickets, Base fix, Security review, Security fix and closing Security findings.
+<strong>Review start</strong> shows the request and its Harness; only <strong>Start now</strong> submits
+it. Cancel or Escape starts nothing. The result names the new Command, which
+appears in the Inbox, or explains a refused start. Check Inbox and logs before
+retrying after a lost response.</p>
+<p>On <strong>Cron jobs</strong>, <strong>Run now</strong> offers the same confirmation for each recognizable
+Pass, preserving its CLI arguments. Literal <code>cd</code> directories and Pass arguments
+are supported; shell expressions remain display-only. The result names a Command
+or gives the Pass&#39;s skip reason, with a link to Inbox for started work.
+Both controls require JavaScript and are hidden without <code>run</code>. Each confirmed
+start uses the same scoped, CSRF-protected API as a client.</p>
 <pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; \
   -H &#39;Content-Type: application/json&#39; \
   -d &#39;{&quot;repository&quot;:&quot;acme/widgets&quot;,&quot;issue&quot;:7,&quot;merge&quot;:false,&quot;email&quot;:{&quot;mode&quot;:&quot;never&quot;},&quot;harness&quot;:&quot;codex&quot;,&quot;model&quot;:&quot;gpt-6.1-sol&quot;,&quot;effort&quot;:&quot;high&quot;,&quot;base_fix&quot;:false,&quot;security_review&quot;:true,&quot;security_fix&quot;:false}&#39; \

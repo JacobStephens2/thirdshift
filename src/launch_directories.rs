@@ -100,6 +100,39 @@ fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf
     Some((path, output_log))
 }
 
+/// A literal cron invocation that can also be represented by the start API.
+/// Shell expressions remain display-only; no cron text is ever executed here.
+pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
+    let home = config::home().ok()?;
+    let (path, _) = cron_directory(command, &home)?;
+    let words = shell_words(cronjobs::shell_command(command))?;
+    let rest = words.get(3..)?;
+    let invocation = rest
+        .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
+        .find(|part| {
+            part.first().is_some_and(|word| {
+                Path::new(word)
+                    .file_name()
+                    .is_some_and(|name| name == "thirdshift")
+            })
+        })?;
+    let arguments: Vec<_> = invocation
+        .iter()
+        .skip(1)
+        .take_while(|word| {
+            !matches!(
+                word.as_str(),
+                ">" | ">>" | "&>" | "&>>" | "<" | "2" | "2>" | "2>>" | "#"
+            )
+        })
+        .cloned()
+        .collect();
+    if arguments.iter().any(|word| word.contains(['$', '`'])) {
+        return None;
+    }
+    Some((path.canonicalize().ok()?, arguments))
+}
+
 // shlex splits shell words, but leaves operators attached to those words.
 // Separate unquoted operators first, preserving quotes and escaped characters.
 fn shell_words(command: &str) -> Option<Vec<String>> {

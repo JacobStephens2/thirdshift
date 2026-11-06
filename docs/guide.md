@@ -615,6 +615,22 @@ An account without `crontab` can use the config list alone.
 
 A client with `run` starts work with structured JSON:
 
+On the Console's Inbox, a signed-in person with `run` can open **Start work**,
+choose a repository from the known Launch directories and enter an issue number
+or URL. **Shared options** offers merge, email, Harness, Model, Effort, parallel
+Tickets, Base fix, Security review, Security fix and closing Security findings.
+**Review start** shows the request and its Harness; only **Start now** submits
+it. Cancel or Escape starts nothing. The result names the new Command, which
+appears in the Inbox, or explains a refused start. Check Inbox and logs before
+retrying after a lost response.
+
+On **Cron jobs**, **Run now** offers the same confirmation for each recognizable
+Pass, preserving its CLI arguments. Literal `cd` directories and Pass arguments
+are supported; shell expressions remain display-only. The result names a Command
+or gives the Pass's skip reason, with a link to Inbox for started work.
+Both controls require JavaScript and are hidden without `run`. Each confirmed
+start uses the same scoped, CSRF-protected API as a client.
+
 ```sh
 curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
   -H 'Content-Type: application/json' \

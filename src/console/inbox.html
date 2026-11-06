@@ -20,6 +20,7 @@
 <body{% if title == "Inbox" %} class="mailbox"{% else if archive.is_some() %} class="archive-page"{% endif %}>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
+  {% if let Some(start) = start %}{% include "console/start_form.html" %}{% include "console/start_confirm.html" %}{% endif %}
   <main {% if title == "Inbox" %}id="inbox" class="one-line"{% else if archive.is_some() %}class="one-line"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
