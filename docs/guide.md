@@ -2006,7 +2006,7 @@ effort = "medium"
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
 ```toml
-launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically
+launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
 
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false

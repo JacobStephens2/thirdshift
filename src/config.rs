@@ -1107,7 +1107,7 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// The User config Setup writes with no answers: every key at its default,
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
-pub const DEFAULTS: &str = r#"launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically
+pub const DEFAULTS: &str = r#"launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
 
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
@@ -1297,6 +1297,16 @@ pub(crate) fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
     path.is_absolute().then_some(path)
 }
 
+/// Formatting assertions below and in Setup compare the retained sections,
+/// after verifying the only new root default preceding them.
+#[cfg(test)]
+pub(crate) fn without_launch_directories_default(text: &str) -> String {
+    let mut document: DocumentMut = text.parse().unwrap();
+    let added = document.remove("launch_directories").expect("root default");
+    assert_eq!(added.as_array().map(|array| array.is_empty()), Some(true));
+    document.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1441,11 +1451,16 @@ mod tests {
             });
             assert!(comment.contains("default"), "[{section}] {line:?}");
             let key = setting.trim_start_matches("# ").split(' ').next().unwrap();
-            keys.push(format!("{section}.{key}"));
+            keys.push(if section.is_empty() {
+                key.into()
+            } else {
+                format!("{section}.{key}")
+            });
         }
         assert_eq!(
             keys,
             [
+                "launch_directories",
                 "merge.always",
                 "base.fix",
                 "launch.pull",
@@ -2208,7 +2223,8 @@ mod tests {
         let text =
             "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
         let answered = document(text).render(Some(notifications_to("me@example.com")));
-        let lines: Vec<&str> = answered.lines().collect();
+        let retained = without_launch_directories_default(&answered);
+        let lines: Vec<&str> = retained.lines().collect();
         assert_eq!(
             lines[..4],
             ["[email]", "always = true", "", "# mine"],
@@ -2294,7 +2310,8 @@ mod tests {
         };
         let rendered = document(text).render(Some(changes));
         assert!(
-            rendered.starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
+            without_launch_directories_default(&rendered)
+                .starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
             "{rendered}"
         );
         assert!(
@@ -2362,7 +2379,10 @@ mod tests {
             assert_eq!(config.spec_parallel, before.spec_parallel);
             assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
             if let Some(comment) = text.lines().next().filter(|line| line.starts_with('#')) {
-                assert!(rendered.starts_with(comment), "{rendered}");
+                assert!(
+                    without_launch_directories_default(&rendered).starts_with(comment),
+                    "{rendered}"
+                );
             }
             // The completed rendering still uses the user's representation.
             if text.contains("merge.always") {
@@ -2384,7 +2404,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    rendered
+                    without_launch_directories_default(&rendered)
                         .starts_with("[harness.codex]\nmodel = \"\"    # mine\neffort = \"\"\n"),
                     "{rendered}"
                 );
@@ -2435,7 +2455,7 @@ mod tests {
         assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
         assert!(config.merge_always && config.launch_pull);
         assert!(!config.base_fix);
-        assert!(rendered.starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
+        assert!(without_launch_directories_default(&rendered).starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
         for line in text
             .lines()
             .filter(|line| *line != "always = true # enabled")
@@ -2455,7 +2475,8 @@ mod tests {
         let config = parse(&rendered).unwrap();
         assert!(config.email.always);
         assert_eq!(config.email.to.as_deref(), Some(to));
-        let lines: Vec<_> = rendered.lines().collect();
+        let retained = without_launch_directories_default(&rendered);
+        let lines: Vec<_> = retained.lines().collect();
         assert_eq!(lines[..3], ["[email]", "always = true", "# mine"]);
         assert!(lines[3].starts_with("to = "), "{rendered}");
         assert!(
@@ -2507,11 +2528,17 @@ mod tests {
             );
             let completed = document(&text).render(None);
             assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
-            assert!(completed.starts_with(&text), "{completed}");
+            assert!(
+                without_launch_directories_default(&completed).starts_with(&text),
+                "{completed}"
+            );
             assert_eq!(document(&completed).render(None), completed);
 
             let rendered = document(&text).render(Some(notifications_to("me@example.com")));
-            assert!(rendered.starts_with(header), "{rendered}");
+            assert!(
+                without_launch_directories_default(&rendered).starts_with(header),
+                "{rendered}"
+            );
             assert!(!rendered.contains("# to ="), "{rendered}");
             let lines: Vec<_> = rendered.lines().collect();
             let to = lines

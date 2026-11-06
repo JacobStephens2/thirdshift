@@ -892,7 +892,7 @@ fn setup_can_enable_triage_readiness_keep_it_and_turn_it_off() {
             config["triage"]["allow_ready_for_agent"].as_bool(),
             Some(enabled)
         );
-        assert!(text.starts_with("[triage] # my triage settings\n"));
+        assert_config_preserved(&text, "[triage] # my triage settings\n");
         assert!(text.contains("# readiness\n"));
     }
 }
@@ -1020,7 +1020,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
         assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
-        assert!(text.starts_with("# my Security settings\n[security]\n"));
+        assert_config_preserved(&text, "# my Security settings\n[security]\n");
         assert!(text.contains("# keep this choice\n"));
         assert!(text.contains("harness = 'codex' # use Codex\n"));
     }

@@ -1972,7 +1972,7 @@ effort = &quot;medium&quot;
 </code></pre>
 <p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. <code>fix-findings</code> and <code>close-findings</code> likewise export none of their sessions or the Ticket runs they start. Sandbox launcher environment values are redacted from retained Session arguments.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
-<pre><code class="language-toml">launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically
+<pre><code class="language-toml">launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
 
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
