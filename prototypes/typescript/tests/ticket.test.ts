@@ -47,7 +47,7 @@ test("standalone Ticket run claims, links embedded skills and streams a Harness 
   expect(result.stdout).toContain("working");
   expect(result.stdout).toContain("done");
   const calls = await readFile(join(f.directory, "calls"), "utf8");
-  expect(calls).toContain('"--add-label", "in-progress", "--remove-label", "ready-for-agent"');
+  expect(calls).toContain('"--method", "PUT", "-f", "labels[]=in-progress"');
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
   expect(issue.labels).toEqual([{ name: "ready-for-agent" }]);
 }, 120_000);
@@ -89,16 +89,20 @@ with (root / 'calls').open('a') as log: log.write(json.dumps(args) + '\\n')
 issue = json.loads((root / 'issue.json').read_text())
 if args[:2] in [['api', 'repos/test/project/issues/7'], ['api', 'repos/test/project/issues/8']]:
     print(json.dumps(issue))
+elif args[:2] == ['api', 'repos/test/project/issues?state=open&labels=ready-for-agent&per_page=100']:
+    print(json.dumps([[dict(issue, number=8), dict(issue, number=7)]]))
+elif len(args) > 1 and args[0] == 'api' and '/events?' in args[1]:
+    print(json.dumps([[{'event': 'labeled', 'label': {'name': 'ready-for-agent'}, 'created_at': '2026-01-01T00:00:00Z', 'actor': {'login': 'test'}}]]))
+elif args[:2] == ['api', 'graphql']:
+    connection = {'nodes': [], 'pageInfo': {'hasNextPage': False, 'endCursor': None}}
+    print(json.dumps({'data': {'repository': {'issue': {'edits': connection, 'parent': None, 'subIssues': connection, 'blockedBy': connection, 'linked': connection}}}}))
 elif args[:2] in [['api', 'repos/test/project/issues/7/comments'], ['api', 'repos/test/project/issues/8/comments']]:
     print(json.dumps([issue['comments']]))
-elif args[:2] == ['issue', 'edit']:
-    labels = [x['name'] for x in issue['labels']]
-    for i, arg in enumerate(args):
-        if arg == '--add-label' and args[i+1] not in labels: labels.append(args[i+1])
-        if arg == '--remove-label' and args[i+1] in labels: labels.remove(args[i+1])
+elif args[0] == 'api' and args[1].endswith('/labels') and '--method' in args and args[args.index('--method') + 1] == 'PUT':
+    labels = [arg.split('=', 1)[1] for arg in args if arg.startswith('labels[]=')]
     issue['labels'] = [{'name': x} for x in labels]
     (root / 'issue.json').write_text(json.dumps(issue))
-    if '--add-label' in args and args[args.index('--add-label') + 1] == 'in-progress' and (root / 'interrupt-claim').exists():
+    if 'in-progress' in labels and (root / 'interrupt-claim').exists():
         import time
         (root / 'claim-ready').write_text('ready')
         while True: time.sleep(10)
@@ -199,6 +203,148 @@ async function waitForFile(path: string): Promise<string> {
   }
   throw new Error(`Timed out waiting for ${path}`);
 }
+
+test("Pickup selects the lowest Ready issue and holds a source-free reservation through Claim ending", async () => {
+  const f = await fixture();
+  const harness = join(f.directory, "claude");
+  await writeFile(harness, (await readFile(harness, "utf8")) + `
+import subprocess
+ref = 'refs/heads/thirdshift/pickup/7'
+token = subprocess.check_output(['git', 'ls-remote', '--refs', 'origin', ref], text=True).split()[0]
+(root / 'reservation').write_text(subprocess.check_output(['git', 'cat-file', '-p', token], text=True))
+assert [x['name'] for x in json.loads((root / 'issue.json').read_text())['labels']] == ['in-progress']
+`);
+  const result = await f.run("pickup");
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
+  const session = object(JSON.parse(await readFile(join(f.directory, "session"), "utf8")));
+  expect(session.args).toEqual(expect.arrayContaining([expect.stringContaining("issues/7")]));
+  const reservation = await readFile(join(f.directory, "reservation"), "utf8");
+  expect(reservation).toContain("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+  expect(reservation).not.toContain("parent ");
+  expect(reservation).toContain("Host:");
+  expect(await readFile(join(f.directory, "calls"), "utf8")).toContain('"repos/test/project/issues/7/labels", "--method", "PUT"');
+  expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/*")).toBe("");
+  const ended = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(ended.labels).toEqual([{ name: "ready-for-agent" }]);
+}, 120_000);
+
+test("Pickup passes over another host's reservation and takes the next Ready issue", async () => {
+  const f = await fixture();
+  const reference = "refs/heads/thirdshift/pickup/7";
+  const owner = f.git("rev-parse", "HEAD");
+  f.git("push", "origin", `${owner}:${reference}`);
+  const result = await f.run("pickup");
+  expect(result.code).toBe(0);
+  expect(f.git("ls-remote", "--refs", "origin", reference)).toBe(`${owner}\t${reference}`);
+  const session = object(JSON.parse(await readFile(join(f.directory, "session"), "utf8")));
+  expect(session.args).toEqual(expect.arrayContaining([expect.stringContaining("issues/8")]));
+}, 120_000);
+
+test.each(["no-ready", "intervening-claim"])("Pickup re-verifies after reservation: %s", async change => {
+  const f = await fixture();
+  // The origin hook changes GitHub's state precisely after the reservation's
+  // creation, with no sleeps or timing assumptions.
+  const hook = join(f.directory, "origin.git/hooks/post-receive");
+  await writeFile(hook, `#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path(os.environ['FIXTURE'])
+for line in sys.stdin:
+    if line.split()[2] == 'refs/heads/thirdshift/pickup/7' and line.split()[0] == '0' * 40:
+        (root / 'changed').write_text('${change}')
+`);
+  await chmod(hook, 0o755);
+  const gh = join(f.directory, "gh");
+  await writeFile(gh, (await readFile(gh, "utf8")).replace("issue = json.loads((root / 'issue.json').read_text())", `issue = json.loads((root / 'issue.json').read_text())
+if (root / 'changed').exists() and args[:2] == ['api', 'repos/test/project/issues/7']:
+    if (root / 'changed').read_text() == 'no-ready': issue['labels'] = []
+`).replace("print(json.dumps([[{'event': 'labeled'", `if (root / 'changed').exists() and '/7/events?' in args[1]:
+        print(json.dumps([[{'event':'labeled','label':{'name':'in-progress'},'created_at':'2025-12-31T23:59:58Z','actor':{'login':'test'}}, {'event':'unlabeled','label':{'name':'in-progress'},'created_at':'2025-12-31T23:59:59Z','actor':{'login':'test'}}, {'event':'labeled','label':{'name':'ready-for-agent'},'created_at':'2026-01-01T00:00:00Z','actor':{'login':'test'}}]]))
+        sys.exit(0)
+    print(json.dumps([[{'event': 'labeled'`));
+  const result = await f.run("pickup");
+  expect(result.code).toBe(0);
+  expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/*")).toBe("");
+  const session = object(JSON.parse(await readFile(join(f.directory, "session"), "utf8")));
+  expect(session.args).toEqual(expect.arrayContaining([expect.stringContaining("issues/8")]));
+}, 120_000);
+
+test.each(["author", "ready-actor", "body-edit", "title-edit", "active-history", "unready-label"])("Pickup rejects unsafe Ready input: %s", async reason => {
+  const f = await fixture();
+  if (reason === "author") await f.issueChange({ author_association: "NONE" });
+  if (reason === "unready-label") await f.issueChange({ labels: [{ name: "ready-for-agent" }, { name: "needs-info" }] });
+  const gh = join(f.directory, "gh");
+  let source = await readFile(gh, "utf8");
+  if (reason === "ready-actor") source = source.replace("'actor': {'login': 'test'}", "'actor': None");
+  if (reason === "active-history") source = source.replace("'name': 'ready-for-agent'}, 'created_at'", "'name': 'in-progress'}, 'created_at'");
+  if (reason === "body-edit" || reason === "title-edit") source = source.replace("connection = {'nodes': [],", `query = args[args.index('-f') + 1]
+    edits = [{'editedAt':'2026-02-01T00:00:00Z','createdAt':'2026-02-01T00:00:00Z','actor':None}] if '${reason === "body-edit" ? "userContentEdits" : "RENAMED_TITLE_EVENT"}' in query else []
+    connection = {'nodes': edits,`);
+  await writeFile(gh, source);
+  const result = await f.run("pickup");
+  expect(result.code).toBe(0);
+  expect(result.stdout).toContain("Pickup skipped");
+  expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
+  expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/*")).toBe("");
+}, 120_000);
+
+test("Pickup reads later edit-history pages before trusting the issue", async () => {
+  const f = await fixture();
+  const gh = join(f.directory, "gh");
+  await writeFile(gh, (await readFile(gh, "utf8")).replace("connection = {'nodes': [], 'pageInfo': {'hasNextPage': False, 'endCursor': None}}", `connection = {'nodes': [], 'pageInfo': {'hasNextPage': False, 'endCursor': None}}
+    if 'userContentEdits' in args[args.index('-f') + 1]:
+        if 'after=second' not in args: connection['pageInfo'] = {'hasNextPage': True, 'endCursor': 'second'}
+        else: connection['nodes'] = [{'editedAt': '2026-02-01T00:00:00Z', 'actor': None}]`));
+  const result = await f.run("pickup");
+  expect(result.code).toBe(0);
+  expect(result.stdout).toContain("Pickup skipped");
+  expect(await readFile(join(f.directory, "calls"), "utf8")).toContain("after=second");
+  expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
+}, 120_000);
+
+test("Pickup fails closed on an origin error without a competing token", async () => {
+  const f = await fixture();
+  const hook = join(f.directory, "origin.git/hooks/pre-receive");
+  await writeFile(hook, "#!/bin/sh\nexit 1\n");
+  await chmod(hook, 0o755);
+  const result = await f.run("pickup");
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("check origin reservation refs/heads/thirdshift/pickup/7 by hand (our token");
+  expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
+}, 120_000);
+
+test("Pickup release preserves a changed reservation and names recovery evidence", async () => {
+  const f = await fixture();
+  const harness = join(f.directory, "claude");
+  await writeFile(harness, (await readFile(harness, "utf8")) + `
+import subprocess
+subprocess.run(['git', 'push', '--force', 'origin', 'HEAD:refs/heads/thirdshift/pickup/7'], check=True)
+`);
+  const result = await f.run("pickup");
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("could not release refs/heads/thirdshift/pickup/7");
+  expect(result.stderr).toContain("our token");
+  expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/7")).toContain(f.git("rev-parse", "HEAD"));
+}, 120_000);
+
+test("Pickup interruption ends the Claim before releasing its reservation", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "interrupt-claim"), "yes");
+  const child = f.start("pickup");
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  try {
+    await waitForFile(join(f.directory, "claim-ready"));
+    child.kill("SIGINT");
+    expect(await child.exited).toBe(130);
+    expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/7")).toBe("");
+    const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+    expect(issue.labels).toEqual([{ name: "ready-for-agent" }]);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGINT");
+    await child.exited;
+    await output;
+  }
+}, 120_000);
 
 test.each([false, true])("interruption stops descendants and ends the Claim (leader exits: %p)", async (exitLeader) => {
   const f = await fixture();
@@ -363,13 +509,13 @@ test("missing repository Claim label is created before applying it", async () =>
   const f = await fixture();
   const gh = join(f.directory, "gh");
   await writeFile(gh, (await readFile(gh, "utf8")).replace(
-    "elif args[:2] == ['issue', 'edit']:",
+    "elif args[0] == 'api' and args[1].endswith('/labels')",
     `elif args[:2] == ['label', 'list']: print('[]')
 elif args[:2] == ['label', 'create']:
     (root / 'label-created').write_text('yes')
-elif args[:2] == ['issue', 'edit']:
-    if '--add-label' in args and args[args.index('--add-label') + 1] == 'in-progress' and not (root / 'label-created').exists():
-        sys.exit("'in-progress' not found")`
+elif args[0] == 'api' and 'labels[]=in-progress' in args and not (root / 'label-created').exists():
+    sys.exit("'in-progress' not found")
+elif args[0] == 'api' and args[1].endswith('/labels')`
   ));
   expect((await f.run()).code).toBe(0);
 }, 120_000);

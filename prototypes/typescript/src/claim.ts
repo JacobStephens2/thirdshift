@@ -26,13 +26,18 @@ export class Claim {
           "--color", "FBCA04", "--description", "A Ticket run has taken this issue"], this.launch);
       }
     }
-    const args = ["gh", "issue", "edit", this.issue.number, "--repo", this.issue.repository];
-    if (addedProgress) args.push("--add-label", "in-progress");
-    if (removedReady) args.push("--remove-label", "ready-for-agent");
     // GitHub may apply the mutation before cancellation or a transport error.
     // Ending reloads labels before deciding what is still ours to undo.
     this.state = { kind: "changed", addedProgress, removedReady };
-    await this.commands.run(args, this.launch);
+    await this.setLabels([...labels.filter(label => label !== "ready-for-agent" && label !== "in-progress"), "in-progress"]);
+  }
+
+  private async setLabels(labels: string[], finishing = false): Promise<void> {
+    // One GitHub PUT swaps Ready and Claim atomically, as modeled in ADR-0017.
+    const args = ["gh", "api", `repos/${this.issue.repository}/issues/${this.issue.number}/labels`, "--method", "PUT"];
+    if (labels.length === 0) args.push("-F", "labels[]");
+    else for (const label of labels) args.push("-f", `labels[]=${label}`);
+    await this.commands.run(args, this.launch, { finishing });
   }
 
   async end(): Promise<void> {
@@ -44,21 +49,21 @@ export class Claim {
     const labels = readLabels(current.labels);
     if (!labels.includes("in-progress")) return;
     if (current.state === "closed") {
-      await commands.run(["gh", "issue", "edit", issue.number, "--repo", issue.repository, "--remove-label", "in-progress"], launch, { finishing: true });
+      await this.setLabels(labels.filter(label => label !== "in-progress"), true);
       return;
     }
     if (current.state !== "open") throw new Error("Invalid issue state at Claim ending");
     switch (this.state.kind) {
       case "unchanged": return;
       case "changed": {
+        const { addedProgress, removedReady } = this.state;
         const remote = await commands.run(["git", "ls-remote", "--heads", "origin", `refs/heads/${issue.branch}`], launch, { finishing: true });
         const prs: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--json", "number"], launch, { finishing: true }));
         if (!Array.isArray(prs)) throw new Error("Invalid pull-request response");
         if (!remote && prs.length === 0) {
-          const args = ["gh", "issue", "edit", issue.number, "--repo", issue.repository];
-          if (this.state.addedProgress) args.push("--remove-label", "in-progress");
-          if (this.state.removedReady) args.push("--add-label", "ready-for-agent");
-          await commands.run(args, launch, { finishing: true });
+          const restored = labels.filter(label => !addedProgress || label !== "in-progress");
+          if (removedReady && !restored.includes("ready-for-agent")) restored.push("ready-for-agent");
+          await this.setLabels(restored, true);
         }
         return;
       }
