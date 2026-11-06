@@ -1,8 +1,8 @@
 # TypeScript Ticket, Pickup and Console prototype
 
-This isolated experiment implements the opening half of a Ticket run (#1836)
-and a Pickup run with bounded model checking (#1838), plus the shared-schema
-Console slice (#1839), under Spec #1831.
+This isolated experiment implements a Ticket run through Delivery and bounded
+CI/conflict Repair (#1836 and #1837), and a Pickup run with bounded model
+checking (#1838), plus the shared-schema Console slice (#1839), under Spec #1831.
 It does not replace the Rust executable or change ADR-0001.
 
 On Linux, with Bun 1.4.4, Git and GitHub CLI installed:
@@ -41,8 +41,29 @@ SIGINT, SIGTERM and SIGHUP record interruption. The active subprocess group gets
 SIGINT, then SIGTERM after one second, then SIGKILL after another second, even
 if its leader has exited. Claim ending runs after cancellation: a new Claim
 is restored to its prior labels when neither an Issue branch on origin nor a
-pull request exists, and otherwise retained. The prototype ends after one
-Harness session; Delivery and CI Repair belong to later tickets.
+pull request exists, and otherwise retained.
+
+After the opening Harness session commits, Delivery pushes the Issue branch,
+opens or verifies a draft pull request against the Base branch, merges Base
+branch updates, and watches check runs and commit statuses on the exact head.
+It waits briefly for initially absent checks to register. Passing or absent CI
+and a mergeable, unchanged head allow Delivery to mark the pull request ready
+for review. Conflicts and failed CI start follow-up Harness sessions, up to
+five Repairs per Ticket run. Delivery bounds reconciliation to ten rounds and
+CI/mergeability waiting to ten minutes (subprocess durations are separate).
+
+Failed ticket run salvage aborts an unfinished merge, pushes commits ahead of
+the Launch directory's Base branch, and opens or keeps a draft pull request.
+Salvage and Claim ending finish even after interruption. Published work retains
+the Claim; nothing on origin releases a new Claim and restores prior readiness.
+Worktrees and local commits remain available if publication fails.
+
+Run outcomes, Claim transitions, Delivery stages and CI check states use tagged
+unions with exhaustive `satisfies never`/`assertNever` branches, checked by
+`bun run typecheck`. The prototype deliberately covers the core Repair loop:
+Continuation, Self-merge, inherited-failure/Base fix detection, Check re-runs,
+Abandoned job recovery and Foreign commit reconciliation remain Rust behavior;
+an unexpected PR head or identity fails safely here.
 
 Pickup derives the repository from the Launch directory's GitHub origin and
 lists every page of open `ready-for-agent` candidates, lowest number first.
@@ -60,9 +81,10 @@ and host/process/recovery metadata. Pickup re-reads readiness and compares the
 Claim-application count before applying its Claim and starting the Ticket
 session. A busy or stale candidate is passed over for the next candidate;
 exhaustion skips with exit 0. Remote errors without another owner's token fail
-closed. The reservation stays through Claim ending, and release uses the exact
-owner token even after interruption. Uncertain acquisition or failed release
-prints the ref and token for human recovery. No timer expires a reservation.
+closed. The reservation stays through Delivery, salvage and Claim ending, and
+release uses the exact owner token even after interruption. Uncertain acquisition
+or failed release prints the ref and token for human recovery. No timer expires
+a reservation.
 
 The prototype applies the Claim **before dispatch**. This deliberately avoids
 the Rust model's known dispatch-before-Claim counterexample without modifying
@@ -71,7 +93,9 @@ request mapping, assumptions, bounded coverage and comparison limits.
 
 `bun test` compiles the binary and exercises it with real temporary Git
 repositories and fake `gh` and `claude` executables, including a signal-resistant
-forked Harness. Tests run the executable with no Bun on PATH. Test waits have
+forked Harness, green Delivery, CI and merge-conflict Repair recovery, bounded
+Repair exhaustion, pending/delayed checks, commit statuses and draft salvage.
+Tests run the executable with no Bun on PATH. Test waits have
 generous overall bounds; the one-second escalation intervals are production
 behavior, not test deadlines.
 

@@ -1,12 +1,16 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { issueFile, readIssue, record } from "./github";
+import { issueFile, readIssue } from "./github";
 import type { Issue } from "./github";
 import { Claim } from "./claim";
+import { Delivery } from "./delivery";
+import { session } from "./harness";
 import { Commands } from "./process";
 import { createWorktree } from "./worktree";
 import { pickup } from "./pickup";
+
+type Outcome = { kind: "ready" } | { kind: "failed"; cause: string } | { kind: "interrupted" };
 
 export async function main(skills: [string, string][]): Promise<void> {
   const commands = new Commands();
@@ -51,6 +55,8 @@ async function runTicket(commands: Commands, launch: string, skills: [string, st
   const canonical = `https://github.com/${repository}/issues/${number}`;
   const branch = `issue-${number}`;
   const claim = new Claim(commands, launch, { repository, number, branch });
+  let delivery: Delivery | undefined;
+  let outcome: Outcome = { kind: "failed", cause: "Ticket run did not complete" };
   try {
     // Pickup makes the Claim before dispatching the Ticket session. A failure
     // before this write has dispatched nothing; a write advances the generation.
@@ -61,22 +67,31 @@ async function runTicket(commands: Commands, launch: string, skills: [string, st
     if (!base) throw new Error("Expected a checked-out Base branch");
     const worktree = await createWorktree(commands, launch, branch, skills);
     await writeIssue(join(worktree, ".thirdshift-issue.md"), text);
-    let resultSeen = false;
-    await commands.run(["claude", "--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "auto",
-      `/thirdshift-implement ${canonical}\nThe Base branch is ${base}. Work on ${branch}. Read .thirdshift-issue.md; do not fetch issue comments yourself.`], worktree, {
-      line(json) {
-        const event: unknown = JSON.parse(json);
-        if (!record(event) || typeof event.type !== "string") throw new Error("Invalid Harness JSON event");
-        if (event.type === "result") {
-          resultSeen = true;
-          if (event.is_error === true) throw new Error("Harness reported an error result");
-        }
-        console.log(JSON.stringify(event));
-      },
-    });
-    if (!resultSeen) throw new Error("Harness ended without a result event");
+    delivery = new Delivery(commands, worktree, { repository, number, branch, base, title: issue.title });
+    await session(commands, worktree, `/thirdshift-implement ${canonical}\nThe Base branch is ${base}. Work on ${branch}. Read .thirdshift-issue.md; do not fetch issue comments yourself.\nCommit your work. Do not push, open a PR, change PR readiness, or merge the pull request; Delivery owns publication.`);
+    await delivery.run();
+    outcome = { kind: "ready" };
+  } catch (error) {
+    outcome = { kind: "failed", cause: error instanceof Error ? error.message : String(error) };
   } finally {
-    await claim.end();
+    if (commands.interrupted) outcome = { kind: "interrupted" };
+    switch (outcome.kind) {
+      case "ready": break;
+      case "failed": console.error(outcome.cause); process.exitCode = 1; break;
+      case "interrupted": console.error("Command interrupted"); process.exitCode = 130; break;
+      default: outcome satisfies never;
+    }
+    if (outcome.kind !== "ready") {
+      try { await delivery?.salvage(); }
+      catch (error) { console.error(`Failed ticket run salvage failed; Worktree retained: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    try {
+      await claim.end();
+    } catch (error) {
+      console.error(`Claim ending failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+    if (commands.interrupted) process.exitCode = 130;
   }
 }
 
