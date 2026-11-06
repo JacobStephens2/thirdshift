@@ -64,15 +64,29 @@ impl Reads for GitHub {
     /// Public read access alone does not make an actor a repository
     /// collaborator: this checks actual membership.
     fn is_member(&self, issue: &IssueUrl, login: &str) -> Result<bool> {
+        self.trusted_login(&issue.repo(), login)
+    }
+}
+
+impl GitHub {
+    /// Author filters need membership checked even when no PR is waiting.
+    pub(crate) fn trusted_login(
+        &self,
+        repository: &crate::issue::Repo,
+        login: &str,
+    ) -> Result<bool> {
+        if login.eq_ignore_ascii_case(&repository.owner) {
+            return Ok(true);
+        }
         if self.membership(&format!(
             "repos/{}/collaborators/{login}",
-            issue.repo_slug()
+            repository.slug()
         ))? {
             return Ok(true);
         }
-        let repo = self.gh_json(&["api", &format!("repos/{}", issue.repo_slug())])?;
+        let repo = self.gh_json(&["api", &format!("repos/{}", repository.slug())])?;
         if repo["owner"]["type"] == "Organization" {
-            return self.membership(&format!("orgs/{}/members/{login}", issue.owner));
+            return self.membership(&format!("orgs/{}/members/{login}", repository.owner));
         }
         Ok(false)
     }

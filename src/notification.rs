@@ -44,6 +44,7 @@ pub enum About<'a> {
     SecurityRun,
     ScoringRun,
     ReviewRun,
+    FixRun,
     TriageRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
@@ -64,6 +65,7 @@ impl About<'_> {
             | About::Process { .. } => launch::repo().ok(),
             About::ScoringRun => None,
             About::ReviewRun => launch::repo().ok(),
+            About::FixRun => launch::repo().ok(),
         }
     }
 }
@@ -86,6 +88,7 @@ enum Subject {
     SecurityRun(Option<Repo>),
     ScoringRun,
     ReviewRun(Option<Repo>),
+    FixRun(Option<Repo>),
     TriageRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
@@ -106,6 +109,7 @@ impl Subject {
             Subject::SecurityRun(repo) => Some(("Security run".into(), repo.as_ref())),
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
             Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
+            Subject::FixRun(repo) => Some(("Fix run".into(), repo.as_ref())),
             Subject::TriageRun(repo) => Some(("Triage run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
@@ -166,6 +170,7 @@ impl RunNotification {
             About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
             About::ReviewRun => Subject::ReviewRun(repo),
+            About::FixRun => Subject::FixRun(repo),
             About::TriageRun => Subject::TriageRun(repo),
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {

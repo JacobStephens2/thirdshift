@@ -104,6 +104,8 @@ pub(crate) struct PullRequest<A = GitHub> {
     security_review_count: Option<usize>,
     /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
     spec_pr: Option<SpecPr>,
+    /// An adopted head needs recorded agent review before Self-merge.
+    merge_hold: Option<String>,
     adapter: A,
 }
 
@@ -123,8 +125,28 @@ impl<A: Adapter> PullRequest<A> {
             scope: CaptureScope::Delivery,
             security_review_count: None,
             spec_pr: None,
+            merge_hold: None,
             adapter,
         }
+    }
+
+    /// Capture an explicit pull request before any publication or Repair.
+    pub fn on_pull_request(
+        pr: &crate::review::PullRequestUrl,
+        branch: &str,
+        base: &str,
+        adapter: A,
+    ) -> Self {
+        let mut target = Self::new(&pr.issue, branch, base, adapter);
+        target.identified = Some(Identified {
+            number: pr.issue.number,
+            url: pr.url.clone(),
+        });
+        target
+    }
+
+    pub fn hold_self_merge(&mut self, reason: String) {
+        self.merge_hold = Some(reason);
     }
 
     /// Resume accounting with an ordinary discovery, then draft the observed
@@ -414,7 +436,17 @@ impl<A: Adapter> PullRequest<A> {
     /// none. An existing pull request, draft or ready, is left to
     /// [`PullRequest::mark_ready`].
     pub fn open_if_absent(&mut self, title: &str, body: &str) -> Result<()> {
-        if self.observe(false)?.is_some() {
+        self.open_draft_if_absent(title, body, false)
+    }
+
+    /// A failed Base CI opening session still publishes its preserved work as
+    /// a draft. Completion observations finish this after interruption too.
+    pub(crate) fn open_failed_fix(&mut self, title: &str, body: &str) -> Result<()> {
+        self.open_draft_if_absent(title, body, true)
+    }
+
+    fn open_draft_if_absent(&mut self, title: &str, body: &str, completion: bool) -> Result<()> {
+        if self.observe(completion)?.is_some() {
             return Ok(());
         }
         progress::step(format!("opening a draft pull request into {}", self.base));
@@ -425,7 +457,7 @@ impl<A: Adapter> PullRequest<A> {
         let number = self.number_from_url(&url)?;
         self.identified = Some(Identified { number, url });
         let snapshot = self
-            .observe(false)?
+            .observe(completion)?
             .context("the pull request just opened is not found")?;
         self.validate(&snapshot, false)?;
         Ok(())
@@ -515,6 +547,12 @@ impl<A: Adapter> PullRequest<A> {
     pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
         self.ensure_spec_pr_allows_merge()?;
+        if let Some(reason) = &self.merge_hold {
+            return Err(crate::failed_run::MergeHold {
+                reason: reason.clone(),
+            }
+            .into());
+        }
         let number = self
             .identified
             .as_ref()

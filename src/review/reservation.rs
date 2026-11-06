@@ -1,4 +1,4 @@
-//! A pull request stays reserved through Review-run cleanup, even on interruption.
+//! A pull request stays reserved through Review/Fix cleanup, even on interruption.
 
 use anyhow::Result;
 
@@ -12,11 +12,17 @@ pub(crate) struct Reservation {
     pr: PullRequestUrl,
     // Drop the label before the origin ref allows another owner in.
     _origin: crate::reservation::Reservation,
+    // Earlier Review runs use the Pickup ref. Hold it until the new ref is
+    // released too, so an older host cannot enter before its label is visible.
+    _legacy: crate::reservation::Reservation,
 }
 
 impl Reservation {
     pub fn take(launch: &Git, github: &GitHub, pr: &PullRequestUrl) -> Result<Option<Self>> {
-        let Some(origin) = crate::reservation::Reservation::take(launch, &pr.issue)? else {
+        let Some(legacy) = crate::reservation::Reservation::take(launch, &pr.issue)? else {
+            return Ok(None);
+        };
+        let Some(origin) = crate::reservation::Reservation::pull_request(launch, pr)? else {
             return Ok(None);
         };
         let labels = github.review_labels(pr)?;
@@ -26,6 +32,7 @@ impl Reservation {
         let held = Self {
             pr: pr.clone(),
             _origin: origin,
+            _legacy: legacy,
         };
         // Arm cleanup before the write: a failed response may still have
         // applied the label remotely.

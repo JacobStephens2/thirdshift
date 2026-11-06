@@ -101,6 +101,99 @@ test('Paused rows and Command details copy the saved resume command', async t =>
   }
 });
 
+test('Copy fix command works on ready Inbox rows and in Command details', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const path = join(logs, 'acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const cache = join(logs, 'github-inbox.json');
+  const previous = await readFile(cache, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  const fixture = { ...JSON.parse(original), kind: 'Review run', issue: null, tickets: [], cause: null,
+    pull_request: 'https://github.com/acme/widgets/pull/42' };
+  const cli = `thirdshift fix ${fixture.pull_request}`;
+  try {
+    for (const width of [1440, 390]) {
+      const page = await pageFor(t, { viewport: { width, height: width === 390 ? 844 : 900 } });
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+      for (const [outcome, ci, mergeable, offered] of [
+        ['ready for review', 'red', 'mergeable', true],
+        ['ready for review', 'green', 'conflicting', true],
+        ['ready for review', 'red', 'conflicting', true],
+        ['ready for review', 'pending', 'conflicting', true],
+        ['ready for review', 'green', 'mergeable', false],
+        ['ready for review', 'unknown', 'unknown', false],
+        ['failed', 'red', 'conflicting', false],
+      ]) {
+        await replaceRecord(path, JSON.stringify({ ...fixture, outcome }));
+        await replaceRecord(cache, JSON.stringify({ version: 1, subjects: {
+          [fixture.pull_request]: { state: 'Open', ci, mergeable, title: 'Repair these widgets' },
+        } }));
+        await writeFile(join(logs, 'github-inbox.changed'), `${width}:${outcome}:${ci}:${mergeable}`);
+        await page.goto(`${origin}/?section=${outcome === 'failed' ? 'needs-you' : 'ready-for-review'}`);
+        const row = page.locator('.command[data-command$="1-fixture.command.json"]');
+        await row.waitFor();
+        const copy = row.getByRole('button', { name: 'Copy fix command', exact: true });
+        assert.equal(await copy.count(), offered ? 1 : 0, `${width}:${outcome}:${ci}:${mergeable}`);
+        if (offered) {
+          assert.equal(await copy.getAttribute('type'), 'button');
+          assert.equal(await copy.getAttribute('data-copy-cli'), cli);
+          assert.equal(await row.locator('.peek-cli code').textContent(), cli);
+          await copy.click();
+          await row.getByText('CLI copied.', { exact: true }).waitFor();
+          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), cli);
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'CLI fits the viewport');
+        }
+        await row.locator('.state').click();
+        const details = page.locator('#peek-content');
+        await details.locator('h2').waitFor();
+        const detailCopy = details.getByRole('button', { name: 'Copy fix command', exact: true });
+        assert.equal(await detailCopy.count(), offered ? 1 : 0, `${width}:${outcome}:${ci}:${mergeable} Peek`);
+        if (offered) {
+          assert.equal(await detailCopy.getAttribute('data-copy-cli'), cli);
+          await detailCopy.click();
+          await details.getByText('CLI copied.', { exact: true }).waitFor();
+          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), cli);
+        }
+      }
+    }
+  } finally {
+    await replaceRecord(path, original);
+    if (previous === null) await rm(cache, { force: true });
+    else await replaceRecord(cache, previous);
+    await writeFile(join(logs, 'github-inbox.changed'), 'restored');
+  }
+});
+
+test('A later Command takes up ready and failed Inbox rows on its pull request', async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const paths = [351, 352, 353].map(number => join(dir, `${number}-fixture.command.json`));
+  const old = new Date(Date.now() - 3 * 86400000).toISOString();
+  const fixture = { ...base, issue: null, tickets: [], kind: 'Review run',
+    pull_request: 'https://github.com/acme/widgets/pull/351', started_at: old, ended_at: old };
+  const page = await pageFor(t);
+  const rowFor = index => page.locator(`.command[data-command$="${[351, 352, 353][index]}-fixture.command.json"]`);
+  try {
+    await replaceRecord(paths[0], JSON.stringify({ ...fixture, outcome: 'ready for review', cause: null }));
+    await replaceRecord(paths[1], JSON.stringify({ ...fixture, outcome: 'failed', cause: 'Waiting for a Fix run' }));
+    await page.goto(origin);
+    await page.locator('#inbox > [data-group="ready for review"]').locator(rowFor(0)).waitFor();
+    await page.locator('#inbox > [data-group="needs you"]').locator(rowFor(1)).waitFor();
+    const now = new Date().toISOString();
+    await replaceRecord(paths[2], JSON.stringify({ ...fixture, kind: 'Fix run', started_at: now, ended_at: now, outcome: 'ready for review', cause: null }));
+    await page.goto(`${origin}/?section=resolved`);
+    for (const [index, from] of [[0, 'ready for review'], [1, 'needs you']]) {
+      const row = page.locator('#inbox > [data-group="resolved"]').locator(rowFor(index));
+      await row.waitFor();
+      assert.match(await row.locator('.left').textContent(), new RegExp(`left ${from}: taken up by a later Command started at`));
+    }
+  } finally {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+  }
+});
+
 test('Inbox keeps issue numbers visible for long repository and Process subjects', async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const original = await readFile(path, 'utf8');
