@@ -1,8 +1,9 @@
 # Go Ticket-run prototype
 
-An isolated, Linux-only experiment for #1830 / #1832. The production Rust
+An isolated, Linux-only experiment for #1830 / #1832 / #1834. The production Rust
 binary and ADR 0001 stay as they are. This slice stops after the opening
-Harness session, before Delivery, CI watch, Repair or Pickup.
+Harness session, before Delivery, CI watch or Repair. Pickup can select and
+reserve a Ready issue and start that same Ticket run.
 
 Requires Go (the version in `go.mod`), Python 3 for tests/generation, Git,
 authenticated `gh`, and Claude Code (`claude`) for real sessions. Tests use
@@ -21,6 +22,7 @@ Run it from the Launch directory of a disposable repository:
 
 ```sh
 /tmp/thirdshift-go https://github.com/owner/repo/issues/7
+/tmp/thirdshift-go pickup
 ```
 
 It checks Origin match, an open issue, and the issue author's Trusted account
@@ -50,6 +52,42 @@ with no Issue branch or open PR on origin has only this run's label changes
 restored (`ready-for-agent` only if it was present before acquisition, and
 `in-progress` removed only if this run added it). Work left on origin keeps
 its Claim, with `agent-failed` on failed or interrupted runs.
+
+## Pickup
+
+`pickup` lists every page of open `ready-for-agent` issues and tries the lowest
+number first. It checks the author, the latest Ready label's actor and subsequent
+title/body edits against the Trusted account rule. Complete label history rejects
+an active Claim and requires a Ready hand-back after a previous Claim ended,
+including either ordering of a same-second hand-back. It passes over triage
+labels, Base/Security fixes, sub-issues, open blockers, and issues shaped within
+30 minutes. Existing origin Issue branches or PRs in any state require a hand-back.
+
+Only Ticket runs are supported: issues with sub-issues (Specs) are passed over.
+This experiment has no production Pass limits, Sweep, CI checks or notifications,
+and inherits the first slice's refusal to resume an existing local branch or
+Worktree. It uses the checked-out Base branch and takes no Pickup options.
+
+For each candidate, ADR-0017 creates `refs/heads/thirdshift/pickup/<number>` on
+origin with an empty create lease and a unique, parentless, empty-tree commit.
+Its message records the token, host, Launch directory, PID and start time.
+Pickup then rechecks the issue, trust, complete history and Claim-application
+count. A busy reservation or stale selection moves on to the next candidate;
+no available candidate exits successfully without starting a session.
+
+A successful Claim precedes Harness dispatch. The reservation lasts through
+Claim ending, even on interruption, and release requires the owner's exact
+commit as its lease. Remote errors fail closed; uncertain create or failed
+release names the ref and token for manual recovery. Crashes retain reservations
+until the Day shift confirms the owner stopped; reservations never expire.
+
+The independent in-test BFS model checks both dispatch properties with three
+hosts and requires shortest counterexamples for `WithoutClaimCount` and
+`UnconditionalCreate`. See [the request mapping and limits](PICKUP-MODEL.md).
+
+```sh
+go test -run '^TestPickupModel' -count=1 -v
+```
 
 ## Embedded Factory skills
 

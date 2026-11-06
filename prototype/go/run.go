@@ -67,6 +67,12 @@ func ticketRun(ctx context.Context, raw string) (runErr error) {
 	if !trusted(data.Association) {
 		return fmt.Errorf("issue author is not a Trusted account")
 	}
+	return runTicket(ctx, launch, issue, data)
+}
+
+// Pickup supplies the issue it re-verified while holding its reservation.
+// A successful Claim precedes any dispatch to the Harness.
+func runTicket(ctx context.Context, launch string, issue issueURL, data issueData) (runErr error) {
 	base, err := command(ctx, launch, "git", "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return err

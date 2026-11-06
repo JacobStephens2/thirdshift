@@ -216,10 +216,13 @@ func waitFor(t *testing.T, description string, check func() bool) {
 	t.Fatalf("timed out waiting for %s", description)
 }
 
-func (f *fixture) start(mode string) (*exec.Cmd, <-chan error) {
+func (f *fixture) start(mode string, args ...string) (*exec.Cmd, <-chan error) {
 	f.t.Helper()
 	f.writeState("open", "OWNER", mode)
-	cmd := exec.Command(binary, "https://github.com/acme/widgets/issues/7")
+	if len(args) == 0 {
+		args = []string{"https://github.com/acme/widgets/issues/7"}
+	}
+	cmd := exec.Command(binary, args...)
 	cmd.Dir, cmd.Env = f.repo, f.env
 	output, err := os.Create(filepath.Join(f.root, "output"))
 	if err != nil {

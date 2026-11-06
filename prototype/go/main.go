@@ -14,10 +14,15 @@ func entry() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: thirdshift <https://github.com/owner/repo/issues/number>")
+		fmt.Fprintln(os.Stderr, "usage: thirdshift <https://github.com/owner/repo/issues/number> | pickup")
 		return 2
 	}
-	err := ticketRun(ctx, os.Args[1])
+	var err error
+	if os.Args[1] == "pickup" {
+		err = pickupRun(ctx)
+	} else {
+		err = ticketRun(ctx, os.Args[1])
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
