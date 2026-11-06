@@ -318,6 +318,26 @@ test('Inbox shows the repository of Commands without an issue before opening Det
   }
 });
 
+test('Inbox shows a full Command name without JavaScript on a phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const process = 'nightly-maintenance-of-every-service-in-the-development-environment';
+  Object.assign(fixture, { kind: 'Process', process_name: process, issue: null, tickets: [] });
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.goto(`${origin}/?section=needs-you`);
+    const command = page.locator('#inbox .subject-command', { hasText: process });
+    assert.equal(await command.textContent(), `Process ${process}`);
+    const dimensions = await command.evaluate(node => ({ width: node.clientWidth, fullWidth: node.scrollWidth }));
+    assert.ok(dimensions.fullWidth <= dimensions.width,
+      `Without JavaScript the full Command name must be readable: ${JSON.stringify(dimensions)}`);
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('Command details times out a held request and can be opened again', async t => {
   const page = await pageFor(t);
   await page.clock.install();
