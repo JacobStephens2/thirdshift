@@ -11,7 +11,7 @@ fn failed_base(scenario: &Scenario, attempt: u64) -> String {
         .to_string();
     let mut state = scenario.gh_state();
     state["checks"][&head] = json!([{
-        "name":"test", "conclusion":"failure", "url":"https://github.com/acme/widgets/actions/runs/900/job/901"
+        "id":901, "name":"test", "conclusion":"failure", "url":"https://github.com/acme/widgets/actions/runs/900/job/901"
     }]);
     state["runs"] = json!([{
         "id":900, "head_branch":"main", "event":"push", "head_sha":head,
@@ -257,6 +257,9 @@ fn named_base_with_no_rerunnable_jobs_repairs_its_origin_tip() {
     let state = scenario.gh_state();
     assert_eq!(state["prs"][0]["base"], "release");
     assert_eq!(state["prs"][0]["title"], "Fix CI on release: push workflow");
-    assert_eq!(state["prs"][0]["head"], format!("fix-release-{}", &tip[..7]));
+    assert_eq!(
+        state["prs"][0]["head"],
+        format!("fix-release-{}", &tip[..7])
+    );
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
 }

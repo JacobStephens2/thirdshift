@@ -155,6 +155,21 @@ fn ci_red_report(failure: &BaseCiEvidence) -> CiReport {
 }
 
 impl GitHub {
+    fn latest_push_run(&self, repo: &Repo, base: &str) -> Result<Option<PushRun>> {
+        let query =
+            serde_urlencoded::to_string([("branch", base), ("event", "push"), ("per_page", "1")])?;
+        let runs = self.gh_json(&[
+            "api",
+            &format!("repos/{}/actions/runs?{query}", repo.slug()),
+        ])?;
+        runs["workflow_runs"]
+            .as_array()
+            .context("CI response has no workflow_runs")?
+            .first()
+            .map(|run| serde_json::from_value(run.clone()).map_err(Into::into))
+            .transpose()
+    }
+
     /// Fix Passes re-run only the first failed push attempt on the sampled
     /// origin tip. Unlike Pickup evidence, this has no filing grace period.
     pub(crate) fn fix_base_tip(
@@ -164,20 +179,9 @@ impl GitHub {
         tip: &str,
     ) -> Result<TipCi> {
         let repo = repository.repo();
-        let query =
-            serde_urlencoded::to_string([("branch", base), ("event", "push"), ("per_page", "1")])?;
-        let runs = self.gh_json(&[
-            "api",
-            &format!("repos/{}/actions/runs?{query}", repo.slug()),
-        ])?;
-        let runs = runs["workflow_runs"]
-            .as_array()
-            .context("CI response has no workflow_runs")?;
-        let run = runs
-            .first()
-            .map(|run| serde_json::from_value::<PushRun>(run.clone()))
-            .transpose()?;
-        let run = run.filter(|run| run.head_sha == tip);
+        let run = self
+            .latest_push_run(&repo, base)?
+            .filter(|run| run.head_sha == tip);
         if run.as_ref().is_some_and(|run| run.status != "completed") {
             return Ok(TipCi::Waiting);
         }
@@ -203,9 +207,15 @@ impl GitHub {
             }
         }
         let mut checks = self.checks_on(repository, tip)?;
-        if checks.is_empty()
-            && let Some(run) = run
+        if let Some(run) = run
             && run.conclusion.as_deref() == Some("failure")
+            && !checks.iter().any(|check| {
+                let workflow = check
+                    .workflow_run
+                    .map(|run| run.id)
+                    .or_else(|| check.job.map(|job| job.workflow_run));
+                workflow == Some(run.id) && crate::ci::needs_repair(std::slice::from_ref(check))
+            })
         {
             checks.push(Check {
                 name: "push workflow".into(),
@@ -277,19 +287,9 @@ impl GitHub {
         repo: &Repo,
         base: &str,
     ) -> Result<Option<BaseCiEvidence>> {
-        let query =
-            serde_urlencoded::to_string([("branch", base), ("event", "push"), ("per_page", "1")])?;
-        let runs = self.gh_json(&[
-            "api",
-            &format!("repos/{}/actions/runs?{query}", repo.slug()),
-        ])?;
-        let runs = runs["workflow_runs"]
-            .as_array()
-            .context("CI response has no workflow_runs")?;
-        let Some(run) = runs.first() else {
+        let Some(run) = self.latest_push_run(repo, base)? else {
             return Ok(None);
         };
-        let run: PushRun = serde_json::from_value(run.clone())?;
         let flaky = run.conclusion.as_deref() == Some("success");
         if run.status != "completed"
             || !matches!(run.conclusion.as_deref(), Some("success" | "failure"))

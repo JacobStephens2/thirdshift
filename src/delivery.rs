@@ -134,56 +134,22 @@ impl Delivery<'_> {
         title: &str,
         failed: &[crate::github::Check],
     ) -> Result<Reached, FailedRun> {
-        let tracker = Tracker::new(Stage::RepairSession, CommandLog);
         let context = RepairContext::BaseBranch(self.base);
         let body = format!(
             "Repairs CI on `{}`.\n\n{}",
             self.base,
             ci::check_list(failed)
         );
-        run_checked(
-            CheckedRun {
-                logs: self.logs,
-                started: self.started,
-                harness: &self.child_asks.harness,
-                security_review: None,
-                security_review_default: None,
-                base: self.base,
-                context,
-            },
-            worktree.for_fix_run(),
+        self.fix_with(
+            worktree,
             pull_request,
-            &tracker,
-            |resolution, log| Reached {
-                resolution,
-                log,
-                ticket_lines: Vec::new(),
-            },
-            |merged, log| Reached {
-                resolution: Resolution::PullRequest {
-                    url: merged.pr.url.clone(),
-                    goal: Goal::Merged,
-                },
-                log,
-                ticket_lines: Vec::new(),
-            },
-            |tracker, worktree, pull_request, sessions| {
-                let mut outside = InWorktree {
-                    tracker,
-                    issue: self.issue,
-                    worktree,
-                    base: self.base,
-                    base_fix: self.base_fix,
-                    child_asks: self.child_asks,
-                    sessions,
-                    pull_request,
-                    repair_cap: self.repair_cap,
-                    protected_paths: self.protected_paths,
-                    context,
-                };
+            context,
+            Stage::RepairSession,
+            |outside, goal| {
+                let worktree = outside.worktree;
                 outside.session(
                     Kind::Implementation,
-                    &prompt::base_ci_fix(self.base, worktree.branch(), failed),
+                    &prompt::base_ci_fix(outside.base, worktree.branch(), failed),
                 )?;
                 outside.push()?;
                 outside.pull_request.open_if_absent(title, &body)?;
@@ -196,17 +162,14 @@ impl Delivery<'_> {
                     crate::review::Reservation::take(worktree.launch(), &GitHub::new(), &pr)?
                         .context("Base CI fix PR is already reserved")?;
                 crate::logs::pull_request(&pr.url);
-                outside.write_built_with(&self.child_asks.harness)?;
+                outside.write_built_with(&outside.child_asks.harness.clone())?;
                 outside.stage(Stage::PullRequestReadiness);
                 outside.mark_pr_ready(None)?;
-                outside.take_to_goal(&pr.url, self.goal)?;
-                if self.goal == Goal::Merged {
-                    delete_branch_after_merge(&mut outside, worktree.branch());
+                outside.take_to_goal(&pr.url, goal)?;
+                if goal == Goal::Merged {
+                    delete_branch_after_merge(outside, worktree.branch());
                 }
-                Ok(Resolution::PullRequest {
-                    url: pr.url,
-                    goal: self.goal,
-                })
+                Ok(Resolution::PullRequest { url: pr.url, goal })
             },
         )
     }
@@ -223,8 +186,46 @@ impl Delivery<'_> {
         if !matches!(steps.as_slice(), [Step::Delivery, Step::SelfMerge]) {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
-        let tracker = Tracker::new(Stage::Push, CommandLog);
         let context = RepairContext::PullRequest(pr);
+        let started = self.started;
+        self.fix_with(
+            worktree,
+            pull_request,
+            context,
+            Stage::Push,
+            |outside, goal| {
+                let worktree = outside.worktree;
+                hand_over_pull_request(
+                    pr,
+                    outside.base,
+                    worktree.branch(),
+                    worktree.path(),
+                    false,
+                    started,
+                )?;
+                outside.push()?;
+                outside.stage(Stage::PullRequestReadiness);
+                let pr = outside.mark_pr_ready(None)?;
+                outside.take_to_goal(&pr.url, goal)?;
+                if goal == Goal::Merged {
+                    delete_branch_after_merge(outside, worktree.branch());
+                }
+                Ok(Resolution::PullRequest { url: pr.url, goal })
+            },
+        )
+    }
+
+    /// Fix entry points share checked sessions, failure preservation, adapters
+    /// and completion accounting while retaining their own opening steps.
+    fn fix_with(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        context: RepairContext<'_>,
+        first: Stage,
+        steps: impl FnOnce(&mut InWorktree<'_>, Goal) -> Result<Resolution>,
+    ) -> Result<Reached, FailedRun> {
+        let tracker = Tracker::new(first, CommandLog);
         run_checked(
             CheckedRun {
                 logs: self.logs,
@@ -252,14 +253,6 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             },
             |tracker, worktree, pull_request, sessions| {
-                hand_over_pull_request(
-                    pr,
-                    self.base,
-                    worktree.branch(),
-                    worktree.path(),
-                    false,
-                    self.started,
-                )?;
                 let mut outside = InWorktree {
                     tracker,
                     issue: self.issue,
@@ -273,17 +266,7 @@ impl Delivery<'_> {
                     protected_paths: self.protected_paths,
                     context,
                 };
-                outside.push()?;
-                outside.stage(Stage::PullRequestReadiness);
-                let pr = outside.mark_pr_ready(None)?;
-                outside.take_to_goal(&pr.url, self.goal)?;
-                if self.goal == Goal::Merged {
-                    delete_branch_after_merge(&mut outside, worktree.branch());
-                }
-                Ok(Resolution::PullRequest {
-                    url: pr.url,
-                    goal: self.goal,
-                })
+                steps(&mut outside, self.goal)
             },
         )
     }
