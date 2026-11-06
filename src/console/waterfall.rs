@@ -29,12 +29,12 @@ fn span_view(
     viewer: &super::auth::Viewer,
     config: &UserConfig,
     query: &Option<String>,
+    machine: &str,
 ) -> anyhow::Result<View> {
     let command = super::query_value(query, "command");
-    let machine = super::query_value(query, "machine");
     if let Some(remote) = super::fleet::read::Remote::select(
         config,
-        &machine,
+        machine,
         viewer.fleet_person().map(str::to_owned),
     )? {
         let value = remote.get(&crate::logs::status::inspect::url("/spans", &command, None))?;
@@ -91,8 +91,9 @@ pub(super) async fn show(
     }
     super::api::read(format, move || {
         let config = UserConfig::load()?;
-        let view = span_view(&viewer, &config, &query)?;
-        if super::machine_is_local(&query)
+        let machine = format.fleet_machine(&query);
+        let view = span_view(&viewer, &config, &query, &machine)?;
+        if machine.is_empty()
             && let Some(response) = security_refusal(&viewer, &config, &view.tree.command)?
         {
             return Ok(response);
@@ -126,8 +127,9 @@ pub(super) async fn data(
     super::api::read(format, move || {
         let value = (|| -> anyhow::Result<Response> {
             let config = UserConfig::load()?;
-            let view = span_view(&viewer, &config, &query)?;
-            if super::machine_is_local(&query)
+            let machine = format.fleet_machine(&query);
+            let view = span_view(&viewer, &config, &query, &machine)?;
+            if machine.is_empty()
                 && let Some(response) = security_refusal(&viewer, &config, &view.tree.command)?
             {
                 return Ok(response);
@@ -153,10 +155,10 @@ pub(super) async fn data(
 }
 
 fn owning_console(config: &UserConfig, query: &Option<String>) -> Option<String> {
-    if super::machine_is_local(query) {
+    let machine = super::query_value(query, "machine");
+    if machine.is_empty() {
         return None;
     }
-    let machine = super::query_value(query, "machine");
     config
         .console
         .fleet

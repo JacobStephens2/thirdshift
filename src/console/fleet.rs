@@ -17,6 +17,30 @@ use crate::config::{
 };
 use crate::resend_key::Credentials;
 
+pub(super) struct PairedMachine {
+    pub entry: Entry,
+    pub token: String,
+}
+
+impl PairedMachine {
+    pub fn load(config: &UserConfig, name: &str) -> Result<Self> {
+        let entry = config
+            .console
+            .fleet
+            .iter()
+            .find(|entry| entry.name == name)
+            .with_context(|| format!("unknown Fleet machine: {name}"))?
+            .clone();
+        // Revalidate hand-edited addresses before transmitting a saved token.
+        pairing_address(&entry.address)?;
+        let token = Credentials::read()?
+            .fleet_token(name)
+            .with_context(|| format!("link-only Fleet machine: {name}"))?
+            .to_owned();
+        Ok(Self { entry, token })
+    }
+}
+
 pub(crate) enum Action {
     Add { name: String, address: String },
     List { json: bool },

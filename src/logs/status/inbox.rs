@@ -28,6 +28,7 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    order: crate::logs::reading::RowOrder,
     pub machine: String,
     pub console: String,
     pub stale: bool,
@@ -232,20 +233,7 @@ impl Inbox {
             section.rows.push(row);
             // Local rows were already ordered; merge with the same Needs you
             // priorities and newest occurrence ordering, without cross-host collapse.
-            section.rows.sort_by_key(|row| {
-                (
-                    if section.group == "needs you" {
-                        match row.state.as_str() {
-                            "Silent" => 0,
-                            "Slow" => 1,
-                            _ => 2,
-                        }
-                    } else {
-                        0
-                    },
-                    std::cmp::Reverse(row.occurred_ms),
-                )
-            });
+            section.rows.sort_by_key(|row| row.order);
             if checked.landing && value["group"] == "needs you" {
                 // The secondary Landing reference belongs beside all machines' rows.
                 let reference = format!(
@@ -401,6 +389,9 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         })
         .to_owned();
     let mut row = Row {
+        order: group
+            .unwrap_or(Group::History)
+            .row_order(kind, facts.ended_at.as_deref().or(Some(&facts.started_at))),
         machine: String::new(),
         console: String::new(),
         stale: false,
@@ -588,6 +579,10 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 None,
             );
             Ok(Row {
+                order: Group::History.row_order(
+                    None,
+                    command.ended_at.as_deref().or(Some(&command.started_at)),
+                ),
                 machine: String::new(),
                 console: String::new(),
                 stale: false,
@@ -665,6 +660,7 @@ pub(super) fn from_read(
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = entry_row(item.command, now, &config.logs_dir)?;
+                    row.order = item.order();
                     // Ready dispatched Runs have their own Inbox row, in
                     // whichever group they reached. Preserve the full tree in
                     // history/show without duplicating DOM IDs.

@@ -28,6 +28,15 @@ impl Format {
         })
     }
 
+    /// HTML links name configured Fleet entries; local links omit the name.
+    /// API details always stay local, including an explicit local hostname.
+    pub fn fleet_machine(self, query: &Option<String>) -> String {
+        match self {
+            Self::Html => super::query_value(query, "machine"),
+            Self::Json => String::new(),
+        }
+    }
+
     pub fn render<T: Serialize>(
         self,
         value: T,

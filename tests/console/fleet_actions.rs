@@ -45,6 +45,46 @@ fn post(
 }
 
 #[test]
+fn local_hostname_dismissal_and_undo_use_the_local_command() {
+    let home = configured();
+    record(home.path(), 7, Some("failed"), 0);
+    let hostname = api::cli(home.path(), &["console", "whoami", "--json"])["hostname"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    api::cli(
+        home.path(),
+        &["dismiss", "widgets#7", "--machine", &hostname, "--json"],
+    );
+    assert_eq!(
+        api::cli(home.path(), &["status", "--local", "--json"])["commands"][0]["group"],
+        "done"
+    );
+    api::cli(
+        home.path(),
+        &[
+            "dismiss",
+            "widgets#7",
+            "--machine",
+            &hostname,
+            "--undo",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        api::cli(home.path(), &["status", "--local", "--json"])["commands"][0]["group"],
+        "needs you"
+    );
+    let activity = fs::read_to_string(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/activity.log"),
+    )
+    .unwrap();
+    assert!(activity.contains("from the CLI"), "{activity}");
+    assert!(!activity.contains("token"), "{activity}");
+}
+
+#[test]
 fn signed_in_remote_dismissal_and_undo_keep_activity_on_the_owner() {
     let caller = configured();
     let owner = configured();
@@ -94,8 +134,8 @@ fn signed_in_remote_dismissal_and_undo_keep_activity_on_the_owner() {
 }
 
 #[test]
-fn remote_stop_from_console_and_cli_ends_the_owning_command() {
-    for from_console in [true, false] {
+fn fleet_and_local_hostname_stop_end_the_owning_command() {
+    for source in ["console", "remote-cli", "local-cli"] {
         let caller = configured();
         let scenario = support::Scenario::new();
         let home = scenario.path("home");
@@ -114,7 +154,7 @@ fn remote_stop_from_console_and_cli_ends_the_owning_command() {
         };
         let owner_console = start(&home, false);
         pair(caller.path(), &home, &owner_console, "read,act");
-        if from_console {
+        if source == "console" {
             assert!(
                 password(caller.path(), None, PASSWORD, PASSWORD)
                     .0
@@ -142,10 +182,20 @@ fn remote_stop_from_console_and_cli_ends_the_owning_command() {
             );
             assert_eq!(response.status(), 200);
             assert!(response.text().unwrap().contains("interrupted"));
-        } else {
+        } else if source == "remote-cli" {
             let answer = api::cli(
                 caller.path(),
                 &["stop", "widgets#7", "--machine", "owner", "--json"],
+            );
+            assert_eq!(answer["outcome"], "interrupted");
+        } else {
+            let hostname = api::cli(&home, &["console", "whoami", "--json"])["hostname"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let answer = api::cli(
+                &home,
+                &["stop", "widgets#7", "--machine", &hostname, "--json"],
             );
             assert_eq!(answer["outcome"], "interrupted");
         }
@@ -155,10 +205,10 @@ fn remote_stop_from_console_and_cli_ends_the_owning_command() {
         );
         let activity =
             fs::read_to_string(home.join(".thirdshift/logs/acme/widgets/activity.log")).unwrap();
-        let expected = if from_console {
-            format!("stopped by {EMAIL} from the Console on caller")
-        } else {
-            "stopped from the Console by token caller".into()
+        let expected = match source {
+            "console" => format!("stopped by {EMAIL} from the Console on caller"),
+            "remote-cli" => "stopped from the Console by token caller".into(),
+            _ => "from the CLI".into(),
         };
         assert!(activity.contains(&expected), "{activity}");
         assert!(

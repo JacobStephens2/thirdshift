@@ -6,7 +6,6 @@ use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 use crate::config::{UserConfig, console::fleet::Entry};
-use crate::resend_key::Credentials;
 
 pub(crate) struct Remote {
     pub entry: Entry,
@@ -42,22 +41,10 @@ impl Remote {
     }
 
     pub fn select(config: &UserConfig, name: &str, person: Option<String>) -> Result<Option<Self>> {
-        if name.is_empty() || crate::host::name().is_some_and(|hostname| hostname == name) {
+        if name.is_empty() {
             return Ok(None);
         }
-        let entry = config
-            .console
-            .fleet
-            .iter()
-            .find(|entry| entry.name == name)
-            .with_context(|| format!("unknown Fleet machine: {name}"))?
-            .clone();
-        // Revalidate hand-edited addresses before sending a saved credential.
-        super::pairing_address(&entry.address)?;
-        let token = Credentials::read()?
-            .fleet_token(name)
-            .with_context(|| format!("link-only Fleet machine: {name}"))?
-            .to_owned();
+        let super::PairedMachine { entry, token } = super::PairedMachine::load(config, name)?;
         Ok(Some(Self {
             entry,
             token,

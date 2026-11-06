@@ -170,6 +170,14 @@ impl Departure {
 }
 
 impl InboxItem<'_> {
+    pub(in crate::logs) fn order(&self) -> RowOrder {
+        let facts = self.command.facts();
+        self.group.row_order(
+            self.needs_you_kind,
+            facts.ended_at.or(Some(facts.started_at)),
+        )
+    }
+
     /// Offer the Fix run only for a pull request still waiting for review
     /// whose latest kept facts show work for Delivery to repair.
     pub(in crate::logs) fn fix_command(&self) -> Option<String> {

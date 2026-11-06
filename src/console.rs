@@ -1107,7 +1107,7 @@ async fn inspect(
         return response;
     }
     let command = query_value(&query, "command");
-    let machine = query_value(&query, "machine");
+    let machine = format.fleet_machine(&query);
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
         if let Some(remote) = fleet::read::Remote::select(
@@ -1141,7 +1141,7 @@ async fn inspect(
     if format == api::Format::Html
         && !response.status().is_success()
         && response.status() != StatusCode::FORBIDDEN
-        && machine_is_local(&query)
+        && format.fleet_machine(&query).is_empty()
     {
         (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response()
     } else {
@@ -1165,8 +1165,8 @@ async fn log(
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
     let tail = query_value(&query, "tail") == "true";
-    if !machine_is_local(&query) {
-        let machine = query_value(&query, "machine");
+    let machine = format.fleet_machine(&query);
+    if !machine.is_empty() {
         return api::read(format, move || {
             let config = UserConfig::load()?;
             let remote = fleet::read::Remote::select(

@@ -40,6 +40,86 @@ fn pair(caller: &Path, owner: &Console, owner_home: &Path, scopes: &str) {
 }
 
 #[test]
+fn hostname_alias_details_stay_remote_while_api_and_cli_stay_local() {
+    let caller_home = tempfile::tempdir().unwrap();
+    let owner_home = tempfile::tempdir().unwrap();
+    configure(caller_home.path());
+    let mut local = record(caller_home.path(), 7, Some("failed"), 0);
+    local["cause"] = json!("LOCAL_COMMAND");
+    write_record(caller_home.path(), 7, &local);
+    fixture(owner_home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let owner = Console::start(binary, owner_home.path());
+    let hostname = api::cli(caller_home.path(), &["console", "whoami", "--json"])["hostname"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let token = tokens::create(owner_home.path(), "caller", &["--scopes", "read,security"]);
+    assert!(
+        super::fleet::add(caller_home.path(), &hostname, &owner.address, &token)
+            .status
+            .success()
+    );
+    let caller = Console::start(binary, caller_home.path());
+    let selector = owner_home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json")
+        .to_string_lossy()
+        .into_owned();
+    for route in ["/peek", "/waterfall", "/spans", "/log"] {
+        let mut owning_url = reqwest::Url::parse(&owner.address)
+            .unwrap()
+            .join(route)
+            .unwrap();
+        owning_url
+            .query_pairs_mut()
+            .append_pair("command", &selector);
+        assert_eq!(
+            reqwest::blocking::get(owning_url).unwrap().status(),
+            200,
+            "owning {route}"
+        );
+        let mut url = reqwest::Url::parse(&caller.address)
+            .unwrap()
+            .join(route)
+            .unwrap();
+        url.query_pairs_mut()
+            .append_pair("command", &selector)
+            .append_pair("machine", &hostname);
+        let response = reqwest::blocking::get(url).unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "{route}: {}",
+            response.text().unwrap()
+        );
+    }
+    let reader = tokens::create(caller_home.path(), "local-reader", &["--scopes", "read"]);
+    let mut url = reqwest::Url::parse(&caller.address)
+        .unwrap()
+        .join("/api/v1/peek")
+        .unwrap();
+    url.query_pairs_mut()
+        .append_pair("command", "widgets#7")
+        .append_pair("machine", &hostname);
+    let details: Value = reqwest::blocking::Client::new()
+        .get(url)
+        .bearer_auth(reader)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(details["command"]["cause"], "LOCAL_COMMAND", "{details}");
+    assert_eq!(
+        api::cli(
+            caller_home.path(),
+            &["show", "widgets#7", "--machine", &hostname, "--json"]
+        )["command"]["cause"],
+        "LOCAL_COMMAND"
+    );
+}
+
+#[test]
 fn remote_command_details_render_locally_and_fetch_fresh_without_writing_content() {
     let caller_home = tempfile::tempdir().unwrap();
     let owner_home = tempfile::tempdir().unwrap();

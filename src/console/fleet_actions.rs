@@ -1,7 +1,7 @@
 //! Owning-machine transport shared by the CLI and signed-in Console actions.
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use askama::Template;
 use axum::{
     http::StatusCode,
@@ -9,7 +9,7 @@ use axum::{
 };
 use serde_json::Value;
 
-use crate::{config::UserConfig, resend_key::Credentials};
+use crate::config::UserConfig;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Action {
@@ -32,30 +32,15 @@ pub(super) struct Answer {
     value: Value,
 }
 
-fn destination(machine: &str) -> Result<(String, String)> {
-    let config = UserConfig::load()?;
-    let credentials = Credentials::read()?;
-    let entry = config
-        .console
-        .fleet
-        .iter()
-        .find(|entry| entry.name == machine)
-        .context("unknown Fleet machine")?;
-    // Recheck edited config before transmitting the saved bearer token.
-    super::fleet::pairing_address(&entry.address)?;
-    let token = credentials
-        .fleet_token(machine)
-        .context("link-only Fleet machine")?;
-    Ok((entry.address.trim_end_matches('/').into(), token.into()))
-}
-
 pub(super) fn request(
     machine: &str,
     person: Option<&str>,
     command: &str,
     action: Action,
 ) -> Result<Answer> {
-    let (address, token) = destination(machine)?;
+    let config = UserConfig::load()?;
+    let destination = super::fleet::PairedMachine::load(&config, machine)?;
+    let address = destination.entry.address.trim_end_matches('/');
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(300))
@@ -63,7 +48,7 @@ pub(super) fn request(
         .build()?;
     let mut request = client
         .post(format!("{address}/api/v1{}", action.endpoint()))
-        .bearer_auth(token);
+        .bearer_auth(destination.token);
     if let Some(person) = person {
         request = request.header(super::auth::PERSON_HEADER, person);
     }
@@ -126,6 +111,12 @@ pub(super) async fn submit(
 }
 
 pub(crate) fn cli(machine: &str, command: &str, action: Action, json: bool) -> Result<()> {
+    if crate::host::name().is_some_and(|hostname| hostname == machine) {
+        return match action {
+            Action::Stop { requeue } => crate::logs::stop::stop(command, requeue, json),
+            Action::Dismiss { undo } => crate::logs::dismiss::dismiss(command, undo, json),
+        };
+    }
     let answer = request(machine, None, command, action)?;
     if !answer.status.is_success() {
         bail!(
