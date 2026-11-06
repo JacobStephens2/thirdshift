@@ -14,21 +14,31 @@ type pullRequest struct {
 
 // Capture a single PR number, then use that number for every later observation
 // and mutation. A closed PR is never replaced or reopened by Delivery.
+// A fork pull request is not this repository's branch and is ignored.
 func (d *delivery) findPR(ctx context.Context) error {
 	if d.prNumber != 0 {
 		_, err := d.observePR(ctx, "")
 		return err
 	}
-	var prs []struct{ Number int }
+	var prs []struct {
+		Number            int
+		IsCrossRepository bool
+	}
 	if err := ghJSON(ctx, &prs, "pr", "list", "--repo", d.issue.repo, "--head", d.branch,
-		"--state", "all", "--json", "number"); err != nil {
+		"--state", "all", "--json", "number,isCrossRepository"); err != nil {
 		return err
 	}
-	if len(prs) > 1 {
+	var same []int
+	for _, pr := range prs {
+		if !pr.IsCrossRepository {
+			same = append(same, pr.Number)
+		}
+	}
+	if len(same) > 1 {
 		return fmt.Errorf("multiple pull requests for %s", d.branch)
 	}
-	if len(prs) == 1 {
-		d.prNumber = prs[0].Number
+	if len(same) == 1 {
+		d.prNumber = same[0]
 		_, err := d.observePR(ctx, "")
 		return err
 	}

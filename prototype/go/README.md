@@ -61,7 +61,8 @@ The opening Harness commits locally; thirdshift pushes the Issue branch and
 opens a draft pull request targeting the selected Base branch. It captures
 the PR number and verifies its open state, repository, branches and published
 head before watching CI or changing readiness. A closed or merged PR stops
-Delivery and salvage without reopening it. Existing PRs are verified and reused.
+Delivery and salvage without reopening it. Existing same-repository PRs are
+verified and reused. A fork pull request for the same branch name is ignored.
 An opening session with no commits ahead of the Base branch ends without Delivery.
 
 Delivery fetches and merges the Base branch, pushes, then watches check runs
