@@ -58,6 +58,7 @@ mod issue;
 mod labels;
 #[cfg(target_os = "linux")]
 mod launch;
+mod launch_directories;
 #[cfg(target_os = "linux")]
 mod local_time;
 #[cfg(target_os = "linux")]
@@ -197,6 +198,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift launch-directories [--json]         List known Launch directories and repositories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
@@ -276,6 +278,7 @@ fn main() -> ExitCode {
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {

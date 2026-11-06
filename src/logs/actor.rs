@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Actor {
     who: String,
     #[serde(default)]
@@ -13,6 +13,14 @@ pub(crate) struct Actor {
 }
 
 impl Actor {
+    pub(crate) const START_ENV: &str = "THIRDSHIFT_STARTED_BY";
+
+    pub(super) fn starting() -> Option<Self> {
+        std::env::var(Self::START_ENV)
+            .ok()
+            .and_then(|value| serde_json::from_str(&value).ok())
+    }
+
     pub fn cli(action: &str) -> anyhow::Result<Self> {
         Ok(Self {
             who: super::unix_user(action)?,

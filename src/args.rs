@@ -70,6 +70,9 @@ pub enum Command {
     CronJobs {
         json: bool,
     },
+    LaunchDirectories {
+        json: bool,
+    },
     Resources {
         json: bool,
     },
@@ -726,6 +729,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [] => Ok(Command::CronJobs { json: false }),
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
+        }
+        Some("launch-directories") => {
+            return match &args[1..] {
+                [] => Ok(Command::LaunchDirectories { json: false }),
+                [flag] if flag == "--json" => Ok(Command::LaunchDirectories { json: true }),
+                _ => bail!("usage: thirdshift launch-directories [--json]"),
             };
         }
         Some("score") => {

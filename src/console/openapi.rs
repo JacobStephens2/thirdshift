@@ -196,6 +196,10 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::CronJobs => object(json!({
             "jobs": array(object(json!({"schedule": text, "command": text}))), "pass_starts": array(record)
         })),
+        View::LaunchDirectories => object(json!({
+            "directories": array(object(json!({"repository": text, "path": text})))
+        })),
+        View::StartRun => object(json!({"version": version, "name": text})),
         View::Resources | View::ResourceStatus => object(json!({
             "host": object(json!({"total_memory_mb": integer, "available_memory_mb": integer,
                 "logical_cpus": integer, "load_one": {"type": "number"}})),
@@ -236,6 +240,27 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
     let (properties, required) = match view {
+        View::StartRun => {
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "required": ["repository", "issue"], "additionalProperties": false,
+                "properties": {
+                    "repository": text,
+                    "issue": {"oneOf": [{"type":"integer", "minimum":1}, {"type":"string"}]},
+                    "merge": {"type":"boolean"}, "base_fix": {"type":"boolean"},
+                    "security_review": {"type":"boolean"}, "security_fix": {"type":"boolean"},
+                    "harness": {"type":"string", "enum": ["claude","codex","agy","grok","muse","opencode"]},
+                    "model": text, "effort": text,
+                    "email": {"oneOf": [
+                        {"type":"object", "required":["mode"], "additionalProperties":false, "properties":{
+                            "mode":{"enum":["always","unless_merged"]}, "address":text
+                        }},
+                        {"type":"object", "required":["mode"], "additionalProperties":false, "properties":{
+                            "mode":{"const":"never"}
+                        }}
+                    ]}
+                }
+            }}}});
+        }
         View::ThemeImport => {
             return json!({"required": true, "content": {"application/json": {"schema": {
                 "type": "object", "required": ["name"], "properties": {
@@ -278,6 +303,7 @@ fn action_body(view: View) -> Value {
         | View::Experiment
         | View::ExperimentSession
         | View::CronJobs
+        | View::LaunchDirectories
         | View::Resources
         | View::ResourceStatus
         | View::Metrics

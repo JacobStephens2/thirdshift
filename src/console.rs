@@ -28,6 +28,7 @@ mod peek;
 mod resources;
 mod restart;
 mod scoring;
+mod start;
 mod stop;
 mod subscription;
 mod time;
@@ -159,6 +160,8 @@ enum View {
     ExperimentSession,
     ApproveEvalTask,
     CronJobs,
+    LaunchDirectories,
+    StartRun,
     Resources,
     ResourceStatus,
     Metrics,
@@ -204,6 +207,8 @@ impl PageRoute {
                 | View::Experiment
                 | View::ExperimentSession
                 | View::CronJobs
+                | View::LaunchDirectories
+                | View::StartRun
                 | View::Resources
                 | View::ResourceStatus
                 | View::Metrics
@@ -232,6 +237,22 @@ impl PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/api/v1/runs",
+        api: "/api/v1/runs",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift https://github.com/acme/widgets/issues/7"],
+        method: Method::POST,
+        view: View::StartRun,
+    },
+    PageRoute {
+        path: "/api/v1/launch-directories",
+        api: "/api/v1/launch-directories",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift launch-directories --json"],
+        method: Method::GET,
+        view: View::LaunchDirectories,
+    },
     PageRoute {
         path: "/whoami",
         api: "/api/v1/whoami",
@@ -718,6 +739,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ExperimentSession, Method::GET) => get(experiments::session),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::LaunchDirectories, Method::GET) => get(known_launch_directories),
+            (View::StartRun, Method::POST) => post(start::submit),
             (View::Scores, Method::GET) => get(scoring::show),
             (View::HumanScores, Method::POST) => post(scoring::submit),
             (View::BugOrigins, Method::GET) => get(bug_origins::show),
@@ -936,6 +959,13 @@ fn query_value(query: &Option<String>, key: &str) -> String {
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.into_owned())
         .unwrap_or_default()
+}
+
+async fn known_launch_directories() -> Response {
+    api::read(api::Format::Json, || {
+        Ok(axum::Json(crate::launch_directories::load()?).into_response())
+    })
+    .await
 }
 
 async fn inbox(

@@ -4,6 +4,9 @@ mod support;
 #[path = "console/api.rs"]
 mod api;
 
+#[path = "console/start.rs"]
+mod start;
+
 #[path = "console/actions.rs"]
 mod actions;
 

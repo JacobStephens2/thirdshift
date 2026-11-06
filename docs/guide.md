@@ -413,8 +413,8 @@ and their resumes); those log reads return 403 naming `security`. Span and
 waterfall responses keep the Command's other stages and omit those sessions,
 including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
-and their auditing are described below; `run` and `admin` endpoints arrive in
-later Console API tickets. A missing route scope returns 403 JSON naming that
+and their auditing are described below. `run` starts Ticket and Spec runs;
+other start and `admin` endpoints arrive in later Console API tickets. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -540,11 +540,12 @@ address's scopes, including the Security finding limits above.
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | The action POSTs below, including Theme and hidden sections |
-| `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
+| `run` | `POST /api/v1/runs` starts a Ticket or Spec run |
+| `admin` | Other administration follows in later API tickets |
 
 Actions take `application/x-www-form-urlencoded` bodies, using the page's
-field names below, except Theme import, which takes an `application/json` Theme
-document. Bearer requests need no CSRF token; sign-in sessions and
+field names below, except Theme import and starting a run, which take
+`application/json`. Bearer requests need no CSRF token; sign-in sessions and
 `--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
 The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 
@@ -565,6 +566,55 @@ token Stops and Dismissals say `by token <holder>`, alongside the CLI and
 Console callers already recorded there. A token naming a person records
 `by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
+
+#### Starting Ticket and Spec runs through the API
+
+`GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
+return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
+inventory. Known Launch directories come from this account's thirdshift cron
+jobs with literal `cd <directory> && ... thirdshift ...` commands, plus the
+top-level `launch_directories` list in User config. Paths may be absolute or
+start with `~/`; aliases of the same directory are listed once. Each directory
+is resolved through its GitHub `origin` remote. Stale cron directories are
+omitted; an invalid configured directory is an error. Cron shell text is never
+evaluated. For complex shell scripts or wrappers, list their directory explicitly.
+An account without `crontab` can use the config list alone.
+
+A client with `run` starts work with structured JSON:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"repository":"acme/widgets","issue":7,"merge":false,"email":{"mode":"never"},"harness":"codex","model":"gpt-6.1-sol","effort":"high","base_fix":false,"security_review":true,"security_fix":false}' \
+  https://console.example.com/api/v1/runs
+```
+
+`issue` accepts a positive number, its decimal string or a full Issue URL in
+the named repository. `merge`, `base_fix`, `security_review` and `security_fix`
+are optional booleans; `harness`, `model` and `effort` are optional strings.
+`email` has `mode` `always`, `unless_merged` or `never`, with an optional
+`address` for the first two. Omitted options use the CLI's User config defaults.
+Unknown fields and invalid arguments are refused. A repository without a known
+Launch directory is refused before anything starts. If several directories
+name it, the first path in the inventory is used.
+
+The Console starts the same binary in that directory, in its own OS session
+with the account's login shell environment. Standard output and errors append
+to the cron command's literal `>>` or `>` output path when present, otherwise
+to `<logs.dir>/cron.log`, the shared cron log used in the scheduling examples.
+It waits at most 30 seconds for the Command record and returns
+`{"version":1,"name":"acme/widgets#7"}`. An early exit returns an error naming
+the exit status and log; a timeout names the process and warns that it may still
+start, so check `status` before retrying. Follow the Command with the usual
+`show`, `status` and log views. It keeps running through a Console restart.
+The generated systemd service uses `KillMode=process` to preserve these
+Commands during a service restart; regenerate an older installed service to
+apply that setting.
+
+An issue with sub-issues starts a Spec run. As with a typed Issue URL, the
+Command limit never skips this work. The Command record and Activity log keep
+the token holder or the named person and calling machine. Every start attempt
+goes in the Console log. Cron and terminal starts keep their usual wording.
 
 #### Console on a server
 
@@ -1893,6 +1943,8 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
 ```toml
+launch_directories = ["~/repos/widgets"]  # additional known Launch directories for API starts
+
 [merge]
 always = true   # every Ticket run Self-merges, without the merge word
 
@@ -1953,6 +2005,8 @@ effort = "medium"
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
 ```toml
+launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically
+
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 

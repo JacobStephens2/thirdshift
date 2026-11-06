@@ -28,6 +28,8 @@ pub use console::{ConsoleAccess, ConsoleSettings};
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    /// Additional known Launch directories for Console API starts.
+    pub launch_directories: Vec<PathBuf>,
     pub review: review::Settings,
     pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
@@ -162,6 +164,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            launch_directories: Vec::new(),
             review: review::Settings::default(),
             scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
@@ -207,6 +210,16 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "launch_directories" {
+                config.launch_directories = value.as_array()
+                    .context(format!("launch_directories must be a list of paths in {file}"))?
+                    .iter()
+                    .map(|value| {
+                        value.as_str().and_then(|path| expand_home(path, home))
+                            .context(format!("launch_directories entries must be absolute paths or start with ~/ in {file}"))
+                    }).collect::<Result<_>>()?;
+                continue;
+            }
             if section == "review" {
                 config.review = review::Settings::parse(value)
                     .with_context(|| format!("invalid [review] in {file}"))?;
@@ -1094,7 +1107,9 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// The User config Setup writes with no answers: every key at its default,
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
-pub const DEFAULTS: &str = r#"[merge]
+pub const DEFAULTS: &str = r#"launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically
+
+[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
