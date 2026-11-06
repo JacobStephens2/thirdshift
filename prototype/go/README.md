@@ -1,8 +1,8 @@
 # Go Ticket-run prototype
 
-An isolated, Linux-only experiment for #1830 / #1832. The production Rust
-binary and ADR 0001 stay as they are. This slice stops after the opening
-Harness session, before Delivery, CI watch, Repair or Pickup.
+An isolated, Linux-only experiment for #1830 / #1832 / #1833. The production
+Rust binary and ADR 0001 stay as they are. This slice runs a Ticket run through
+Delivery, CI watch and bounded Repair sessions. Pickup remains separate work.
 
 Requires Go (the version in `go.mod`), Python 3 for tests/generation, Git,
 authenticated `gh`, and Claude Code (`claude`) for real sessions. Tests use
@@ -21,6 +21,8 @@ Run it from the Launch directory of a disposable repository:
 
 ```sh
 /tmp/thirdshift-go https://github.com/owner/repo/issues/7
+# Lower the default maximum of five Repairs (zero disables Repairs):
+/tmp/thirdshift-go --repair-limit 2 https://github.com/owner/repo/issues/7
 ```
 
 It checks Origin match, an open issue, and the issue author's Trusted account
@@ -44,12 +46,43 @@ malformed events, missing completion, error results, and process failures fail
 the Ticket run. `SIGINT` or `SIGTERM` interrupts its current child process
 group: SIGINT, a two-second grace, SIGTERM, another two seconds, then SIGKILL.
 If the leader exits early, remaining group members are killed immediately.
-Interruption exits 130. Claim ending uses its own bounded context so it still
-finishes after interruption: a closed issue loses its Claim; an open issue
+Interruption exits 130. Failed ticket run salvage and Claim ending each use
+their own bounded context so they still finish after interruption. Salvage
+aborts an unfinished merge and pushes committed work ahead of the Base branch
+to a draft pull request. A closed issue loses its Claim; an open issue
 with no Issue branch or open PR on origin has only this run's label changes
 restored (`ready-for-agent` only if it was present before acquisition, and
 `in-progress` removed only if this run added it). Work left on origin keeps
 its Claim, with `agent-failed` on failed or interrupted runs.
+
+## Delivery and Repair
+
+The opening Harness commits locally; thirdshift pushes the Issue branch and
+opens a draft pull request targeting the selected Base branch. It captures
+the PR number and verifies its open state, repository, branches and published
+head before watching CI or changing readiness. A closed or merged PR stops
+Delivery and salvage without reopening it. Existing PRs are verified and reused.
+An opening session with no commits ahead of the Base branch ends without Delivery.
+
+Delivery fetches and merges the Base branch, pushes, then watches check runs
+and commit statuses for the full published head SHA. Pending results are polled;
+passing or absent CI plus a mergeable PR permits readiness. A previously seen
+set of checks disappearing cannot establish green CI. Inherited failures fail
+the run without spending a Repair on the Base branch's code.
+
+A Base branch conflict or failed head checks start a Repair in the same Worktree
+with refreshed trusted issue context. Repairs commit their changes, including
+any conflicted merge, before Delivery pushes and checks the new head. There are
+at most five Repairs (lowered by `--repair-limit`) and ten reconciliation rounds.
+An unchanged Repair head fails; this prototype does not yet implement the Rust
+runner's Check re-run or Abandoned job re-run policies (ADRs 0010 and 0020).
+Failed Delivery keeps or converts its PR to a draft, preserves the Claim, and
+adds `agent-failed`; work that could not be pushed remains in the Worktree.
+
+Run outcomes, Claim transitions, Delivery states and CI states use typed enums.
+`go test ./...` type-checks the production syntax tree and rejects any switch
+that does not explicitly cover every enum constant, including switches with
+a default. Checker fixtures demonstrate missing and newly added variants fail.
 
 ## Embedded Factory skills
 

@@ -94,7 +94,11 @@ func (f *fixture) writeState(state, association, mode string) {
 }
 
 func (f *fixture) run(url string) (string, error) {
-	cmd := exec.Command(binary, url)
+	return f.runArgs(url)
+}
+
+func (f *fixture) runArgs(args ...string) (string, error) {
+	cmd := exec.Command(binary, args...)
 	cmd.Dir, cmd.Env = f.repo, f.env
 	output, err := cmd.CombinedOutput()
 	return string(output), err

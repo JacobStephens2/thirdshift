@@ -20,9 +20,8 @@ func makeClaim(ctx context.Context, issue issueURL, data issueData) error {
 	return err
 }
 
-// This slice ends before Delivery: release only when nothing remains on origin.
 // Never reuse the cancelled Ticket-run context here.
-func endClaim(ctx context.Context, launch string, issue issueURL, branch string, initial issueData, failed bool) error {
+func endClaim(ctx context.Context, launch string, issue issueURL, branch string, initial issueData, result runOutcome) error {
 	data, err := readIssue(ctx, issue)
 	if err != nil {
 		return err
@@ -32,6 +31,7 @@ func endClaim(ctx context.Context, launch string, issue issueURL, branch string,
 	}
 	args := []string{"issue", "edit", issue.number, "--repo", issue.repo}
 	unchanged := len(args)
+	state := claimClosed
 	if data.State == "open" {
 		refs, err := command(ctx, launch, "git", "ls-remote", "--heads", "origin", "refs/heads/"+branch)
 		if err != nil {
@@ -44,22 +44,30 @@ func endClaim(ctx context.Context, launch string, issue issueURL, branch string,
 			return err
 		}
 		if len(refs) != 0 || len(prs) != 0 {
-			if !failed {
-				return nil
+			state = claimHeld
+			if result.failed() {
+				state = claimFailed
 			}
-			if _, err := command(ctx, "", "gh", "label", "create", "agent-failed", "--repo", issue.repo, "--description", "Failed Ticket run", "--force"); err != nil {
-				return err
-			}
-			args = append(args, "--add-label", "agent-failed")
 		} else {
-			if !initial.hasLabel("in-progress") {
-				args = append(args, "--remove-label", "in-progress")
-			}
-			if initial.hasLabel("ready-for-agent") {
-				args = append(args, "--add-label", "ready-for-agent")
-			}
+			state = claimReleased
 		}
-	} else {
+	}
+	switch state {
+	case claimHeld:
+		return nil
+	case claimFailed:
+		if _, err := command(ctx, "", "gh", "label", "create", "agent-failed", "--repo", issue.repo, "--description", "Failed Ticket run", "--force"); err != nil {
+			return err
+		}
+		args = append(args, "--add-label", "agent-failed")
+	case claimReleased:
+		if !initial.hasLabel("in-progress") {
+			args = append(args, "--remove-label", "in-progress")
+		}
+		if initial.hasLabel("ready-for-agent") {
+			args = append(args, "--add-label", "ready-for-agent")
+		}
+	case claimClosed:
 		args = append(args, "--remove-label", "in-progress")
 		if data.hasLabel("agent-failed") {
 			args = append(args, "--remove-label", "agent-failed")
