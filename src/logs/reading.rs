@@ -322,7 +322,7 @@ pub(super) struct RetainedWork {
     pub(super) pull_requests: BTreeSet<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct IdlePass {
     pub(super) repository: String,
     pub(super) kind: String,

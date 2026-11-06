@@ -342,6 +342,7 @@ mod tests {
     #[test]
     fn command_heading_precedes_stop_and_dismiss() {
         let inspection = crate::logs::stop::Inspection {
+            security_details: false,
             details: json!({
                 "repository": "acme/widgets", "name": "acme/widgets#7", "state": "live",
                 "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7",
@@ -382,6 +383,7 @@ mod tests {
 
     fn render_peek(details: Value) -> String {
         let inspection = crate::logs::stop::Inspection {
+            security_details: false,
             details,
             dismissal: None,
             can_stop: false,

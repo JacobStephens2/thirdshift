@@ -4,7 +4,6 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use serde::Serialize;
 
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
@@ -223,44 +222,9 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
-        let kept = crate::logs::github::load(&config.logs_dir);
-        let github = if let Observation::Record(record) = command
-            && let Some(row) = command.selector()
-        {
-            let record = &record.record;
-            let urls = record
-                .pull_request
-                .as_deref()
-                .into_iter()
-                .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
-                .collect();
-            kept.command_answer(&row, record.pull_request.as_deref(), urls)
-        } else {
-            Default::default()
-        };
-        #[derive(Serialize)]
-        struct ShownCommand {
-            #[serde(flatten)]
-            details: serde_json::Value,
-            #[serde(flatten)]
-            github: crate::logs::github::CommandAnswer,
-        }
-        #[derive(Serialize)]
-        struct Show {
-            version: u32,
-            hostname: String,
-            command: ShownCommand,
-        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&Show {
-                version: 1,
-                hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: ShownCommand {
-                    details: crate::logs::metrics::details(&snapshot, command)?,
-                    github,
-                },
-            })?
+            serde_json::to_string_pretty(&envelope(details(&config, &snapshot, command)?))?
         );
     } else {
         print(command)?;
@@ -268,8 +232,63 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
+pub(in crate::logs) fn details(
+    config: &UserConfig,
+    snapshot: &Snapshot,
+    command: Observation<'_>,
+) -> Result<serde_json::Value> {
+    let kept = crate::logs::github::load(&config.logs_dir);
+    let github = if let Observation::Record(record) = command
+        && let Some(row) = command.selector()
+    {
+        let record = &record.record;
+        let urls = record
+            .pull_request
+            .as_deref()
+            .into_iter()
+            .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
+            .collect();
+        kept.command_answer(&row, record.pull_request.as_deref(), urls)
+    } else {
+        Default::default()
+    };
+    let mut value = crate::logs::metrics::details(snapshot, command)?;
+    value
+        .as_object_mut()
+        .expect("Command details object")
+        .extend(
+            serde_json::to_value(github)?
+                .as_object()
+                .expect("GitHub answer object")
+                .clone(),
+        );
+    Ok(value)
+}
+
+pub(crate) fn envelope(command: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"version": 1, "hostname": crate::host::name().unwrap_or_else(|| "unknown".into()), "command": command})
+}
+
+pub(crate) fn read_log(
+    config: &UserConfig,
+    input: &str,
+    session: Option<&str>,
+) -> Result<serde_json::Value> {
+    let snapshot = Snapshot::for_user(config, Local::now())?;
+    let selection = snapshot.resolve(input)?;
+    let path = selected_log(selection.observation, session)?;
+    super::super::catalog::contents(&selection.reader(path))
+}
+
+pub fn logs(input: &str, session: Option<&str>, follow: bool, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&read_log(&config, input, session)?)?
+        );
+        return Ok(());
+    }
     let snapshot = Snapshot::for_user(&config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;

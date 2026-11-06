@@ -289,6 +289,14 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     })
 }
 
+/// Whether `path` is a Security session trace. Command logs have no session
+/// kind, so a read-scoped caller can still open those.
+pub(crate) fn security_session(path: &Path) -> bool {
+    decode(path)
+        .and_then(|decoded| decoded.session_kind)
+        .is_some_and(crate::session::kind::is_security)
+}
+
 /// Only the log-records file represents a Session trace in the inventory.
 pub(super) fn inventory_session(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {

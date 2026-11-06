@@ -49,6 +49,7 @@ fn cronjobs_pairs_cli_and_console_without_running_scheduled_commands() {
     let mut start = command(home.path());
     start.args(["console", "--no-sign-in"]);
     let console = Console::start_command(start);
+    assert_eq!(api::json(console.get("/api/v1/cronjobs")), jobs);
     assert!(
         console
             .get("/")

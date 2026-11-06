@@ -1,8 +1,7 @@
 //! Retained Bug origins and the CLI's confirm, correct and reject actions.
 use anyhow::{Result, bail};
 use askama::Template;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::Response;
 use axum::{Extension, Form};
 use serde::Deserialize;
 
@@ -18,19 +17,22 @@ struct BugOriginsPage {
     csrf: String,
 }
 
-pub(super) async fn show(Extension(viewer): Extension<Viewer>) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
+pub(super) async fn show(
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        format.render(origins::view()?, |origins| {
             Ok(BugOriginsPage {
-                page: super::PageContext::new(&config),
-                origins: origins::view()?,
+                page: super::PageContext::new(&config, &viewer.scopes),
+                origins,
                 csrf: viewer.csrf,
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -41,25 +43,29 @@ pub(super) struct SettlementForm {
     pull_request: String,
 }
 
-pub(super) async fn submit(Form(form): Form<SettlementForm>) -> Response {
-    let result = tokio::task::spawn_blocking(move || -> Result<String> {
-        let mut args = vec![form.issue];
-        match form.action.as_str() {
-            "confirm" => args.push("--confirm".into()),
-            "correct" => {
-                args.push("--correct".into());
-                args.push(form.pull_request);
+pub(super) async fn submit(
+    Extension(format): Extension<super::api::Format>,
+    Form(form): Form<SettlementForm>,
+) -> Response {
+    super::api::action(
+        format,
+        "/bug-origins",
+        move || -> Result<serde_json::Value> {
+            let mut args = vec![form.issue];
+            match form.action.as_str() {
+                "confirm" => args.push("--confirm".into()),
+                "correct" => {
+                    args.push("--correct".into());
+                    args.push(form.pull_request);
+                }
+                "reject" => args.push("--none".into()),
+                _ => bail!("choose confirm, correct or reject"),
             }
-            "reject" => args.push("--none".into()),
-            _ => bail!("choose confirm, correct or reject"),
-        }
-        args.push("--json".into());
-        origins::apply(origins::parse(&args)?)
-    })
-    .await;
-    match result {
-        Ok(Ok(_)) => Redirect::to("/bug-origins").into_response(),
-        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-        Err(error) => super::page(Err(error)),
-    }
+            args.push("--json".into());
+            Ok(serde_json::from_str(&origins::apply(origins::parse(
+                &args,
+            )?)?)?)
+        },
+    )
+    .await
 }

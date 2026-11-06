@@ -43,6 +43,7 @@ pub(super) enum EventKind {
     ThemeChanged,
     ThemeSaved,
     SectionsChanged,
+    ApiCall,
 }
 
 impl std::fmt::Display for EventKind {
@@ -57,6 +58,7 @@ impl std::fmt::Display for EventKind {
             Self::ThemeChanged => "theme-changed",
             Self::ThemeSaved => "theme-saved",
             Self::SectionsChanged => "sections-changed",
+            Self::ApiCall => "api-call",
         })
     }
 }
@@ -66,6 +68,19 @@ pub(super) struct Event {
     pub time: i64,
     pub email: String,
     pub event: EventKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<u16>,
+}
+
+impl Event {
+    pub fn summary(&self) -> String {
+        match (&self.endpoint, self.outcome) {
+            (Some(endpoint), Some(outcome)) => format!("{} {endpoint} {outcome}", self.event),
+            _ => self.event.to_string(),
+        }
+    }
 }
 
 pub(super) enum SignIn {
@@ -251,15 +266,28 @@ impl Accounts {
     }
 
     pub(super) fn record(&self, email: &str, event: EventKind) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: email.into(),
+            event,
+            endpoint: None,
+            outcome: None,
+        })
+    }
+
+    pub(super) fn record_api(&self, actor: &str, endpoint: String, outcome: u16) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: actor.into(),
+            event: EventKind::ApiCall,
+            endpoint: Some(endpoint),
+            outcome: Some(outcome),
+        })
+    }
+
+    fn append(&self, event: &Event) -> Result<()> {
         let mut file = private_file(&self.root.join("console.log"))?;
-        serde_json::to_writer(
-            &mut file,
-            &Event {
-                time: self.now,
-                email: email.into(),
-                event,
-            },
-        )?;
+        serde_json::to_writer(&mut file, event)?;
         file.write_all(b"\n")?;
         Ok(())
     }

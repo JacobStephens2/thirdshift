@@ -203,9 +203,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
-       thirdshift console theme import <file>        Import a Theme JSON document
-       thirdshift console theme export <name>        Export a Theme as JSON
+       thirdshift console token <create|list|revoke> ... | scopes ...  Manage tokens or address scopes; CLI-only
+       thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
+       thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
@@ -213,8 +213,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log
-       thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
+       thirdshift logs --file <id> [--follow | --json]  Read a log
+       thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -313,6 +313,15 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::ConsoleToken(action)) => {
+            return match console::tokens::run(action) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
+        Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
+        Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
             return match console::serve(no_sign_in) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -365,8 +374,9 @@ fn main() -> ExitCode {
             command,
             session,
             follow,
+            json,
         }) => {
-            return match logs::status::inspect::logs(&command, session.as_deref(), follow) {
+            return match logs::status::inspect::logs(&command, session.as_deref(), follow, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -383,8 +393,8 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogFile { id, follow }) => {
-            return match logs::catalog::print_file(&id, follow) {
+        Ok(Command::LogFile { id, follow, json }) => {
+            return match logs::catalog::print_file(&id, follow, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

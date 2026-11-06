@@ -109,7 +109,7 @@ fn triage_and_review_names_select_their_commands() {
 
 #[test]
 fn triage_and_review_render_in_inbox_history_and_catalog() {
-    use crate::logs::status::{ArchivePage, archive, inbox};
+    use crate::logs::status::{ArchivePage, Read};
 
     let dir = tempfile::tempdir().unwrap();
     let mut expected = Vec::new();
@@ -121,13 +121,14 @@ fn triage_and_review_render_in_inbox_history_and_catalog() {
     config.logs_dir = dir.path().to_owned();
     // Keep the fixed fixture in the Inbox as the wall clock advances.
     config.inbox_days = (Local::now() - now()).num_days().max(0) + 7;
-    let inbox = inbox(&config).unwrap();
+    let read = Read::capture(&config, false).unwrap();
+    let inbox = read.inbox(&config).unwrap();
     let rows: Vec<_> = inbox
         .sections
         .iter()
         .flat_map(|section| &section.rows)
         .collect();
-    let history = archive(&config, ArchivePage::History, "", "").unwrap();
+    let history = read.archive(&config, ArchivePage::History, "", "").unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(history.rows.len(), 2);
     for (_, sessions) in &expected {

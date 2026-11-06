@@ -120,8 +120,13 @@ export async function loadLook() {
     if (response.headers.get('x-thirdshift-console-assets') === 'development') {
       document.dispatchEvent(new Event('console-development-assets'));
     }
-    if (!themes) return;
     const settings = await response.json();
+    if (!themes) {
+      root.dataset.theme = settings.theme;
+      await refreshThemeStyles();
+      activity();
+      return;
+    }
     if (requestedRevision !== revision || saving) return;
     csrf = settings.csrf;
     const picker = document.querySelector('#theme-name');

@@ -256,6 +256,16 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(5));
     assert_eq!(config["inbox"]["silent_minutes"].as_integer(), Some(10));
     assert_eq!(config["console"]["port"].as_integer(), Some(8711));
+    assert!(
+        config["console"]["address_scopes"]
+            .as_table()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        text.contains("an address absent here has all five scopes"),
+        "{text}"
+    );
     assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
     assert!(
         config["console"]["other_consoles"]
@@ -300,6 +310,24 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         result.stderr.contains(".thirdshift/config.toml"),
         "stderr: {}",
         result.stderr
+    );
+}
+
+#[test]
+fn setup_preserves_address_scopes() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[console]\nallowed_emails = ['reader@example.test']\n[console.address_scopes] # permissions\n'reader@example.test' = ['read'] # keep read-only\n");
+    let result = scenario.run(&["setup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["address_scopes"]["reader@example.test"][0].as_str(),
+        Some("read")
+    );
+    assert!(
+        text.contains("# permissions") && text.contains("# keep read-only"),
+        "{text}"
     );
 }
 

@@ -56,6 +56,108 @@ fn origin_command(home: &Path) -> Command {
 }
 
 #[test]
+fn scores_and_bug_origin_api_reads_equal_the_cli_retained_views() {
+    let home = tempfile::tempdir().unwrap();
+    fixture(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (path, args) in [
+        ("/api/v1/scores", vec!["scores", "--json"]),
+        (
+            "/api/v1/scores?pull_request=23",
+            vec!["scores", "23", "--json"],
+        ),
+        ("/api/v1/bug-origins", vec!["bug-origins", "--json"]),
+    ] {
+        api::parity(&console, home.path(), path, &args);
+    }
+}
+
+#[test]
+fn act_eval_judgments_return_the_cli_json() {
+    let home = tempfile::tempdir().unwrap();
+    let cli_home = tempfile::tempdir().unwrap();
+    fixture(home.path());
+    fixture(cli_home.path());
+    let token = tokens::create(home.path(), "grader", &["--scopes", "act"]);
+    let mut start = origin_command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (issue, action, flag) in [
+        ("8", "confirm", "--confirm"),
+        ("9", "correct", "--correct"),
+        ("10", "reject", "--none"),
+    ] {
+        let actual = api::json(actions::post(
+            &console,
+            &token,
+            "/api/v1/bug-origins/settle",
+            &[("issue", issue), ("action", action), ("pull_request", "24")],
+        ));
+        let mut twin = origin_command(cli_home.path());
+        twin.args(["bug-origins", issue, flag]);
+        if action == "correct" {
+            twin.arg("24");
+        }
+        let output = twin.arg("--json").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            actual,
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        );
+    }
+    let mut form = vec![("pull_request".to_owned(), PR.to_owned())];
+    for criterion in CRITERIA {
+        form.push((criterion.into(), "pass".into()));
+        form.push((format!("{criterion}_reason"), "My reason".into()));
+    }
+    let borrowed: Vec<_> = form
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    let actual = api::json(actions::post(
+        &console,
+        &token,
+        "/api/v1/scores/mine",
+        &borrowed,
+    ));
+    assert_eq!(actual, cli(home.path(), &["scores", PR, "--json"]));
+    // The CLI's --mine dialogue writes a timestamp. Compare the Scores and
+    // revealed assessment, whose values must agree independently of that time.
+    let scenario = support::Scenario::new();
+    fixture(&scenario.path("home"));
+    let output = scenario.run_on_terminal(
+        &["scores", PR, "--mine", "--json"],
+        &[],
+        &[
+            ("Correct (pass/fail):", "pass"),
+            ("Correct reason:", "My reason"),
+            ("Scoped (pass/fail):", "pass"),
+            ("Scoped reason:", "My reason"),
+            ("Tested (pass/fail):", "pass"),
+            ("Tested reason:", "My reason"),
+            ("Honest (pass/fail):", "pass"),
+            ("Honest reason:", "My reason"),
+            ("Standards (pass/fail):", "pass"),
+            ("Standards reason:", "My reason"),
+        ],
+    );
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let expected = cli(&scenario.path("home"), &["scores", PR, "--json"]);
+    assert_eq!(
+        actual[0]["sample"][0]["mine"]["scores"],
+        expected[0]["sample"][0]["mine"]["scores"]
+    );
+    assert_eq!(
+        actual[0]["sample"][0]["assessment"],
+        expected[0]["sample"][0]["assessment"]
+    );
+}
+
+#[test]
 fn scoring_actions_leave_console_terminable() {
     for path in ["/scores/mine", "/bug-origins/settle"] {
         let home = tempfile::tempdir().unwrap();

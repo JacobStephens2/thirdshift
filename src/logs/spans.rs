@@ -202,6 +202,17 @@ fn metric(
 }
 
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
+    load_with(config, input, false)
+}
+
+/// A Console caller without the `security` scope still sees the Command's
+/// stages. Security session traces are refused on the log routes; this read
+/// skips those files so their prompts and tool output never enter the tree.
+pub(crate) fn load_without_security_sessions(config: &UserConfig, input: &str) -> Result<View> {
+    load_with(config, input, true)
+}
+
+fn load_with(config: &UserConfig, input: &str, hide_security_sessions: bool) -> Result<View> {
     let now = Local::now();
     let snapshot = Snapshot::for_user(config, now)?;
     let mut commands: Vec<_> = snapshot
@@ -260,7 +271,7 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     };
     if let (Some(command), Some(owner)) = (selected, owner) {
         for node in ancestry::of(command, owner)? {
-            tree.spans.extend(spans(&node)?);
+            tree.spans.extend(spans(&node, hide_security_sessions)?);
         }
     }
     tree.roll_up();
@@ -268,7 +279,7 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
 }
 
 /// Project one ancestry node, reading an attached Session's own spans.
-fn spans(node: &Node) -> Result<Vec<Span>> {
+fn spans(node: &Node, hide_security_sessions: bool) -> Result<Vec<Span>> {
     let command = node.command;
     let selector = Observation::Record(command).selector().unwrap_or_default();
     let id = node.id().map(hex).unwrap_or_default();
@@ -303,21 +314,27 @@ fn spans(node: &Node) -> Result<Vec<Span>> {
             vec![span]
         }
         Fact::Session(attachment) => {
-            let mut template = record_span(command, id, parent, SpanKind::Sess, &selector);
-            template.start = attachment
-                .stage
-                .as_ref()
-                .and_then(|timing| timing.began)
-                .map(|time| time.timestamp_millis() as f64)
-                .or(template.start);
-            template.input = None;
-            template.conversation_url =
-                Some(inspect::url("/log", &selector, Some(&attachment.path)));
-            let spans = session::read(&attachment.path, &node.context, &template);
-            if command.account.is_some() {
-                spans.ok().flatten().unwrap_or_default()
+            // The log routes refuse these filenames. Skip the read so the
+            // trace's prompt and tool output stay out of the span tree.
+            if hide_security_sessions && crate::logs::owner::security_session(&attachment.path) {
+                Vec::new()
             } else {
-                spans?.unwrap_or_default()
+                let mut template = record_span(command, id, parent, SpanKind::Sess, &selector);
+                template.start = attachment
+                    .stage
+                    .as_ref()
+                    .and_then(|timing| timing.began)
+                    .map(|time| time.timestamp_millis() as f64)
+                    .or(template.start);
+                template.input = None;
+                template.conversation_url =
+                    Some(inspect::url("/log", &selector, Some(&attachment.path)));
+                let spans = session::read(&attachment.path, &node.context, &template);
+                if command.account.is_some() {
+                    spans.ok().flatten().unwrap_or_default()
+                } else {
+                    spans?.unwrap_or_default()
+                }
             }
         }
     })

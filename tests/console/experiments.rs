@@ -32,6 +32,18 @@ fn legacy_paused_experiment_advertises_a_supported_resume_command() {
     fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let console = Console::start(binary, home.path());
+    api::parity(
+        &console,
+        home.path(),
+        "/api/v1/experiments",
+        &["experiments", "--json"],
+    );
+    api::parity(
+        &console,
+        home.path(),
+        &format!("/api/v1/experiments/{id}"),
+        &["experiments", &id, "--json"],
+    );
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     let resume = html
         .split("Run the same command to resume: <code>")
@@ -67,6 +79,32 @@ fn proposal(home: &Path, suite: &str, task: &str) {
         "format = 1\nstate = \"proposed\"\nsession = \"code-review\"\nrepository = \"private\"\nbase = {:?}\nchange = {:?}\ncriteria = \"Invented success criteria\"\n[inputs]\n",
         "a".repeat(40), "b".repeat(40)
     )).unwrap();
+}
+
+#[test]
+fn act_approval_returns_the_cli_json() {
+    let home = tempfile::tempdir().unwrap();
+    let twin = tempfile::tempdir().unwrap();
+    configure(home.path());
+    configure(twin.path());
+    proposal(home.path(), "code-review", "task");
+    proposal(twin.path(), "code-review", "task");
+    let token = tokens::create(home.path(), "curator", &["--scopes", "act"]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let actual = api::json(actions::post(
+        &console,
+        &token,
+        "/api/v1/experiments/proposals/code-review/task/approve",
+        &[],
+    ));
+    assert_eq!(
+        actual,
+        api::cli(
+            twin.path(),
+            &["evals", "approve", "code-review", "task", "--json"]
+        )
+    );
+    assert_eq!(actual["state"], "approved");
 }
 
 #[test]
@@ -360,6 +398,12 @@ fn selected_session_evidence_survives_unrelated_corruption_and_legacy_verdicts()
     let view: Value = serde_json::from_slice(&cli(&["experiments", &id, "--json"]).stdout).unwrap();
     let session = view["sessions"][0]["id"].as_str().unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    api::parity(
+        &console,
+        home.path(),
+        &format!("/api/v1/experiments/{id}/sessions/{session}"),
+        &["experiments", &id, "--session", session, "--json"],
+    );
     let metadata = directory.join("experiment.json");
     let mut record: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
     for state in ["running", "completed"] {

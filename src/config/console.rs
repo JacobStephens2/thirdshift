@@ -1,6 +1,9 @@
 //! Console settings and narrowly scoped, comment-preserving look writes.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use crate::console::Scope;
 
 pub mod themes;
 
@@ -117,7 +120,7 @@ impl std::fmt::Display for OtherAccounts {
 
 pub fn other_accounts(value: Option<&str>, json: bool) -> Result<String> {
     let settings = match value {
-        Some(value) => edit(None, &[], &[], Some(OtherAccounts::parse(value)?))?,
+        Some(value) => edit(None, &[], &[], Some(OtherAccounts::parse(value)?), None)?,
         None => super::UserConfig::load()?.console,
     };
     Ok(if json {
@@ -133,6 +136,8 @@ pub struct ConsoleSettings {
     pub address: String,
     pub port: u16,
     pub allowed_emails: Vec<String>,
+    #[serde(skip_serializing)]
+    pub address_scopes: BTreeMap<String, Vec<Scope>>,
     pub other_consoles: Vec<String>,
     pub other_accounts: OtherAccounts,
     pub theme: String,
@@ -145,6 +150,7 @@ impl Default for ConsoleSettings {
             address: String::new(),
             port: 8711,
             allowed_emails: Vec::new(),
+            address_scopes: BTreeMap::new(),
             other_consoles: Vec::new(),
             other_accounts: OtherAccounts::default(),
             theme: "focus-auto".into(),
@@ -154,6 +160,13 @@ impl Default for ConsoleSettings {
 }
 
 impl ConsoleSettings {
+    pub(crate) fn scopes_for(&self, email: &str) -> Vec<Scope> {
+        self.address_scopes
+            .get(email)
+            .cloned()
+            .unwrap_or_else(|| Scope::ALL.to_vec())
+    }
+
     /// The HTTPS site's DNS name, accepted with or without `https://`.
     pub fn hostname(&self) -> Result<&str> {
         let host = self
@@ -183,7 +196,16 @@ impl ConsoleSettings {
         if !self.address.is_empty() {
             self.hostname()?;
         }
-        for email in &self.allowed_emails {
+        let addresses = self
+            .allowed_emails
+            .iter()
+            .map(|email| ("allowed_emails", email))
+            .chain(
+                self.address_scopes
+                    .keys()
+                    .map(|email| ("address_scopes", email)),
+            );
+        for (key, email) in addresses {
             ensure!(
                 email.split_once('@').is_some_and(|(local, domain)| {
                     !local.is_empty()
@@ -192,7 +214,7 @@ impl ConsoleSettings {
                         && !domain.starts_with('.')
                         && !domain.ends_with('.')
                 }) && !email.chars().any(char::is_whitespace),
-                "console.allowed_emails: {email:?} is not an email address"
+                "console.{key}: {email:?} is not an email address"
             );
         }
         validate_theme(&self.theme)?;
@@ -215,7 +237,12 @@ pub fn write_look(
     hide: &[String],
     show: &[String],
 ) -> Result<ConsoleSettings> {
-    edit(theme, hide, show, None)
+    edit(theme, hide, show, None, None)
+}
+
+/// CLI-only access change, serialized with all other Console config writes.
+pub(crate) fn write_address_scopes(email: &str, scopes: Vec<Scope>) -> Result<ConsoleSettings> {
+    edit(None, &[], &[], None, Some((email, scopes)))
 }
 
 fn edit(
@@ -223,6 +250,7 @@ fn edit(
     hide: &[String],
     show: &[String],
     other_accounts: Option<OtherAccounts>,
+    address_scopes: Option<(&str, Vec<Scope>)>,
 ) -> Result<ConsoleSettings> {
     use std::fs::{self, OpenOptions};
     use std::io::Write;
@@ -289,6 +317,39 @@ fn edit(
     if let Some(other_accounts) = other_accounts {
         set("other_accounts", other_accounts.value());
         settings.other_accounts = other_accounts;
+    }
+    if let Some((email, scopes)) = address_scopes {
+        ensure!(
+            settings
+                .allowed_emails
+                .iter()
+                .any(|allowed| allowed == email),
+            "address is not allowed in console.allowed_emails"
+        );
+        let table = document["console"]
+            .as_table_like_mut()
+            .expect("validated console table");
+        if !table.contains_key("address_scopes") {
+            table.insert(
+                "address_scopes",
+                Item::Value(toml_edit::InlineTable::new().into()),
+            );
+        }
+        table
+            .get_mut("address_scopes")
+            .and_then(Item::as_table_like_mut)
+            .expect("validated address scopes table")
+            .insert(
+                email,
+                Item::Value(
+                    scopes
+                        .iter()
+                        .map(|scope| scope.name())
+                        .collect::<toml_edit::Array>()
+                        .into(),
+                ),
+            );
+        settings.address_scopes.insert(email.to_owned(), scopes);
     }
     let rendered = document.to_string();
     if path.exists() {

@@ -164,6 +164,22 @@ impl Logged {
 /// or, for `repair`, any numbered Repair or its Resume. A token no kind
 /// reads, as older thirdshift versions may have written, is still selected
 /// by the first two rules.
+/// Whether `token` names a Security session or its Resume. Those traces hold
+/// Security-run details and are readable only with the `security` scope.
+pub(crate) fn is_security(token: &str) -> bool {
+    matches!(
+        Logged::read(token).map(|logged| logged.kind),
+        Some(
+            Kind::SecurityReview
+                | Kind::SecurityReviewFallback
+                | Kind::SecurityAudit
+                | Kind::SecurityReproduction(_)
+                | Kind::SecurityFixPublishing
+                | Kind::SecurityCloseCheck
+        )
+    )
+}
+
 pub fn selects(word: &str, token: &str) -> bool {
     let resumed = token.strip_suffix("-resume").unwrap_or(token);
     token == word
@@ -197,6 +213,31 @@ mod tests {
         (Kind::SecurityFixPublishing, "security-fix-publishing"),
         (Kind::SecurityCloseCheck, "security-close-check"),
     ];
+
+    #[test]
+    fn security_sessions_and_their_resumes_are_the_security_scope() {
+        for token in [
+            "security-review",
+            "security-review-resume",
+            "security-review-fallback",
+            "security-review-fallback-resume",
+            "security-audit",
+            "security-reproduction-12",
+            "security-reproduction-12-resume",
+            "security-fix-publishing",
+            "security-close-check",
+        ] {
+            assert!(is_security(token), "{token}");
+        }
+        for token in [
+            "implement",
+            "code-review",
+            "repair-3",
+            "architecture-review",
+        ] {
+            assert!(!is_security(token), "{token}");
+        }
+    }
 
     #[test]
     fn every_kind_reads_back_from_its_token_and_its_resumes() {

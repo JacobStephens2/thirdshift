@@ -1,5 +1,7 @@
 <div class="header-status">
   {% include "console/notifications.html" %}
+  {% if page.can_read() %}
   {% include "console/host-resources.html" %}
   <script src="/assets/resources.js" type="module"></script>
+  {% endif %}
 </div>

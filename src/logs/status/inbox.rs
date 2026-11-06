@@ -137,14 +137,14 @@ pub(crate) enum ArchivePage {
     Security,
 }
 
-pub(crate) fn archive(
+pub(super) fn archive_from_read(
     config: &UserConfig,
     page: ArchivePage,
     outcome: &str,
     repository: &str,
+    snapshot: &Snapshot,
+    now: DateTime<Local>,
 ) -> Result<Archive> {
-    let now = Local::now();
-    let snapshot = Snapshot::for_user(config, now)?;
     let mut entries: Vec<_> = snapshot
         .entries()
         .iter()
@@ -274,15 +274,14 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
     }
 }
 
-pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
-    let now = Local::now();
-    let snapshot = Snapshot::for_user(config, now)?;
-    // The Console shows the same groups as `status` by reading the same
-    // kept answer. The Console's background reader refreshes it independently
-    // of requests; status reads GitHub only when that answer is too old.
-    let kept = crate::logs::github::load(&config.logs_dir);
+pub(super) fn from_read(
+    config: &UserConfig,
+    snapshot: &Snapshot,
+    kept: &crate::logs::github::Kept,
+    now: DateTime<Local>,
+) -> Result<Inbox> {
     let items = snapshot
-        .evaluate_inbox(config.inbox_days, &kept)
+        .evaluate_inbox(config.inbox_days, kept)
         .into_rows(false);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
@@ -373,8 +372,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         active_runs: snapshot.active_runs(),
         sections,
         github_warning: kept.warning(),
-        idle_passes: snapshot.idle_passes,
-        pass_starts: snapshot.pass_starts,
+        idle_passes: snapshot.idle_passes.clone(),
+        pass_starts: snapshot.pass_starts.clone(),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
     })

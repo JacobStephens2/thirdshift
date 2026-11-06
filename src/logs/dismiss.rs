@@ -269,15 +269,26 @@ pub(super) fn action(
 }
 
 pub(crate) struct Request {
-    pub who: String,
+    pub actor: super::Actor,
     pub undo: bool,
-    pub from_console: bool,
 }
 
 pub(crate) struct Change {
     name: String,
     group: Group,
     dismissal: Option<DismissalView>,
+}
+
+impl Change {
+    pub(crate) fn json(&self) -> serde_json::Value {
+        match &self.dismissal {
+            Some(dismissal) => serde_json::json!({
+                "version": 1, "name": self.name, "group": self.group,
+                "dismissal": dismissal,
+            }),
+            None => serde_json::json!({"version": 1, "name": self.name, "undone": true}),
+        }
+    }
 }
 
 fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<()> {
@@ -292,32 +303,17 @@ fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<(
 }
 
 pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
-    let who = super::unix_user("dismissal")?;
     let change = request(
         input,
         Request {
-            who,
+            actor: super::Actor::cli("dismissal")?,
             undo,
-            from_console: false,
         },
     )?;
-    if let Some(dismissal) = change.dismissal {
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "version": 1, "name": change.name, "group": change.group,
-                    "dismissal": dismissal,
-                })
-            );
-        } else {
-            println!("dismissed {} from {}", change.name, change.group.title());
-        }
-    } else if json {
-        println!(
-            "{}",
-            serde_json::json!({"version": 1, "name": change.name, "undone": true})
-        );
+    if json {
+        println!("{}", change.json());
+    } else if change.dismissal.is_some() {
+        println!("dismissed {} from {}", change.name, change.group.title());
     } else {
         println!("took back the dismissal of {}", change.name);
     }
@@ -327,12 +323,7 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
 /// Shared mutation: Console callers supply their authenticated account; the CLI
 /// supplies its Unix user. Neither caller changes GitHub or the live Command.
 pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
-    let Request {
-        who,
-        undo,
-        from_console,
-    } = request;
-    let source = if from_console { "Console" } else { "CLI" };
+    let Request { actor, undo } = request;
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
     let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
@@ -358,10 +349,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         activity_write(
             &config,
             &target.repository,
-            &format!(
-                "{} dismissal taken back from the {source} by {who}",
-                target.subject
-            ),
+            &format!("{} dismissal taken back {actor}", target.subject),
         )?;
         return Ok(Change {
             name: target.name,
@@ -383,9 +371,9 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
             selector: selector.clone(),
             kind: target.kind.clone(),
             kinds,
-            who: who.clone(),
+            who: actor.who().to_owned(),
             at: at.clone(),
-            from_console,
+            from_console: actor.is_console(),
         };
         dismissal.get_or_insert_with(|| row.view(None));
         file.rows.push(row);
@@ -394,7 +382,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     activity_write(
         &config,
         &target.repository,
-        &format!("{} dismissed from the {source} by {who}", target.subject),
+        &format!("{} dismissed {actor}", target.subject),
     )?;
     Ok(Change {
         name: target.name,

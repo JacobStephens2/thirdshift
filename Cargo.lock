@@ -2213,6 +2213,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tower",
  "tower-layer",
 ]
 
