@@ -68,8 +68,11 @@ def main():
         print("No changed files; no affected tests.")
         return
     areas = set()
+    typescript = False
     for path in sorted(paths):
-        if path.startswith((b"src/console/", b"src/config/console/")) or path in {
+        if path.startswith(b"prototypes/typescript/"):
+            typescript = True
+        elif path.startswith((b"src/console/", b"src/config/console/")) or path in {
             b"src/console.rs", b"src/config/console.rs", b"tests/console/scoring_fixture.py",
             b"tests/fixtures/waterfall-logs.jsonl", b"tests/fixtures/waterfall-spans.jsonl",
         }:
@@ -88,6 +91,9 @@ def main():
             areas.add("full")
             print(f"Conservative full-suite selection for {os.fsdecode(path)!r}.", flush=True)
     full = "full" in areas or len(areas) > 1
+    if typescript:
+        run("bun", "run", "--cwd", "prototypes/typescript", "typecheck")
+        run("bun", "test", "--cwd", "prototypes/typescript")
     if "site" in areas:
         run("npm", "test", "--prefix", "site")
         if not full:
