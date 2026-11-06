@@ -170,7 +170,7 @@ thirdshift console other-accounts none
 </div></details>
 <details class="fold"><summary><h3>Inbox</h3></summary>
 <div class="manual-content" id="inbox">
-<p><code>thirdshift status</code> names this host, counts its active runs, such as <code>2 active runs</code>, and shows its <strong>Inbox</strong> across every repository in the selected log sources. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:</p>
+<p><code>thirdshift status</code> names this host and shows the <strong>Inbox</strong> across every repository in the selected log sources and every live <a href="#fleet">Fleet</a> entry. It counts active runs across those machines, such as <code>2 active runs</code>, with a per-machine breakdown. Each owning machine supplies its rows&#39; groups; the caller does not regroup them. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:</p>
 <ul>
 <li><strong>Needs you:</strong> live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Paused (a plan-limit stop), Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or when GitHub shows its issue closed or its pull request merged. A Triage row also leaves once its issue loses <code>needs-triage</code>; Resolved counts from the first read showing the label gone. Architect and Security runs use the issue and pull request of the Spec run or Ticket run they dispatched. A failed Ticket run whose pull request closed unmerged stays while its issue is open. Live Silent and Slow rows stay until their Commands end, whatever GitHub shows. A row GitHub can speak for no longer ages out; rows with no issue or pull request, no Command record, no read yet or nothing GitHub can find still age out after <code>inbox.days</code> (7 by default), straight to History. Reopening an issue brings back a row still in Done or Resolved. Dismissals hold across GitHub changes; Undo uses the latest kept facts. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.</li>
 <li><strong>Ready for review:</strong> Commands that ended ready, with a pull request. One leaves when a later Command on the same issue starts on this machine, or when GitHub shows its pull request merged or closed; a pull request GitHub still shows as open keeps its row however old it is. A row GitHub can&#39;t speak for still leaves after <code>inbox.days</code>: one with no pull request, one with no Command record, one not read yet, or one whose pull request GitHub can&#39;t resolve. A merged pull request takes its row to Resolved for <code>inbox.days</code> from the merge time (a closed one from the close time); a pull request reopened while its row is in Done or Resolved brings the row back. From History on, a row keeps what GitHub last showed and its issue and pull request aren&#39;t read again. The Console reads ready rows&#39; pull requests and Needs you rows&#39; issues and pull requests in a batched query in the background once a minute, even with no pages open, and keeps the answer in one file on the machine. Changed answers wake open Inbox pages; unchanged reads leave pages idle. <code>status</code> uses the same answer while it is under 5 minutes old, and otherwise reads GitHub itself. Neither timing is a User config setting. The reads never write to GitHub. <code>status --json</code> gives each row what GitHub last showed and when, and how old the Inbox&#39;s answer is.</li>
@@ -195,12 +195,22 @@ thirdshift console other-accounts none
 <p><code>status</code> and the Console Inbox also show <code>Pickup last fired &lt;age&gt; ago on &lt;owner&gt;/&lt;repo&gt;</code> (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in <code>&lt;logs.dir&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;pickup|architect|secure&gt;.last-fired</code>. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.</p>
 <p>When no Commands are running, each bullet in the Inbox&#39;s <strong>Last recorded skipped Passes</strong> and <strong>Last fired Passes</strong> starts with its recorded date and time. A skipped reason uses its Activity log time, which repeated skips do not advance; a last-fired entry uses the saved Pass start and keeps its relative age. An unreadable skip time shows <strong>Time unknown</strong>.</p>
 <p><code>thirdshift cronjobs</code> and the Console&#39;s Cron jobs page show this same per-repository start inventory alongside this account&#39;s thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. <code>cronjobs --json</code> returns an object with <code>jobs</code> (each entry&#39;s <code>schedule</code> and <code>command</code>) and <code>pass_starts</code>. Both it and <code>status --json</code> expose <code>pass_starts</code> entries with <code>repository</code>, <code>kind</code>, RFC 3339 <code>last_fired_at</code> and nonnegative <code>age_seconds</code>.</p>
-<p><code>thirdshift status --json</code> is the versioned API for agents; the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0016-the-console-is-a-long-running-reader.md">Console</a> shows the same Inbox. It runs outside a repository too. Version 1 has this shape:</p>
+<p><code>thirdshift status --json</code> is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command&#39;s <code>machine</code> (the owning machine&#39;s hostname) and <code>machine_name</code> (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a <code>machines</code> section. The Command&#39;s recorded <code>hostname</code> remains unchanged. The Console currently shows its own machine&#39;s Inbox; its Fleet poller is a separate Ticket. Version 2 has this shape:</p>
 <pre><code class="language-json">{
-  &quot;version&quot;: 1,
+  &quot;version&quot;: 2,
   &quot;hostname&quot;: &quot;factory&quot;,
   &quot;active_runs&quot;: 1,
+  &quot;machines&quot;: [{
+    &quot;name&quot;: &quot;factory&quot;,
+    &quot;hostname&quot;: &quot;factory&quot;,
+    &quot;fetched_at&quot;: &quot;2026-10-18T12:00:53-04:00&quot;,
+    &quot;reachability&quot;: &quot;ok&quot;,
+    &quot;active_runs&quot;: 1,
+    &quot;error&quot;: null
+  }],
   &quot;commands&quot;: [{
+    &quot;machine&quot;: &quot;factory&quot;,
+    &quot;machine_name&quot;: &quot;factory&quot;,
     &quot;version&quot;: 2,
     &quot;kind&quot;: &quot;Run&quot;,
     &quot;repository&quot;: &quot;acme/widgets&quot;,
@@ -387,6 +397,22 @@ HTTPS, with an exception for <code>http://127.0.0.1</code> for local use. Redire
 <code>~/.thirdshift/credentials.toml</code>. The User config holds no token. Removing an
 entry deletes its saved token too; revoke the token on its issuer separately
 when its access is no longer wanted. Adding an existing name pairs it again.</p>
+<p><code>thirdshift status</code> fetches each live entry&#39;s own <code>/api/v1/status</code> Inbox with
+a three-second timeout per machine. Its rows join the local Inbox groups,
+tagged with their Fleet entry name. Other-account Commands retain their account
+tag too. The total active runs includes reachable machines, with each machine&#39;s
+count shown separately. Link-only entries are not fetched.</p>
+<p>Use <code>thirdshift status --machine server</code> to show only that paired machine;
+<code>--json</code> and <code>--all</code> can be combined with it. Giving this machine&#39;s own hostname
+behaves like plain <code>status</code>, including its Fleet. Unknown and link-only names
+are rejected. Human-readable rows carry machine tags once a live Fleet exists.</p>
+<p><code>status --json</code> version 2 includes a <code>machines</code> array with <code>name</code>, <code>hostname</code>,
+RFC 3339 <code>fetched_at</code>, <code>active_runs</code>, <code>reachability</code> and nullable <code>error</code>.
+Reachability is <code>ok</code>, <code>unreachable</code> (including a timeout), <code>refused</code> (including
+a revoked token) or <code>needs update</code> (a missing or incompatible API). A failed
+machine contributes no rows or active runs to that read; it never fails the
+rest of <code>status</code>. Reads do not follow other machines&#39; Fleets or change the
+saved pairing&#39;s last-contact time.</p>
 <p><code>fleet list</code> reports saved metadata without contacting the machines. <strong>Live</strong>
 means Credentials hold a token for the entry&#39;s name; it does not promise the
 machine is reachable or the token still valid. <strong>Last contact</strong> is the last

@@ -251,12 +251,20 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
 fn inbox_api_equals_status_json_without_sign_in() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
+    freeze_clock(home.path());
     let mut command = record(home.path(), 7, Some("failed"), 0);
     // No GitHub subject: the test compares one local captured view, without
     // racing the Console's independent background GitHub refresh.
     command["issue"] = Value::Null;
     write_record(home.path(), 7, &command);
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console", "--no-sign-in"])
+            .env("HOME", home.path())
+            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        command
+    });
     parity(
         &console,
         home.path(),

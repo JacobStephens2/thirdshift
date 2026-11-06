@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
@@ -13,7 +13,7 @@ use crate::logs::dismiss::{self, DismissalView, DismissedRow, READY_KIND};
 use crate::logs::github::{CommandAnswer, FindingSubject, Kept, Subject};
 use crate::logs::stop;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum Group {
     #[serde(rename = "needs you")]
@@ -51,7 +51,7 @@ impl Group {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum NeedsYouKind {
     Silent,

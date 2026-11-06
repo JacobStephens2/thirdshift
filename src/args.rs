@@ -118,6 +118,7 @@ pub enum Command {
     Status {
         json: bool,
         all: bool,
+        machine: Option<String>,
     },
     Show {
         command: String,
@@ -776,27 +777,24 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("status") => {
-            return match &args[1..] {
-                [] => Ok(Command::Status {
-                    json: false,
-                    all: false,
-                }),
-                [flag] if flag == "--json" => Ok(Command::Status {
-                    json: true,
-                    all: false,
-                }),
-                [flag] if flag == "--all" => Ok(Command::Status {
-                    json: false,
-                    all: true,
-                }),
-                [a, b] if (a == "--all" && b == "--json") || (a == "--json" && b == "--all") => {
-                    Ok(Command::Status {
-                        json: true,
-                        all: true,
-                    })
+            let usage = "usage: thirdshift status [--all] [--json] [--machine <name>]";
+            let (mut json, mut all, mut machine) = (false, false, None);
+            let mut words = args[1..].iter();
+            while let Some(word) = words.next() {
+                match word.as_str() {
+                    "--json" if !json => json = true,
+                    "--all" if !all => all = true,
+                    "--machine" if machine.is_none() => {
+                        let name = words
+                            .next()
+                            .filter(|name| !name.starts_with('-') && !name.is_empty())
+                            .context(usage)?;
+                        machine = Some(name.clone());
+                    }
+                    _ => bail!(usage),
                 }
-                _ => bail!("usage: thirdshift status [--all] [--json]"),
-            };
+            }
+            return Ok(Command::Status { json, all, machine });
         }
         Some("--release-summary") => {
             return match &args[1..] {

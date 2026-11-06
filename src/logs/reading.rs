@@ -30,7 +30,7 @@ use super::{Pass, activity};
 pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
-pub(super) use inbox::{Group, InboxItem};
+pub(super) use inbox::{Group, InboxItem, NeedsYouKind};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::Observation;
@@ -374,7 +374,7 @@ pub(super) struct Command {
     activity: captured_activity::Activity,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 pub(super) struct CurrentStage {
     pub(super) name: String,
     pub(super) began_at: String,

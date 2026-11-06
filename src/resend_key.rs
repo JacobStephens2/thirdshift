@@ -163,6 +163,10 @@ impl Credentials {
         self.secrets.fleet.contains_key(name)
     }
 
+    pub(crate) fn fleet_token(&self, name: &str) -> Option<&str> {
+        self.secrets.fleet.get(name).map(String::as_str)
+    }
+
     /// Fleet holders retain the raw token; issuers retain only its hash.
     pub fn save_fleet_token(&self, name: &str, token: Option<&str>) -> Result<()> {
         let text = self.text.as_deref().unwrap_or_default();

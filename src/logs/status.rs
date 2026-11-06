@@ -1,7 +1,9 @@
 //! Format machine-wide Command observations.
 
+pub(crate) mod fleet;
 mod inbox;
 pub mod inspect;
+mod remote;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::{Archive, ArchivePage};
@@ -59,7 +61,7 @@ impl Read {
 
     fn status(&self, config: &UserConfig, all: bool) -> Status<'_> {
         Status {
-            version: 1,
+            version: fleet::VERSION,
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             active_runs: self.snapshot.active_runs(),
             commands: self
@@ -75,7 +77,14 @@ impl Read {
     }
 
     pub fn json(&self, config: &UserConfig, all: bool) -> Result<serde_json::Value> {
-        Ok(serde_json::to_value(self.status(config, all))?)
+        Ok(serde_json::to_value(self.document(config, all)?)?)
+    }
+
+    pub fn document(&self, config: &UserConfig, all: bool) -> Result<fleet::Document> {
+        fleet::local(
+            serde_json::to_value(self.status(config, all))?,
+            self.now.into(),
+        )
     }
 
     pub fn inbox(&self, config: &UserConfig) -> Result<Inbox> {
@@ -97,9 +106,30 @@ impl Read {
     }
 }
 
-fn print_command(command: &Command, state_word: &str, indent: &str) {
-    let facts = &command.record;
-    let stage = stage_text(command);
+fn print_command(command: &Command, state_word: &str, indent: &str, machine: Option<&str>) {
+    print_command_line(
+        &command.record,
+        &stage_text(command),
+        command.account.as_deref(),
+        state_word,
+        indent,
+        machine,
+    );
+    print_tickets(&command.record, &format!("{indent}  "));
+    print_pause(&command.record, indent);
+    for nested in command.dispatched.iter().chain(&command.children) {
+        print_command(nested, nested.state, &format!("{indent}  "), machine);
+    }
+}
+
+fn print_command_line(
+    facts: &CommandRecord,
+    stage: &str,
+    account: Option<&str>,
+    state_word: &str,
+    indent: &str,
+    machine: Option<&str>,
+) {
     let mut subject = if let Some(name) = facts.process_label() {
         match &facts.issue {
             Some(issue) => format!(
@@ -124,25 +154,20 @@ fn print_command(command: &Command, state_word: &str, indent: &str) {
     if let Some(pull_request) = &facts.pull_request {
         subject.push_str(&format!(" · {pull_request}"));
     }
-    if let Some(account) = &command.account {
+    if let Some(account) = account {
         subject.push_str(&format!(" · [{account}]"));
     }
+    let tag = machine
+        .map(|machine| format!("[{machine}] "))
+        .unwrap_or_default();
     println!(
-        "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
+        "{indent}{tag}{} {subject} · {} · {} · {} · {} · {stage}",
         super::display_name(&facts.kind),
         state_word,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
         facts.effort.as_deref().unwrap_or("default Effort")
     );
-    print_tickets(facts, &format!("{indent}  "));
-    print_pause(facts, indent);
-    for dispatched in &command.dispatched {
-        print_command(dispatched, dispatched.state, &format!("{indent}  "));
-    }
-    for child in &command.children {
-        print_command(child, child.state, &format!("{indent}  "));
-    }
 }
 
 pub(super) fn print_pause(facts: &super::command_record::CommandRecord, indent: &str) {
@@ -175,7 +200,7 @@ pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
     );
 }
 
-pub fn show(json: bool, all: bool) -> Result<()> {
+pub fn show(json: bool, all: bool, machine: Option<&str>) -> Result<()> {
     let config = UserConfig::load()?;
     let waiting = config.effective_waiting_line_interval();
     if waiting != config.waiting_line_interval {
@@ -189,35 +214,86 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         eprintln!("thirdshift: account {account}: logs unavailable or unreadable");
     }
     let status = read.status(&config, all);
+    let local = fleet::local(serde_json::to_value(&status)?, read.now.into())?;
+    let document = fleet::fetch_and_merge(&config, local, machine, all)?;
+    let include_local = machine.is_none_or(|machine| machine == status.hostname);
+    let tags = document
+        .machines
+        .iter()
+        .any(|machine| machine.name != status.hostname);
+    let local_tag = tags.then_some(status.hostname.as_str());
     if json {
-        println!("{}", serde_json::to_string_pretty(&status)?);
+        println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
         println!("{}", status.hostname);
-        println!("{}", active_runs_text(status.active_runs));
-        if let Some(warning) = read.kept.warning() {
+        println!("{}", active_runs_text(document.active_runs));
+        if tags {
+            for machine in &document.machines {
+                let reachability = serde_json::to_value(&machine.reachability)?;
+                println!(
+                    "{}: {} · {}{}",
+                    machine.name,
+                    active_runs_text(machine.active_runs),
+                    reachability.as_str().unwrap(),
+                    machine
+                        .error
+                        .as_ref()
+                        .map(|error| format!(" · {error}"))
+                        .unwrap_or_default()
+                );
+            }
+        }
+        if include_local && let Some(warning) = read.kept.warning() {
             println!("Warning: {warning}");
         }
+        let remote: Vec<_> = document
+            .commands
+            .iter()
+            .filter(|row| row["machine_name"] != status.hostname)
+            .map(remote::Row::read)
+            .collect::<Result<_>>()?;
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands
                 .iter()
-                .filter(|item| item.group == group)
+                .filter(|item| include_local && item.group == group)
                 .collect();
             let references: Vec<_> = status
                 .commands
                 .iter()
                 .filter(|item| {
-                    group == Group::Landing && item.landing && item.group == Group::NeedsYou
+                    include_local
+                        && group == Group::Landing
+                        && item.landing
+                        && item.group == Group::NeedsYou
                 })
                 .collect();
-            if items.is_empty() && references.is_empty() {
+            let remote_items: Vec<_> = remote.iter().filter(|row| row.group == group).collect();
+            let remote_references: Vec<_> = remote
+                .iter()
+                .filter(|row| {
+                    group == Group::Landing && row.landing && row.group == Group::NeedsYou
+                })
+                .collect();
+            if items.is_empty()
+                && references.is_empty()
+                && remote_items.is_empty()
+                && remote_references.is_empty()
+            {
                 continue;
             }
             println!("{}:", group.title());
             for item in items {
                 match item.command {
-                    Observation::Record(command) => print_command(command, item.state_word(), ""),
-                    Observation::History(command) => print_history(command),
+                    Observation::Record(command) => {
+                        print_command(command, item.state_word(), "", local_tag)
+                    }
+                    Observation::History(command) => {
+                        if let Some(machine) = local_tag {
+                            print!("[{machine}] ");
+                        }
+                        print_history(command);
+                    }
                 }
                 if item.group == Group::ReadyForReview {
                     println!("  {}", item.github.ci.unwrap_or_default().label());
@@ -236,6 +312,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     println!("  {} Commands with this cause: {cause}", item.count);
                 }
             }
+            for row in remote_items {
+                row.print();
+            }
             for item in references {
                 if let Observation::Record(command) = item.command {
                     let facts = &command.record;
@@ -243,6 +322,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                         || facts.name.clone(),
                         |issue| format!("{}#{}", facts.repository, issue.number),
                     );
+                    if let Some(machine) = local_tag {
+                        print!("[{machine}] ");
+                    }
                     if let Some(account) = &command.account {
                         print!("[{account}] ");
                     }
@@ -252,11 +334,14 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     );
                 }
             }
+            for row in remote_references {
+                row.print_reference();
+            }
         }
-        for pass in status.idle_passes {
+        for pass in status.idle_passes.iter().filter(|_| include_local) {
             println!("{}", pass.line());
         }
-        for pass in status.pass_starts {
+        for pass in status.pass_starts.iter().filter(|_| include_local) {
             println!("{}", pass.line());
         }
     }
@@ -269,19 +354,33 @@ pub(crate) fn active_runs_text(count: usize) -> String {
 }
 
 pub(super) fn stage_text(command: &Command) -> String {
-    if let Some(outcome) = &command.record.outcome {
-        return outcome.clone();
+    stage_details(
+        command.record.outcome.as_deref(),
+        command.state,
+        command.stage.as_ref(),
+        command.health.as_ref(),
+    )
+}
+
+fn stage_details(
+    outcome: Option<&str>,
+    state: &str,
+    stage: Option<&super::reading::CurrentStage>,
+    health: Option<&super::reading::Health>,
+) -> String {
+    if let Some(outcome) = outcome {
+        return outcome.to_owned();
     }
-    let mut text = command.stage.as_ref().map_or_else(
+    let mut text = stage.map_or_else(
         || {
-            if command.state == "died" {
+            if state == "died" {
                 "died before first stage".into()
             } else {
                 "starting".into()
             }
         },
         |stage| {
-            if command.state == "died" {
+            if state == "died" {
                 format!("died at {}", super::display_name(&stage.name))
             } else {
                 format!(
@@ -292,11 +391,7 @@ pub(super) fn stage_text(command: &Command) -> String {
             }
         },
     );
-    if let Some(health) = command
-        .health
-        .as_ref()
-        .and_then(super::reading::Health::text)
-    {
+    if let Some(health) = health.and_then(super::reading::Health::text) {
         text.push_str(&format!(" · {health}"));
     }
     text
