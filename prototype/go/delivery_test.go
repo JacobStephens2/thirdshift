@@ -96,7 +96,7 @@ func TestFailedTicketRunSalvagesDraft(t *testing.T) {
 func TestDeliveryEnforcesRepairLimit(t *testing.T) {
 	f := newFixture(t)
 	f.writeState("open", "OWNER", "ci-still-red")
-	output, err := f.runArgs("--repair-limit", "2", "https://github.com/acme/widgets/issues/7")
+	output, err := f.run("--repair-limit", "2", "https://github.com/acme/widgets/issues/7")
 	if err == nil || !strings.Contains(output, "Repair limit reached (2)") {
 		t.Fatalf("Repair budget: %v: %s", err, output)
 	}

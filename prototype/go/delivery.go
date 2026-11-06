@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// GitHub can initially list no checks while workflows register after a push.
+const ciRegistrationGrace = 5 * time.Second
+
 type delivery struct {
 	issue                         issueURL
 	worktree, branch, base, title string
@@ -25,6 +28,7 @@ func (d *delivery) deliver(ctx context.Context) error {
 	repairs, rounds := 0, 0
 	reason, baseHead := "", ""
 	knownChecks := false
+	registrationDeadline := time.Time{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -62,6 +66,7 @@ func (d *delivery) deliver(ctx context.Context) error {
 				return err
 			}
 			knownChecks, state = false, deliveryWatch
+			registrationDeadline = time.Now().Add(ciRegistrationGrace)
 		case deliveryWatch:
 			pr, err := d.observePR(ctx, head)
 			if err != nil {
@@ -93,6 +98,12 @@ func (d *delivery) deliver(ctx context.Context) error {
 			case ciAbsent, ciPassed:
 				if ci.state == ciAbsent && knownChecks {
 					return fmt.Errorf("CI checks disappeared for %s", head)
+				}
+				if ci.state == ciAbsent && time.Now().Before(registrationDeadline) {
+					if err := pollPause(ctx); err != nil {
+						return err
+					}
+					continue
 				}
 				switch pr.Mergeable {
 				case "MERGEABLE":

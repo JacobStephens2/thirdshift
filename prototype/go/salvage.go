@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -11,19 +12,26 @@ func (d *delivery) salvage(ctx context.Context) error {
 			return err
 		}
 	}
+	// Draft before attempting a push: a rejected push must not leave a failed
+	// Ticket run's existing pull request looking ready for review.
+	if err := d.findPR(ctx); err != nil {
+		return err
+	}
+	var draftErr error
+	if d.prNumber != 0 {
+		draftErr = d.draft(ctx)
+	}
 	ahead, err := command(ctx, d.worktree, "git", "rev-list", "--count", d.base+"..HEAD")
 	if err != nil {
-		return err
+		return errors.Join(draftErr, err)
 	}
 	if string(ahead) != "0" {
 		if _, err := d.publish(ctx); err != nil {
-			return fmt.Errorf("Failed ticket run salvage: %w", err)
+			return errors.Join(draftErr, fmt.Errorf("Failed ticket run salvage: %w", err))
 		}
-	} else if err := d.findPR(ctx); err != nil {
-		return err
 	}
 	if d.prNumber != 0 {
-		return d.draft(ctx)
+		return errors.Join(draftErr, d.draft(ctx))
 	}
-	return nil
+	return draftErr
 }

@@ -66,7 +66,9 @@ An opening session with no commits ahead of the Base branch ends without Deliver
 
 Delivery fetches and merges the Base branch, pushes, then watches check runs
 and commit statuses for the full published head SHA. Pending results are polled;
-passing or absent CI plus a mergeable PR permits readiness. A previously seen
+passing or absent CI plus a mergeable PR permits readiness. An empty initial
+listing gets a five-second registration grace before CI is considered absent.
+A previously seen
 set of checks disappearing cannot establish green CI. Inherited failures fail
 the run without spending a Repair on the Base branch's code.
 
@@ -76,8 +78,11 @@ any conflicted merge, before Delivery pushes and checks the new head. There are
 at most five Repairs (lowered by `--repair-limit`) and ten reconciliation rounds.
 An unchanged Repair head fails; this prototype does not yet implement the Rust
 runner's Check re-run or Abandoned job re-run policies (ADRs 0010 and 0020).
-Failed Delivery keeps or converts its PR to a draft, preserves the Claim, and
+Failed Delivery drafts any existing PR before attempting a salvage push, so
+a rejected push still leaves it as a draft. It preserves the Claim and
 adds `agent-failed`; work that could not be pushed remains in the Worktree.
+A draft-conversion error is reported while salvage still attempts to push
+committed work, then attempts draft conversion again.
 
 Run outcomes, Claim transitions, Delivery states and CI states use typed enums.
 `go test ./...` type-checks the production syntax tree and rejects any switch
