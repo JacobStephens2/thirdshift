@@ -46,8 +46,10 @@ group: SIGINT, a two-second grace, SIGTERM, another two seconds, then SIGKILL.
 If the leader exits early, remaining group members are killed immediately.
 Interruption exits 130. Claim ending uses its own bounded context so it still
 finishes after interruption: a closed issue loses its Claim; an open issue
-with no Issue branch or open PR on origin is released and made ready again;
-otherwise its Claim stays, with `agent-failed` on failed or interrupted runs.
+with no Issue branch or open PR on origin has only this run's label changes
+restored (`ready-for-agent` only if it was present before acquisition, and
+`in-progress` removed only if this run added it). Work left on origin keeps
+its Claim, with `agent-failed` on failed or interrupted runs.
 
 ## Embedded Factory skills
 

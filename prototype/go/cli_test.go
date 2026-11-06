@@ -368,3 +368,29 @@ func TestWorktreeFailureReleasesClaimWithoutLaunchingHarness(t *testing.T) {
 	}
 	f.assertLabels("enhancement", "ready-for-agent")
 }
+
+func TestReviewClaimReleaseRestoresOriginalLabels(t *testing.T) {
+	f := newFixture(t)
+	path := filepath.Join(f.root, "state.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	state["labels"] = []map[string]string{{"name": "enhancement"}}
+	raw, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := f.run("https://github.com/acme/widgets/issues/7")
+	if err != nil {
+		t.Fatalf("Ticket run: %v: %s", err, output)
+	}
+	f.assertLabels("enhancement")
+}

@@ -75,7 +75,7 @@ func ticketRun(ctx context.Context, raw string) (runErr error) {
 	defer func() {
 		completion, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		runErr = errors.Join(runErr, endClaim(completion, launch, issue, branch, runErr != nil || ctx.Err() != nil))
+		runErr = errors.Join(runErr, endClaim(completion, launch, issue, branch, data, runErr != nil || ctx.Err() != nil))
 	}()
 	if err := makeClaim(ctx, issue, data); err != nil {
 		return err
