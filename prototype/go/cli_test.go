@@ -369,6 +369,41 @@ func TestWorktreeFailureReleasesClaimWithoutLaunchingHarness(t *testing.T) {
 	f.assertLabels("enhancement", "ready-for-agent")
 }
 
+func TestIssueFileSymlinkIsNotFollowed(t *testing.T) {
+	f := newFixture(t)
+	canary := filepath.Join(f.root, "operator-secret.txt")
+	const original = "operator secret\n"
+	if err := os.WriteFile(canary, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(canary, filepath.Join(f.repo, ".thirdshift-issue.md")); err != nil {
+		t.Fatal(err)
+	}
+	f.git(f.repo, "add", ".thirdshift-issue.md")
+	f.git(f.repo, "commit", "-m", "plant issue symlink")
+	f.git(f.repo, "push", "origin", "main")
+
+	output, err := f.run("https://github.com/acme/widgets/issues/7")
+	got, readErr := os.ReadFile(canary)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != original {
+		t.Fatalf("issue write followed symlink outside the worktree: %q\nrun err=%v output=%s", got, err, output)
+	}
+	info, statErr := os.Lstat(filepath.Join(f.worktree, ".thirdshift-issue.md"))
+	if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("worktree issue path = %v, %v; want the planted symlink", info, statErr)
+	}
+	if err == nil || !strings.Contains(output, "symlink") {
+		t.Fatalf("wanted symlink refusal, got %v: %s", err, output)
+	}
+	if strings.Contains(output, `"session_id"`) {
+		t.Fatal("started Harness after refusing the symlink")
+	}
+	f.assertLabels("enhancement", "ready-for-agent")
+}
+
 func TestReviewClaimReleaseRestoresOriginalLabels(t *testing.T) {
 	f := newFixture(t)
 	path := filepath.Join(f.root, "state.json")
