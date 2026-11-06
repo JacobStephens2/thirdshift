@@ -10,6 +10,7 @@ mod cronjobs;
 mod experiments;
 mod filters;
 pub(crate) mod fleet;
+mod fleet_inbox;
 mod github;
 pub(crate) use account_commands::Scopes;
 pub use account_commands::{password, print_log, sign_out};
@@ -659,6 +660,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
+        let fleet = fleet_inbox::Fleet::new();
+        let fleet_poller = fleet.follow(notifier.clone());
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
@@ -667,6 +670,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             router(no_sign_in, changes)
                 .layer(axum::Extension(notifier))
                 .layer(axum::Extension(assets))
+                .layer(axum::Extension(fleet))
                 .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
@@ -699,6 +703,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             let _ = observer.await;
             github.abort();
             let _ = github.await;
+            fleet_poller.abort();
+            let _ = fleet_poller.await;
         })
         .await
         .context("Console server failed")?;
@@ -729,9 +735,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Resources, Method::GET) => get(resources::show),
             (View::ResourceStatus, Method::GET) => get(resources::status),
             (View::Metrics, Method::GET) => get(metrics),
-            (View::Inbox, Method::GET) => {
-                get(move |viewer, format, query| inbox(cli, path, viewer, format, query))
-            }
+            (View::Inbox, Method::GET) => get(move |viewer, format, fleet, query| {
+                inbox(cli, path, viewer, format, fleet, query)
+            }),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
@@ -828,6 +834,8 @@ struct InboxPage {
     repository: String,
     /// The `section` the URL asked for, as its slug.
     section: String,
+    machine: String,
+    machines: Vec<fleet_inbox::Machine>,
 }
 
 impl InboxPage {
@@ -861,6 +869,19 @@ impl InboxPage {
     fn slug(&self, group: &str) -> String {
         slug(group)
     }
+    fn folder_url(&self, group: &str) -> String {
+        let mut url = reqwest::Url::parse("http://localhost/").expect("fixed URL");
+        url.query_pairs_mut().append_pair("section", &slug(group));
+        if !self.machine.is_empty() {
+            url.query_pairs_mut().append_pair("machine", &self.machine);
+        }
+        format!(
+            "/{}",
+            url.query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default()
+        )
+    }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
     }
@@ -888,8 +909,8 @@ impl InboxPage {
         RowTemplate {
             row,
             csrf: &self.csrf,
-            can_copy,
-            can_act: self.page.can_act(),
+            can_copy: can_copy && row.console.is_empty(),
+            can_act: self.page.can_act() && row.console.is_empty(),
             can_security: self.page.can_security(),
         }
     }
@@ -947,6 +968,7 @@ async fn inbox(
     path: &'static str,
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
+    axum::Extension(fleet): axum::Extension<fleet_inbox::Fleet>,
     RawQuery(query): RawQuery,
 ) -> Response {
     let mut requested_page = if format == api::Format::Html {
@@ -983,7 +1005,7 @@ async fn inbox(
     {
         return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
     }
-    render_page(format, cli, archive_page, query, viewer).await
+    render_page(format, cli, archive_page, query, viewer, fleet).await
 }
 
 async fn render_page(
@@ -992,6 +1014,7 @@ async fn render_page(
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
     viewer: auth::Viewer,
+    fleet: fleet_inbox::Fleet,
 ) -> Response {
     // The shared observations and templates stay blocking, off the async executor.
     api::read(format, move || {
@@ -1011,12 +1034,19 @@ async fn render_page(
             None => ("Inbox", cli),
         };
         format.render(read.json(&config, all)?, |_| {
+            let mut inbox = read.inbox(&config)?;
+            let machine = query_value(&query, "machine");
+            let machines = if archive_page.is_none() {
+                fleet.merge(&config, &mut inbox, &machine)?
+            } else {
+                Vec::new()
+            };
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
                 csrf: viewer.csrf,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
-                inbox: read.inbox(&config)?,
+                inbox,
                 title,
                 archive: archive_page
                     .map(|page| read.archive(&config, page, &outcome, &repository))
@@ -1024,6 +1054,8 @@ async fn render_page(
                 outcome,
                 repository,
                 section: query_value(&query, "section"),
+                machine,
+                machines,
             }
             .render()?)
         })

@@ -28,6 +28,9 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub machine: String,
+    pub console: String,
+    pub stale: bool,
     pub account: Option<String>,
     pub id: String,
     pub started_ms: i64,
@@ -116,14 +119,250 @@ impl Row {
         }
     }
     pub fn peek_url(&self) -> String {
-        super::inspect::url("/peek", &self.selector, None)
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/peek", &self.selector, None)
+        )
     }
     pub fn log_url(&self) -> String {
-        super::inspect::url("/log", &self.selector, None)
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/log", &self.selector, None)
+        )
     }
     pub fn session_url(&self, session: &std::path::Path) -> String {
-        super::inspect::url("/log", &self.selector, Some(session))
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/log", &self.selector, Some(session))
+        )
     }
+
+    pub fn tag_machine(&mut self, name: &str, console: &str, stale: bool) {
+        self.machine = name.into();
+        self.console = console.trim_end_matches('/').into();
+        self.stale = stale;
+        self.id = identity(&format!("{name}\0{}", self.id));
+        if !console.is_empty() {
+            self.can_dismiss = false;
+            self.logs_url = format!("{}/logs", self.console);
+        }
+        for child in &mut self.children {
+            child.tag_machine(name, console, stale);
+        }
+    }
+}
+
+impl Inbox {
+    /// Received rows keep the owning machine's grouping and presentation facts;
+    /// this path never opens their paths or evaluates them against local GitHub.
+    pub fn merge_remote(
+        &mut self,
+        document: &super::fleet::Document,
+        entry: &crate::config::console::fleet::Entry,
+        stale: bool,
+    ) -> Result<()> {
+        for value in &document.commands {
+            let checked = super::text::Row::read(value)?;
+            let Some(section) = self
+                .sections
+                .iter_mut()
+                .find(|section| section.group == value["group"].as_str().unwrap_or_default())
+            else {
+                continue;
+            };
+            let mut row = received(value, chrono::Local::now())?;
+            row.tag_machine(&entry.name, &entry.address, stale);
+            let subject = row.subject.clone();
+            section.rows.push(row);
+            // Local rows were already ordered; merge with the same Needs you
+            // priorities and newest occurrence ordering, without cross-host collapse.
+            section.rows.sort_by_key(|row| {
+                (
+                    if section.group == "needs you" {
+                        match row.state.as_str() {
+                            "Silent" => 0,
+                            "Slow" => 1,
+                            _ => 2,
+                        }
+                    } else {
+                        0
+                    },
+                    std::cmp::Reverse(row.occurred_ms),
+                )
+            });
+            if checked.landing && value["group"] == "needs you" {
+                // The secondary Landing reference belongs beside all machines' rows.
+                let reference = format!(
+                    "[{}] {} · {} · see Needs you",
+                    entry.name,
+                    subject,
+                    value["needs_you_kind"].as_str().unwrap_or("Needs you")
+                );
+                if let Some(landing) = self
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.group == "landing")
+                {
+                    landing.references.push(reference);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
+    for value in &document.commands {
+        received(value, chrono::Local::now())?;
+    }
+    Ok(())
+}
+
+fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Facts {
+        account: Option<String>,
+        repository: String,
+        kind: String,
+        issue: Option<Issue>,
+        #[serde(default)]
+        name: String,
+        state: String,
+        started_at: String,
+        ended_at: Option<String>,
+        outcome: Option<String>,
+        command_log: Option<std::path::PathBuf>,
+        cause: Option<String>,
+        pull_request: Option<String>,
+        harness: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        stage: Option<crate::logs::reading::CurrentStage>,
+        health: Option<Health>,
+        resume_command: Option<String>,
+        github_ci: Option<crate::github::InboxCi>,
+        github_mergeable: Option<crate::github::InboxMergeable>,
+        #[serde(default)]
+        children: Vec<serde_json::Value>,
+        #[serde(default)]
+        dispatched: Vec<serde_json::Value>,
+        #[serde(default)]
+        tickets: Vec<crate::logs::command_record::TicketRecord>,
+        #[serde(default)]
+        security_findings: Vec<crate::security::RecordedFinding>,
+        #[serde(flatten)]
+        departure: Option<crate::logs::reading::Departure>,
+        dismissal: Option<crate::logs::dismiss::DismissalView>,
+    }
+    let facts: Facts = serde_json::from_value(value.clone())?;
+    let live = facts.state == "live";
+    let selector = facts
+        .command_log
+        .as_ref()
+        .map(|path| {
+            let path = if value["source"] == "command_record" {
+                path.with_extension("command.json")
+            } else {
+                path.clone()
+            };
+            if facts.name.is_empty() {
+                path.to_string_lossy().into_owned()
+            } else {
+                format!("{}::{}", path.display(), facts.name)
+            }
+        })
+        .unwrap_or_default();
+    let (mut subject, mut title) =
+        subject(&facts.repository, &facts.kind, facts.issue.as_ref(), None);
+    let mut subject_url = issue_url(facts.issue.as_ref());
+    let ready = value["group"] == "ready for review";
+    if ready && let Some(pr) = &facts.pull_request {
+        subject = crate::review::PullRequestUrl::parse(pr)
+            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
+            .unwrap_or_else(|_| pr.clone());
+        subject_url = Some(pr.clone()).filter(|url| url.starts_with("https://"));
+        title = value["github"]["subjects"][pr]["facts"]["title"]
+            .as_str()
+            .unwrap_or("(title unavailable)")
+            .into();
+    }
+    let group: Option<Group> = value
+        .get("group")
+        .map(|group| serde_json::from_value(group.clone()))
+        .transpose()?;
+    let kind = value
+        .get("needs_you_kind")
+        .and_then(|kind| serde_json::from_value(kind.clone()).ok());
+    let state = group
+        .map_or(facts.state.as_str(), |group| {
+            group.state_word(kind, value["stopping"] == true, &facts.state)
+        })
+        .to_owned();
+    Ok(Row {
+        machine: String::new(),
+        console: String::new(),
+        stale: false,
+        id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
+        account: facts.account,
+        started_ms: timestamp(&facts.started_at),
+        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
+        live,
+        logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
+        log_growth: String::new(),
+        selector,
+        can_dismiss: false,
+        logs_url: String::new(),
+        subject,
+        subject_url,
+        title,
+        state,
+        now_line: super::stage_details(
+            facts.outcome.as_deref(),
+            &facts.state,
+            facts.stage.as_ref(),
+            facts.health.as_ref(),
+        ),
+        timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
+        count: value["count"].as_u64().unwrap_or(1) as usize,
+        cause: facts.cause.unwrap_or_default(),
+        resume_command: facts.resume_command,
+        fix_command: None,
+        left: facts
+            .dismissal
+            .as_ref()
+            .map(|dismissal| dismissal.line())
+            .into_iter()
+            .chain(facts.departure.as_ref().map(|departure| departure.line()))
+            .collect::<Vec<_>>()
+            .join("; "),
+        harness: format!(
+            "{} · {} · {}",
+            facts.harness.as_deref().unwrap_or("unknown Harness"),
+            facts.model.as_deref().unwrap_or("default Model"),
+            facts.effort.as_deref().unwrap_or("default Effort")
+        ),
+        pull_request: facts.pull_request.unwrap_or_default(),
+        ci: ready.then(|| facts.github_ci.unwrap_or_default()),
+        merge_conflict: ready
+            && facts.github_mergeable == Some(crate::github::InboxMergeable::Conflicting),
+        tickets: facts
+            .tickets
+            .iter()
+            .map(|ticket| ticket_text(ticket, &facts.repository))
+            .collect(),
+        children: facts
+            .dispatched
+            .iter()
+            .chain(&facts.children)
+            .map(|child| received(child, now))
+            .collect::<Result<_>>()?,
+        findings: facts.security_findings,
+        sessions: Vec::new(),
+    })
 }
 
 pub(crate) struct Archive {
@@ -226,6 +465,9 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 None,
             );
             Ok(Row {
+                machine: String::new(),
+                console: String::new(),
+                stale: false,
                 account: command.account.clone(),
                 id: identity(&match &command.account {
                     Some(account) => format!(
@@ -430,6 +672,9 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let live = command.state == "live";
     let (subject, title) = row_subject(facts);
     Ok(Row {
+        machine: String::new(),
+        console: String::new(),
+        stale: false,
         account: command.account.clone(),
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.

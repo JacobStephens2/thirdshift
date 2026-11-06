@@ -13,7 +13,7 @@ use crate::resend_key::Credentials;
 pub(super) const VERSION: u32 = 2;
 const TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Document {
     pub version: u32,
     pub hostname: String,
@@ -27,7 +27,7 @@ pub(crate) struct Document {
     other: Map<String, Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Machine {
     pub name: String,
     pub hostname: Option<String>,
@@ -37,7 +37,7 @@ pub(crate) struct Machine {
     pub error: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Reachability {
     Ok,
@@ -159,7 +159,7 @@ pub(crate) fn fetch_and_merge(
     Ok(local)
 }
 
-fn fetch(
+pub(crate) fn fetch(
     client: &reqwest::blocking::Client,
     entry: &Entry,
     token: &str,
