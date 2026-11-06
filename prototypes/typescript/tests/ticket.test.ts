@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmod, lstat, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { buildBinary, root, runBinary, startBinary } from "./binary";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -11,14 +12,8 @@ function object(value: unknown): Record<string, unknown> {
   return value;
 }
 
-const root = resolve(import.meta.dir, "..");
-const binary = join(root, "build/thirdshift");
 const fixtures: string[] = [];
-beforeAll(async () => {
-  const build = Bun.spawn([process.execPath, "run", "build"], { cwd: root, stdout: "pipe", stderr: "pipe" });
-  const [code, out, err] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-  if (code !== 0) throw new Error(`build: ${out}\n${err}`);
-}, 120_000);
+beforeAll(buildBinary, 120_000);
 
 test("standalone Ticket run claims, links embedded skills and streams a Harness session", async () => {
   const f = await fixture();
@@ -143,12 +138,10 @@ print('{"type":"result","is_error":false,"result":"done"}', end='', flush=True)
   await chmod(join(directory, "gh"), 0o755);
   await chmod(join(directory, "claude"), 0o755);
   function start(url = "https://github.com/test/project/issues/7") {
-    return Bun.spawn([binary, url], { cwd: directory, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    return startBinary([url], directory, env);
   }
-  async function run(url?: string) {
-    const child = start(url);
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, stdout, stderr };
+  function run(url = "https://github.com/test/project/issues/7") {
+    return runBinary([url], directory, env);
   }
   async function issueChange(change: Record<string, unknown>) {
     const file = join(directory, "issue.json");
