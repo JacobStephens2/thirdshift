@@ -159,3 +159,30 @@ Optional `AFTER_DESKTOP` and `AFTER_MOBILE` paths capture the restored Inbox.
 when all changes are under this directory. Changes elsewhere do not select
 this suite. For mixed changes, prototype checks are added independently to
 the existing selector rules. Install dependencies here before using that command.
+
+## Reproducible Rust comparison
+
+From the repository root, with Bun, Rust/Cargo, Git and Chromium installed:
+
+```sh
+bun prototypes/typescript/benchmark.ts --ref HEAD --output /tmp/typescript-benchmark.json
+```
+
+The runner checks out the selected commit in a fresh detached Worktree, installs
+locked dependencies outside the timings, and measures typechecking, slice tests,
+standalone compilation and the ADR-0017 model tests. Each operation gets a cold
+build-output run and an immediate no-edit repeat; the model runs use compiled
+test artifacts. TypeScript explicitly enables `tsc` incremental metadata. Rust
+uses four build jobs and separate empty target directories for check, release
+build and test. OS and dependency-download caches stay warm. Allow several
+minutes and several GB of temporary disk space. Rust compiles the full production
+binary, so these workloads are not feature-equivalent. The JSON retains exact
+commands, output, host/tool versions, per-file physical line counts and owner-file
+slice inventories. Normal completion and command failures remove the Worktree
+and build directories. Only committed files are measured.
+Per-command logs remain beside the output as `<output>.logs/`, including on
+measurement failure, so diagnostics survive Worktree cleanup.
+
+The [empirical report](../../docs/research/typescript-vs-rust.md) contains the
+recorded results, scope limits and architectural comparison; its companion JSON
+is the raw run. This experiment leaves ADR-0001 for the Day shift to decide.

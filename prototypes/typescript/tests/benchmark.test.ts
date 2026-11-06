@@ -32,6 +32,7 @@ test("benchmark CLI measures a pinned fresh worktree and removes it, with tool f
     const tool = `#!/bin/sh
 set -eu
 if [ "\${1:-}" = --version ]; then echo fixture-1; exit; fi
+case "$*" in *install*|fetch*) exit;; esac
 if [ -n "\${FAIL_BENCHMARK:-}" ]; then echo compiler-failed >&2; exit 23; fi
 case "$PWD" in */worktree|*/worktree/prototypes/typescript) ;; *) echo not-a-worktree >&2; exit 24;; esac
 case "$*" in
@@ -62,7 +63,34 @@ echo measured
     const failed = run({ FAIL_BENCHMARK: "1" });
     expect(failed.exitCode).not.toBe(0);
     expect(failed.stderr.toString()).toContain("compiler-failed");
+    expect(await readFile(join(output + ".logs", "typescript-typecheck-cold.log"), "utf8")).toContain("compiler-failed");
     expect(await Bun.file(output).exists()).toBe(false);
     expect(git("worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 120_000);
+
+test("empirical research report covers measured commands, sizes, scope and architectural tradeoffs", async () => {
+  const docs = resolve(import.meta.dir, "../../../docs/research");
+  const report = await readFile(join(docs, "typescript-vs-rust.md"), "utf8");
+  const results = JSON.parse(await readFile(join(docs, "typescript-vs-rust.json"), "utf8"));
+  for (const topic of ["Reproduction", "Measured results", "Source size", "Subprocess and signal", "Exhaustiveness", "Console velocity", "Model checking", "Limitations", "ADR-0001"]) {
+    expect(report).toContain(topic);
+  }
+  expect(results.commit).toMatch(/^[a-f0-9]{40}$/);
+  for (const language of ["typescript", "rust"]) {
+    for (const operation of ["typecheck", "test", "build", "model"]) {
+      for (const cache of ["cold", "incremental"]) {
+        const matches = results.measurements.filter((row: { language: string; operation: string; cache: string }) =>
+          row.language === language && row.operation === operation && row.cache === cache);
+        expect(matches).toHaveLength(1);
+        const row = matches[0];
+        expect(row.exitCode).toBe(0);
+        expect(Number.isFinite(row.seconds) && row.seconds > 0).toBe(true);
+        expect(row.command.length).toBeGreaterThan(1);
+        expect(report).toContain(row.seconds.toFixed(3));
+      }
+    }
+    expect(report).toContain(String(results.binaryBytes[language]));
+    expect(report).toContain(String(results.sources[language].production.lines));
+  }
+});

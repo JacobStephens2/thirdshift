@@ -48,10 +48,12 @@ const measurements: {
   seconds: number; exitCode: number; output: string;
 }[] = [];
 const binaryBytes: Record<string, number> = {};
+const logs = options.output + ".logs";
 let added = false;
 try {
   await command(["git", "worktree", "add", "--detach", worktree, commit], repo);
   added = true;
+  await mkdir(logs, { recursive: true });
   const ts = join(worktree, "prototypes/typescript");
   const versions = {
     bun: (await command(["bun", "--version"], repo)).trim(),
@@ -70,10 +72,18 @@ try {
     } : process.env;
     for (const cache of ["cold", "incremental"]) {
       console.log(`${language} ${operation} ${cache}: ${args.join(" ")}`);
+      const log = join(logs, `${language}-${operation}-${cache}.log`);
       const start = performance.now();
-      const output = await command(args, cwd, env);
+      let output: string;
+      try { output = await command(args, cwd, env); }
+      catch (error) {
+        await writeFile(log, String(error) + "\n");
+        throw new Error(`Measurement failed; retained output: ${log}`, { cause: error });
+      }
+      const seconds = (performance.now() - start) / 1000;
+      await writeFile(log, output);
       measurements.push({ language, operation, cache, command: args, cwd: language === "typescript" ? "prototypes/typescript" : ".",
-        seconds: (performance.now() - start) / 1000, exitCode: 0, output });
+        seconds, exitCode: 0, output });
       console.log(`  ${measurements.at(-1)?.seconds.toFixed(3)}s`);
     }
   }
