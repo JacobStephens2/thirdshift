@@ -86,7 +86,7 @@ impl NeedsYouKind {
 }
 
 /// Why a row left Needs you or Ready for review through the exit this
-/// machine knows: a later Command starting on the same issue.
+/// machine knows: a later Command starting on the same issue or pull request.
 pub(in crate::logs) const TAKEN_UP_REASON: &str = "taken up by a later Command";
 /// Why a waiting row left through GitHub: its pull request merged.
 pub(in crate::logs) const MERGED_REASON: &str = "pull request merged";
@@ -140,6 +140,16 @@ impl Departure {
 }
 
 impl InboxItem<'_> {
+    /// Offer the Fix run only for a pull request still waiting for review
+    /// whose latest kept facts show work for Delivery to repair.
+    pub(in crate::logs) fn fix_command(&self) -> Option<String> {
+        (self.group == Group::ReadyForReview
+            && (self.github.ci == Some(crate::github::InboxCi::Red)
+                || self.github.mergeable == Some(crate::github::InboxMergeable::Conflicting)))
+        .then(|| record_pull_request(&self.command).map(|url| format!("thirdshift fix {url}")))
+        .flatten()
+    }
+
     pub(in crate::logs) fn cause(&self) -> Option<&str> {
         self.command.facts().cause
     }
@@ -453,15 +463,15 @@ pub(super) fn evaluate<'a>(
         .collect();
     let starts: Vec<_> = observations
         .iter()
-        .map(|row| issue_starts(row.command))
+        .map(|row| work_starts(row.command))
         .collect();
-    let starts_by_issue = all_starts(&starts);
+    let starts_by_work = all_starts(&starts);
     let commands_for_resume: Vec<_> = observations.iter().map(|row| row.command).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
-        for (issue, start) in starts {
+        for (work, start) in starts {
             latest
-                .entry(issue)
+                .entry(work)
                 .and_modify(|time: &mut DateTime<FixedOffset>| *time = (*time).max(*start))
                 .or_insert(*start);
         }
@@ -509,15 +519,15 @@ pub(super) fn evaluate<'a>(
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let stopping = captured.stopping;
         // When this row stopped waiting through the later-Command exit:
-        // the earliest later start on any of its issues. Only rows that
-        // waited (ended problems and ready Commands) leave through it, so
+        // the earliest later start on any of its issues or pull requests.
+        // Only rows that waited (ended problems and ready Commands) leave through it, so
         // a Command that never waited keeps going by when it ended, and a
         // row that ages out keeps going straight to History.
         let waited = problem.is_some() || facts.ready;
         let taken_up = if facts.outcome == Some("paused") {
             resumed_at(command, &commands_for_resume, ended)
         } else if waited {
-            superseded_at(starts, &starts_by_issue, ended)
+            superseded_at(starts, &starts_by_work, ended)
         } else {
             None
         };
@@ -549,7 +559,7 @@ pub(super) fn evaluate<'a>(
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
             && !starts
                 .iter()
-                .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start)))
+                .any(|(work, start)| latest.get(work).is_some_and(|latest| latest > start)))
             || github_holds;
         // A dismissal holds for every kind it covered: a row that turns
         // into a kind it wasn't when dismissed waits again. Its kind is
@@ -928,14 +938,21 @@ fn is_landing(command: &Command) -> bool {
             .any(is_landing)
 }
 
-/// Every start on the machine per issue, oldest first.
+/// Work whose later Command can take up an earlier waiting Inbox row.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Work {
+    Issue(String, u64),
+    PullRequest(String),
+}
+
+/// Every start on the machine per issue or pull request, oldest first.
 fn all_starts(
-    starts: &[BTreeMap<(String, u64), DateTime<FixedOffset>>],
-) -> BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> {
-    let mut all: BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> = BTreeMap::new();
+    starts: &[BTreeMap<Work, DateTime<FixedOffset>>],
+) -> BTreeMap<Work, Vec<DateTime<FixedOffset>>> {
+    let mut all: BTreeMap<Work, Vec<DateTime<FixedOffset>>> = BTreeMap::new();
     for starts in starts {
-        for (issue, start) in starts {
-            all.entry(issue.clone()).or_default().push(*start);
+        for (work, start) in starts {
+            all.entry(work.clone()).or_default().push(*start);
         }
     }
     for times in all.values_mut() {
@@ -947,14 +964,14 @@ fn all_starts(
 /// The earliest later start after this row began waiting. An overlapping
 /// Command cannot take up its ended work or hide a subsequent start that can.
 fn superseded_at(
-    starts: &BTreeMap<(String, u64), DateTime<FixedOffset>>,
-    all: &BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>>,
+    starts: &BTreeMap<Work, DateTime<FixedOffset>>,
+    all: &BTreeMap<Work, Vec<DateTime<FixedOffset>>>,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<DateTime<FixedOffset>> {
     starts
         .iter()
-        .filter_map(|(issue, start)| {
-            all.get(issue).and_then(|times| {
+        .filter_map(|(work, start)| {
+            all.get(work).and_then(|times| {
                 times
                     .iter()
                     .find(|time| **time > *start && ended.is_none_or(|end| **time >= end))
@@ -1000,17 +1017,25 @@ fn resumed_at(
         .min()
 }
 
-fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<FixedOffset>> {
+fn work_starts(entry: Observation<'_>) -> BTreeMap<Work, DateTime<FixedOffset>> {
     let mut starts = BTreeMap::new();
-    fn collect(command: &Command, starts: &mut BTreeMap<(String, u64), DateTime<FixedOffset>>) {
+    fn collect(command: &Command, starts: &mut BTreeMap<Work, DateTime<FixedOffset>>) {
         let record = &command.record;
-        if let Some(issue) = &record.issue
-            && let Some(start) = time(Some(&record.started_at))
-        {
-            starts
-                .entry((record.repository.to_ascii_lowercase(), issue.number))
-                .and_modify(|latest| *latest = (*latest).max(start))
-                .or_insert(start);
+        if let Some(start) = time(Some(&record.started_at)) {
+            let issue = record
+                .issue
+                .as_ref()
+                .map(|issue| Work::Issue(record.repository.to_ascii_lowercase(), issue.number));
+            let pull_request = record
+                .pull_request
+                .as_ref()
+                .map(|url| Work::PullRequest(url.trim_end_matches('/').to_ascii_lowercase()));
+            for work in issue.into_iter().chain(pull_request) {
+                starts
+                    .entry(work)
+                    .and_modify(|latest| *latest = (*latest).max(start))
+                    .or_insert(start);
+            }
         }
         for child in command.dispatched.iter().chain(&command.children) {
             collect(child, starts);
@@ -1023,7 +1048,7 @@ fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<Fixe
                 && let Some(start) = time(Some(&command.started_at))
             {
                 starts.insert(
-                    (command.repository.to_ascii_lowercase(), issue.number),
+                    Work::Issue(command.repository.to_ascii_lowercase(), issue.number),
                     start,
                 );
             }
