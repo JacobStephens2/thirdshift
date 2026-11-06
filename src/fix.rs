@@ -21,6 +21,8 @@ use crate::run::Ended;
 use crate::session::Logs;
 use crate::worktree::Worktree;
 
+mod base_ci;
+
 pub(crate) enum Target {
     PullRequest(crate::review::PullRequestInput),
     Pass {
@@ -48,6 +50,11 @@ pub(crate) fn run(
             };
             let github = GitHub::new();
             let base = launch.base.name();
+            if author.is_none()
+                && let Some(ending) = base_ci::run(&launch, command, config, harness)?
+            {
+                return Ok(ending);
+            }
             for pr in github.fix_candidates(&launch.repo, base, author.as_deref())? {
                 if !github.needs_fix(&pr, base, author.as_deref(), false)? {
                     continue;

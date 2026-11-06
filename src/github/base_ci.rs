@@ -23,6 +23,11 @@ pub(crate) enum BaseCiAction {
     Commented(IssueUrl),
 }
 
+pub(crate) enum TipCi {
+    Waiting,
+    Checks(Vec<Check>),
+}
+
 impl BaseCiEvidence {
     fn flaky(&self) -> bool {
         self.run.conclusion.as_deref() == Some("success")
@@ -150,6 +155,119 @@ fn ci_red_report(failure: &BaseCiEvidence) -> CiReport {
 }
 
 impl GitHub {
+    /// Fix Passes re-run only the first failed push attempt on the sampled
+    /// origin tip. Unlike Pickup evidence, this has no filing grace period.
+    pub(crate) fn fix_base_tip(
+        &self,
+        repository: &IssueUrl,
+        base: &str,
+        tip: &str,
+    ) -> Result<TipCi> {
+        let repo = repository.repo();
+        let query =
+            serde_urlencoded::to_string([("branch", base), ("event", "push"), ("per_page", "1")])?;
+        let runs = self.gh_json(&[
+            "api",
+            &format!("repos/{}/actions/runs?{query}", repo.slug()),
+        ])?;
+        let runs = runs["workflow_runs"]
+            .as_array()
+            .context("CI response has no workflow_runs")?;
+        let run = runs
+            .first()
+            .map(|run| serde_json::from_value::<PushRun>(run.clone()))
+            .transpose()?;
+        let run = run.filter(|run| run.head_sha == tip);
+        if run.as_ref().is_some_and(|run| run.status != "completed") {
+            return Ok(TipCi::Waiting);
+        }
+        if let Some(run) = &run
+            && run.conclusion.as_deref() == Some("failure")
+            && run.run_attempt == 1
+            && !self.failed_push_jobs(&repo, run)?.is_empty()
+        {
+            match self.rerun_failed_jobs(repository, run.id) {
+                Ok(()) => {
+                    crate::progress::step(format!(
+                        "re-running failed jobs of run {} on {base}",
+                        run.id
+                    ));
+                    return Ok(TipCi::Waiting);
+                }
+                Err(error) => {
+                    crate::progress::warn(
+                        &error,
+                        format_args!("could not re-run CI on {base}; checking failures for repair"),
+                    );
+                }
+            }
+        }
+        let mut checks = self.checks_on(repository, tip)?;
+        if checks.is_empty()
+            && let Some(run) = run
+            && run.conclusion.as_deref() == Some("failure")
+        {
+            checks.push(Check {
+                name: "push workflow".into(),
+                conclusion: Conclusion::Failure,
+                url: Some(run.html_url),
+                job: None,
+                workflow_run: None,
+            });
+        }
+        Ok(TipCi::Checks(checks))
+    }
+
+    /// Exact head matching across all states also suppresses retries of drafts
+    /// left by a failed attempt. Forks with the same branch name do not cover it.
+    pub(crate) fn base_fix_pr_exists(&self, repo: &Repo, branch: &str) -> Result<bool> {
+        let listed = self.gh_json(&[
+            "pr",
+            "list",
+            "--repo",
+            &repo.slug(),
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--limit",
+            "1000",
+            "--json",
+            "isCrossRepository",
+        ])?;
+        Ok(listed
+            .as_array()
+            .context("PR listing is not an array")?
+            .iter()
+            .any(|pr| pr["isCrossRepository"] == false))
+    }
+
+    pub(crate) fn close_base_ci_issues(&self, repo: &Repo, base: &str, pr: &str) -> Result<()> {
+        let title = format!("CI red on {base}");
+        // CI-red reports need no particular label; Base fixes are labelled.
+        let issues = self.gh_api_items(
+            &format!("repos/{}/issues?state=open&per_page=100", repo.slug()),
+            "",
+        )?;
+        for issue in issues {
+            if issue.get("pull_request").is_some() {
+                continue;
+            }
+            let name = issue["title"].as_str().unwrap_or("");
+            if name != title && !name.starts_with(&format!("{title}: ")) {
+                continue;
+            }
+            let url = IssueUrl::parse(issue["html_url"].as_str().context("issue has no URL")?)?;
+            self.close_issue(
+                &url,
+                &format!(
+                    "Closed by {pr}, merged into {base} by a thirdshift Fix run with Self-merge."
+                ),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Read the latest push attempt and its preceding outcome. A pending latest
     /// run hides earlier failures. A failed evidence read never publishes a
     /// Ticket. Flaky reports read job logs before publication; a CI-red report

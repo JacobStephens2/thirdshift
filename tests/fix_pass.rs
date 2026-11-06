@@ -360,7 +360,10 @@ fn candidate_changed_after_selection_is_released_and_the_next_pr_is_taken() {
             let head = scenario.origin_git(&["rev-parse", branch]);
             state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
         }
-        state["on_ci_read"] = json!({"times":1, "seen":[], "script":action});
+        // The race happens after PR selection; the unscoped Pass now observes
+        // Base branch CI before reading a candidate's head.
+        let base_head = scenario.origin_git(&["rev-parse", "main"]);
+        state["on_ci_read"] = json!({"times":1, "seen":[base_head.trim()], "script":action});
         scenario.write_gh_state(&state);
         scenario.agent_does("exit 1");
         let result = scenario.run(&["fix", "no-base-fix", "no-email"]);

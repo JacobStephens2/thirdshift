@@ -125,6 +125,92 @@ impl OpeningSession {
 }
 
 impl Delivery<'_> {
+    /// A newly authored Base branch repair has no issue or adopted PR head.
+    /// Its opening session shares Delivery's failure preservation and merge gates.
+    pub(crate) fn base_ci_fix(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        title: &str,
+        failed: &[crate::github::Check],
+    ) -> Result<Reached, FailedRun> {
+        let tracker = Tracker::new(Stage::RepairSession, CommandLog);
+        let context = RepairContext::BaseBranch(self.base);
+        let body = format!(
+            "Repairs CI on `{}`.\n\n{}",
+            self.base,
+            ci::check_list(failed)
+        );
+        run_checked(
+            CheckedRun {
+                logs: self.logs,
+                started: self.started,
+                harness: &self.child_asks.harness,
+                security_review: None,
+                security_review_default: None,
+                base: self.base,
+                context,
+            },
+            worktree.for_fix_run(),
+            pull_request,
+            &tracker,
+            |resolution, log| Reached {
+                resolution,
+                log,
+                ticket_lines: Vec::new(),
+            },
+            |merged, log| Reached {
+                resolution: Resolution::PullRequest {
+                    url: merged.pr.url.clone(),
+                    goal: Goal::Merged,
+                },
+                log,
+                ticket_lines: Vec::new(),
+            },
+            |tracker, worktree, pull_request, sessions| {
+                let mut outside = InWorktree {
+                    tracker,
+                    issue: self.issue,
+                    worktree,
+                    base: self.base,
+                    base_fix: self.base_fix,
+                    child_asks: self.child_asks,
+                    sessions,
+                    pull_request,
+                    repair_cap: self.repair_cap,
+                    protected_paths: self.protected_paths,
+                    context,
+                };
+                outside.session(
+                    Kind::Implementation,
+                    &prompt::base_ci_fix(self.base, worktree.branch(), failed),
+                )?;
+                outside.push()?;
+                outside.pull_request.open_if_absent(title, &body)?;
+                let identified = outside
+                    .pull_request
+                    .info()
+                    .context("Base CI fix has no PR")?;
+                let pr = crate::review::PullRequestUrl::parse(&identified.url)?;
+                let _held =
+                    crate::review::Reservation::take(worktree.launch(), &GitHub::new(), &pr)?
+                        .context("Base CI fix PR is already reserved")?;
+                crate::logs::pull_request(&pr.url);
+                outside.write_built_with(&self.child_asks.harness)?;
+                outside.stage(Stage::PullRequestReadiness);
+                outside.mark_pr_ready(None)?;
+                outside.take_to_goal(&pr.url, self.goal)?;
+                if self.goal == Goal::Merged {
+                    delete_branch_after_merge(&mut outside, worktree.branch());
+                }
+                Ok(Resolution::PullRequest {
+                    url: pr.url,
+                    goal: self.goal,
+                })
+            },
+        )
+    }
+
     /// An existing PR enters Delivery directly; no implementation or initial
     /// review runs, and closing-issue context is refreshed before every Repair.
     pub fn fix_run(
@@ -394,6 +480,7 @@ impl Delivery<'_> {
 enum RepairContext<'a> {
     Issue(&'a IssueUrl),
     PullRequest(&'a crate::review::PullRequestUrl),
+    BaseBranch(&'a str),
 }
 
 impl<'a> RepairContext<'a> {
@@ -401,6 +488,7 @@ impl<'a> RepairContext<'a> {
         match self {
             Self::Issue(issue) => prompt::RepairSubject::Issue(issue),
             Self::PullRequest(pr) => prompt::RepairSubject::PullRequest(&pr.url),
+            Self::BaseBranch(base) => prompt::RepairSubject::BaseBranch(base),
         }
     }
 }
@@ -450,6 +538,7 @@ fn run_checked<T, S>(
             no_untrusted_edit_since(issue, started, "Ticket run")?;
             hand_over_issue(issue, &path)
         }
+        RepairContext::BaseBranch(_) => Ok(()),
     };
     let (delivered, log) = Sessions::checked_within(
         logs,

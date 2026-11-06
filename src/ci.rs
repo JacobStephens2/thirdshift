@@ -718,6 +718,11 @@ pub(crate) fn needs_repair(checks: &[Check]) -> bool {
         && checks.iter().any(|check| reading(check) == Reading::Failed)
 }
 
+/// Base branch maintenance owns every failed check, with no inheritance split.
+pub(crate) fn base_failures(checks: Vec<Check>) -> Vec<Check> {
+    checks.into_iter().filter(is_failed).collect()
+}
+
 /// Interpret a check consistently for selection and CI watch.
 fn reading(check: &Check) -> Reading {
     match &check.conclusion {
