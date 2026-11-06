@@ -8,7 +8,7 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { createServer } = require('node:http');
 const { chromium } = require('./playwright.cjs');
-const binary = process.env.THIRDSHIFT_BINARY || resolve('target/debug/thirdshift');
+const binary = process.env.THIRDSHIFT_BINARY || resolve(__dirname, '../../target/debug/thirdshift');
 
 async function fixture(t, commands) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-spec-review-'));
@@ -18,26 +18,27 @@ async function fixture(t, commands) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({version: 2, hostname: 'fixture', active_runs: 0, commands, machines: []}));
   });
-  await new Promise(resolve => remote.listen(0, '127.0.0.1', resolve));
-  await writeFile(join(root, 'config.toml'), `[console]\nport = 0\nfleet = [{ name = "remote", address = "http://127.0.0.1:${remote.address().port}" }]\n`);
-  await writeFile(join(root, 'credentials.toml'), '[fleet]\nremote = "fixture"\n', {mode: 0o600});
-  const child = spawn(binary, ['console', '--no-sign-in'], {
-    env: {...process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '100'}, stdio: ['ignore', 'pipe', 'inherit']
-  });
-  const exited = once(child, 'exit');
-  const lines = createInterface({input: child.stdout});
-  let origin;
-  try { [origin] = await once(lines, 'line', {signal: AbortSignal.timeout(15000)}); }
-  finally { lines.close(); }
-  const browser = await chromium.launch({headless: true});
+  let child, exited, browser;
   t.after(async () => {
-    await browser.close();
-    if (child.exitCode === null) child.kill();
+    await browser?.close();
+    if (child?.exitCode === null) child.kill();
     await exited;
     remote.closeAllConnections();
     await new Promise(resolve => remote.close(resolve));
     await rm(home, {recursive: true, force: true});
   });
+  await new Promise(resolve => remote.listen(0, '127.0.0.1', resolve));
+  await writeFile(join(root, 'config.toml'), `[console]\nport = 0\nfleet = [{ name = "remote", address = "http://127.0.0.1:${remote.address().port}" }]\n`);
+  await writeFile(join(root, 'credentials.toml'), '[fleet]\nremote = "fixture"\n', {mode: 0o600});
+  child = spawn(binary, ['console', '--no-sign-in'], {
+    env: {...process.env, HOME: home, THIRDSHIFT_FLEET_INTERVAL_MS: '100'}, stdio: ['ignore', 'pipe', 'inherit']
+  });
+  exited = once(child, 'exit').catch(error => { if (error.code !== 'ENOENT') throw error; });
+  const lines = createInterface({input: child.stdout});
+  let origin;
+  try { [origin] = await once(lines, 'line', {signal: AbortSignal.timeout(15000)}); }
+  finally { lines.close(); }
+  browser = await chromium.launch({headless: true});
   return { page: await browser.newPage(), origin };
 }
 function command(name, outcome = 'ready for review') {
