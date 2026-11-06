@@ -48,11 +48,15 @@ pub(crate) struct Week {
     initial_calibration: bool,
 }
 
-pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
-    let repo = Repo {
+pub(crate) fn repository() -> Repo {
+    Repo {
         owner: "JacobStephens2".into(),
         name: "thirdshift".into(),
-    };
+    }
+}
+
+pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
+    let repo = repository();
     logs::started(logs::Work::ScoringRun(&repo), &config.scoring.grader());
     logs::resumable("thirdshift score");
     if config.scoring.owners.is_empty() {

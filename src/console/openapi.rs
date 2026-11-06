@@ -204,7 +204,11 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::LaunchDirectories => object(json!({
             "directories": array(object(json!({"repository": text, "path": text})))
         })),
-        View::StartRun => object(json!({"version": version, "name": text})),
+        View::StartRun => json!({"oneOf": [
+            object(json!({"version": version, "name": text})),
+            object(json!({"version": version, "outcome": {"const":"skipped"}, "reason": text})),
+            object(json!({"version": version, "outcome": {"const":"started"}, "process_id": integer}))
+        ]}),
         View::Resources | View::ResourceStatus => object(json!({
             "host": object(json!({"total_memory_mb": integer, "available_memory_mb": integer,
                 "logical_cpus": integer, "load_one": {"type": "number"}})),
@@ -246,25 +250,7 @@ fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
     let (properties, required) = match view {
         View::StartRun => {
-            return json!({"required": true, "content": {"application/json": {"schema": {
-                "type": "object", "required": ["repository", "issue"], "additionalProperties": false,
-                "properties": {
-                    "repository": text,
-                    "issue": {"oneOf": [{"type":"integer", "minimum":1}, {"type":"string"}]},
-                    "merge": {"type":"boolean"}, "base_fix": {"type":"boolean"},
-                    "security_review": {"type":"boolean"}, "security_fix": {"type":"boolean"},
-                    "harness": {"type":"string", "enum": ["claude","codex","agy","grok","muse","opencode"]},
-                    "model": text, "effort": text,
-                    "email": {"oneOf": [
-                        {"type":"object", "required":["mode"], "additionalProperties":false, "properties":{
-                            "mode":{"enum":["always","unless_merged"]}, "address":text
-                        }},
-                        {"type":"object", "required":["mode"], "additionalProperties":false, "properties":{
-                            "mode":{"const":"never"}
-                        }}
-                    ]}
-                }
-            }}}});
+            return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
         }
         View::SetConfig => (json!({"value": text}), vec!["value"]),
         View::ThemeImport => {
@@ -341,6 +327,108 @@ fn action_body(view: View) -> Value {
     json!({"required":!required.is_empty(),"content":{"application/x-www-form-urlencoded":{"schema":{
         "type":"object", "properties":properties,"required":required
     }}}})
+}
+
+fn start_schema() -> Value {
+    let text = json!({"type":"string"});
+    let boolean = json!({"type":"boolean"});
+    let fields = json!({
+        "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
+        "pull_request": text, "author": text, "name": text,
+        "base": text, "focus": text, "report": {"type":"string","minLength":1},
+        "order": {"enum":["lowest-first","highest-first"]},
+        "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
+        "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
+        "security_review": boolean, "security_fix": boolean, "security_close": boolean,
+        "parallel": {"type":"integer","minimum":1},
+        "harness": {"enum":["claude","codex","agy","grok","muse","opencode"]},
+        "model": text, "effort": text,
+        "email": {"oneOf":[
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"enum":["always","unless_merged"]},"address":text}},
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"const":"never"}}}
+        ]}
+    });
+    let shared = [
+        "merge",
+        "email",
+        "harness",
+        "model",
+        "effort",
+        "base_fix",
+        "security_review",
+        "security_fix",
+        "security_close",
+        "parallel",
+    ];
+    let mut variants = Vec::new();
+    for (command, own, common, required) in [
+        ("ticket", vec!["issue"], shared.to_vec(), vec!["issue"]),
+        (
+            "architect",
+            vec!["base", "focus", "plan_only"],
+            shared.to_vec(),
+            vec![],
+        ),
+        ("pickup", vec!["base", "order"], shared.to_vec(), vec![]),
+        ("secure", vec!["base"], shared.to_vec(), vec![]),
+        (
+            "review",
+            vec!["pull_request", "author", "recommend_only"],
+            vec!["email", "harness", "model", "effort", "security_review"],
+            vec![],
+        ),
+        (
+            "process",
+            vec!["name", "issue", "pull_request", "plan_only"],
+            vec![
+                "merge",
+                "email",
+                "harness",
+                "model",
+                "effort",
+                "security_review",
+                "security_fix",
+                "security_close",
+            ],
+            vec!["name"],
+        ),
+        ("skill", vec!["name", "issue"], vec![], vec!["name"]),
+        ("score", vec![], vec![], vec![]),
+        (
+            "triage",
+            vec![
+                "report",
+                "read_machine",
+                "recommend_only",
+                "allow_ready_for_agent",
+            ],
+            vec!["email", "harness", "model", "effort"],
+            vec!["report"],
+        ),
+    ] {
+        let mut properties = serde_json::Map::new();
+        for key in ["repository"].into_iter().chain(own).chain(common) {
+            properties.insert(key.into(), fields[key].clone());
+        }
+        properties.insert("command".into(), json!({"const":command}));
+        let mut required: Vec<_> = required.into_iter().chain(["repository"]).collect();
+        if command != "ticket" {
+            required.push("command");
+        }
+        let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
+        if command == "review" {
+            variant["oneOf"] = json!([
+                {"required":["pull_request"],"not":{"required":["author"]}},
+                {"required":["author"],"not":{"required":["pull_request"]}}
+            ]);
+        } else if command == "process" {
+            variant["not"] = json!({"required":["issue","pull_request"]});
+        }
+        variants.push(variant);
+    }
+    json!({"oneOf":variants})
 }
 
 fn setting() -> Value {

@@ -33,6 +33,7 @@ mod run_metrics;
 pub(crate) mod session;
 pub(crate) mod session_signals;
 pub(crate) mod spans;
+pub(crate) mod start_notice;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
@@ -318,6 +319,7 @@ pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
+    start_notice::skipped(&reason);
     record().skipped(pass, repo, reason);
 }
 

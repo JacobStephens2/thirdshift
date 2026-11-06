@@ -1,12 +1,13 @@
-//! Requested Ticket/Spec runs: CLI arguments, detached lifetime and observation.
+//! Requested work: CLI arguments, detached lifetime and observation.
 use std::fs::OpenOptions;
+use std::io::{Seek, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::{Extension, Json, response::Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{api, auth::Viewer};
 use crate::{
@@ -57,7 +58,9 @@ impl Email {
 #[serde(deny_unknown_fields)]
 pub(super) struct Request {
     repository: String,
-    issue: Issue,
+    #[serde(default)]
+    command: Kind,
+    issue: Option<Issue>,
     merge: Option<bool>,
     email: Option<Email>,
     harness: Option<String>,
@@ -66,12 +69,58 @@ pub(super) struct Request {
     base_fix: Option<bool>,
     security_review: Option<bool>,
     security_fix: Option<bool>,
+    security_close: Option<bool>,
+    parallel: Option<std::num::NonZeroUsize>,
+    base: Option<String>,
+    focus: Option<String>,
+    plan_only: Option<bool>,
+    order: Option<Order>,
+    pull_request: Option<String>,
+    author: Option<String>,
+    recommend_only: Option<bool>,
+    name: Option<String>,
+    report: Option<String>,
+    read_machine: Option<bool>,
+    allow_ready_for_agent: Option<bool>,
 }
 
-#[derive(Serialize)]
-struct Started {
-    version: u8,
-    name: String,
+#[derive(Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Kind {
+    #[default]
+    Ticket,
+    Architect,
+    Pickup,
+    Secure,
+    Review,
+    Process,
+    Skill,
+    Score,
+    Triage,
+}
+
+#[derive(Deserialize)]
+enum Order {
+    #[serde(rename = "lowest-first")]
+    LowestFirst,
+    #[serde(rename = "highest-first")]
+    HighestFirst,
+}
+
+impl Kind {
+    fn word(&self) -> &'static str {
+        match self {
+            Self::Ticket => "ticket",
+            Self::Architect => "architect",
+            Self::Pickup => "pickup",
+            Self::Secure => "secure",
+            Self::Review => "review",
+            Self::Process => "process",
+            Self::Skill => "skill",
+            Self::Score => "score",
+            Self::Triage => "triage",
+        }
+    }
 }
 
 impl Request {
@@ -91,7 +140,140 @@ impl Request {
             owner: parts[0].into(),
             name: parts[1].into(),
         };
-        let input = match &self.issue {
+        self.check_fields()?;
+        let issue = self.issue_url(&repo)?;
+        let mut args = if self.command == Kind::Ticket {
+            vec![issue.clone().context("issue is required")?]
+        } else {
+            vec![self.command.word().into()]
+        };
+        if matches!(self.command, Kind::Process | Kind::Skill) {
+            args.push(self.name.clone().context("name is required")?);
+            if let Some(issue) = issue {
+                args.extend(["issue".into(), issue]);
+            }
+        }
+        if let Some(url) = &self.pull_request {
+            let pr = crate::review::PullRequestUrl::parse(url)?;
+            ensure!(
+                pr.issue.repo().slug().eq_ignore_ascii_case(&repo.slug()),
+                "pull request must be in {}",
+                repo.slug()
+            );
+            if self.command == Kind::Process {
+                args.push("pull-request".into());
+            }
+            args.push(url.clone());
+        }
+        if let Some(author) = &self.author {
+            args.extend(["--author".into(), author.clone()]);
+        }
+        if let Some(base) = &self.base {
+            args.extend(["--base".into(), base.clone()]);
+        }
+        if let Some(focus) = &self.focus {
+            args.push(focus.clone());
+        }
+        if let Some(order) = &self.order {
+            args.push(
+                match order {
+                    Order::LowestFirst => "--lowest-first",
+                    Order::HighestFirst => "--highest-first",
+                }
+                .into(),
+            );
+        }
+        for (enabled, word) in [
+            (self.plan_only, "--plan-only"),
+            (self.recommend_only, "--recommend-only"),
+            (self.read_machine, "--read-machine"),
+            (self.allow_ready_for_agent, "--allow-ready-for-agent"),
+        ] {
+            if enabled == Some(true) {
+                args.push(word.into());
+            }
+        }
+        crate::args::public_flag_words(&self.flags()?, &mut args);
+        // The CLI decides allowed options and combinations. Also verify positional
+        // JSON values stayed positional rather than becoming a CLI flag/subcommand.
+        match crate::args::parse(&args)? {
+            crate::args::Command::Architect(parsed) => ensure!(
+                parsed.focus == self.focus,
+                "focus must be literal focus text"
+            ),
+            crate::args::Command::Process(crate::args::ProcessAction::Run(parsed)) => ensure!(
+                Some(&parsed.name) == self.name.as_ref(),
+                "name must be a Process name"
+            ),
+            crate::args::Command::Process(_) => bail!("only a Process run can be started"),
+            _ => {}
+        }
+        Ok((repo, args))
+    }
+
+    fn check_fields(&self) -> Result<()> {
+        use Kind::*;
+        let kind = &self.command;
+        for (present, allowed, field) in [
+            (
+                self.issue.is_some(),
+                matches!(kind, Ticket | Process | Skill),
+                "issue",
+            ),
+            (self.name.is_some(), matches!(kind, Process | Skill), "name"),
+            (
+                self.pull_request.is_some(),
+                matches!(kind, Review | Process),
+                "pull_request",
+            ),
+            (self.author.is_some(), matches!(kind, Review), "author"),
+            (
+                self.base.is_some(),
+                matches!(kind, Architect | Pickup | Secure),
+                "base",
+            ),
+            (self.focus.is_some(), matches!(kind, Architect), "focus"),
+            (
+                self.plan_only.is_some(),
+                matches!(kind, Architect | Process),
+                "plan_only",
+            ),
+            (self.order.is_some(), matches!(kind, Pickup), "order"),
+            (
+                self.recommend_only.is_some(),
+                matches!(kind, Review | Triage),
+                "recommend_only",
+            ),
+            (self.report.is_some(), matches!(kind, Triage), "report"),
+            (
+                self.read_machine.is_some(),
+                matches!(kind, Triage),
+                "read_machine",
+            ),
+            (
+                self.allow_ready_for_agent.is_some(),
+                matches!(kind, Triage),
+                "allow_ready_for_agent",
+            ),
+        ] {
+            ensure!(!present || allowed, "{} takes no {field}", kind.word());
+        }
+        if *kind == Triage {
+            ensure!(
+                self.report
+                    .as_ref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+                "report text is required"
+            );
+        }
+        Ok(())
+    }
+
+    fn issue_url(&self, repo: &Repo) -> Result<Option<String>> {
+        let Some(issue) = &self.issue else {
+            return Ok(None);
+        };
+        let input = match issue {
             Issue::Number(number) => IssueInput::parse(&number.to_string())?,
             Issue::Text(text) => IssueInput::parse(text)?,
         };
@@ -108,11 +290,7 @@ impl Request {
             "issue must be a positive number or an Issue URL in {}",
             repo.slug()
         );
-        let record_repo = issue.repo();
-        let mut args = vec![issue.url];
-        crate::args::public_flag_words(&self.flags()?, &mut args);
-        crate::args::parse(&args)?;
-        Ok((record_repo, args))
+        Ok(Some(issue.url))
     }
 
     fn flags(&self) -> Result<Flags> {
@@ -125,6 +303,7 @@ impl Request {
                 }
             }),
             email: self.email.as_ref().map(Email::ask).transpose()?,
+            parallel: self.parallel,
             base_fix: self.base_fix.map(|fix| {
                 if fix {
                     BaseFixAsk::Allow
@@ -137,6 +316,13 @@ impl Request {
                     crate::security::FixAsk::Allow
                 } else {
                     crate::security::FixAsk::Forbid
+                }
+            }),
+            security_close: self.security_close.map(|close| {
+                if close {
+                    crate::security::CloseAsk::Allow
+                } else {
+                    crate::security::CloseAsk::Forbid
                 }
             }),
             security_review: self.security_review.map(|review| {
@@ -159,7 +345,6 @@ impl Request {
                     effort: self.effort.clone(),
                 },
             },
-            ..Flags::default()
         })
     }
 }
@@ -171,7 +356,7 @@ pub(super) async fn submit(
     api::action(api::Format::Json, "/", move || start(request, viewer)).await
 }
 
-fn start(request: Request, viewer: Viewer) -> Result<Started> {
+fn start(request: Request, viewer: Viewer) -> Result<serde_json::Value> {
     let (repo, args) = request.arguments()?;
     let inventory = crate::launch_directories::load()?;
     let directory = inventory
@@ -190,6 +375,15 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
         .open(&log_path)?;
     let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
     let mut command = Command::new(shell);
+    let notice = tempfile::NamedTempFile::new()?;
+    let stdin = if let Some(report) = &request.report {
+        let mut file = tempfile::tempfile()?;
+        file.write_all(report.as_bytes())?;
+        file.rewind()?;
+        Stdio::from(file)
+    } else {
+        Stdio::null()
+    };
     command
         .args([
             "-l",
@@ -205,7 +399,8 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             crate::logs::Actor::START_ENV,
             serde_json::to_string(&viewer.activity_actor())?,
         )
-        .stdin(Stdio::null())
+        .env(crate::logs::start_notice::ENV, notice.path())
+        .stdin(stdin)
         .stdout(log.try_clone()?)
         .stderr(log);
     // SAFETY: setsid is async-signal-safe and touches no Rust state after fork.
@@ -217,16 +412,29 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             Ok(())
         });
     }
+    let record_repo = if request.command == Kind::Score {
+        crate::scoring::repository()
+    } else {
+        Repo::of_origin(&format!("https://github.com/{}", directory.repository))
+            .context("known Launch directory must name a GitHub repository")?
+    };
     let started_after = chrono::Local::now();
     let mut child = command
         .spawn()
         .context("can't start thirdshift with the login shell")?;
-    let result = wait_for_record(&mut child, &config, &repo, &log_path, started_after);
+    let result = wait_for_record(
+        &mut child,
+        &config,
+        &record_repo,
+        &log_path,
+        started_after,
+        notice.path(),
+    );
     // Dropping std::process::Child does not reap it. The Console may outlive it.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    result.map(|name| Started { version: 1, name })
+    result
 }
 
 fn wait_for_record(
@@ -235,20 +443,31 @@ fn wait_for_record(
     repo: &Repo,
     log: &std::path::Path,
     started_after: chrono::DateTime<chrono::Local>,
-) -> Result<String> {
+    notice: &std::path::Path,
+) -> Result<serde_json::Value> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
+        if let Some(response) = crate::logs::start_notice::read(notice, child.id())?
+            && response["outcome"] == "started"
+        {
+            return Ok(response);
+        }
         if let Some(name) =
             crate::logs::command_for_process(config, repo, child.id(), started_after)?
         {
-            return Ok(name);
+            return Ok(serde_json::json!({"version":1,"name":name}));
         }
         if let Some(status) = child.try_wait()? {
             // A very short run can publish and finish between the first read and exit.
             if let Some(name) =
                 crate::logs::command_for_process(config, repo, child.id(), started_after)?
             {
-                return Ok(name);
+                return Ok(serde_json::json!({"version":1,"name":name}));
+            }
+            if status.success()
+                && let Some(skipped) = crate::logs::start_notice::read(notice, child.id())?
+            {
+                return Ok(skipped);
             }
             bail!(
                 "thirdshift exited with {status} before a Command record appeared; see {}",
