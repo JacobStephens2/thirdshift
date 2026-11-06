@@ -849,6 +849,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let handler = if matches!(page.view, View::Config) {
             // The API is admin-only; a person with read may see the page.
             handler.layer(middleware::from_fn(auth::require_config_view))
+        } else if matches!(page.view, View::Look | View::Themes | View::ThemeExport) {
+            handler.layer(middleware::from_fn(auth::require_look_view))
         } else if let Some(scope) = page.scope {
             handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
         } else {

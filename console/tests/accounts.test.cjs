@@ -51,7 +51,7 @@ test("Update shows versions only for admin and Theme import controls follow admi
   const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
   const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
   t.after(() => scopes("read,security,act,run,admin"));
-  for (const scope of ["read,act", "read,act,admin"]) {
+  for (const scope of ["read,act", "read,act,admin", "admin"]) {
     scopes(scope);
     for (const viewport of [{width:1440,height:900}, {width:390,height:844}]) {
       const context = await browser.newContext({viewport});
@@ -63,6 +63,8 @@ test("Update shows versions only for admin and Theme import controls follow admi
         await page.getByLabel("Email").fill("owner@example.test");
         await page.getByLabel("Password", {exact:true}).fill("browser test password");
         await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", {name:"Sign in",exact:true}).click()]);
+        // Admin alone may administer the machine even without access to Inbox.
+        if (scope === "admin") await page.goto(`${origin}/config`);
         const admin = scope.includes("admin");
         assert.equal(await page.getByRole("link", {name:"Update thirdshift",exact:true}).count(), admin ? 1 : 0);
         await page.locator("[data-open-themes]").click();
@@ -70,6 +72,18 @@ test("Update shows versions only for admin and Theme import controls follow admi
         assert.equal(await page.locator("#save-theme").count(), admin ? 1 : 0);
         await page.locator("#export-theme").click();
         await page.waitForFunction(() => document.querySelector("#theme-document").value.length > 0);
+        if (scope === "admin") {
+          const theme = JSON.parse(await page.locator("#theme-document").inputValue());
+          theme.name = `admin-only-${viewport.width}`;
+          await page.locator("#theme-document").fill(JSON.stringify(theme));
+          await page.locator("#save-theme").click();
+          await page.getByText("Theme saved.", {exact:true}).waitFor();
+          await page.locator("#theme-name").selectOption(theme.name);
+          await page.locator("#export-theme").click();
+          await page.waitForFunction(name => JSON.parse(document.querySelector("#theme-document").value).name === name, theme.name);
+          assert.equal(await page.getByRole("button", {name:"Apply Theme",exact:true}).count(), 0);
+          assert.equal(await page.locator("[data-open-sections]").count(), 0);
+        }
         const response = await page.goto(`${origin}/update`);
         assert.equal(response.status(), admin ? 200 : 403);
         if (admin) {
