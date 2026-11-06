@@ -228,10 +228,12 @@ impl Cli {
             });
         }
         let command = args::parse(&words)?;
-        let operation = match command {
-            args::Command::Config { key, value, json } => Operation::Config { key, value, json },
-            args::Command::Update { check, json } => Operation::Update { check, json },
-            _ => bail!("--machine supports start, config and update"),
+        let operation = if let args::Command::Config { key, value, json } = command {
+            Operation::Config { key, value, json }
+        } else if let args::Command::Update { check, json } = command {
+            Operation::Update { check, json }
+        } else {
+            bail!("--machine supports start, config and update")
         };
         Ok(Self { machine, operation })
     }
@@ -251,14 +253,14 @@ impl Cli {
                     Some(remote) => remote.get("/start-options")?,
                     None => serde_json::to_value(super::start_controls::Options::load(&config)?)?,
                 };
-                return Ok(serde_json::to_string_pretty(&value)?);
+                Ok(serde_json::to_string_pretty(&value)?)
             }
             Operation::Start(request) => {
                 let value = match remote {
                     Some(remote) => remote.post_json("/runs", &request)?,
                     None => super::start::cli(request)?,
                 };
-                return Ok(serde_json::to_string_pretty(&value)?);
+                Ok(serde_json::to_string_pretty(&value)?)
             }
             Operation::Config { key, value, json } => {
                 let Some(remote) = remote else {
