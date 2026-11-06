@@ -366,7 +366,7 @@ The shorter `curl -fsSL https://thirdshift.app/install.sh | sh`, shown on [third
 
 thirdshift is a statically linked Rust binary with the Factory skills compiled in. Unlike an interpreted script, it needs neither a language runtime nor a checkout of thirdshift on the target machine ([ADR-0001](adr/0001-rust-binary-with-embedded-skills.md), [ADR-0003](adr/0003-static-binaries-through-github-releases.md)).
 
-Rust's data-carrying `enum`s represent the unattended Run, Claim and CI states. Exhaustive `match` means adding a state fails compilation until every match handles it. Pickup's reservation protocol across competing hosts is model-checked with `stateright` inside `cargo test` ([ADR-0017](adr/0017-pickup-reserves-issues-on-origin.md)). These checks matter when nobody is watching the control flow.
+Rust's data-carrying `enum`s represent the unattended Ticket run, Claim and CI states. Exhaustive `match` means adding a state fails compilation until every match handles it. Pickup's reservation protocol across competing hosts is model-checked with `stateright` inside `cargo test` ([ADR-0017](adr/0017-pickup-reserves-issues-on-origin.md)). These checks matter when nobody is watching the control flow.
 
 The installer ends by pointing you to Setup. Run `thirdshift setup` to choose your defaults, or just start a Ticket run and thirdshift will offer it (see [User config](#user-config)).
 
