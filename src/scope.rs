@@ -535,6 +535,9 @@ fn scope_base(unit: &str, caps: Option<&Caps>) -> Command {
             // when its parent catches the failure or ignores SIGTERM.
             "--property=OOMPolicy=kill",
         ]);
+    } else {
+        // Let the Harness observe a child tool's OOM exit and recover.
+        command.arg("--property=OOMPolicy=continue");
     }
     command.arg("--");
     command
@@ -783,10 +786,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn availability_probes_the_manager_on_every_platform() {
+    fn availability_and_oom_policies_are_explicit_on_every_platform() {
         const FIXTURE: &str = "THIRDSHIFT_SCOPE_AVAILABILITY_FIXTURE";
         if let Some(directory) = std::env::var_os(FIXTURE) {
             assert!(available(), "the fixture's manager is reachable");
+            let mut session = session_command("unused");
+            let session_args: Vec<_> = session.command().get_args().collect();
+            assert!(session_args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=continue")));
+            assert!(!session_args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=kill")));
+            let caps = Caps::default();
+            let trial = trial_command(Path::new("unused"), &[], "policy", 1, &caps).unwrap();
+            let grader = grader_command(Path::new("unused"), &[], Path::new("."), &caps).unwrap();
+            for launch in [trial, grader] {
+                let args: Vec<_> = launch.command.get_args().collect();
+                assert!(args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=kill")));
+                assert!(!args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=continue")));
+            }
             let _session = trial_session_command("unused");
             let manager = Path::new(&directory).join("systemctl");
             std::fs::write(&manager, "#!/bin/sh\nexit 1\n").unwrap();
@@ -800,7 +815,7 @@ mod tests {
             crate::test_support::write_executable(&program, "#!/bin/sh\nexit 0\n");
         }
         crate::test_support::assert_test_without_warnings(
-            "scope::tests::availability_probes_the_manager_on_every_platform",
+            "scope::tests::availability_and_oom_policies_are_explicit_on_every_platform",
             |command| {
                 command
                     .env(FIXTURE, directory.path())

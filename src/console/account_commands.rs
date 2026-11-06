@@ -5,6 +5,70 @@ use std::io::Write;
 use super::accounts::Accounts;
 use crate::config::UserConfig;
 
+pub(crate) struct Scopes {
+    email: Option<String>,
+    scopes: Option<Vec<super::Scope>>,
+    json: bool,
+}
+
+impl Scopes {
+    pub(crate) fn parse(args: &[String]) -> Result<Self> {
+        let usage = "usage: thirdshift console scopes [--email <address>] [--scopes read,security,act,run,admin] [--json]";
+        let mut command = Self {
+            email: None,
+            scopes: None,
+            json: false,
+        };
+        let mut args = args.iter();
+        while let Some(flag) = args.next() {
+            match flag.as_str() {
+                "--email" if command.email.is_none() => {
+                    command.email = Some(
+                        args.next()
+                            .filter(|email| !email.starts_with('-'))
+                            .ok_or_else(|| anyhow::anyhow!(usage))?
+                            .clone(),
+                    );
+                }
+                "--scopes" if command.scopes.is_none() => {
+                    command.scopes = Some(super::Scope::parse(
+                        args.next().ok_or_else(|| anyhow::anyhow!(usage))?,
+                    )?);
+                }
+                "--json" if !command.json => command.json = true,
+                _ => bail!(usage),
+            }
+        }
+        Ok(command)
+    }
+
+    pub(crate) fn run(self) -> Result<String> {
+        let email = email(self.email.as_deref())?;
+        let settings = if let Some(scopes) = self.scopes {
+            crate::config::console::write_address_scopes(&email, scopes)?
+        } else {
+            UserConfig::load()?.console
+        };
+        ensure!(
+            settings.allowed_emails.contains(&email),
+            "address is not allowed in console.allowed_emails"
+        );
+        let scopes = settings.scopes_for(&email);
+        Ok(if self.json {
+            serde_json::json!({"email": email, "scopes": scopes}).to_string()
+        } else {
+            format!(
+                "{email}: {}",
+                scopes
+                    .iter()
+                    .map(|scope| scope.name())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        })
+    }
+}
+
 fn email(given: Option<&str>) -> Result<String> {
     if let Some(email) = given {
         return Ok(email.into());
@@ -63,7 +127,7 @@ pub fn print_log(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&events)?);
     } else {
         for event in events {
-            println!("{} {} {}", event.time, event.email, event.event);
+            println!("{} {} {}", event.time, event.email, event.summary());
         }
     }
     Ok(())

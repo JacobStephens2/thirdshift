@@ -244,23 +244,37 @@ fn write_mine(
 
 fn display(weeks: &[Week], calibration: &calibration::Calibration, json: bool) -> Result<String> {
     if json {
-        let mut view = serde_json::to_value(weeks)?;
-        for week in view.as_array_mut().unwrap() {
-            for pr in week["sample"].as_array_mut().unwrap() {
-                if let Some(scores) = pr
-                    .get_mut("assessment")
-                    .and_then(|assessment| assessment.get_mut("scores"))
-                    .and_then(|scores| scores.as_array_mut())
-                {
-                    for score in scores {
-                        let criterion = serde_json::from_value(score["criterion"].clone())?;
-                        score["calibration"] = serde_json::to_value(&calibration[&criterion])?;
-                    }
+        return Ok(serde_json::to_string_pretty(&json_view(
+            weeks,
+            calibration,
+        )?)?);
+    }
+    display_text(weeks, calibration)
+}
+
+pub(crate) fn json_view(
+    weeks: &[Week],
+    calibration: &calibration::Calibration,
+) -> Result<serde_json::Value> {
+    let mut view = serde_json::to_value(weeks)?;
+    for week in view.as_array_mut().unwrap() {
+        for pr in week["sample"].as_array_mut().unwrap() {
+            if let Some(scores) = pr
+                .get_mut("assessment")
+                .and_then(|assessment| assessment.get_mut("scores"))
+                .and_then(|scores| scores.as_array_mut())
+            {
+                for score in scores {
+                    let criterion = serde_json::from_value(score["criterion"].clone())?;
+                    score["calibration"] = serde_json::to_value(&calibration[&criterion])?;
                 }
             }
         }
-        return Ok(serde_json::to_string_pretty(&view)?);
     }
+    Ok(view)
+}
+
+fn display_text(weeks: &[Week], calibration: &calibration::Calibration) -> Result<String> {
     let mut text = String::new();
     for week in weeks {
         text.push_str(&format!(

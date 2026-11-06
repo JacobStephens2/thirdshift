@@ -12,6 +12,8 @@
 //! process-wide interface serializes its operations, including emitted output.
 
 pub(crate) mod accounts;
+mod actor;
+pub(crate) use actor::Actor;
 mod activity;
 mod command_record;
 pub mod dismiss;

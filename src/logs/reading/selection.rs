@@ -271,6 +271,15 @@ pub(in crate::logs) struct Selection<'a> {
 }
 
 impl Selection<'_> {
+    pub(in crate::logs) fn security_details(self) -> bool {
+        self.owner
+            .is_some_and(|owner| owner.record.kind == "Security run")
+            || match self.observation {
+                Observation::Record(command) => command.record.kind == "Security run",
+                Observation::History(command) => command.kind == "Security run",
+            }
+    }
+
     pub(in crate::logs) fn stop_target(self, input: &str) -> Result<PathBuf> {
         self.observation.require_writable("stop")?;
         if let Some(owner) = self.child_owner {

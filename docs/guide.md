@@ -386,6 +386,189 @@ Every Inbox group starts open. Click its heading, or focus it and press Enter or
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
 
+#### Console API
+
+The Console serves read views as JSON under `/api/v1`, using a bearer token or
+the same sign-in session as the page. `console --no-sign-in` also enables the API on localhost.
+An unauthenticated API request receives a 401 JSON error instead of the sign-in
+page. Reads use GET; these endpoints start no work and change no Commands.
+
+Issue a token on the serving machine, from its owner's shell:
+
+```sh
+thirdshift console token create laptop
+thirdshift console token create automation --scopes read,security,act,run,admin --expires 2027-01-01
+thirdshift console token list
+thirdshift console token list --json
+thirdshift console token revoke laptop
+```
+
+Create prints the `ts_` token once; copy it into the client's Credentials.
+Holders are unique on this machine. The default scope is `read`. The five
+accepted scopes are `read` (views), `security` (Security run details and findings),
+`act` (actions), `run` (starting Commands) and `admin` (administration).
+A token without `security` still receives the other fields of a read route, but
+not Security finding records: `security_findings`, `security_fix_findings`, and
+a true `security_findings_waiting` flag are omitted or cleared. It also cannot
+read a Security session trace (`security-review`, `security-audit`,
+`security-reproduction-<n>`, `security-fix-publishing`, `security-close-check`,
+and their resumes); those log reads return 403 naming `security`. Span and
+waterfall responses keep the Command's other stages and omit those sessions,
+including their prompts and tool output. A token that
+has `security` receives the finding records and those traces. The `act` endpoints
+and their auditing are described below; `run` and `admin` endpoints arrive in
+later Console API tickets. A missing route scope returns 403 JSON naming that
+scope. An expired or revoked token returns 401.
+
+The machine stores only SHA-256 hashes in the owner-only
+`~/.thirdshift/console-tokens.json`, beside the Credentials. List shows holder,
+scopes, issue date, optional expiry and last use, never the token or its hash.
+Expiry accepts a UTC date (`YYYY-MM-DD`, expiring at its start) or an RFC 3339
+timestamp. Revocation deletes the record and takes effect on the next request.
+Last use updates on successful authentication. Token management is CLI-only;
+there is no API endpoint to create, list or revoke tokens.
+
+Each address in `console.allowed_emails` has all five scopes unless narrowed in
+`console.address_scopes`. Set and show an address's scopes from the machine's shell:
+
+```sh
+thirdshift console scopes --email reader@example.com --scopes read
+thirdshift console scopes --email reader@example.com --json
+```
+
+With exactly one allowed address, `--email` can be omitted. `--scopes ''` grants
+no scopes; omitting `--scopes` only shows the current scopes. Setup writes
+`address_scopes = {}` with its default stated and preserves existing entries.
+For example, under `[console]`:
+
+```toml
+allowed_emails = ["owner@example.com", "reader@example.com"]
+address_scopes = { "reader@example.com" = ["read"] }
+```
+
+A sign-in session uses its address's current scopes on every request. The page
+hides controls it cannot use, and a refused API call returns 403 naming the
+missing scope. The sign-in list and address scopes are CLI-only settings: no
+page or API endpoint can write them, even with `admin`.
+Signing out of your own browser remains available even with no scopes.
+
+A bearer request can name a person with `X-Thirdshift-Person: reader@example.com`.
+The owning machine requires that exact address on its own `allowed_emails` list,
+or returns 403. Its effective scopes are the intersection of the token's scopes
+and the address's scopes; neither can grant what the other lacks. For example:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
+  -H "X-Thirdshift-Person: reader@example.com" \
+  https://console.example.com/api/v1/whoami
+```
+
+The header applies only to bearer authentication. A session always acts as the
+address that signed in. A token without the header acts as its holder.
+
+Send the token as `Authorization: Bearer <token>`. Tokens require HTTPS to the
+installed Caddy or Apache proxy, which sets `X-Forwarded-Proto: https`.
+The exception is a direct connection to `127.0.0.1` with no proxy headers.
+Other transports are refused before checking the token, with the same 401
+whether it was valid or not.
+
+Failed bearer tokens and password sign-ins share an in-memory limit per client
+IP address, across token holders and account names. From the third failure,
+responses slow down; the eighth failure starts a 60-second cool-down. Requests
+from that address then receive 429 with `Retry-After` in seconds; API errors
+also include `retry_after` in their JSON. A success does not clear the count.
+Idle failure counts expire after 60 seconds, and restarting the Console clears
+the limiter. Other client addresses can still authenticate. The existing
+account password slowdown and five-tries-per-code limit remain in place.
+
+Only a proxy connecting from `127.0.0.1` may supply `X-Forwarded-For`: the Console
+uses the last address of the first header, the one the proxy appended or
+replaced. A later duplicate header is ignored. Other peers' headers are ignored
+and their connection's IP address is used. A missing or invalid forwarded
+address also falls back to the peer. Set this header in a custom proxy as in
+the nginx example below.
+
+`GET /api/v1/whoami` returns `hostname`, `thirdshift_version`, `api_version`,
+`identity` (token holder, session address or local caller), and effective
+`scopes`. Its CLI twin is `thirdshift console whoami [--json]`, reporting the
+local caller with all scopes. In `--no-sign-in` mode its JSON matches the HTTP
+response. For example, with a token in the client's `THIRDSHIFT_TOKEN` variable:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/whoami
+```
+
+Each response equals its CLI twin's `--json` output. A caller with `read` sees
+Security run rows and stages, with finding records withheld. Security run
+details, the Security page and Security Session traces need `security`.
+For example, `GET /api/v1/status` equals
+`thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
+`thirdshift show widgets#7 --json`, subject to those scope checks.
+Query arguments use the CLI flag names without `--`; positional Command
+selectors use `command`, and Scores selectors use `pull_request`.
+
+`GET /api/v1/openapi.json` returns the OpenAPI description of the endpoints
+this Console serves. Its CLI twin, `thirdshift console openapi`, prints the same
+JSON without a running Console. Both generate it from the shared route table:
+each operation lists its declared scope, CLI twins, arguments and response
+schema. The description contains no credentials or local records. Routes added
+by later Console API tickets appear when they are served.
+
+| Read | API path | CLI twin (add `--json`) |
+| --- | --- | --- |
+| Machine and caller | `/api/v1/whoami` | `console whoami` |
+| Inbox | `/api/v1/status` (`?all=true` includes History) | `status` (`--all`) |
+| History, Security, Lanes, Stages | `/api/v1/history`, `/api/v1/security`, `/api/v1/lanes`, `/api/v1/stages` | `status --all` |
+| Command details, child Ticket runs and stages | `/api/v1/peek?command=<selector>` | `show <selector>` |
+| Waterfall | `/api/v1/waterfall?command=<selector>`, `/api/v1/spans?command=<selector>&span=<id>` | `show <selector> --spans` or `--span <id>` |
+| Command log or Session trace | `/api/v1/log?command=<selector>&session=<kind>` (omit `session` for the Command log) | `logs <selector> [--session <kind>]` |
+| Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
+| Run metrics | `/api/v1/metrics` (`command`, `from`, `through`, repeated `repo`) | `metrics` |
+| Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
+| Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
+| Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
+| Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
+| Available Themes | `/api/v1/themes` | `console theme list` |
+
+Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
+`--follow` stays a separate streaming option. Other-account Commands retain
+their account tags and remain read-only: Stop and Dismissal refuse them and
+name the owning account. CLI refusals return 422 JSON with an `error` message.
+An unrestricted signed-in session and `console --no-sign-in` hold every scope,
+so their JSON still matches the CLI. A restricted session's JSON follows its
+address's scopes, including the Security finding limits above.
+
+| Scope | Calls |
+| --- | --- |
+| `read` | The read calls above, including Security run rows and stages |
+| `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
+| `act` | The action POSTs below, including Theme and hidden sections |
+| `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
+
+Actions take `application/x-www-form-urlencoded` bodies, using the page's
+field names below, except Theme import, which takes an `application/json` Theme
+document. Bearer requests need no CSRF token; sign-in sessions and
+`--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
+The response is the CLI twin's JSON. Stop waits for cleanup to finish.
+
+| POST path under `/api/v1` | Fields | CLI twin (add `--json`) |
+| --- | --- | --- |
+| `/stop` | `command`, optional `requeue=true` | `stop <command> [--requeue]` |
+| `/dismiss`, `/dismiss/undo` | `command` | `dismiss <command> [--undo]` |
+| `/scores/mine` | `pull_request`, each of `Correct`, `Scoped`, `Tested`, `Honest`, `Standards` as `pass` or `fail`, and each corresponding `<criterion>_reason` | `scores <pull_request> --mine` |
+| `/bug-origins/settle` | `issue`, `action=confirm\|correct\|reject`, `pull_request` for a correction | `bug-origins <issue> --confirm\|--correct <pr>\|--none` |
+| `/experiments/proposals/<suite>/<task>/approve` | none | `evals approve <suite> <task>` |
+| `/theme` | `theme` | `console theme <name>` |
+| `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
+| `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
+
+Every attempted API change records its holder or session address, endpoint and
+HTTP outcome in the Console log; reads add no events. Activity log lines for
+token Stops and Dismissals say `by token <holder>`, alongside the CLI and
+Console callers already recorded there. A token naming a person records
+`by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
+never written to that audit record.
+
 #### Console on a server
 
 Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:
@@ -430,6 +613,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Connection "";
         proxy_buffering off;
         proxy_cache off;

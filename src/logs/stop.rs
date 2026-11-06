@@ -20,17 +20,12 @@ pub enum Ending {
 
 #[derive(Deserialize, Serialize)]
 pub struct Request {
-    pub who: String,
+    #[serde(flatten)]
+    pub actor: super::Actor,
     pub requeue: bool,
-    #[serde(default)]
-    pub from_console: bool,
 }
 
 impl Request {
-    pub(super) fn source(&self) -> &'static str {
-        if self.from_console { "Console" } else { "CLI" }
-    }
-
     pub fn ending(&self) -> Ending {
         if self.requeue {
             Ending::Requeue
@@ -68,9 +63,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let request = Request {
-        who: super::unix_user("Stop")?,
+        actor: super::Actor::cli("Stop")?,
         requeue,
-        from_console: false,
     };
     let path = request_stop(input, request)?;
     wait(
@@ -79,6 +73,14 @@ pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
         &mut std::io::stdout(),
         json,
     )
+}
+
+/// API Stop has the CLI's quiet wait and exact JSON result.
+pub(crate) fn request_json(input: &str, request: Request) -> Result<serde_json::Value> {
+    let path = request_stop(input, request)?;
+    let mut output = Vec::new();
+    wait(&path, &mut WallClock(Instant::now()), &mut output, true)?;
+    Ok(serde_json::from_slice(&output)?)
 }
 
 /// Both callers publish and signal the same captured Command. Only the CLI
@@ -110,6 +112,8 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
     pub fix_command: Option<String>,
+    /// A dispatched Run keeps the privacy of its owning Security run.
+    pub security_details: bool,
     pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
@@ -120,6 +124,12 @@ pub(crate) struct Inspection {
     pub accepted_log_directory: Option<PathBuf>,
 }
 
+/// Read privacy from captured ownership, without Scoring or detail enrichment.
+pub(crate) fn security_details(config: &UserConfig, input: &str) -> Result<bool> {
+    let snapshot = Snapshot::for_user(config, chrono::Local::now())?;
+    Ok(snapshot.resolve(input)?.security_details())
+}
+
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let snapshot = Snapshot::details_for_user(config, chrono::Local::now(), input)?;
@@ -127,7 +137,8 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = super::metrics::details(&snapshot, selected.observation)?;
+    let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
+    let security_details = selected.security_details();
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
@@ -150,6 +161,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
             .iter()
             .find(|row| row.command.selector() == selected.observation.selector())
             .and_then(|row| row.fix_command()),
+        security_details,
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,

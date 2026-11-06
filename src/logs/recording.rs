@@ -421,15 +421,7 @@ impl<O: Outside> Record<O> {
             let root = started.root.clone();
             let subject = started.subject();
             if let Some(request) = self.stop_request() {
-                self.activity_write(
-                    &root,
-                    &format!(
-                        "{subject} stopped from the {} by {}",
-                        request.source(),
-                        request.who
-                    ),
-                    None,
-                );
+                self.activity_write(&root, &format!("{subject} stopped {}", request.actor), None);
             }
             let line = format!("{subject} ended: {outcome}");
             self.activity_write(&root, &line, None);

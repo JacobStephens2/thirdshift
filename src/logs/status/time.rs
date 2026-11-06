@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
 
-use crate::config::UserConfig;
 use crate::logs::command_record::{Issue, StageName};
 use crate::logs::reading::{Command, Entry, Observation, Snapshot};
 
@@ -334,10 +333,13 @@ fn grid(repository: String, groups: Vec<Group>) -> Grid {
     }
 }
 
-pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Result<Views> {
-    let now = Local::now();
+pub(super) fn from_read(
+    snapshot: &Snapshot,
+    now: DateTime<Local>,
+    hours: f64,
+    by_repository: bool,
+) -> Result<Views> {
     let cutoff = now - chrono::Duration::seconds((hours * 3600.0) as i64);
-    let snapshot = Snapshot::for_user(config, now)?;
     let mut lanes = Vec::new();
     let mut groups = Vec::new();
     for entry in snapshot.entries() {

@@ -20,6 +20,17 @@ fn console_header_shows_host_admission_and_reloads_limits() {
     assert!(output.status.success());
     let snapshot: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(snapshot["ready"], false);
+    for path in ["/api/v1/resources", "/api/v1/resources/status"] {
+        let observed = api::json(console.get(path));
+        // Memory and load are live OS measurements, so two observations can
+        // differ. The document and configured admission decision are shared.
+        assert_eq!(
+            observed.as_object().unwrap().keys().collect::<Vec<_>>(),
+            snapshot.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert_eq!(observed["ready"], snapshot["ready"]);
+        assert_eq!(observed["limits"], snapshot["limits"]);
+    }
     for path in ["/", "/resources", "/cronjobs", "/account", "/console-log"] {
         let html = console.get(path).text().unwrap();
         let header = html.split("</header>").next().unwrap();

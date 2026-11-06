@@ -546,7 +546,7 @@ fn a_failed_turn_or_a_non_zero_exit_fails_the_run_with_codexs_error_in_the_cause
         ),
         (
             "echo '{\"type\": \"error\", \"message\": \"Reconnecting... 1/5\"}'\nkill -KILL $PPID",
-            "codex exited by signal: Reconnecting... 1/5",
+            "codex exited by signal 9 (SIGKILL): Reconnecting... 1/5",
         ),
     ] {
         let scenario = Scenario::new();

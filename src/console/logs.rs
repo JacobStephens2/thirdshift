@@ -85,30 +85,81 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
     Ok(lines.join("\n"))
 }
 
-pub(super) async fn index() -> Response {
-    inventory(None).await
+pub(super) async fn index(
+    Extension(viewer): Extension<super::auth::Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    inventory(viewer, format, None).await
 }
-pub(super) async fn command(Path(id): Path<String>) -> Response {
-    inventory(Some(id)).await
+pub(super) async fn command(
+    Path(id): Path<String>,
+    Extension(viewer): Extension<super::auth::Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    inventory(viewer, format, Some(id)).await
 }
 
-async fn inventory(owner: Option<String>) -> Response {
-    super::page(
-        tokio::task::spawn_blocking(move || -> Result<String> {
-            let config = UserConfig::load()?;
-            let logs = catalog::load(&config, owner.as_deref())?;
+async fn inventory(
+    viewer: super::auth::Viewer,
+    format: super::api::Format,
+    owner: Option<String>,
+) -> Response {
+    super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        let logs = catalog::load(&config, owner.as_deref())?;
+        let value = serde_json::json!({"version": 1, "logs": logs});
+        format.render(value, |_| {
             Ok(LogsPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 groups: by_repository(logs),
                 owner: owner.unwrap_or_default(),
             }
             .render()?)
         })
-        .await,
-    )
+    })
+    .await
 }
 
-pub(super) async fn reader(Path(id): Path<String>) -> Response {
+async fn security_refusal(viewer: &super::auth::Viewer, id: &str) -> Option<Response> {
+    if viewer.scopes.contains(&super::Scope::Security) {
+        return None;
+    }
+    let selected = id.to_owned();
+    match tokio::task::spawn_blocking(move || -> Result<bool> {
+        let config = UserConfig::load()?;
+        let log = catalog::find(&config, &selected)?;
+        Ok(log.security_details)
+    })
+    .await
+    {
+        Ok(Ok(true)) => Some(super::api::error(
+            StatusCode::FORBIDDEN,
+            "Missing scope: security",
+        )),
+        Ok(Ok(false)) => None,
+        Ok(Err(error)) => Some(super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)),
+        Err(_) => Some(super::api::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Can't read this view; check the Console's stderr.",
+        )),
+    }
+}
+
+pub(super) async fn reader(
+    Path(id): Path<String>,
+    Extension(viewer): Extension<super::auth::Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    if let Some(response) = security_refusal(&viewer, &id).await {
+        return response;
+    }
+    if format == super::api::Format::Json {
+        return super::api::read(format, move || {
+            let log = catalog::find(&UserConfig::load()?, &id)?;
+            Ok(Json(catalog::contents(&log.reader)?).into_response())
+        })
+        .await;
+    }
     let result = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let config = UserConfig::load()?;
         let Some(log) = catalog::load(&config, None)?
@@ -121,7 +172,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
             ReaderPage {
-                page: super::PageContext::new(&config),
+                page: super::PageContext::new(&config, &viewer.scopes),
                 log,
                 html,
                 offset: lines.offset,
@@ -164,6 +215,9 @@ pub(super) async fn stream(
 ) -> Response {
     // A finite request uses the same reader and offset as SSE when a proxy
     // cannot keep streams open. It still crosses the normal account guard.
+    if let Some(response) = security_refusal(&viewer, &id).await {
+        return response;
+    }
     if headers
         .get("accept")
         .is_some_and(|value| value == "application/json")

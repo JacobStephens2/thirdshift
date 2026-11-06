@@ -189,6 +189,12 @@ fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     assert!(output.status.success(), "{output:?}");
     let status: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(status["commands"][0]["account"], "conductor");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    assert_eq!(api::json(console.get("/api/v1/status")), status);
     assert!(
         machine
             .home("serving")
@@ -267,6 +273,16 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
         command
     });
     let token: Value = console.get("/look").json().unwrap();
+    let issued = machine.run(&[
+        "console",
+        "token",
+        "create",
+        "remote-operator",
+        "--scopes",
+        "act",
+    ]);
+    assert!(issued.status.success());
+    let bearer = String::from_utf8(issued.stdout).unwrap();
     for (action, ending) in [
         ("stop", "triage"),
         ("stop", "requeue"),
@@ -285,6 +301,26 @@ fn other_account_live_actions_never_signal_or_write_and_details_never_cache_ther
             .unwrap();
         assert_eq!(response.status(), 409);
         assert!(response.text().unwrap().contains("account conductor"));
+        assert!(work.0.try_wait().unwrap().is_none());
+        let response = actions::post(
+            &console,
+            bearer.trim(),
+            &format!("/api/v1/{action}"),
+            &[
+                ("command", selector),
+                (
+                    "requeue",
+                    if ending == "requeue" { "true" } else { "false" },
+                ),
+            ],
+        );
+        assert_eq!(response.status(), 422);
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("account conductor")
+        );
         assert!(work.0.try_wait().unwrap().is_none());
     }
     let path = dir.join("7-fixture.command.json");
