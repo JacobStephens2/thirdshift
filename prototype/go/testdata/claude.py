@@ -51,7 +51,7 @@ if mode == "no-result":
 if mode == "error-result":
     print(json.dumps({"type": "result", "is_error": True}), flush=True)
     sys.exit(0)
-if mode in {"delivery", "ci-repair", "conflict-repair", "salvage", "ci-still-red", "pending-check", "pending-status", "no-ci", "checks-disappear", "pr-closes", "partial-register"}:
+if mode in {"delivery", "ci-repair", "conflict-repair", "salvage", "ci-still-red", "pending-check", "pending-status", "no-ci", "checks-disappear", "pr-closes", "partial-register", "open-workflow"}:
     Path("widget.txt").write_text(("resolved\n" if mode == "conflict-repair" else "repaired\n") if repair else "broken\n")
     if mode == "ci-still-red":
         Path("widget.txt").write_text(f"attempt {len((root / 'sessions.jsonl').read_text().splitlines())}\n")

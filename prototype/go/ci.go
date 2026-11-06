@@ -65,6 +65,15 @@ func readCI(ctx context.Context, repo, head string) (ciObservation, error) {
 			}
 		}
 	}
+	open, err := workflowRuns(ctx, repo, head, &result)
+	if err != nil {
+		return result, err
+	}
+	// An open run may not have created its jobs yet. Successes already listed
+	// must not hide it. A failure already in hand can start a Repair.
+	if open && len(result.failed) == 0 {
+		pending = true
+	}
 	switch {
 	case pending:
 		result.state = ciPending
@@ -74,4 +83,67 @@ func readCI(ctx context.Context, repo, head string) (ciObservation, error) {
 		result.state = ciPassed
 	}
 	return result, nil
+}
+
+// Latest workflow run of each workflow on this SHA. Older runs are superseded.
+// A completed failure is red even when none of its jobs appeared as check runs.
+func workflowRuns(ctx context.Context, repo, head string, result *ciObservation) (bool, error) {
+	var pages []struct {
+		WorkflowRuns []struct {
+			ID         int64   `json:"id"`
+			Name       string  `json:"name"`
+			Status     string  `json:"status"`
+			Conclusion *string `json:"conclusion"`
+			CreatedAt  string  `json:"created_at"`
+			WorkflowID int64   `json:"workflow_id"`
+		} `json:"workflow_runs"`
+	}
+	if err := ghJSON(ctx, &pages, "api", "repos/"+repo+"/actions/runs?head_sha="+head+"&per_page=100", "--paginate", "--slurp"); err != nil {
+		return false, err
+	}
+	type latestRun struct {
+		id         int64
+		name       string
+		status     string
+		conclusion *string
+		created    string
+	}
+	latest := map[int64]latestRun{}
+	for _, page := range pages {
+		for _, run := range page.WorkflowRuns {
+			if run.WorkflowID == 0 || run.ID == 0 || run.CreatedAt == "" || run.Status == "" {
+				return false, fmt.Errorf("unreadable workflow run")
+			}
+			prev, ok := latest[run.WorkflowID]
+			if ok && (prev.created > run.CreatedAt || (prev.created == run.CreatedAt && prev.id >= run.ID)) {
+				continue
+			}
+			latest[run.WorkflowID] = latestRun{run.ID, run.Name, run.Status, run.Conclusion, run.CreatedAt}
+		}
+	}
+	open := false
+	for _, run := range latest {
+		switch run.status {
+		case "queued", "in_progress", "waiting", "requested", "pending":
+			open = true
+		case "completed":
+			if run.conclusion == nil {
+				return false, fmt.Errorf("workflow run %d completed without a conclusion", run.id)
+			}
+			switch *run.conclusion {
+			case "success", "neutral", "skipped":
+			case "failure", "timed_out", "cancelled", "action_required", "stale", "startup_failure":
+				name := run.name
+				if name == "" {
+					name = fmt.Sprintf("workflow %d", run.id)
+				}
+				result.failed = append(result.failed, name)
+			default:
+				return false, fmt.Errorf("unknown workflow conclusion %q", *run.conclusion)
+			}
+		default:
+			return false, fmt.Errorf("unknown workflow status %q", run.status)
+		}
+	}
+	return open, nil
 }

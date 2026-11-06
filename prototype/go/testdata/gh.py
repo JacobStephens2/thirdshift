@@ -49,7 +49,25 @@ if args[:1] == ["api"]:
                     {"name": "fast", "status": "completed", "conclusion": "success"},
                     {"name": "security", "status": "completed", "conclusion": conclusion},
                 ]
+        if mode == "open-workflow":
+            checks = [{"name": "fast", "status": "completed", "conclusion": "success"}]
         print(json.dumps([{"check_runs": checks}]))
+    elif "/actions/runs" in args[1]:
+        if "head_sha=" not in args[1]:
+            sys.exit("workflow runs query missing head_sha")
+        head = args[1].split("head_sha=")[1].split("&")[0]
+        widget = subprocess.run(["git", "--git-dir", str(root / "origin.git"), "show", head + ":widget.txt"], capture_output=True, text=True).stdout
+        reads = root / ("workflow-reads-" + head)
+        count = int(reads.read_text()) if reads.exists() else 0
+        reads.write_text(str(count + 1))
+        runs = []
+        if state["mode"] == "open-workflow":
+            run = {"id": 1, "name": "CI", "status": "in_progress", "conclusion": None, "workflow_id": 10, "created_at": "2026-01-01T00:00:00Z"}
+            if count > 0:
+                run["status"] = "completed"
+                run["conclusion"] = "failure" if widget == "broken\n" else "success"
+            runs = [run]
+        print(json.dumps([{"workflow_runs": runs}]))
     elif "/statuses" in args[1]:
         head = args[1].split("/commits/")[1].split("/")[0]
         count = int((root / ("ci-reads-" + head)).read_text())

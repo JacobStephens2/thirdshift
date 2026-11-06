@@ -68,8 +68,10 @@ Delivery fetches and merges the Base branch, pushes, then watches check runs
 and commit statuses for the full published head SHA. Pending results are polled.
 An empty or passing listing during the first five seconds stays provisional, so
 a check that registers after a faster one still counts. After that grace,
-passing or absent CI plus a mergeable PR permits readiness. A previously seen
-set of checks disappearing cannot establish green CI. Inherited failures fail
+passing or absent CI plus a mergeable PR permits readiness. A workflow run that
+is still open on the head stays pending even when the checks already listed
+succeeded, and a completed failing run is red when its jobs never appeared.
+A previously seen set of checks disappearing cannot establish green CI. Inherited failures fail
 the run without spending a Repair on the Base branch's code.
 
 A Base branch conflict or failed head checks start a Repair in the same Worktree
