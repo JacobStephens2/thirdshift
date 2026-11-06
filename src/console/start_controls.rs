@@ -109,7 +109,53 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
                     false,
                 )
             }
-            _ => continue,
+            args::Command::Help
+            | args::Command::Version
+            | args::Command::Update { .. }
+            | args::Command::Setup
+            | args::Command::Config { .. }
+            | args::Command::Score
+            | args::Command::Scores { .. }
+            | args::Command::BugOrigins(_)
+            | args::Command::Evals(_)
+            | args::Command::Experiment(_)
+            | args::Command::Experiments(_)
+            | args::Command::Recheck(_)
+            | args::Command::CronJobs { .. }
+            | args::Command::LaunchDirectories { .. }
+            | args::Command::Resources { .. }
+            | args::Command::Console { .. }
+            | args::Command::ConsoleInstall { .. }
+            | args::Command::ConsolePassword(_)
+            | args::Command::ConsoleSignOut { .. }
+            | args::Command::ConsoleLog { .. }
+            | args::Command::ConsoleToken(_)
+            | args::Command::ConsoleScopes(_)
+            | args::Command::ConsoleWhoami { .. }
+            | args::Command::ConsoleOpenApi
+            | args::Command::ConsoleTheme { .. }
+            | args::Command::ConsoleThemeImport(_)
+            | args::Command::ConsoleOtherAccounts { .. }
+            | args::Command::ConsoleThemeExport(_)
+            | args::Command::ConsoleSections { .. }
+            | args::Command::Status { .. }
+            | args::Command::Show { .. }
+            | args::Command::Metrics(_)
+            | args::Command::Spans { .. }
+            | args::Command::Stop { .. }
+            | args::Command::Dismiss { .. }
+            | args::Command::Logs { .. }
+            | args::Command::LogsList { .. }
+            | args::Command::LogsExport { .. }
+            | args::Command::LogFile { .. }
+            | args::Command::ReleaseSummary
+            | args::Command::Skill { .. }
+            | args::Command::Process(_)
+            | args::Command::Trial(_)
+            | args::Command::OomExec { .. }
+            | args::Command::EmailTest(_)
+            | args::Command::Triage(_)
+            | args::Command::Run(_) => continue,
         };
         request["repository"] = json!(directory.repository);
         add_flags(&mut request, &flags);
