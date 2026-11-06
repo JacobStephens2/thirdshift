@@ -3,16 +3,58 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
+
+// errStaleClaim means the issue read that authorized this Claim is no longer
+// the issue's labels. Pickup passes over it. A direct Ticket run stops.
+// The whole-label PUT must not erase that newer decision.
+var errStaleClaim = errors.New("ready state changed after the readiness read")
+
+// Labels that stop a Claim when they appear after the readiness snapshot.
+// agent-failed and in-progress are included so a later failure or Claim is
+// not cleared by this attempt's replacement.
+var claimGateLabels = []string{
+	"in-progress", "agent-failed", "needs-triage", "needs-info",
+	"ready-for-human", "wontfix", "base-fix", "security-fix",
+}
 
 func makeClaim(ctx context.Context, issue issueURL, data issueData) error {
 	if _, err := command(ctx, "", "gh", "label", "create", "in-progress", "--repo", issue.repo,
 		"--description", "A Claim: thirdshift has taken this issue", "--force"); err != nil {
 		return err
 	}
-	return changeLabels(ctx, issue, data, []string{"in-progress"}, []string{"ready-for-agent", "agent-failed"})
+	// The readiness snapshot is from before history, trust and reservation
+	// checks. Replace labels from a new read, and do not claim if that read
+	// shows the Day shift closed the gate.
+	fresh, err := readIssue(ctx, issue)
+	if err != nil {
+		return err
+	}
+	if err := rejectStaleClaim(data, fresh); err != nil {
+		return err
+	}
+	return changeLabels(ctx, issue, fresh, []string{"in-progress"}, []string{"ready-for-agent", "agent-failed"})
+}
+
+func rejectStaleClaim(before, fresh issueData) error {
+	if before.State == "open" && fresh.State != "open" {
+		return fmt.Errorf("%w: issue is no longer open", errStaleClaim)
+	}
+	if len(before.PullRequest) == 0 && len(fresh.PullRequest) != 0 {
+		return fmt.Errorf("%w: issue is now a pull request", errStaleClaim)
+	}
+	if before.hasLabel("ready-for-agent") && !fresh.hasLabel("ready-for-agent") {
+		return fmt.Errorf("%w: ready-for-agent was removed", errStaleClaim)
+	}
+	for _, label := range claimGateLabels {
+		if fresh.hasLabel(label) && !before.hasLabel(label) {
+			return fmt.Errorf("%w: %s was applied", errStaleClaim, label)
+		}
+	}
+	return nil
 }
 
 // One whole-label PUT matches the model's atomic Ready/Claim transition.
@@ -86,5 +128,11 @@ func endClaim(ctx context.Context, launch string, issue issueURL, branch string,
 	if len(add) == 0 && len(remove) == 0 {
 		return nil
 	}
-	return changeLabels(ctx, issue, data, add, remove)
+	// Branch and PR reads sit between the ending snapshot and this PUT.
+	// Replace from a current read so a label applied in that window is kept.
+	fresh, err := readIssue(ctx, issue)
+	if err != nil {
+		return err
+	}
+	return changeLabels(ctx, issue, fresh, add, remove)
 }

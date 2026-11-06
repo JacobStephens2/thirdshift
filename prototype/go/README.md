@@ -31,9 +31,13 @@ Launch directory must have a checked-out Base branch. This first slice creates
 `issue-7` and a sibling Worktree `<launch-name>-issue-7`; an existing branch
 or directory fails safely rather than resuming or overwriting it.
 
-The Claim replaces `ready-for-agent` and clears `agent-failed`, preserving
-other labels from its issue read. Acquisition and ending each use one whole-label
-REST PUT to swap Ready/Claim atomically, matching the model's transition.
+The Claim re-reads labels immediately before one whole-label REST PUT.
+If that read shows the issue is no longer open, Ready was removed, or an
+unready label was applied after the readiness snapshot, Pickup skips the
+issue and a direct Ticket run stops, without writing labels. Otherwise the
+PUT replaces `ready-for-agent`, clears `agent-failed`, and preserves every
+other label from the re-read. Ending uses the same single PUT and re-reads
+before it, so a label applied while branch and PR state is checked is kept.
 The session gets `.thirdshift-issue.md` with the title, body,
 and paginated comments, replacing each untrusted comment with a notice.
 Factory skills are linked under `.claude/skills/thirdshift-*`. Both those

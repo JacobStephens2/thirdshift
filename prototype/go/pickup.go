@@ -62,5 +62,9 @@ func pickupReserved(ctx context.Context, launch string, issue issueURL, generati
 	if err != nil || !ready || current != generation {
 		return false, err
 	}
-	return true, runTicket(ctx, launch, issue, data)
+	err = runTicket(ctx, launch, issue, data)
+	if errors.Is(err, errStaleClaim) {
+		return false, nil
+	}
+	return true, err
 }

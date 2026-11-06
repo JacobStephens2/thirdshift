@@ -60,6 +60,14 @@ if args[:1] == ["api"]:
     elif "/issues?" in args[1]:
         print(json.dumps(pickup.get("pages", [[{"number": 7}]])))
     elif "/events?" in args[1]:
+        # A label applied after the issue snapshot and before Claim. Production
+        # gh is not involved; this only sequences the fixture's own state.
+        label = pickup.get("poison_label")
+        if reads.get(number, 0) >= 2 and isinstance(label, str) and label:
+            names = [item.get("name") for item in state.get("labels", [])]
+            if label not in names:
+                state.setdefault("labels", []).append({"name": label})
+                (root / "state.json").write_text(json.dumps(state))
         print(json.dumps(config.get("events", [[{"event": "labeled", "created_at": "2020-01-01T00:00:00Z",
                             "actor": {"login": "acme"}, "label": {"name": "ready-for-agent"}}]])))
     elif "/comments" in args[1]:

@@ -16,7 +16,8 @@ assert skill.is_symlink() and "Implement" in (skill / "SKILL.md").read_text()
 issue = Path(".thirdshift-issue.md").read_text()
 assert "Trusted comment" in issue and "UNTRUSTED_PAYLOAD" not in issue
 state = json.loads((root / "state.json").read_text())
-assert {item["name"] for item in state["labels"]} == {"enhancement", "in-progress"}
+names = {item["name"] for item in state["labels"]}
+assert "in-progress" in names and "ready-for-agent" not in names, names
 with (root / "sessions.jsonl").open("a") as sessions:
     sessions.write(json.dumps({"cwd": str(Path.cwd()), "prompt": sys.argv[-1]}) + "\n")
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "fixture"}), flush=True)

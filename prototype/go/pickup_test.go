@@ -237,6 +237,32 @@ func TestPickupSameSecondHandbackAndTrustedMember(t *testing.T) {
 	}
 }
 
+func TestPickupRefusesClaimWhenGateLabelAppearsAfterRead(t *testing.T) {
+	for _, label := range []string{"wontfix", "priority"} {
+		t.Run(label, func(t *testing.T) {
+			f := newFixture(t)
+			f.writeState("open", "OWNER", "reservation")
+			f.pickupConfig(map[string]any{"poison_label": label})
+			output, err := f.run("pickup")
+			if label == "priority" {
+				if err != nil || !strings.Contains(output, `"result":"done"`) {
+					t.Fatalf("benign label should still dispatch: %v: %s", err, output)
+				}
+				f.assertLabels("enhancement", "priority", "ready-for-agent")
+				return
+			}
+			if err != nil || !strings.Contains(output, "Pickup skipped") {
+				t.Fatalf("wanted skip, got %v: %s", err, output)
+			}
+			f.assertNoSession()
+			f.assertLabels("enhancement", "ready-for-agent", "wontfix")
+			if got := f.git(f.repo, "ls-remote", "origin", "refs/heads/thirdshift/pickup/*"); got != "" {
+				t.Fatalf("stale reservation retained: %s", got)
+			}
+		})
+	}
+}
+
 func TestPickupSelectsLowestReadyAcrossPages(t *testing.T) {
 	f := newFixture(t)
 	f.writeState("open", "OWNER", "reservation")

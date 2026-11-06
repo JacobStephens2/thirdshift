@@ -42,7 +42,7 @@ consistency. No external model checker or Go dependency is required.
 | `CreateReservation` | `reserve`: push unique parentless commit with empty create lease |
 | `RefreshIssue` | `pickupReserved` → `readReady`: current issue/labels, retained as Claim entry |
 | `RefreshHistory` | `readReady`: history check; `pickupReserved`: selected-generation comparison |
-| `PutClaimLabels` | `runTicket` → `makeClaim` → `changeLabels`: single REST whole-label PUT, Ready off / Claim on |
+| `PutClaimLabels` | `runTicket` → `makeClaim` → `changeLabels`: re-read labels, then one REST whole-label PUT, Ready off / Claim on. A gate label applied after the refresh snapshot skips the PUT and the dispatch |
 | `PrepareWorktree` | `runTicket`: local preparation after successful Claim |
 | `Dispatch` | `runTicket` → `harnessSession`: start the opening Harness session |
 | `FailBeforeDispatch` | Claim request/setup/session-start failure; no dispatched session |
