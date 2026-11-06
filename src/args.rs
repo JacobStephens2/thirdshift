@@ -125,6 +125,10 @@ pub enum Command {
         command: String,
         json: bool,
     },
+    RemoteDetails {
+        machine: String,
+        route: String,
+    },
     Metrics(MetricsArgs),
     Spans {
         command: String,
@@ -148,6 +152,7 @@ pub enum Command {
         session: Option<String>,
         follow: bool,
         json: bool,
+        tail: bool,
     },
     LogsList {
         json: bool,
@@ -396,6 +401,11 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
+    if matches!(args.first().map(String::as_str), Some("show" | "logs"))
+        && args.iter().any(|arg| arg == "--machine")
+    {
+        return parse_remote_details(args);
+    }
     match args.first().map(String::as_str) {
         Some("--trial") => {
             let [_, request] = args else {
@@ -718,7 +728,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
                 _ => {}
             }
-            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow | --json] | thirdshift logs <command> --export <dir>";
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] | thirdshift logs <command> --export <dir>";
             let command = args
                 .get(1)
                 .filter(|name| !name.starts_with('-'))
@@ -735,11 +745,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
             let mut session = None;
             let mut follow = false;
             let mut json = false;
+            let mut tail = false;
             let mut flags = args[2..].iter();
             while let Some(flag) = flags.next() {
                 match flag.as_str() {
                     "--follow" if !follow => follow = true,
                     "--json" if !json => json = true,
+                    "--tail" if !tail => tail = true,
                     "--session" if session.is_none() => {
                         session = Some(
                             flags
@@ -753,11 +765,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
             }
             anyhow::ensure!(!(follow && json), "--json cannot be combined with --follow");
+            anyhow::ensure!(!(follow && tail), "--tail cannot be combined with --follow");
             return Ok(Command::Logs {
                 command: command.clone(),
                 session,
                 follow,
                 json,
+                tail,
             });
         }
         Some("cronjobs") => {
@@ -952,6 +966,75 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
         "week and repository filters apply only to metrics trends"
     );
     Ok(asked)
+}
+
+fn parse_remote_details(args: &[String]) -> Result<Command> {
+    let mut local_args = Vec::new();
+    let mut machine = None;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--machine" {
+            anyhow::ensure!(machine.is_none(), "--machine may be given only once");
+            machine = Some(
+                words
+                    .next()
+                    .filter(|name| !name.starts_with('-'))
+                    .context("--machine needs a Fleet name")?
+                    .clone(),
+            );
+        } else {
+            local_args.push(word.clone());
+        }
+    }
+    let machine = machine.expect("machine flag present");
+    let details = parse(&local_args)?;
+    if crate::host::name().is_some_and(|hostname| hostname == machine) {
+        return Ok(details);
+    }
+    use crate::logs::status::inspect::url;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only details reads have a remote JSON twin; other Commands, follow and export are refused"
+    )]
+    let route = match details {
+        Command::Show { command, .. } => url("/peek", &command, None),
+        Command::Spans { command, span, .. } => {
+            let mut route =
+                reqwest::Url::parse("http://localhost")?.join(&url("/spans", &command, None))?;
+            if let Some(span) = span {
+                route.query_pairs_mut().append_pair("span", &span);
+            }
+            format!("{}?{}", route.path(), route.query().unwrap_or_default())
+        }
+        Command::Logs {
+            command,
+            session,
+            follow: false,
+            tail,
+            ..
+        } => {
+            let route = url(
+                "/log",
+                &command,
+                session.as_deref().map(std::path::Path::new),
+            );
+            if tail {
+                format!("{route}&tail=true")
+            } else {
+                route
+            }
+        }
+        Command::LogsList { owner, .. } => {
+            owner.map_or_else(|| "/logs".into(), |id| format!("/logs/command/{id}"))
+        }
+        Command::LogFile {
+            id, follow: false, ..
+        } => format!("/logs/{id}"),
+        _ => bail!(
+            "remote details return JSON snapshots; follow logs or export a Trace on the owning machine"
+        ),
+    };
+    Ok(Command::RemoteDetails { machine, route })
 }
 
 const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue> | pull-request <PR URL>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";

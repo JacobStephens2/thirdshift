@@ -354,7 +354,6 @@ pub(super) enum Entry {
 pub(super) struct Command {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) account: Option<String>,
-    #[serde(skip)]
     pub(super) record_path: PathBuf,
     #[serde(flatten)]
     pub(super) record: CommandRecord,

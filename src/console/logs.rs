@@ -60,10 +60,79 @@ fn by_repository(logs: Vec<Log>) -> Vec<LogGroup> {
 #[template(path = "console/reader.html")]
 struct ReaderPage {
     page: super::PageContext,
-    log: Log,
+    log: ReaderLog,
     html: String,
     offset: u64,
     live: bool,
+    cli: String,
+    details_url: String,
+    stream: String,
+    snapshot: bool,
+    owning_console: Option<String>,
+}
+
+/// Presentation facts carry no filesystem reader. Remote logs use the same
+/// template without manufacturing a local Log or opening an owning path.
+struct ReaderLog {
+    account: Option<String>,
+    kind: catalog::Kind,
+    name: String,
+    selector: String,
+}
+
+pub(super) fn remote(
+    remote: &super::fleet::read::Remote,
+    config: &UserConfig,
+    viewer: &super::auth::Viewer,
+    format: super::api::Format,
+    command: &str,
+    session: &str,
+) -> Result<Response> {
+    let session = (!session.is_empty()).then(|| std::path::Path::new(session));
+    let route = crate::logs::status::inspect::url("/log", command, session);
+    let value = remote.get(&route)?;
+    format.render(value, |value| {
+        let contents = value["contents"]
+            .as_str()
+            .context("incompatible remote log")?;
+        let kind = if session.is_some() {
+            catalog::Kind::Session
+        } else {
+            catalog::Kind::Command
+        };
+        let cli = format!(
+            "thirdshift logs '{}'{} --machine '{}' --json",
+            command.replace('\'', "'\\''"),
+            session
+                .map(|session| format!(
+                    " --session '{}'",
+                    session.display().to_string().replace('\'', "'\\''")
+                ))
+                .unwrap_or_default(),
+            remote.entry.name.replace('\'', "'\\''")
+        );
+        Ok(ReaderPage {
+            page: super::PageContext::new(config, &viewer.scopes),
+            log: ReaderLog {
+                account: None,
+                kind,
+                name: session.map_or_else(
+                    || command.to_owned(),
+                    |session| session.display().to_string(),
+                ),
+                selector: command.into(),
+            },
+            html: conversation::render(contents, kind),
+            offset: 0,
+            live: false,
+            snapshot: true,
+            stream: String::new(),
+            cli,
+            details_url: remote.command_url("/peek", command, None),
+            owning_console: Some(super::fleet::read::owning_url(&remote.entry, &route)),
+        }
+        .render()?)
+    })
 }
 
 /// A small, plain-text tail through the same confined reader as Full Command log.
@@ -73,16 +142,19 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
         .into_iter()
         .find(|log| log.path == path)
         .context("Command log is unavailable")?;
-    let offset = std::fs::metadata(&log.path)?
-        .len()
-        .saturating_sub(BUDGET as u64);
-    let batch = log.reader.read(offset, Framing::Raw, BUDGET)?;
-    let text = String::from_utf8_lossy(&batch.bytes);
+    Ok(recent_output(&log.reader.tail(BUDGET)?))
+}
+
+pub(super) fn recent_output(bytes: &[u8]) -> String {
+    // The reader applies the raw byte budget before UTF-8 normalization.
+    // Applying it again to decoded text can discard readable output when
+    // replacement characters expanded invalid bytes in the owning tail.
+    let text = String::from_utf8_lossy(bytes);
     // The byte window can cut the oldest line; keep that suffix too, so a
     // complete line at the window boundary and very long lines stay visible.
     let mut lines: Vec<_> = text.lines().rev().take(5).collect();
     lines.reverse();
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 pub(super) async fn index(
@@ -173,10 +245,20 @@ pub(super) async fn reader(
         Ok(Some(
             ReaderPage {
                 page: super::PageContext::new(&config, &viewer.scopes),
-                log,
+                cli: format!("thirdshift logs --file {}", log.id),
+                details_url: crate::logs::status::inspect::url("/peek", &log.selector, None),
+                stream: format!("/logs/{}/stream/{}", log.id, lines.offset),
+                log: ReaderLog {
+                    account: log.account,
+                    kind: log.kind,
+                    name: log.name,
+                    selector: log.selector,
+                },
                 html,
                 offset: lines.offset,
                 live: !lines.done,
+                snapshot: false,
+                owning_console: None,
             }
             .render()?,
         ))

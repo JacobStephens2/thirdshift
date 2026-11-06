@@ -560,6 +560,7 @@ const PAGES: &[PageRoute] = &[
         cli: &[
             "thirdshift logs widgets#7 --json",
             "thirdshift logs widgets#7 --session implement --json",
+            "thirdshift logs widgets#7 --tail --json",
         ],
         method: Method::GET,
         view: View::Log,
@@ -1102,9 +1103,27 @@ async fn inspect(
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
+    let machine = query_value(&query, "machine");
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
+        if let Some(remote) = fleet::read::Remote::select(
+            &config,
+            &machine,
+            viewer.fleet_person().map(str::to_owned),
+        )? {
+            let document = remote.get(&status::inspect::url("/peek", &command, None))?;
+            return format.render(document, |document| {
+                let output = remote.preview(&command).ok();
+                Ok(
+                    peek::Peek::remote(command, document["command"].clone(), output, &remote)
+                        .render()?,
+                )
+            });
+        }
         let mut details = crate::logs::stop::inspect(&config, &command)?;
         if details.security_details && !viewer.scopes.contains(&Scope::Security) {
             return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));
@@ -1122,6 +1141,7 @@ async fn inspect(
     if format == api::Format::Html
         && !response.status().is_success()
         && response.status() != StatusCode::FORBIDDEN
+        && machine_is_local(&query)
     {
         (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response()
     } else {
@@ -1129,13 +1149,36 @@ async fn inspect(
     }
 }
 
+fn machine_is_local(query: &Option<String>) -> bool {
+    let machine = query_value(query, "machine");
+    machine.is_empty() || machine == hostname()
+}
+
 async fn log(
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
+    let tail = query_value(&query, "tail") == "true";
+    if !machine_is_local(&query) {
+        let machine = query_value(&query, "machine");
+        return api::read(format, move || {
+            let config = UserConfig::load()?;
+            let remote = fleet::read::Remote::select(
+                &config,
+                &machine,
+                viewer.fleet_person().map(str::to_owned),
+            )?
+            .expect("remote machine");
+            logs::remote(&remote, &config, &viewer, format, &command, &session)
+        })
+        .await;
+    }
     if format == api::Format::Json {
         if !viewer.scopes.contains(&Scope::Security) {
             let command_for_check = command.clone();
@@ -1171,6 +1214,7 @@ async fn log(
                 &config,
                 &command,
                 (!session.is_empty()).then_some(session.as_str()),
+                tail,
             )?)
             .into_response())
         })

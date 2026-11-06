@@ -164,6 +164,11 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Log => {
             query("command", true, text.clone());
             query("session", false, text.clone());
+            query(
+                "tail",
+                false,
+                json!({"type": "boolean", "default": false, "description": "Read at most the final 4096 bytes."}),
+            );
             object(json!({"version": version, "contents": text}))
         }
         View::Reader => object(json!({"version": version, "contents": text})),

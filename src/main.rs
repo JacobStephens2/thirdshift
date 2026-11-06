@@ -210,13 +210,13 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
-       thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
-       thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
+       thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
@@ -391,6 +391,9 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::RemoteDetails { machine, route }) => {
+            return printed(console::fleet::read::Remote::cli(&machine, &route));
+        }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -402,8 +405,15 @@ fn main() -> ExitCode {
             session,
             follow,
             json,
+            tail,
         }) => {
-            return match logs::status::inspect::logs(&command, session.as_deref(), follow, json) {
+            return match logs::status::inspect::logs(
+                &command,
+                session.as_deref(),
+                follow,
+                json,
+                tail,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

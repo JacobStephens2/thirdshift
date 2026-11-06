@@ -31,6 +31,9 @@ pub(super) struct Peek {
     pub resume_command: Option<String>,
     pub fix_command: Option<String>,
     pub output: Option<String>,
+    pub log_url: String,
+    pub waterfall_url: String,
+    pub owning_console: Option<String>,
 }
 
 pub(super) struct Log {
@@ -77,10 +80,70 @@ impl Peek {
         csrf: String,
         config: &crate::config::UserConfig,
     ) -> Self {
-        let value = inspection.details;
-        let output = value["command_log"]
+        let output = inspection.details["command_log"]
             .as_str()
             .and_then(|path| super::logs::preview(config, std::path::Path::new(path)).ok());
+        let steps = step_facts(
+            &inspection.details,
+            inspection.accepted_log_directory.as_deref(),
+        );
+        let mut peek = Self::from_details(command.clone(), inspection.details);
+        peek.output = output;
+        peek.facts.extend(steps);
+        peek.fix_command = inspection.fix_command;
+        peek.dismissal = inspection.dismissal.map(|action| {
+            let (path, label, suffix) = match action {
+                crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),
+                crate::logs::dismiss::Action::Undo => ("/dismiss/undo", "Undo", " --undo"),
+            };
+            DismissAction {
+                path,
+                label,
+                cli: format!(
+                    "thirdshift dismiss '{}'{suffix}",
+                    command.replace('\'', "'\\''")
+                ),
+            }
+        });
+        peek.csrf = csrf;
+        peek.can_stop = inspection.can_stop;
+        peek.stopping = inspection.stopping;
+        peek.branches = inspection.branches;
+        peek.pull_requests = inspection.pull_requests;
+        peek
+    }
+
+    pub fn remote(
+        command: String,
+        value: Value,
+        output: Option<String>,
+        remote: &super::fleet::read::Remote,
+    ) -> Self {
+        // This constructor only renders values. In particular, none of the
+        // owning machine's absolute paths are opened on this machine.
+        let mut peek = Self::from_details(command.clone(), value);
+        peek.output = output.map(|text| super::logs::recent_output(text.as_bytes()));
+        peek.log_url = remote.url(&peek.log_url);
+        peek.waterfall_url = remote.url(&peek.waterfall_url);
+        for log in &mut peek.logs {
+            log.url = remote.url(&log.url);
+        }
+        peek.cli.push_str(&format!(
+            " --machine '{}'",
+            remote.entry.name.replace('\'', "'\\''")
+        ));
+        peek.owning_console = Some(super::fleet::read::owning_url(
+            &remote.entry,
+            &crate::logs::status::inspect::url("/peek", &command, None),
+        ));
+        // Experiment pages, recovery commands and actions belong to their
+        // own workflows; remote details offer the owning Console for them.
+        peek.experiment_url = None;
+        peek.resume_command = None;
+        peek
+    }
+
+    fn from_details(command: String, value: Value) -> Self {
         let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
         let name = value["name"]
             .as_str()
@@ -123,8 +186,11 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
-            output,
-            fix_command: inspection.fix_command,
+            output: None,
+            log_url: crate::logs::status::inspect::url("/log", &command, None),
+            waterfall_url: crate::logs::status::inspect::url("/waterfall", &command, None),
+            owning_console: None,
+            fix_command: None,
             failure_reason: failure_reason(&value),
             pause_reason: (value["outcome"] == "paused")
                 .then(|| value["cause"].as_str().map(str::to_owned))
@@ -133,27 +199,14 @@ impl Peek {
                 .then(|| value["resume_command"].as_str().map(str::to_owned))
                 .flatten(),
             account: value["account"].as_str().map(str::to_owned),
-            dismissal: inspection.dismissal.map(|action| {
-                let (path, label, suffix) = match action {
-                    crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),
-                    crate::logs::dismiss::Action::Undo => ("/dismiss/undo", "Undo", " --undo"),
-                };
-                DismissAction {
-                    path,
-                    label,
-                    cli: format!(
-                        "thirdshift dismiss '{}'{suffix}",
-                        command.replace('\'', "'\\''")
-                    ),
-                }
-            }),
-            csrf,
+            dismissal: None,
+            csrf: String::new(),
             live: value["state"] == "live",
             stop_cli: format!("thirdshift stop '{}'", command.replace('\'', "'\\''")),
-            can_stop: inspection.can_stop,
-            stopping: inspection.stopping,
-            branches: inspection.branches,
-            pull_requests: inspection.pull_requests,
+            can_stop: false,
+            stopping: false,
+            branches: Vec::new(),
+            pull_requests: Vec::new(),
             advisories,
             issue_url,
             experiment_url,
@@ -161,12 +214,7 @@ impl Peek {
             title,
             command,
             cli,
-            facts: {
-                let steps = step_facts(&value, inspection.accepted_log_directory.as_deref());
-                let mut facts = Fact::children(value, false, "");
-                facts.extend(steps);
-                facts
-            },
+            facts: Fact::children(value, false, ""),
             logs,
         }
     }

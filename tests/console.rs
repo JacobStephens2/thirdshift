@@ -13,6 +13,9 @@ mod tokens;
 #[path = "console/fleet.rs"]
 mod fleet;
 
+#[path = "console/remote_details.rs"]
+mod remote_details;
+
 #[path = "console/resources.rs"]
 mod resources;
 

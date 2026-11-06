@@ -204,7 +204,7 @@ const content = document.querySelector('#peek-content');
 const help = document.querySelector('#keys');
 const jumps = document.querySelector('#jumps');
 let selected = null;
-let peekCommand = null;
+let peekUrl = null;
 let pendingPeek = null;
 // Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
@@ -257,12 +257,12 @@ function dismissalNotice(form, subject) {
 
 function initializeSpanTree() { return initSpanTree({
   openDetails() {
-    peekCommand = null;
+    peekUrl = null;
     pendingPeek?.abort();
     pendingPeek = null;
   },
   openCommand: span => {
-    peekCommand = null;
+    peekUrl = null;
     togglePeek({ dataset: { command: span.command, peek: span.command_url } });
   }
 }); }
@@ -283,16 +283,15 @@ function closePeek() {
   stopPeekUpdates();
   pendingPeek?.abort();
   pendingPeek = null;
-  peekCommand = null;
+  peekUrl = null;
   peek.hidden = true;
   document.body.classList.remove('peek-open');
 }
 
 async function togglePeek(row) {
-  if (row.dataset.console) { location.assign(row.dataset.peek); return; }
   if (!row.dataset.command) return;
-  if (peekCommand === row.dataset.command) { closePeek(); return; }
-  peekCommand = row.dataset.command;
+  if (peekUrl === row.dataset.peek) { closePeek(); return; }
+  peekUrl = row.dataset.peek;
   content.textContent = 'Loading details…';
   peek.hidden = false;
   document.body.classList.add('peek-open');
@@ -300,8 +299,7 @@ async function togglePeek(row) {
 }
 
 function showPeek(row) {
-  if (row.dataset.console) return;
-  if (peekCommand !== row.dataset.command) togglePeek(row);
+  if (peekUrl !== row.dataset.peek) togglePeek(row);
 }
 
 // Overview combines the current groups; a folder filters to one section.
@@ -341,8 +339,8 @@ if (mailbox) {
 }
 
 async function refreshPeek() {
-  if (peekCommand && !pendingPeek) {
-    await loadPeek(`/peek?${new URLSearchParams({ command: peekCommand })}`);
+  if (peekUrl && !pendingPeek) {
+    await loadPeek(peekUrl);
   }
 }
 
@@ -370,7 +368,7 @@ function keepCopy() {
 // Command details open folded; a refresh of the same Command keeps what was opened.
 let foldsCommand = null;
 function keepFolds(url) {
-  const command = new URL(url, location.href).searchParams.get('command');
+  const command = new URL(url, location.href).href;
   const open = command === foldsCommand
     ? new Set([...content.querySelectorAll('details[data-fact][open]')].map(fold => fold.dataset.fact))
     : new Set();
@@ -391,7 +389,9 @@ async function loadPeek(url) {
   }, 10000);
   try {
     const response = await fetch(url, { signal: request.signal, cache: 'no-store' });
-    if (!response.ok) throw new Error('Details unavailable');
+    // Remote refusals use an escaped local template, including the missing
+    // scope and the owning Console link. Keep that explanation in the pane.
+    if (!response.ok && !response.headers.get('content-type')?.startsWith('text/html')) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
     const restoreCopy = keepCopy();

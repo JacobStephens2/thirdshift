@@ -243,6 +243,10 @@ Above **Full Command log**, Command details shows the last five lines of recent
 Command output, reading at most 4 KiB. It updates with the page's existing live
 connection, including while a Slow run keeps logging. Empty or unavailable logs
 say so without hiding the details; the full-log link stays available.
+Remote previews request that bounded tail from the owning machine through
+`/api/v1/log?tail=true`, the twin of `logs <command> --tail --json`, and keep
+only the current request's answer. The full Command log is fetched only when
+its reader opens.
 
 Each Needs you row has a **Copy** button at the end of its line for sharing its
 problem with an agent. It copies the machine, Command selector, state, cause,
