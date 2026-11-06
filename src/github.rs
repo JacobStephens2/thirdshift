@@ -22,7 +22,7 @@ pub(crate) use quota::{Quota, Quotas};
 
 mod advisories;
 mod base_ci;
-pub(crate) use base_ci::BaseCiAction;
+pub(crate) use base_ci::{BaseCiAction, TipCi};
 pub(crate) mod review;
 mod session_issue;
 mod trust;

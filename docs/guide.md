@@ -17,7 +17,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 - **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
-- **[Fix run](#fix-runs)**, `thirdshift fix [<PR URL or number>]`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.
+- **[Fix run](#fix-runs)**, `thirdshift fix [<PR URL or number>]`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass first checks Base branch CI unless scoped by author, then selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.
 - **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
 Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
@@ -2361,6 +2361,18 @@ order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
 restricts selection to that account, which must itself be trusted. Neither
 `base` nor `author` can be combined with a targeted PR.
 
+Without `--author`, the Pass first checks the selected Base branch's tip on
+`origin`. A failed first push-workflow attempt with failed jobs gets one
+failed-jobs re-run; the Pass logs it on stderr and skips while CI runs.
+Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
+in a Worktree on `fix-<base>-<short-sha>`, from that origin tip. Delivery opens
+`Fix CI on <base>: <check>[, <check>…]` targeting the Base branch, treats every
+red check as its own to fix, and follows the usual merge and email flags and
+User config. A PR already opened from that branch, including an `in-progress`
+or failed draft PR, prevents another repair for that commit. Overlapping hosts
+share the Base branch CI reservation. A successful Self-merge closes open
+`CI red on <base>` reports and Base fix issues naming that Base branch.
+
 The Pass selects the first PR with a Merge conflict or CI red on its current
 head. It skips `in-progress` PRs, pending CI without a Merge conflict, and
 mergeable PRs with green or absent CI. It reserves and rechecks each candidate;
@@ -2393,7 +2405,9 @@ Self-merge also requires a Review-run marker by the GitHub account thirdshift
 acts as covering the adopted head. Without that evidence, Delivery still repairs
 the PR and checks CI, then holds Self-merge with the PR ready for review. Run
 `thirdshift review <PR URL>` before retrying the Fix run with `merge`; a Fix run
-never adds an opening review session. This preserves [ADR 0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)'s reviewed-code gate.
+never adds an opening review session for an existing PR. A newly authored Base
+branch CI fix has its own CI-fix session instead of adopting another PR's head.
+This preserves [ADR 0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)'s reviewed-code gate.
 `base-fix` / `--base-fix` and `no-base-fix` / `--no-base-fix` override `base.fix`.
 `harness`, `model` and `effort` use the usual command and User config precedence.
 `email [<address>]`, `email-unless-merged [<address>]` and `no-email` (also with

@@ -125,6 +125,55 @@ impl OpeningSession {
 }
 
 impl Delivery<'_> {
+    /// A newly authored Base branch repair has no issue or adopted PR head.
+    /// Its opening session shares Delivery's failure preservation and merge gates.
+    pub(crate) fn base_ci_fix(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        title: &str,
+        failed: &[crate::github::Check],
+    ) -> Result<Reached, FailedRun> {
+        let context = RepairContext::BaseBranch(self.base);
+        let body = format!(
+            "Repairs CI on `{}`.\n\n{}",
+            self.base,
+            ci::description_check_list(failed)
+        );
+        self.fix_with(
+            worktree,
+            pull_request,
+            context,
+            Stage::RepairSession,
+            |outside, goal| {
+                let worktree = outside.worktree;
+                outside.session(
+                    Kind::Implementation,
+                    &prompt::base_ci_fix(outside.base, worktree.branch(), failed),
+                )?;
+                outside.push()?;
+                outside.pull_request.open_if_absent(title, &body)?;
+                let identified = outside
+                    .pull_request
+                    .info()
+                    .context("Base CI fix has no PR")?;
+                let pr = crate::review::PullRequestUrl::parse(&identified.url)?;
+                let _held =
+                    crate::review::Reservation::take(worktree.launch(), &GitHub::new(), &pr)?
+                        .context("Base CI fix PR is already reserved")?;
+                crate::logs::pull_request(&pr.url);
+                outside.write_built_with(&outside.child_asks.harness.clone())?;
+                outside.stage(Stage::PullRequestReadiness);
+                outside.mark_pr_ready(None)?;
+                outside.take_to_goal(&pr.url, goal)?;
+                if goal == Goal::Merged {
+                    delete_branch_after_merge(outside, worktree.branch());
+                }
+                Ok(Resolution::PullRequest { url: pr.url, goal })
+            },
+        )
+    }
+
     /// An existing PR enters Delivery directly; no implementation or initial
     /// review runs, and closing-issue context is refreshed before every Repair.
     pub fn fix_run(
@@ -137,8 +186,46 @@ impl Delivery<'_> {
         if !matches!(steps.as_slice(), [Step::Delivery, Step::SelfMerge]) {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
-        let tracker = Tracker::new(Stage::Push, CommandLog);
         let context = RepairContext::PullRequest(pr);
+        let started = self.started;
+        self.fix_with(
+            worktree,
+            pull_request,
+            context,
+            Stage::Push,
+            |outside, goal| {
+                let worktree = outside.worktree;
+                hand_over_pull_request(
+                    pr,
+                    outside.base,
+                    worktree.branch(),
+                    worktree.path(),
+                    false,
+                    started,
+                )?;
+                outside.push()?;
+                outside.stage(Stage::PullRequestReadiness);
+                let pr = outside.mark_pr_ready(None)?;
+                outside.take_to_goal(&pr.url, goal)?;
+                if goal == Goal::Merged {
+                    delete_branch_after_merge(outside, worktree.branch());
+                }
+                Ok(Resolution::PullRequest { url: pr.url, goal })
+            },
+        )
+    }
+
+    /// Fix entry points share checked sessions, failure preservation, adapters
+    /// and completion accounting while retaining their own opening steps.
+    fn fix_with(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+        context: RepairContext<'_>,
+        first: Stage,
+        steps: impl FnOnce(&mut InWorktree<'_>, Goal) -> Result<Resolution>,
+    ) -> Result<Reached, FailedRun> {
+        let tracker = Tracker::new(first, CommandLog);
         run_checked(
             CheckedRun {
                 logs: self.logs,
@@ -166,14 +253,6 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             },
             |tracker, worktree, pull_request, sessions| {
-                hand_over_pull_request(
-                    pr,
-                    self.base,
-                    worktree.branch(),
-                    worktree.path(),
-                    false,
-                    self.started,
-                )?;
                 let mut outside = InWorktree {
                     tracker,
                     issue: self.issue,
@@ -187,17 +266,7 @@ impl Delivery<'_> {
                     protected_paths: self.protected_paths,
                     context,
                 };
-                outside.push()?;
-                outside.stage(Stage::PullRequestReadiness);
-                let pr = outside.mark_pr_ready(None)?;
-                outside.take_to_goal(&pr.url, self.goal)?;
-                if self.goal == Goal::Merged {
-                    delete_branch_after_merge(&mut outside, worktree.branch());
-                }
-                Ok(Resolution::PullRequest {
-                    url: pr.url,
-                    goal: self.goal,
-                })
+                steps(&mut outside, self.goal)
             },
         )
     }
@@ -394,6 +463,7 @@ impl Delivery<'_> {
 enum RepairContext<'a> {
     Issue(&'a IssueUrl),
     PullRequest(&'a crate::review::PullRequestUrl),
+    BaseBranch(&'a str),
 }
 
 impl<'a> RepairContext<'a> {
@@ -401,6 +471,7 @@ impl<'a> RepairContext<'a> {
         match self {
             Self::Issue(issue) => prompt::RepairSubject::Issue(issue),
             Self::PullRequest(pr) => prompt::RepairSubject::PullRequest(&pr.url),
+            Self::BaseBranch(base) => prompt::RepairSubject::BaseBranch(base),
         }
     }
 }
@@ -450,6 +521,7 @@ fn run_checked<T, S>(
             no_untrusted_edit_since(issue, started, "Ticket run")?;
             hand_over_issue(issue, &path)
         }
+        RepairContext::BaseBranch(_) => Ok(()),
     };
     let (delivered, log) = Sessions::checked_within(
         logs,

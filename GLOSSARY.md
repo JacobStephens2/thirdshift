@@ -124,6 +124,7 @@ Started with `--author`, it is a **Pass** taking that author's lowest-numbered e
 _Avoid_: PR review (GitHub's feature), code review run
 
 **Fix run**:
+An unscoped Fix **Pass** checks **Base branch** CI before selecting a pull request: it can re-run the first failed push attempt or author a repair pull request, taking every red check as its own through **Delivery** to ready for review or **Self-merge**, with the usual **Run notification** policy.
 One **Command** on an open pull request by a **Trusted account**, ready or draft, that takes its head branch through **Delivery** and the **Repair loop** against its **Base branch**, without repeating implementation or the initial code review. Started with no pull request, it is a **Pass** taking the lowest-numbered eligible open, non-draft, same-repository pull request targeting its selected Base branch with a **Merge conflict** or **CI red**, optionally scoped to a Trusted account with `--author`. It skips `in-progress` pull requests, pending CI without a Merge conflict, and green or absent CI without a Merge conflict. It reserves the pull request until it ends, and leaves it ready for review or completes a **Self-merge** when asked; a failure preserves its work and offers **Recovery** on that pull request. A title or body edit to a linked closing issue by an account that is not a **Trusted account**, made since a few minutes before the Fix run started, fails the run instead of starting the next Repair session.
 
 **Architect run**:
