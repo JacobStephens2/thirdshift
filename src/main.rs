@@ -212,8 +212,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
-       thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
-       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
+       thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
@@ -333,9 +333,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Stop {
             command,
+            machine,
             requeue,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Stop { requeue },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::stop::stop(&command, requeue, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
@@ -343,9 +355,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Dismiss {
             command,
+            machine,
             undo,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Dismiss { undo },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),

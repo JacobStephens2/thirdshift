@@ -40,6 +40,8 @@ pub(crate) struct Row {
     pub log_growth: String,
     pub selector: String,
     pub can_dismiss: bool,
+    pub remote_stop: bool,
+    pub remote_undo: bool,
     pub logs_url: String,
     pub subject: String,
     /// The pull request or issue's `https://` address, which the subject links to.
@@ -98,6 +100,28 @@ impl Timing {
 }
 
 impl Row {
+    fn present_ready(
+        &mut self,
+        title: Option<&str>,
+        ci: Option<crate::github::InboxCi>,
+        mergeable: Option<crate::github::InboxMergeable>,
+    ) {
+        if self.pull_request.is_empty() {
+            return;
+        }
+        self.subject = crate::review::PullRequestUrl::parse(&self.pull_request)
+            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
+            .unwrap_or_else(|_| self.pull_request.clone());
+        self.subject_url =
+            Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
+        self.title = title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("(title unavailable)")
+            .into();
+        self.ci = Some(ci.unwrap_or_default());
+        self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
+    }
+
     /// The one-line row's summary: where the Command stands and, for a
     /// Command without an issue title, the first thing it did or hit.
     pub fn gist(&self) -> String {
@@ -146,7 +170,6 @@ impl Row {
         self.stale = stale;
         self.id = identity(&format!("{name}\0{}", self.id));
         if !console.is_empty() {
-            self.can_dismiss = false;
             self.logs_url = format!("{}/logs", self.console);
         }
         for child in &mut self.children {
@@ -156,6 +179,26 @@ impl Row {
 }
 
 impl Inbox {
+    pub fn remote_actions(&mut self, machine: &str, allowed: bool) {
+        fn apply(row: &mut Row, allowed: bool) {
+            row.can_dismiss &= allowed;
+            row.remote_stop &= allowed;
+            row.remote_undo &= allowed;
+            for child in &mut row.children {
+                apply(child, allowed);
+            }
+        }
+        for row in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.rows)
+        {
+            if row.machine == machine && !row.console.is_empty() {
+                apply(row, allowed);
+            }
+        }
+    }
+
     /// Received rows keep the owning machine's grouping and presentation facts;
     /// this path never opens their paths or evaluates them against local GitHub.
     pub fn merge_remote(
@@ -332,19 +375,12 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     } else {
         &facts.kind
     };
-    let (mut subject, mut title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
-    let mut subject_url = issue_url(facts.issue.as_ref());
+    let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
+    let subject_url = issue_url(facts.issue.as_ref());
     let ready = value["group"] == "ready for review";
-    if ready && let Some(pr) = &facts.pull_request {
-        subject = crate::review::PullRequestUrl::parse(pr)
-            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
-            .unwrap_or_else(|_| pr.clone());
-        subject_url = Some(pr.clone()).filter(|url| url.starts_with("https://"));
-        title = value["github"]["subjects"][pr]["facts"]["title"]
-            .as_str()
-            .unwrap_or("(title unavailable)")
-            .into();
-    }
+    let ready_title = value["github"]["subjects"]
+        [facts.pull_request.as_deref().unwrap_or_default()]["facts"]["title"]
+        .as_str();
     let group: Option<Group> = value
         .get("group")
         .map(|group| serde_json::from_value(group.clone()))
@@ -357,19 +393,39 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             group.state_word(kind, value["stopping"] == true, &facts.state)
         })
         .to_owned();
-    Ok(Row {
+    let mut row = Row {
         machine: String::new(),
         console: String::new(),
         stale: false,
         id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
-        account: facts.account,
+        account: facts.account.clone(),
         started_ms: timestamp(&facts.started_at),
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
         log_growth: String::new(),
         selector,
-        can_dismiss: false,
+        can_dismiss: facts.account.is_none()
+            && value["source"] == "command_record"
+            && matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            )
+            && value["collapsed"].as_array().is_none_or(|rows| {
+                rows.iter()
+                    .all(|row| row["account"].is_null() && row["source"] == "command_record")
+            }),
+        remote_stop: facts.account.is_none()
+            && live
+            && value["source"] == "command_record"
+            && value["parent_record"].is_null()
+            && value["stopping"] != true,
+        remote_undo: facts.account.is_none()
+            && facts.dismissal.is_some()
+            && !matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            ),
         logs_url: String::new(),
         subject,
         subject_url,
@@ -403,9 +459,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             facts.effort.as_deref().unwrap_or("default Effort")
         ),
         pull_request: facts.pull_request.unwrap_or_default(),
-        ci: ready.then(|| facts.github_ci.unwrap_or_default()),
-        merge_conflict: ready
-            && facts.github_mergeable == Some(crate::github::InboxMergeable::Conflicting),
+        ci: None,
+        merge_conflict: false,
         tickets: facts
             .tickets
             .iter()
@@ -419,7 +474,11 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .collect::<Result<_>>()?,
         findings: facts.security_findings,
         sessions: Vec::new(),
-    })
+    };
+    if ready {
+        row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
+    }
+    Ok(row)
 }
 
 pub(crate) struct Archive {
@@ -543,6 +602,8 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 can_dismiss: false,
+                remote_stop: false,
+                remote_undo: false,
                 logs_url: command
                     .command_log
                     .as_ref()
@@ -605,20 +666,10 @@ pub(super) fn from_read(
                     row.state = item.state_word().into();
                     row.fix_command = item.fix_command();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
-                        row.subject = crate::review::PullRequestUrl::parse(&row.pull_request)
-                            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
-                            .unwrap_or_else(|_| row.pull_request.clone());
-                        row.subject_url = Some(row.pull_request.clone())
-                            .filter(|url| url.starts_with("https://"));
-                        row.title = kept
+                        let title = kept
                             .pull_request(&row.selector, &row.pull_request)
-                            .and_then(|pr| pr.title.as_deref())
-                            .filter(|title| !title.trim().is_empty())
-                            .unwrap_or("(title unavailable)")
-                            .into();
-                        row.ci = Some(item.github.ci.unwrap_or_default());
-                        row.merge_conflict = item.github.mergeable
-                            == Some(crate::github::InboxMergeable::Conflicting);
+                            .and_then(|pr| pr.title.as_deref());
+                        row.present_ready(title, item.github.ci, item.github.mergeable);
                     }
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();

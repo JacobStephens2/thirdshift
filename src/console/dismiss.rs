@@ -10,6 +10,8 @@ use crate::logs::dismiss;
 #[derive(Deserialize)]
 pub(super) struct DismissForm {
     command: String,
+    #[serde(default)]
+    machine: String,
 }
 
 pub(super) async fn submit(
@@ -34,6 +36,15 @@ async fn change(
     form: DismissForm,
     undo: bool,
 ) -> Response {
+    if !form.machine.is_empty() && format == super::api::Format::Html {
+        return super::fleet_actions::submit(
+            viewer,
+            form.machine,
+            form.command,
+            super::fleet_actions::Action::Dismiss { undo },
+        )
+        .await;
+    }
     match tokio::task::spawn_blocking(move || {
         dismiss::request(
             &form.command,
