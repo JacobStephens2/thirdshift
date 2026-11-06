@@ -285,6 +285,7 @@ function closePeek() {
 }
 
 async function togglePeek(row) {
+  if (row.dataset.console) { location.assign(row.dataset.peek); return; }
   if (!row.dataset.command) return;
   if (peekCommand === row.dataset.command) { closePeek(); return; }
   peekCommand = row.dataset.command;
@@ -295,6 +296,7 @@ async function togglePeek(row) {
 }
 
 function showPeek(row) {
+  if (row.dataset.console) return;
   if (peekCommand !== row.dataset.command) togglePeek(row);
 }
 

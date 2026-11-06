@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::path::Path;
 
-use super::{age, stage_text, ticket_text};
+use super::{age, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
@@ -28,6 +28,9 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub machine: String,
+    pub console: String,
+    pub stale: bool,
     pub account: Option<String>,
     pub id: String,
     pub started_ms: i64,
@@ -116,14 +119,307 @@ impl Row {
         }
     }
     pub fn peek_url(&self) -> String {
-        super::inspect::url("/peek", &self.selector, None)
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/peek", &self.selector, None)
+        )
     }
     pub fn log_url(&self) -> String {
-        super::inspect::url("/log", &self.selector, None)
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/log", &self.selector, None)
+        )
     }
     pub fn session_url(&self, session: &std::path::Path) -> String {
-        super::inspect::url("/log", &self.selector, Some(session))
+        format!(
+            "{}{}",
+            self.console,
+            super::inspect::url("/log", &self.selector, Some(session))
+        )
     }
+
+    pub fn tag_machine(&mut self, name: &str, console: &str, stale: bool) {
+        self.machine = name.into();
+        self.console = console.trim_end_matches('/').into();
+        self.stale = stale;
+        self.id = identity(&format!("{name}\0{}", self.id));
+        if !console.is_empty() {
+            self.can_dismiss = false;
+            self.logs_url = format!("{}/logs", self.console);
+        }
+        for child in &mut self.children {
+            child.tag_machine(name, console, stale);
+        }
+    }
+}
+
+impl Inbox {
+    /// Received rows keep the owning machine's grouping and presentation facts;
+    /// this path never opens their paths or evaluates them against local GitHub.
+    pub fn merge_remote(
+        &mut self,
+        document: &super::fleet::Document,
+        entry: &crate::config::console::fleet::Entry,
+        stale: bool,
+    ) -> Result<()> {
+        let rows = document
+            .commands
+            .iter()
+            .map(|value| present(value, chrono::Local::now()))
+            .collect::<Result<Vec<_>>>()?;
+        let listed = rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (value, mut row) in document.commands.iter().zip(rows) {
+            let checked = super::text::Row::read(value)?;
+            let Some(section) = self
+                .sections
+                .iter_mut()
+                .find(|section| section.group == value["group"].as_str().unwrap_or_default())
+            else {
+                continue;
+            };
+            row.children.retain(|child| !listed.contains(&child.id));
+            // `row.html` shows repository and issue number as the link text.
+            // A received document chooses `issue.url` independently, so keep
+            // the href only when it names that same GitHub issue or pull request.
+            bind_subject_link(&mut row);
+            row.tag_machine(&entry.name, &entry.address, stale);
+            let subject = row.subject.clone();
+            section.rows.push(row);
+            // Local rows were already ordered; merge with the same Needs you
+            // priorities and newest occurrence ordering, without cross-host collapse.
+            section.rows.sort_by_key(|row| {
+                (
+                    if section.group == "needs you" {
+                        match row.state.as_str() {
+                            "Silent" => 0,
+                            "Slow" => 1,
+                            _ => 2,
+                        }
+                    } else {
+                        0
+                    },
+                    std::cmp::Reverse(row.occurred_ms),
+                )
+            });
+            if checked.landing && value["group"] == "needs you" {
+                // The secondary Landing reference belongs beside all machines' rows.
+                let reference = format!(
+                    "[{}] {} · {} · see Needs you",
+                    entry.name,
+                    subject,
+                    value["needs_you_kind"].as_str().unwrap_or("Needs you")
+                );
+                if let Some(landing) = self
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.group == "landing")
+                {
+                    landing.references.push(reference);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Drop a subject href that is not the GitHub issue or pull request named
+/// by the row's visible repository and number. The text stays either way.
+fn bind_subject_link(row: &mut Row) {
+    if !subject_link_matches(&row.subject, row.subject_url.as_deref()) {
+        row.subject_url = None;
+    }
+    for child in &mut row.children {
+        bind_subject_link(child);
+    }
+}
+
+fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
+    let Some(url) = url else {
+        return true;
+    };
+    let label = subject
+        .rsplit_once(" · ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(subject);
+    let Some((repository, number)) = label.rsplit_once('#') else {
+        return false;
+    };
+    let Ok(number) = number.parse::<u64>() else {
+        return false;
+    };
+    if let Ok(issue) = crate::issue::IssueUrl::parse(url) {
+        return issue.repo_slug().eq_ignore_ascii_case(repository) && issue.number == number;
+    }
+    crate::review::PullRequestUrl::parse(url).is_ok_and(|pull| {
+        pull.issue.repo_slug().eq_ignore_ascii_case(repository) && pull.issue.number == number
+    })
+}
+
+pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
+    for value in &document.commands {
+        present(value, chrono::Local::now())?;
+    }
+    Ok(())
+}
+
+/// Pure presentation shared by local observations and received Commands.
+/// Only the local caller attaches captured paths, activity and Session inventory.
+fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Facts {
+        account: Option<String>,
+        repository: String,
+        kind: String,
+        issue: Option<Issue>,
+        #[serde(default)]
+        name: String,
+        state: String,
+        started_at: String,
+        ended_at: Option<String>,
+        outcome: Option<String>,
+        command_log: Option<std::path::PathBuf>,
+        cause: Option<String>,
+        pull_request: Option<String>,
+        harness: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        stage: Option<crate::logs::reading::CurrentStage>,
+        health: Option<Health>,
+        resume_command: Option<String>,
+        process_name: Option<String>,
+        github_ci: Option<crate::github::InboxCi>,
+        github_mergeable: Option<crate::github::InboxMergeable>,
+        #[serde(default)]
+        children: Vec<serde_json::Value>,
+        #[serde(default)]
+        dispatched: Vec<serde_json::Value>,
+        #[serde(default)]
+        tickets: Vec<crate::logs::command_record::TicketRecord>,
+        #[serde(default)]
+        security_findings: Vec<crate::security::RecordedFinding>,
+        #[serde(flatten)]
+        departure: Option<crate::logs::reading::Departure>,
+        dismissal: Option<crate::logs::dismiss::DismissalView>,
+    }
+    let facts: Facts = serde_json::from_value(value.clone())?;
+    let live = facts.state == "live";
+    let selector = facts
+        .command_log
+        .as_ref()
+        .map(|path| {
+            let path = if value["source"] == "command_record" {
+                path.with_extension("command.json")
+            } else {
+                path.clone()
+            };
+            if facts.name.is_empty() {
+                path.to_string_lossy().into_owned()
+            } else {
+                format!("{}::{}", path.display(), facts.name)
+            }
+        })
+        .unwrap_or_default();
+    let process =
+        (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
+    let name = if value["source"] == "command_record" {
+        &facts.name
+    } else {
+        &facts.kind
+    };
+    let (mut subject, mut title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
+    let mut subject_url = issue_url(facts.issue.as_ref());
+    let ready = value["group"] == "ready for review";
+    if ready && let Some(pr) = &facts.pull_request {
+        subject = crate::review::PullRequestUrl::parse(pr)
+            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
+            .unwrap_or_else(|_| pr.clone());
+        subject_url = Some(pr.clone()).filter(|url| url.starts_with("https://"));
+        title = value["github"]["subjects"][pr]["facts"]["title"]
+            .as_str()
+            .unwrap_or("(title unavailable)")
+            .into();
+    }
+    let group: Option<Group> = value
+        .get("group")
+        .map(|group| serde_json::from_value(group.clone()))
+        .transpose()?;
+    let kind = value
+        .get("needs_you_kind")
+        .and_then(|kind| serde_json::from_value(kind.clone()).ok());
+    let state = group
+        .map_or(facts.state.as_str(), |group| {
+            group.state_word(kind, value["stopping"] == true, &facts.state)
+        })
+        .to_owned();
+    Ok(Row {
+        machine: String::new(),
+        console: String::new(),
+        stale: false,
+        id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
+        account: facts.account,
+        started_ms: timestamp(&facts.started_at),
+        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
+        live,
+        logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
+        log_growth: String::new(),
+        selector,
+        can_dismiss: false,
+        logs_url: String::new(),
+        subject,
+        subject_url,
+        title,
+        state,
+        now_line: super::stage_details(
+            facts.outcome.as_deref(),
+            &facts.state,
+            facts.stage.as_ref(),
+            facts.health.as_ref(),
+        ),
+        timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
+        count: value["count"].as_u64().unwrap_or(1) as usize,
+        cause: facts.cause.unwrap_or_default(),
+        resume_command: facts
+            .resume_command
+            .filter(|_| facts.outcome.as_deref() == Some("paused")),
+        fix_command: None,
+        left: facts
+            .dismissal
+            .as_ref()
+            .map(|dismissal| dismissal.line())
+            .into_iter()
+            .chain(facts.departure.as_ref().map(|departure| departure.line()))
+            .collect::<Vec<_>>()
+            .join("; "),
+        harness: format!(
+            "{} · {} · {}",
+            facts.harness.as_deref().unwrap_or("unknown Harness"),
+            facts.model.as_deref().unwrap_or("default Model"),
+            facts.effort.as_deref().unwrap_or("default Effort")
+        ),
+        pull_request: facts.pull_request.unwrap_or_default(),
+        ci: ready.then(|| facts.github_ci.unwrap_or_default()),
+        merge_conflict: ready
+            && facts.github_mergeable == Some(crate::github::InboxMergeable::Conflicting),
+        tickets: facts
+            .tickets
+            .iter()
+            .map(|ticket| ticket_text(ticket, &facts.repository))
+            .collect(),
+        children: facts
+            .dispatched
+            .iter()
+            .chain(&facts.children)
+            .map(|child| present(child, now))
+            .collect::<Result<_>>()?,
+        findings: facts.security_findings,
+        sessions: Vec::new(),
+    })
 }
 
 pub(crate) struct Archive {
@@ -226,6 +522,9 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 None,
             );
             Ok(Row {
+                machine: String::new(),
+                console: String::new(),
+                stale: false,
                 account: command.account.clone(),
                 id: identity(&match &command.account {
                     Some(account) => format!(
@@ -425,75 +724,49 @@ pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
 }
 
 fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
-    let facts = &command.record;
-    let (log_length, session_length) = command.activity_lengths();
-    let live = command.state == "live";
-    let (subject, title) = row_subject(facts);
-    Ok(Row {
-        account: command.account.clone(),
+    fn attach_local(
+        row: &mut Row,
+        command: &Command,
+        now: DateTime<Local>,
+        root: &Path,
+    ) -> Result<()> {
+        let facts = &command.record;
+        let (log_length, session_length) = command.activity_lengths();
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.
-        id: identity(&format!(
+        row.id = identity(&format!(
             "{}\0{}\0{}\0{}\0{}",
             command.record_path.to_string_lossy(),
             facts.kind,
             facts.name,
             facts.issue.as_ref().map_or("", |issue| issue.url.as_str()),
             facts.started_at
-        )),
-        started_ms: timestamp(&facts.started_at),
-        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
-        live,
-        logging: live && !matches!(command.health, Some(Health::Silent { .. })),
-        log_growth: format!("{log_length}:{session_length}"),
-        selector: Observation::Record(command).selector().unwrap_or_default(),
-        can_dismiss: false,
-        logs_url: logs_url(&command.record_path, root, command.account.as_deref()),
-        subject,
-        subject_url: issue_url(facts.issue.as_ref()),
-        title,
-        state: command.state.into(),
-        now_line: stage_text(command),
-        timing: Timing::new(
-            live,
+        ));
+        row.log_growth = format!("{log_length}:{session_length}");
+        row.selector = Observation::Record(command).selector().unwrap_or_default();
+        row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
+        row.timing = Timing::new(
+            row.live,
             &facts.started_at,
             facts
                 .ended_at
                 .as_deref()
                 .filter(|_| !facts.end_time_estimated),
             now,
-        ),
-        count: 1,
-        cause: facts.cause.clone().unwrap_or_default(),
-        resume_command: facts
-            .resume_command
-            .clone()
-            .filter(|_| facts.outcome.as_deref() == Some("paused")),
-        fix_command: None,
-        left: String::new(),
-        harness: format!(
-            "{} · {} · {}",
-            facts.harness,
-            facts.model.as_deref().unwrap_or("default Model"),
-            facts.effort.as_deref().unwrap_or("default Effort")
-        ),
-        pull_request: facts.pull_request.clone().unwrap_or_default(),
-        ci: None,
-        merge_conflict: false,
-        tickets: facts
-            .tickets
-            .iter()
-            .map(|ticket| ticket_text(ticket, &facts.repository))
-            .collect(),
-        children: command
-            .dispatched
-            .iter()
-            .chain(&command.children)
-            .map(|child| row(child, now, root))
-            .collect::<Result<_>>()?,
-        findings: facts.security_findings.clone(),
-        sessions: command.sessions()?,
-    })
+        );
+        row.sessions = command.sessions()?;
+        for (child, command) in row
+            .children
+            .iter_mut()
+            .zip(command.dispatched.iter().chain(&command.children))
+        {
+            attach_local(child, command, now, root)?;
+        }
+        Ok(())
+    }
+    let mut row = present(&serde_json::to_value(command)?, now)?;
+    attach_local(&mut row, command, now, root)?;
+    Ok(row)
 }
 
 fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {
@@ -585,5 +858,181 @@ mod tests {
         ] {
             assert_eq!(outcome_kind(text), kind, "{text}");
         }
+    }
+
+    /// `row.html` puts `subject_url` in the subject link while the visible
+    /// text is the row's repository and issue number. A Fleet document chooses
+    /// those independently, so a mismatched URL must not become that href.
+    #[test]
+    fn a_fleet_issue_link_stays_on_the_repository_the_row_names() {
+        use crate::config::console::fleet::Entry;
+
+        let command = |title: &str, url: &str, child: &str| {
+            serde_json::json!({
+                "machine_name": "remote",
+                "group": "needs you",
+                "landing": false,
+                "stopping": false,
+                "count": 1,
+                "repository": "acme/widgets",
+                "kind": "Run",
+                "name": "fixture",
+                "state": "failed",
+                "started_at": "2026-01-01T00:00:00Z",
+                "issue": { "number": 1, "url": url, "title": title },
+                "children": [{
+                    "repository": "acme/widgets",
+                    "kind": "Run",
+                    "name": "child",
+                    "state": "failed",
+                    "started_at": "2026-01-02T00:00:00Z",
+                    "issue": { "number": 2, "url": child, "title": "Child" }
+                }]
+            })
+        };
+        let document: crate::logs::status::fleet::Document = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "hostname": "remote-host",
+            "active_runs": 0,
+            "commands": [
+                command("Off GitHub", "https://evil.example/phish", "https://github.com/attacker/phish/issues/2"),
+                command("Wrong number", "https://github.com/acme/widgets/issues/99", "https://github.com/acme/widgets/issues/2"),
+                command("Matching", "https://github.com/acme/widgets/issues/1", "https://github.com/acme/widgets/issues/2"),
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "notacme/widgets",
+                    "kind": "Run",
+                    "name": "suffix",
+                    "state": "failed",
+                    "started_at": "2026-01-03T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Suffix"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "acme/widgets",
+                    "kind": "Process",
+                    "name": "build",
+                    "process_name": "build",
+                    "state": "failed",
+                    "started_at": "2026-01-04T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Process"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "ready for review",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "ignored/repo",
+                    "kind": "Run",
+                    "name": "review",
+                    "state": "done",
+                    "started_at": "2026-01-05T00:00:00Z",
+                    "pull_request": "https://github.com/acme/widgets/pull/7"
+                }
+            ],
+            "machines": []
+        }))
+        .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: vec![
+                super::Section {
+                    group: "needs you",
+                    title: "Needs you",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+                super::Section {
+                    group: "ready for review",
+                    title: "Ready for review",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+            ],
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            warning: None,
+            github_warning: None,
+        };
+        inbox
+            .merge_remote(
+                &document,
+                &Entry {
+                    name: "remote".into(),
+                    address: "https://fleet.example".into(),
+                    hostname: None,
+                    thirdshift_version: None,
+                    scopes: Vec::new(),
+                    last_contact: None,
+                },
+                false,
+            )
+            .unwrap();
+        let rows = &inbox.sections[0].rows;
+        assert_eq!(rows.len(), 5);
+        let row = |title: &str| {
+            rows.iter()
+                .find(|row| row.title == title)
+                .unwrap_or_else(|| panic!("missing {title}"))
+        };
+        let off_github = row("Off GitHub");
+        assert_eq!(off_github.subject, "acme/widgets#1");
+        assert_eq!(off_github.subject_url, None, "off-GitHub URL");
+        assert_eq!(off_github.children[0].subject, "acme/widgets#2");
+        assert_eq!(off_github.children[0].subject_url, None, "other repository");
+        let wrong_number = row("Wrong number");
+        assert_eq!(wrong_number.subject, "acme/widgets#1");
+        assert_eq!(
+            wrong_number.subject_url, None,
+            "same repository, different issue"
+        );
+        assert_eq!(
+            wrong_number.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        let matching = row("Matching");
+        assert_eq!(
+            matching.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        assert_eq!(
+            matching.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        assert_eq!(row("Suffix").subject, "notacme/widgets#1");
+        assert_eq!(
+            row("Suffix").subject_url,
+            None,
+            "repository is not a suffix of another"
+        );
+        assert_eq!(row("Process").subject, "Process build · acme/widgets#1");
+        assert_eq!(
+            row("Process").subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        let ready = &inbox.sections[1].rows;
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].subject, "acme/widgets#7");
+        assert_eq!(
+            ready[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/7")
+        );
     }
 }
