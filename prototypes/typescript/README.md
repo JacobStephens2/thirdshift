@@ -1,8 +1,9 @@
-# TypeScript Ticket run prototype
+# TypeScript Ticket and Pickup prototype
 
 This isolated experiment implements a Ticket run through Delivery and bounded
-CI/conflict Repair for #1836 and #1837 under Spec #1831. It does not replace the
-Rust executable or change ADR-0001.
+CI/conflict Repair (#1836 and #1837), and a Pickup run with bounded model
+checking (#1838), under Spec #1831.
+It does not replace the Rust executable or change ADR-0001.
 
 On Linux, with Bun 1.4.4, Git and GitHub CLI installed:
 
@@ -13,6 +14,7 @@ bun run typecheck
 bun test
 bun run build
 ./build/thirdshift https://github.com/owner/repository/issues/123
+./build/thirdshift pickup
 ```
 
 Run the executable from the target repository's Launch directory on its Base
@@ -61,7 +63,33 @@ unions with exhaustive `satisfies never`/`assertNever` branches, checked by
 `bun run typecheck`. The prototype deliberately covers the core Repair loop:
 Continuation, Self-merge, inherited-failure/Base fix detection, Check re-runs,
 Abandoned job recovery and Foreign commit reconciliation remain Rust behavior;
-an unexpected PR head or identity fails safely here. Pickup belongs to #1838.
+an unexpected PR head or identity fails safely here.
+
+Pickup derives the repository from the Launch directory's GitHub origin and
+lists every page of open `ready-for-agent` candidates, lowest number first.
+It checks Trusted account authorship, the latest Ready labelling's actor,
+subsequent title/body edits, Claim history, open blockers, parentage, disqualifying
+labels and the five-minute shaping wait. History and edit connections are read
+to completion. This Ticket-only slice passes over Specs (issues with sub-issues),
+and fails safely at Worktree creation for an existing local Issue branch, as
+the direct Ticket command does. Continuation and Spec runs are not implemented.
+More than 100 blockers is conservatively passed over rather than truncated.
+
+Each candidate is reserved using ADR-0017's empty create lease on
+`refs/heads/thirdshift/pickup/N`. Its unique commit has an empty tree, no parent,
+and host/process/recovery metadata. Pickup re-reads readiness and compares the
+Claim-application count before applying its Claim and starting the Ticket
+session. A busy or stale candidate is passed over for the next candidate;
+exhaustion skips with exit 0. Remote errors without another owner's token fail
+closed. The reservation stays through Delivery, salvage and Claim ending, and
+release uses the exact owner token even after interruption. Uncertain acquisition
+or failed release prints the ref and token for human recovery. No timer expires
+a reservation.
+
+The prototype applies the Claim **before dispatch**. This deliberately avoids
+the Rust model's known dispatch-before-Claim counterexample without modifying
+the production protocol. [The model boundary](tests/pickup-model.md) records the
+request mapping, assumptions, bounded coverage and comparison limits.
 
 `bun test` compiles the binary and exercises it with real temporary Git
 repositories and fake `gh` and `claude` executables, including a signal-resistant

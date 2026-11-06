@@ -6,6 +6,11 @@ export function trusted(association: unknown): boolean {
   return association === "OWNER" || association === "MEMBER" || association === "COLLABORATOR";
 }
 
+// GitHub label names are case-insensitive; preserve their display spelling.
+export function labelIs(actual: unknown, canonical: string): boolean {
+  return typeof actual === "string" && actual.toLowerCase() === canonical;
+}
+
 export interface Issue {
   title: string;
   body: string;
