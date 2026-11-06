@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { inboxStatus, dismissResponse, type InboxStatus } from "../src/console/schema";
 import { routes } from "../src/console/routes";
 import { z } from "zod";
 import { chromium } from "playwright";
+import { buildBinary, runBinary, startBinary } from "./binary";
 
-const root = resolve(import.meta.dir, "..");
-const binary = join(root, "build/thirdshift");
 const directories: string[] = [];
 const initial = {
   activeRuns: 1,
@@ -19,11 +18,7 @@ const initial = {
   ],
 } satisfies InboxStatus;
 
-beforeAll(async () => {
-  const build = Bun.spawn([process.execPath, "run", "build"], { cwd: root, stdout: "pipe", stderr: "pipe" });
-  const [code, out, err] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-  if (code !== 0) throw new Error(`build: ${out}\n${err}`);
-}, 120_000);
+beforeAll(buildBinary, 120_000);
 
 test("every registered Console route has OpenAPI, page, CLI and scope parity", async () => {
   const f = await fixture();
@@ -104,13 +99,11 @@ async function fixture() {
   const state = join(directory, "inbox.json");
   await writeFile(state, JSON.stringify(initial));
   const env = { ...process.env, PATH: "/usr/bin:/bin", THIRDSHIFT_PROTOTYPE_INBOX: state, THIRDSHIFT_PROTOTYPE_TOKEN: "test-console-token" };
-  async function cli(...args: string[]) {
-    const child = Bun.spawn([binary, ...args], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, stdout, stderr };
+  function cli(...args: string[]) {
+    return runBinary(args, directory, env);
   }
   async function serve(scope = "act") {
-    const child = Bun.spawn([binary, "console", "--port", "0", "--scope", scope], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+    const child = startBinary(["console", "--port", "0", "--scope", scope], directory, env);
     const reader = child.stdout.getReader();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
