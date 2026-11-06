@@ -8,6 +8,10 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.4",
+    "playwright": "1.64.0",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "zod": "4.1.12"
   }
 }

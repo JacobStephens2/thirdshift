@@ -14,10 +14,16 @@ async function collect(directory: string, prefix = ""): Promise<void> {
 }
 await collect(skillsRoot);
 await mkdir(join(root, "build"), { recursive: true });
+const client = await Bun.build({ entrypoints: [join(root, "src/console/client.ts")], target: "browser", minify: true });
+if (!client.success || !client.outputs[0]) throw new Error(`Console client build failed: ${client.logs.join("\n")}`);
+const assets = {
+  html: await readFile(join(root, "src/console/index.html"), "utf8"),
+  client: await client.outputs[0].text(),
+};
 // A transient entrypoint lets the compiler embed every skill and supporting file
 // without checking generated copies into the repository.
 await writeFile(join(root, "build/entry.ts"),
-  `import { main } from "../src/ticket.ts";\nconst skills: [string, string][] = ${JSON.stringify(skills)};\nawait main(skills);\n`);
+  `import { main } from "../src/main.ts";\nconst skills: [string, string][] = ${JSON.stringify(skills)};\nawait main(skills, ${JSON.stringify(assets)});\n`);
 const result = Bun.spawnSync([process.execPath, "build", "--compile", "--target=bun-linux-x64", "build/entry.ts", "--outfile", "build/thirdshift"], {
   cwd: root, stdout: "inherit", stderr: "inherit",
 });

@@ -1,7 +1,8 @@
-# TypeScript Ticket run prototype
+# TypeScript Ticket run and Console prototype
 
 This isolated experiment implements the opening half of a Ticket run for #1836
-under Spec #1831. It does not replace the Rust executable or change ADR-0001.
+and the shared-schema Console slice for #1839 under Spec #1831. It does not
+replace the Rust executable or change ADR-0001.
 
 On Linux, with Bun 1.4.4, Git and GitHub CLI installed:
 
@@ -46,6 +47,62 @@ repositories and fake `gh` and `claude` executables, including a signal-resistan
 forked Harness. Tests run the executable with no Bun on PATH. Test waits have
 generous overall bounds; the one-second escalation intervals are production
 behavior, not test deadlines.
+
+## Shared-schema Console slice
+
+Install Chromium once for the Playwright test (and its OS dependencies if needed):
+
+```sh
+bunx playwright install chromium
+# On a fresh Linux host: bunx playwright install --with-deps chromium
+```
+
+`src/console/schema.ts` defines the runtime Zod schemas and derives the TypeScript
+types for Inbox status and Dismissal requests/responses. The CLI, HTTP handlers,
+browser client and browser test consume those schemas. OpenAPI 3.1 schemas are
+generated from them. `src/console/routes.ts` pairs every route with its Console
+page, CLI twin and required scope; the parity test compares the document against
+the table and sends a request to every registered route. The build bundles the
+typed browser client and embeds it and the HTML in the standalone executable.
+
+The slice uses a separate prototype Inbox file, not Rust Command records. It
+does not yet ingest Ticket runs or reproduce GitHub settlement, retention,
+collapsed rows, kind changes, account visibility or Activity/Console logs. Seed
+that file with a payload matching the shared schema, for example:
+
+```sh
+export THIRDSHIFT_PROTOTYPE_INBOX=/tmp/typescript-inbox.json
+cat > "$THIRDSHIFT_PROTOTYPE_INBOX" <<'JSON'
+{"activeRuns":0,"rows":[{"id":"ticket-7","title":"Ticket #7 failed","group":"needs-you","active":false,"dismissal":null}]}
+JSON
+./build/thirdshift status --json
+./build/thirdshift dismiss ticket-7 --json
+./build/thirdshift dismiss ticket-7 --undo --json
+./build/thirdshift console openapi
+export THIRDSHIFT_PROTOTYPE_TOKEN="$(openssl rand -hex 32)"
+./build/thirdshift console --port 3939 --scope act
+```
+
+Open the printed localhost URL and enter that token. JSON routes require it as
+`Authorization: Bearer <token>`. The HTML login shell and bundled script are
+public and contain no Inbox data or token. The browser keeps the entered token
+in session storage for reloads. `--scope read` permits status and OpenAPI but
+refuses Dismissal/Undo with 403; `act` includes read access. This local-only
+prototype uses one configured token and binds exclusively to `127.0.0.1`; it
+does not implement production Console accounts or token administration.
+
+Without the override, the Inbox file lives at
+`~/.local/state/thirdshift-typescript/inbox.json`; a missing file gives an empty
+Inbox. The active-run count is calculated from the rows. Dismissal moves a
+waiting row to Working if active or Resolved if ended, keeping its prior group
+for Undo. Other rows cannot be dismissed. Updates are serialized inside one
+Console and atomically replace the file. Run only one writer at a time, including
+CLI actions. Both CLI and HTTP actions return the fresh shared status payload.
+
+`bun test tests/console.test.ts` runs compiled CLI/HTTP parity, authorization,
+and Playwright checks at 1440×900 and 390×844, including Dismissal, reload, Undo
+and persisted CLI status. Browser failures are failures, not skipped checks.
+Optional `AFTER_DESKTOP` and `AFTER_MOBILE` paths capture the restored Inbox.
 
 `scripts/affected-tests issue-1831` selects only `tsc --noEmit` and `bun test`
 when all changes are under this directory. Changes elsewhere do not select
