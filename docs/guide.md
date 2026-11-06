@@ -2363,13 +2363,17 @@ restricts selection to that account, which must itself be trusted. Neither
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
 `origin`. A failed first push-workflow attempt with failed jobs gets one
-failed-jobs re-run; the Pass logs it on stderr and skips while CI runs.
+failed-jobs re-run; the Pass logs it on stderr and skips while CI runs. Pending
+Base branch checks, including external checks, also skip before PR selection.
 Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
 in a Worktree on `fix-<base>-<short-sha>`, from that origin tip. Delivery opens
 `Fix CI on <base>: <check>[, <check>…]` targeting the Base branch, treats every
 red check as its own to fix, and follows the usual merge and email flags and
 User config. A PR already opened from that branch, including an `in-progress`
-or failed draft PR, prevents another repair for that commit. Overlapping hosts
+or failed draft PR, prevents another repair for that commit. An existing repair
+branch also prevents another attempt if PR creation failed. When the opening
+session fails after leaving work, preservation publishes it as a draft repair
+PR and offers its Fix Recovery command. Overlapping hosts
 share the Base branch CI reservation. A successful Self-merge closes open
 `CI red on <base>` reports and Base fix issues naming that Base branch.
 
@@ -2401,8 +2405,11 @@ Check re-run and optional Base fix. A Fix run starts no implementation or initia
 Standards/Spec review session.
 
 `merge` / `--merge` and `no-merge` / `--no-merge` override `merge.always`.
-Self-merge also requires a Review-run marker by the GitHub account thirdshift
-acts as covering the adopted head. Without that evidence, Delivery still repairs
+Self-merge also requires recorded agent authorship or review by the GitHub
+account thirdshift acts as, covering the exact adopted head. A completed Ticket,
+Spec or Base CI Delivery records its delivered head for later Fix runs, as a
+Review run records the head it reviewed. Simply repairing an adopted PR without
+an opening review does not grant that evidence. Without it, Delivery still repairs
 the PR and checks CI, then holds Self-merge with the PR ready for review. Run
 `thirdshift review <PR URL>` before retrying the Fix run with `merge`; a Fix run
 never adds an opening review session for an existing PR. A newly authored Base

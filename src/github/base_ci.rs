@@ -207,6 +207,9 @@ impl GitHub {
             }
         }
         let mut checks = self.checks_on(repository, tip)?;
+        if crate::ci::has_pending(&checks) {
+            return Ok(TipCi::Waiting);
+        }
         if let Some(run) = run
             && run.conclusion.as_deref() == Some("failure")
             && !checks.iter().any(|check| {

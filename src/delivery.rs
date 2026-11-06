@@ -140,7 +140,7 @@ impl Delivery<'_> {
             self.base,
             ci::description_check_list(failed)
         );
-        self.fix_with(
+        let mut outcome = self.fix_with(
             worktree,
             pull_request,
             context,
@@ -171,7 +171,25 @@ impl Delivery<'_> {
                 }
                 Ok(Resolution::PullRequest { url: pr.url, goal })
             },
-        )
+        );
+        // The opening session can fail before normal publication. Preservation
+        // has already pushed its work; give that attempt a draft and Recovery
+        // identity so later Passes do not start it from the Base branch again.
+        if let Err(failed) = &mut outcome
+            && pull_request.info().is_none()
+        {
+            if let Err(error) = pull_request.open_failed_fix(title, &body) {
+                progress::warn(
+                    &error,
+                    format_args!("could not open the failed Base CI repair as a draft"),
+                );
+            }
+            if let Some(pr) = pull_request.info() {
+                crate::logs::pull_request(&pr.url);
+                failed.pr_url = Some(pr.url);
+            }
+        }
+        outcome
     }
 
     /// An existing PR enters Delivery directly; no implementation or initial
@@ -1109,7 +1127,20 @@ impl Outside for InWorktree<'_> {
             protected_paths: self.protected_paths,
             context: self.context,
         };
-        repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)
+        repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)?;
+        // Ticket/Spec and Base CI Deliveries began with agent-authored or
+        // reviewed work. Preserve exact-head evidence for a later Fix run.
+        // An adopted PR cannot acquire that authority merely by passing CI.
+        if goal == Goal::ReadyForReview
+            && !matches!(self.context, RepairContext::PullRequest(_))
+            && let Err(error) = self.record_delivered_head(pr_url)
+        {
+            progress::warn(
+                &error,
+                format_args!("could not record the delivered agent head"),
+            );
+        }
+        Ok(())
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -1137,7 +1168,18 @@ impl Outside for InWorktree<'_> {
     }
 }
 
-impl InWorktree<'_> {}
+impl InWorktree<'_> {
+    fn record_delivered_head(&mut self, pr_url: &str) -> Result<()> {
+        self.pull_request.ensure_actionable(true)?;
+        let head = self.worktree.head()?;
+        let pr = crate::review::PullRequestUrl::parse(pr_url)?;
+        let marker = serde_json::json!({"authored_head": head});
+        GitHub::new().comment_review(
+            &pr,
+            &format!("Delivery completed on agent-authored or reviewed head {head}.\n\n<!-- thirdshift-review {marker} -->\n"),
+        )
+    }
+}
 
 /// A failed Delivery's worktree and its pull request on GitHub. Worktree
 /// owns preservation and the cleanup decision when this is dropped.

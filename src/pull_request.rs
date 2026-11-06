@@ -436,7 +436,17 @@ impl<A: Adapter> PullRequest<A> {
     /// none. An existing pull request, draft or ready, is left to
     /// [`PullRequest::mark_ready`].
     pub fn open_if_absent(&mut self, title: &str, body: &str) -> Result<()> {
-        if self.observe(false)?.is_some() {
+        self.open_draft_if_absent(title, body, false)
+    }
+
+    /// A failed Base CI opening session still publishes its preserved work as
+    /// a draft. Completion observations finish this after interruption too.
+    pub(crate) fn open_failed_fix(&mut self, title: &str, body: &str) -> Result<()> {
+        self.open_draft_if_absent(title, body, true)
+    }
+
+    fn open_draft_if_absent(&mut self, title: &str, body: &str, completion: bool) -> Result<()> {
+        if self.observe(completion)?.is_some() {
             return Ok(());
         }
         progress::step(format!("opening a draft pull request into {}", self.base));
@@ -447,7 +457,7 @@ impl<A: Adapter> PullRequest<A> {
         let number = self.number_from_url(&url)?;
         self.identified = Some(Identified { number, url });
         let snapshot = self
-            .observe(false)?
+            .observe(completion)?
             .context("the pull request just opened is not found")?;
         self.validate(&snapshot, false)?;
         Ok(())

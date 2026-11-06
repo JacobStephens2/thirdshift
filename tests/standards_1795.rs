@@ -75,6 +75,8 @@ fn fix_self_merge_requires_review_evidence() {
     ]);
     scenario.write_gh_state(&state);
 
+    let ready = scenario.run(&["fix", &url, "--no-merge", "--no-email"]);
+    assert_eq!(ready.code, Some(0), "{}", ready.stderr);
     let result = scenario.run(&["fix", &url, "--merge", "--no-email"]);
     let merged = scenario.gh_state()["prs"][0]["state"] == "MERGED";
     assert!(

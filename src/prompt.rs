@@ -612,7 +612,7 @@ impl<'a> From<&'a IssueUrl> for RepairSubject<'a> {
 }
 
 impl RepairSubject<'_> {
-    fn url(&self) -> &str {
+    fn reference(&self) -> &str {
         match self {
             Self::Issue(issue) => &issue.url,
             Self::PullRequest(url) => url,
@@ -678,7 +678,7 @@ pub fn conflict_repair<'a>(
          {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
-        url = subject.url(),
+        url = subject.reference(),
         issue_file_instruction = subject.instruction(),
     )
 }
@@ -732,7 +732,7 @@ pub fn ci_fix_repair<'a>(
          {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
-        url = subject.url(),
+        url = subject.reference(),
         issue_file_instruction = subject.instruction(),
     )
 }
@@ -765,7 +765,7 @@ pub fn review_repair<'a>(
          {SOURCE_EDITS}\n\
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
-        url = subject.url(),
+        url = subject.reference(),
         issue_file_instruction = subject.instruction(),
         address_findings = review.address_findings(),
         unaddressed_findings = review.unaddressed_findings(),

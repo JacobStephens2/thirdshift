@@ -27,6 +27,13 @@ pub(crate) struct ReviewInput {
 struct ReviewMarker {
     reviewed_head: Option<String>,
     pushed_head: Option<String>,
+    authored_head: Option<String>,
+}
+
+impl ReviewMarker {
+    fn reviewed(&self, head: &str) -> bool {
+        self.reviewed_head.as_deref() == Some(head) || self.pushed_head.as_deref() == Some(head)
+    }
 }
 
 impl GitHub {
@@ -178,10 +185,23 @@ impl GitHub {
     }
 
     pub(crate) fn reviewed_head(&self, pr: &PullRequestUrl, head: &str) -> Result<bool> {
-        Ok(self.review_markers(pr)?.iter().any(|marker| {
-            marker.reviewed_head.as_deref() == Some(head)
-                || marker.pushed_head.as_deref() == Some(head)
-        }))
+        Ok(self
+            .review_markers(pr)?
+            .iter()
+            .any(|marker| marker.reviewed(head)))
+    }
+
+    /// Authored Delivery evidence permits Fix Self-merge without claiming that
+    /// a Review run has already reviewed the pull request.
+    pub(crate) fn authored_or_reviewed_head(
+        &self,
+        pr: &PullRequestUrl,
+        head: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .review_markers(pr)?
+            .iter()
+            .any(|marker| marker.reviewed(head) || marker.authored_head.as_deref() == Some(head)))
     }
 
     /// Fix commits delivered to the open pull request that owns this base.

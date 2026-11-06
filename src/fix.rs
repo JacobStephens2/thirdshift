@@ -167,8 +167,8 @@ fn targeted(
         // Acquisition samples origin independently of PR metadata. Evidence
         // must cover the head actually adopted before Delivery begins.
         let adopted_head = worktree.head()?;
-        let reviewed =
-            asks.goal != crate::run::Goal::Merged || github.reviewed_head(&pr, &adopted_head)?;
+        let reviewed = asks.goal != crate::run::Goal::Merged
+            || github.authored_or_reviewed_head(&pr, &adopted_head)?;
         let mut target =
             PullRequest::on_pull_request(&pr, &snapshot.branch, &snapshot.base, github);
         if !reviewed {

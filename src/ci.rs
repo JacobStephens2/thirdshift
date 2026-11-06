@@ -844,10 +844,13 @@ enum Reading {
 
 /// A settled red head is eligible for an unattended Fix run.
 pub(crate) fn needs_repair(checks: &[Check]) -> bool {
-    !checks
+    !has_pending(checks) && checks.iter().any(|check| reading(check) == Reading::Failed)
+}
+
+pub(crate) fn has_pending(checks: &[Check]) -> bool {
+    checks
         .iter()
         .any(|check| reading(check) == Reading::Pending)
-        && checks.iter().any(|check| reading(check) == Reading::Failed)
 }
 
 /// Base branch maintenance owns every failed check, with no inheritance split.

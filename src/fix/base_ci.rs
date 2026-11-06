@@ -48,10 +48,10 @@ pub(super) fn run(
     }
     let failed = ci::base_failures(checks);
     let branch = format!("fix-{base}-{}", ci::short(tip));
-    if github.base_fix_pr_exists(repo, &branch)? {
+    if github.base_fix_pr_exists(repo, &branch)? || launch.directory.git().on_origin(&branch)? {
         return Ok(Some(skipped(
             repo,
-            format!("a pull request from {branch} already exists"),
+            format!("a repair branch or pull request from {branch} already exists"),
         )));
     }
     harness.check()?;
