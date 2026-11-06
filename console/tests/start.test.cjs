@@ -1,6 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { writeFile } = require('node:fs/promises');
+const { mkdir, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const { startFixture } = require('./start-fixture.cjs');
 
@@ -138,4 +138,43 @@ test('Run now recognizes all Pass kinds and leaves shell expressions display-onl
     if (kind === 'review') { assert.equal(request.author, 'fixture'); assert.equal(request.recommend_only, true); }
     await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
+});
+
+test('Run now preserves numeric arguments beside shell redirections', async t => {
+  const original = `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base main highest-first no-email harness codex\n`;
+  t.after(() => writeFile(join(fixture.home, 'crontab'), original));
+  const page = await fixture.page();
+  t.after(() => page.context().close());
+  for (const redirection of ['', ' >> /tmp/fixture-cron.log 2>&1', ' 2>&1', ' 2>> /tmp/fixture-errors.log']) {
+    await writeFile(join(fixture.home, 'crontab'), `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base main no-email harness codex parallel 2${redirection}\n`);
+    await page.goto(`${fixture.origin}/cronjobs`);
+    await page.getByRole('button', { name: 'Run now', exact: true }).click();
+    const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+    await confirm.waitFor();
+    const request = JSON.parse(await confirm.locator('pre').textContent());
+    assert.equal(request.parallel, 2);
+    assert.equal(request.harness, 'codex');
+    await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
+  }
+});
+
+test('Run now offers Custom-process Passes without adding an issue target', async t => {
+  const original = `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base main highest-first no-email harness codex\n`;
+  t.after(() => writeFile(join(fixture.home, 'crontab'), original));
+  const processes = join(fixture.home, '.thirdshift/processes');
+  await mkdir(processes, { recursive: true });
+  await writeFile(join(processes, 'inspect.toml'), 'version = 1\ndescription = "Inspect"\n[[steps]]\nname = "inspect"\ncommand = "true"\n');
+  await writeFile(join(fixture.home, 'crontab'), `*/5 * * * * cd '${fixture.repo}' && thirdshift process inspect no-email harness codex\n`);
+  const page = await fixture.page();
+  t.after(() => page.context().close());
+  await page.goto(`${fixture.origin}/cronjobs`);
+  await page.getByRole('button', { name: 'Run now', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+  await confirm.waitFor();
+  const request = JSON.parse(await confirm.locator('pre').textContent());
+  assert.equal(request.command, 'process');
+  assert.equal(request.name, 'inspect');
+  assert.equal(request.issue, undefined);
+  assert.equal(request.harness, 'codex');
+  await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
 });

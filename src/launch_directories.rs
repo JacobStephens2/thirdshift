@@ -70,6 +70,17 @@ fn resolve(path: &Path) -> Result<Directory> {
 
 // Parse literal shell words only. Never execute cron text to discover a path.
 fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    let invocation = cron_invocation(command, home)?;
+    Some((invocation.directory, invocation.output_log))
+}
+
+struct CronInvocation {
+    directory: PathBuf,
+    words: Vec<String>,
+    output_log: Option<PathBuf>,
+}
+
+fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
     let words = shell_words(cronjobs::shell_command(command))?;
     let [cd, path, and, rest @ ..] = words.as_slice() else {
         return None;
@@ -89,7 +100,7 @@ fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf
     let path = config::expand_home(path, home)?;
     let output_log = thirdshift
         .windows(2)
-        .find(|pair| matches!(pair[0].as_str(), ">>" | ">" | "&>" | "&>>"))
+        .find(|pair| matches!(pair[0].as_str(), ">>" | ">" | "1>" | "1>>" | "&>" | "&>>"))
         .and_then(|pair| {
             let log = &pair[1];
             if log.contains(['$', '`']) {
@@ -97,40 +108,33 @@ fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf
             }
             config::expand_home(log, home).or_else(|| Some(path.join(log)))
         });
-    Some((path, output_log))
+    Some(CronInvocation {
+        directory: path,
+        words: thirdshift.iter().skip(1).cloned().collect(),
+        output_log,
+    })
 }
 
 /// A literal cron invocation that can also be represented by the start API.
 /// Shell expressions remain display-only; no cron text is ever executed here.
 pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
     let home = config::home().ok()?;
-    let (path, _) = cron_directory(command, &home)?;
-    let words = shell_words(cronjobs::shell_command(command))?;
-    let rest = words.get(3..)?;
-    let invocation = rest
-        .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
-        .find(|part| {
-            part.first().is_some_and(|word| {
-                Path::new(word)
-                    .file_name()
-                    .is_some_and(|name| name == "thirdshift")
-            })
-        })?;
+    let invocation = cron_invocation(command, &home)?;
     let arguments: Vec<_> = invocation
-        .iter()
-        .skip(1)
+        .words
+        .into_iter()
         .take_while(|word| {
+            let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
             !matches!(
-                word.as_str(),
-                ">" | ">>" | "&>" | "&>>" | "<" | "2" | "2>" | "2>>" | "#"
+                operator,
+                ">" | ">>" | "&>" | "&>>" | "<" | ">&" | "<&" | "#"
             )
         })
-        .cloned()
         .collect();
     if arguments.iter().any(|word| word.contains(['$', '`'])) {
         return None;
     }
-    Some((path.canonicalize().ok()?, arguments))
+    Some((invocation.directory.canonicalize().ok()?, arguments))
 }
 
 // shlex splits shell words, but leaves operators attached to those words.
@@ -156,7 +160,16 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
         } else if quote.is_none() && matches!(character, '\'' | '"') {
             quote = Some(character);
         } else if quote.is_none() && "&|;<>".contains(character) {
-            spaced.push(' ');
+            // A contiguous IO number belongs to the redirect (2>&1); a
+            // standalone number remains a CLI argument (parallel 2 >> log).
+            let word_start = spaced.rfind(char::is_whitespace).map_or(0, |at| at + 1);
+            let word = &spaced[word_start..];
+            let io_number = matches!(character, '<' | '>')
+                && !word.is_empty()
+                && word.bytes().all(|byte| byte.is_ascii_digit());
+            if !io_number {
+                spaced.push(' ');
+            }
             spaced.push(character);
             if chars.peek() == Some(&character)
                 || matches!(character, '>' | '<') && chars.peek() == Some(&'&')

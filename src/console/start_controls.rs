@@ -20,9 +20,9 @@ impl Form {
         let mut form = Self {
             repositories: Vec::new(),
             harness: config.harness.default.unwrap_or(Harness::Claude).name(),
-            harnesses: crate::harness::names()
-                .split(" or ")
-                .map(str::to_owned)
+            harnesses: Harness::ALL
+                .into_iter()
+                .map(|harness| harness.name().to_owned())
                 .collect(),
             error: None,
         };
@@ -89,6 +89,23 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
                 (
                     json!({"command":"review", "author":author, "recommend_only":review.mode == crate::review::Mode::RecommendOnly}),
                     review.flags,
+                    false,
+                )
+            }
+            args::Command::Process(args::ProcessAction::Run(process))
+                if process.issue.is_none() && process.pull_request.is_none() =>
+            {
+                (
+                    json!({"command":"process", "name":process.name, "plan_only":process.plan_only}),
+                    Flags {
+                        goal: process.goal,
+                        email: process.email,
+                        harness: process.asked,
+                        security_review: process.security_review,
+                        security_fix: process.security_fix,
+                        security_close: process.security_close,
+                        ..Flags::default()
+                    },
                     false,
                 )
             }
