@@ -32,10 +32,7 @@ pub(super) async fn processes() -> Response {
 
 pub(super) fn process_name(name: &str) -> Result<()> {
     ensure!(
-        !name.is_empty()
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)),
+        crate::args::one_path_component(name),
         "name must be a Process name, not a path"
     );
     Ok(())

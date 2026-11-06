@@ -170,6 +170,10 @@ fn parse(words: &str) -> Command {
 
 // Identity ignores display/selection arguments, but retains different actions
 // sharing one variant. API metadata cannot cover a writer with a read example.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the independently parsed enum inventory fails on new variants; only multi-action variants need a suffix here"
+)]
 fn identity(words: &str) -> (Discriminant<Command>, String) {
     let command = parse(words);
     let action = match &command {
@@ -207,6 +211,10 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
     (discriminant(&command), action)
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "only the named enum is relevant among syn's non-exhaustive syntax items"
+)]
 fn inventory(source: &str, name: &str, examples: &[(&str, &str)]) {
     let file = syn::parse_file(source).unwrap();
     let enumeration = file

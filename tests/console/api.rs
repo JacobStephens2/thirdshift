@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn api_process_show_accepts_cli_single_component_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let directory = home.path().join(".thirdshift/processes");
+    fs::create_dir_all(&directory).unwrap();
+    let source = "version = 1\ndescription = \"Inspect\"\n[[steps]]\nname = \"inspect\"\ncommand = \"printf inspected\"\n";
+    fs::write(directory.join("inspect.v1.toml"), source).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["process", "show", "inspect.v1"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = console.get("/api/v1/processes/inspect.v1");
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+}
+
 pub(super) fn cli(home: &Path, args: &[&str]) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
     command.args(args).env("HOME", home);
@@ -16,7 +39,9 @@ pub(super) fn cli(home: &Path, args: &[&str]) -> Value {
 }
 
 pub(super) fn json(response: reqwest::blocking::Response) -> Value {
-    assert_eq!(response.status(), 200);
+    if response.status() != 200 {
+        panic!("HTTP {}: {}", response.status(), response.text().unwrap());
+    }
     assert_eq!(response.headers()["content-type"], "application/json");
     response.json().unwrap()
 }
@@ -30,6 +55,7 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
 fn remaining_cli_reads_have_api_twins() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
+    let reader = tokens::create(home.path(), "reader", &[]);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     for (path, args) in [
         ("/api/v1/help", vec!["help"]),
@@ -66,6 +92,7 @@ fn remaining_cli_reads_have_api_twins() {
     );
     let response = reqwest::blocking::Client::new()
         .post(format!("{}/api/v1/evals/touched", console.address))
+        .bearer_auth(&reader)
         .json(&json!({"paths":["src/main.rs"]}))
         .send()
         .unwrap();

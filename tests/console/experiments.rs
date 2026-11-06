@@ -29,9 +29,9 @@ fn api_experiment_changes_and_rechecks_match_cli_views() {
     saved["candidate"] = saved["baseline"].clone();
     fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
     let key = format!("{:x}--baseline--0", Sha256::digest(b"code-review\0fixture"));
-    let trial = directory.join("trials").join(&key);
+    let trial = directory.join("results");
     fs::create_dir_all(&trial).unwrap();
-    fs::write(trial.join("result.json"), serde_json::to_vec(&json!({
+    fs::write(trial.join(format!("{key}.json")), serde_json::to_vec(&json!({
         "suite":"code-review", "task":"fixture", "arm":"baseline", "trial":0,
         "outcome":"succeeded", "score":{"passed":true,"wrong_finding":false,"borderline":true,"checks":[],"model":null,"rechecks":[]}, "attempts":[]
     })).unwrap()).unwrap();
