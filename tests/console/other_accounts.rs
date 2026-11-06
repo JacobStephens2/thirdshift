@@ -1,11 +1,11 @@
 use super::*;
 
-struct Machine {
+pub(super) struct Machine {
     root: tempfile::TempDir,
 }
 
 impl Machine {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         for name in ["serving", "conductor", "unreadable"] {
@@ -46,10 +46,10 @@ void endpwent(void) { if (accounts) fclose(accounts); accounts = NULL; }
         Self { root }
     }
 
-    fn home(&self, name: &str) -> std::path::PathBuf {
+    pub(super) fn home(&self, name: &str) -> std::path::PathBuf {
         self.root.path().join(name)
     }
-    fn command(&self) -> Command {
+    pub(super) fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
         command
             .env("HOME", self.home("serving"))
@@ -68,7 +68,7 @@ void endpwent(void) { if (accounts) fclose(accounts); accounts = NULL; }
     fn run(&self, args: &[&str]) -> std::process::Output {
         self.command().args(args).output().unwrap()
     }
-    fn setting(&self, value: &str) {
+    pub(super) fn setting(&self, value: &str) {
         assert!(
             self.run(&["console", "other-accounts", value])
                 .status
@@ -194,7 +194,7 @@ fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
         command.args(["console", "--no-sign-in"]);
         command
     });
-    assert_eq!(api::json(console.get("/api/v1/status")), status);
+    api::assert_status_facts_equal(api::json(console.get("/api/v1/status")), status);
     assert!(
         machine
             .home("serving")

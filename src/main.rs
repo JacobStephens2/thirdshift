@@ -197,7 +197,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
        thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
-       thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -402,8 +402,13 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::Status { json, all }) => {
-            return match logs::status::show(json, all) {
+        Ok(Command::Status {
+            json,
+            all,
+            machine,
+            local,
+        }) => {
+            return match logs::status::show(json, all, machine.as_deref(), local) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

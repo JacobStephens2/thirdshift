@@ -96,7 +96,7 @@ fn read_token() -> Result<String> {
     Ok(token)
 }
 
-fn pairing_address(address: &str) -> Result<reqwest::Url> {
+pub(crate) fn pairing_address(address: &str) -> Result<reqwest::Url> {
     let url = fleet::link_address(address)?;
     ensure!(
         url.username().is_empty()

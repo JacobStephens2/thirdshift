@@ -118,6 +118,8 @@ pub enum Command {
     Status {
         json: bool,
         all: bool,
+        machine: Option<String>,
+        local: bool,
     },
     Show {
         command: String,
@@ -776,27 +778,30 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("status") => {
-            return match &args[1..] {
-                [] => Ok(Command::Status {
-                    json: false,
-                    all: false,
-                }),
-                [flag] if flag == "--json" => Ok(Command::Status {
-                    json: true,
-                    all: false,
-                }),
-                [flag] if flag == "--all" => Ok(Command::Status {
-                    json: false,
-                    all: true,
-                }),
-                [a, b] if (a == "--all" && b == "--json") || (a == "--json" && b == "--all") => {
-                    Ok(Command::Status {
-                        json: true,
-                        all: true,
-                    })
+            let usage = "usage: thirdshift status [--all] [--json] [--machine <name> | --local]";
+            let (mut json, mut all, mut machine, mut local) = (false, false, None, false);
+            let mut words = args[1..].iter();
+            while let Some(word) = words.next() {
+                match word.as_str() {
+                    "--json" if !json => json = true,
+                    "--all" if !all => all = true,
+                    "--local" if !local && machine.is_none() => local = true,
+                    "--machine" if machine.is_none() && !local => {
+                        let name = words
+                            .next()
+                            .filter(|name| !name.starts_with('-') && !name.is_empty())
+                            .context(usage)?;
+                        machine = Some(name.clone());
+                    }
+                    _ => bail!(usage),
                 }
-                _ => bail!("usage: thirdshift status [--all] [--json]"),
-            };
+            }
+            return Ok(Command::Status {
+                json,
+                all,
+                machine,
+                local,
+            });
         }
         Some("--release-summary") => {
             return match &args[1..] {

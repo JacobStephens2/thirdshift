@@ -26,6 +26,21 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
     assert_eq!(json(console.get(path)), expected, "{path}");
 }
 
+pub(super) fn assert_status_facts_equal(mut actual: Value, mut expected: Value) {
+    // Each read has its own fetch instant; all other owning-machine facts match.
+    for status in [&mut actual, &mut expected] {
+        for machine in status["machines"].as_array_mut().unwrap() {
+            let fetched_at = machine
+                .as_object_mut()
+                .unwrap()
+                .remove("fetched_at")
+                .unwrap();
+            assert!(chrono::DateTime::parse_from_rfc3339(fetched_at.as_str().unwrap()).is_ok());
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
 #[test]
 fn theme_import_is_available_through_the_versioned_api() {
     let home = tempfile::tempdir().unwrap();
@@ -251,12 +266,20 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
 fn inbox_api_equals_status_json_without_sign_in() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
+    freeze_clock(home.path());
     let mut command = record(home.path(), 7, Some("failed"), 0);
     // No GitHub subject: the test compares one local captured view, without
     // racing the Console's independent background GitHub refresh.
     command["issue"] = Value::Null;
     write_record(home.path(), 7, &command);
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console", "--no-sign-in"])
+            .env("HOME", home.path())
+            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        command
+    });
     parity(
         &console,
         home.path(),

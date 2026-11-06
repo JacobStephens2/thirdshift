@@ -496,7 +496,7 @@ const PAGES: &[PageRoute] = &[
         path: "/lanes",
         api: "/api/v1/lanes",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -504,7 +504,7 @@ const PAGES: &[PageRoute] = &[
         path: "/stages",
         api: "/api/v1/stages",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -512,7 +512,10 @@ const PAGES: &[PageRoute] = &[
         path: "/",
         api: "/api/v1/status",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status", "thirdshift status --json"],
+        cli: &[
+            "thirdshift status --local",
+            "thirdshift status --local --json",
+        ],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -520,7 +523,7 @@ const PAGES: &[PageRoute] = &[
         path: "/events",
         api: "/api/v1/events",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status"],
+        cli: &["thirdshift status --local"],
         method: Method::GET,
         view: View::Changes,
     },
@@ -528,7 +531,7 @@ const PAGES: &[PageRoute] = &[
         path: "/history",
         api: "/api/v1/history",
         scope: Some(Scope::Read),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -536,7 +539,7 @@ const PAGES: &[PageRoute] = &[
         path: "/security",
         api: "/api/v1/security",
         scope: Some(Scope::Security),
-        cli: &["thirdshift status --all --json"],
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
@@ -998,10 +1001,12 @@ async fn render_page(
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
         let (title, cli) = match archive_page {
-            Some(status::ArchivePage::History) => ("History", "thirdshift status --all --json"),
+            Some(status::ArchivePage::History) => {
+                ("History", "thirdshift status --local --all --json")
+            }
             Some(status::ArchivePage::Security) => (
                 "Security",
-                "thirdshift status --all --json · thirdshift show <command> --json",
+                "thirdshift status --local --all --json · thirdshift show <command> --json",
             ),
             None => ("Inbox", cli),
         };
