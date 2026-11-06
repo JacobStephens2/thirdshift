@@ -38,6 +38,17 @@ if args[:1] == ["api"]:
             pr = pr_data()
             pr["state"] = "CLOSED"
             pr_path.write_text(json.dumps(pr))
+        if mode == "partial-register":
+            # First read is a fast success. The next read, still inside the
+            # registration grace, is when the failing check appears.
+            if count == 0:
+                checks = [{"name": "fast", "status": "completed", "conclusion": "success"}]
+            else:
+                conclusion = "failure" if widget == "broken\n" else "success"
+                checks = [
+                    {"name": "fast", "status": "completed", "conclusion": "success"},
+                    {"name": "security", "status": "completed", "conclusion": conclusion},
+                ]
         print(json.dumps([{"check_runs": checks}]))
     elif "/statuses" in args[1]:
         head = args[1].split("/commits/")[1].split("/")[0]

@@ -65,10 +65,10 @@ Delivery and salvage without reopening it. Existing PRs are verified and reused.
 An opening session with no commits ahead of the Base branch ends without Delivery.
 
 Delivery fetches and merges the Base branch, pushes, then watches check runs
-and commit statuses for the full published head SHA. Pending results are polled;
-passing or absent CI plus a mergeable PR permits readiness. An empty initial
-listing gets a five-second registration grace before CI is considered absent.
-A previously seen
+and commit statuses for the full published head SHA. Pending results are polled.
+An empty or passing listing during the first five seconds stays provisional, so
+a check that registers after a faster one still counts. After that grace,
+passing or absent CI plus a mergeable PR permits readiness. A previously seen
 set of checks disappearing cannot establish green CI. Inherited failures fail
 the run without spending a Repair on the Base branch's code.
 

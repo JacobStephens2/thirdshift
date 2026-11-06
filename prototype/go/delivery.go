@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-// GitHub can initially list no checks while workflows register after a push.
+// GitHub can initially list nothing, or only a fast check, while other
+// workflows register after a push. An empty or passing listing is not final
+// until this grace has elapsed.
 const ciRegistrationGrace = 5 * time.Second
 
 type delivery struct {
@@ -96,10 +98,13 @@ func (d *delivery) deliver(ctx context.Context) error {
 				}
 				reason, state = "Fix failing CI checks on "+head+": "+strings.Join(ci.failed, ", ")+". Commit the fix.", deliveryRepair
 			case ciAbsent, ciPassed:
+				if ci.state == ciPassed {
+					knownChecks = true
+				}
 				if ci.state == ciAbsent && knownChecks {
 					return fmt.Errorf("CI checks disappeared for %s", head)
 				}
-				if ci.state == ciAbsent && time.Now().Before(registrationDeadline) {
+				if time.Now().Before(registrationDeadline) {
 					if err := pollPause(ctx); err != nil {
 						return err
 					}
