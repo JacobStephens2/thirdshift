@@ -286,7 +286,16 @@ impl<O: Outside> Record<O> {
                 | Work::Experiment(_) => None,
             },
         };
-        let line = format!("{} started: {command_log}, on {harness}", started.subject());
+        let actor = self
+            .command_record
+            .as_ref()
+            .and_then(|(_, tree)| tree.command.started_by.as_ref())
+            .map(|actor| format!(", {actor}"))
+            .unwrap_or_default();
+        let line = format!(
+            "{} started: {command_log}, on {harness}{actor}",
+            started.subject()
+        );
         if self.activity_started.is_none() {
             self.activity_started = Some(started);
             self.activity_write(&root, &line, None);

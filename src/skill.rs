@@ -40,6 +40,7 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
         }
         let prompt = prompt::skill(&skill.name, &skill.path, issue.as_ref());
         crate::resources::wait()?;
+        crate::logs::start_notice::skill_started(&config, &skill.name)?;
         progress::step(format_args!("running {} with {choice}", skill.name));
         run_session(worktree.path(), &choice, "the skill session", &prompt)
     })();

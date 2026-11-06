@@ -91,6 +91,8 @@ pub(super) struct CommandRecord {
     pub issue: Option<Issue>,
     pub hostname: String,
     pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<super::Actor>,
     pub process_start: String,
     pub harness: String,
     pub model: Option<String>,
@@ -430,6 +432,7 @@ impl CommandRecord {
             issue,
             hostname: String::new(),
             process_id: std::process::id(),
+            started_by: super::Actor::starting(),
             process_start: String::new(),
             harness: harness.harness.name().into(),
             model: harness.model.clone(),

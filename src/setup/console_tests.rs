@@ -95,7 +95,12 @@ fn declining_console_retains_existing_access_and_offers_no_install() {
         setup(&mut outside);
         let before = UserConfig::parse(saved, Path::new(PATH), Path::new(HOME)).unwrap();
         assert_eq!(config(&outside).console, before.console);
-        assert!(outside.user_config.as_deref().unwrap().starts_with(saved));
+        assert!(
+            crate::config::without_launch_directories_default(
+                outside.user_config.as_deref().unwrap()
+            )
+            .starts_with(saved)
+        );
         assert!(
             !outside
                 .said()
@@ -121,7 +126,10 @@ fn entering_existing_console_defaults_preserves_allowlist_layout_and_comments() 
         ..Scripted::answering(&answers)
     };
     setup(&mut outside);
-    assert!(outside.user_config.as_deref().unwrap().starts_with(saved));
+    assert!(
+        crate::config::without_launch_directories_default(outside.user_config.as_deref().unwrap())
+            .starts_with(saved)
+    );
 }
 
 #[test]

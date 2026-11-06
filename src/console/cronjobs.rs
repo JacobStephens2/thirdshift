@@ -1,4 +1,4 @@
-//! The Console's read-only view of the CLI's cron job inventory.
+//! Cron job inventory with confirmed starts through the Console API.
 use askama::Template;
 use axum::response::Response;
 
@@ -12,6 +12,9 @@ use crate::cronjobs::{self, CronJobs};
 struct CronJobsPage {
     page: super::PageContext,
     inventory: CronJobs,
+    csrf: String,
+    passes: Vec<super::start_controls::Pass>,
+    start_error: Option<String>,
 }
 
 pub(super) async fn show(
@@ -21,9 +24,20 @@ pub(super) async fn show(
     super::api::read(format, move || {
         let config = UserConfig::load()?;
         format.render(cronjobs::load()?, |inventory| {
+            let (passes, start_error) = if viewer.scopes.contains(&super::Scope::Run) {
+                match super::start_controls::passes(&config, &inventory.jobs) {
+                    Ok(passes) => (passes, None),
+                    Err(error) => (Vec::new(), Some(error.to_string())),
+                }
+            } else {
+                (Vec::new(), None)
+            };
             Ok(CronJobsPage {
                 page: super::PageContext::new(&config, &viewer.scopes),
                 inventory,
+                csrf: viewer.csrf,
+                passes,
+                start_error,
             }
             .render()?)
         })

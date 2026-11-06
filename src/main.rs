@@ -61,6 +61,8 @@ mod labels;
 #[cfg(target_os = "linux")]
 mod launch;
 #[cfg(target_os = "linux")]
+mod launch_directories;
+#[cfg(target_os = "linux")]
 mod local_time;
 #[cfg(target_os = "linux")]
 mod logs;
@@ -198,8 +200,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
-       thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
+       thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -217,7 +220,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
-       thirdshift update                              Update to the latest release
+       thirdshift update [--check] [--json]             Update to the latest release, or check its version
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
@@ -227,8 +230,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
-  harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>, effort <level>       Choose the Harness's Model and Effort
+  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands: architect, pickup, secure, review --author <login>, fix. For architect, pickup, secure and fix, base <branch> selects an origin branch; fix also accepts author <login>.
@@ -257,7 +259,13 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Update) => return outcome(update::update()),
+        Ok(Command::Update { check, json }) => {
+            return if check || json {
+                printed(update::command(check, json))
+            } else {
+                outcome(update::update())
+            };
+        }
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::Score) => return score(),
         Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
@@ -278,7 +286,11 @@ fn main() -> ExitCode {
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
+        Ok(Command::Config { key, value, json }) => {
+            return printed(console::config(key.as_deref(), value.as_deref(), json));
+        }
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
@@ -658,6 +670,7 @@ fn score() -> ExitCode {
     let _lock = match scoring::lock() {
         Ok(Some(lock)) => lock,
         Ok(None) => {
+            logs::start_notice::skipped("another Scoring run is running on this machine");
             progress::step("Scoring run skipped: another Scoring run is running on this machine");
             return ExitCode::SUCCESS;
         }

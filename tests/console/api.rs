@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn api_process_show_accepts_cli_single_component_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let directory = home.path().join(".thirdshift/processes");
+    fs::create_dir_all(&directory).unwrap();
+    let source = "version = 1\ndescription = \"Inspect\"\n[[steps]]\nname = \"inspect\"\ncommand = \"printf inspected\"\n";
+    fs::write(directory.join("inspect.v1.toml"), source).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["process", "show", "inspect.v1"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = console.get("/api/v1/processes/inspect.v1");
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+}
+
 pub(super) fn cli(home: &Path, args: &[&str]) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
     command.args(args).env("HOME", home);
@@ -16,7 +39,9 @@ pub(super) fn cli(home: &Path, args: &[&str]) -> Value {
 }
 
 pub(super) fn json(response: reqwest::blocking::Response) -> Value {
-    assert_eq!(response.status(), 200);
+    if response.status() != 200 {
+        panic!("HTTP {}: {}", response.status(), response.text().unwrap());
+    }
     assert_eq!(response.headers()["content-type"], "application/json");
     response.json().unwrap()
 }
@@ -27,10 +52,127 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
 }
 
 #[test]
+fn remaining_cli_reads_have_api_twins() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (path, args) in [
+        ("/api/v1/help", vec!["help"]),
+        ("/api/v1/version", vec!["version"]),
+        ("/api/v1/processes", vec!["process", "list"]),
+        (
+            "/api/v1/processes/ticket-run",
+            vec!["process", "show", "ticket-run"],
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            json(console.get(path)).as_str().unwrap().trim_end(),
+            expected.trim_end(),
+            "{path}"
+        );
+    }
+    parity(&console, home.path(), "/api/v1/evals", &["evals", "list"]);
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/other-accounts",
+        &["console", "other-accounts", "--json"],
+    );
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/evals/touched", console.address))
+        .bearer_auth(&reader)
+        .json(&json!({"paths":["src/main.rs"]}))
+        .send()
+        .unwrap();
+    assert_eq!(
+        json(response),
+        cli(home.path(), &["evals", "touched", "src/main.rs"])
+    );
+    assert_eq!(
+        console
+            .get("/api/v1/processes/%2E%2E%2Fcredentials")
+            .status(),
+        422
+    );
+}
+
+#[test]
+fn other_account_changes_share_cli_values_and_audit_and_require_admin() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let admin = tokens::create(home.path(), "owner", &["--scopes", "admin"]);
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let client = reqwest::blocking::Client::new();
+    let request = |token: &str| {
+        client
+            .post(format!("{}/api/v1/other-accounts", console.address))
+            .bearer_auth(token)
+            .json(&json!({"value":"readable"}))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(request(&reader).status(), 403);
+    assert_eq!(json(request(&admin)), json!("readable"));
+    parity(
+        &console,
+        home.path(),
+        "/api/v1/other-accounts",
+        &["console", "other-accounts", "--json"],
+    );
+    let log = cli(home.path(), &["console", "log", "--json"]);
+    assert!(
+        log.as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"] == "config-changed"
+                && event["email"] == "owner"
+                && event["change"]["key"] == "console.other_accounts"
+                && event["change"]["old"] == "none"
+                && event["change"]["new"] == "readable")
+    );
+}
+
+#[test]
+fn remaining_mutations_enforce_their_scopes_before_reading_arguments() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for path in [
+        "/processes/check",
+        "/email-test",
+        "/experiments/id/name",
+        "/experiments/id/difficulty",
+        "/experiments/id/rechecks",
+    ] {
+        let response = reqwest::blocking::Client::new()
+            .post(format!("{}/api/v1{path}", console.address))
+            .bearer_auth(&reader)
+            .json(&json!({}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), 403, "{path}");
+    }
+}
+
+#[test]
 fn theme_import_is_available_through_the_versioned_api() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
-    let token = tokens::create(home.path(), "theme-importer", &["--scopes", "act"]);
+    let token = tokens::create(home.path(), "theme-importer", &["--scopes", "admin"]);
     let reader = tokens::create(home.path(), "reader", &[]);
     let mut theme = cli(home.path(), &["console", "theme", "export", "focus-auto"]);
     theme["name"] = json!("api-custom");
@@ -59,7 +201,7 @@ fn theme_import_is_available_through_the_versioned_api() {
         refused.json::<Value>().unwrap()["error"]
             .as_str()
             .unwrap()
-            .contains("act")
+            .contains("admin")
     );
     let invalid = client
         .post(format!("{}/api/v1/themes", console.address))
@@ -175,6 +317,11 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
     assert_eq!(document, cli(home.path(), &["console", "openapi"]));
     assert_eq!(document["openapi"], "3.1.1");
     let paths = document["paths"].as_object().unwrap();
+    assert_eq!(
+        paths["/api/v1/experiments/{id}/difficulty"]["post"]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["type"],
+        "array"
+    );
     for path in [
         "/api/v1/status",
         "/api/v1/peek",

@@ -903,7 +903,7 @@ test -f {root}/{COPY_REPLACED}
         }
     }
 
-    fn command(&self, args: &[&str]) -> Command {
+    pub(crate) fn command(&self, args: &[&str]) -> Command {
         self.command_running(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
     }
 

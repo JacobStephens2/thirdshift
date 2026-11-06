@@ -526,6 +526,35 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
     response
 }
 
+pub(super) async fn require_config_view(
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if viewer.scopes.contains(&Scope::Read) || viewer.scopes.contains(&Scope::Admin) {
+        next.run(request).await
+    } else {
+        super::api::error(StatusCode::FORBIDDEN, "Missing scope: read or admin")
+    }
+}
+
+/// A person changing the look can read the documents needed by those controls.
+/// API reads retain their route-table read scope.
+pub(super) async fn require_look_view(
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if [Scope::Read, Scope::Act, Scope::Admin]
+        .iter()
+        .any(|scope| viewer.scopes.contains(scope))
+    {
+        next.run(request).await
+    } else {
+        super::api::error(StatusCode::FORBIDDEN, "Missing scope: read, act or admin")
+    }
+}
+
 pub(super) async fn require_scope(
     State(scope): State<Scope>,
     viewer: Option<Extension<Viewer>>,

@@ -380,7 +380,7 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. With `run`, use **Start work** on Inbox or **Run now** on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system's scheduler remain available too.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
 
@@ -416,8 +416,9 @@ and their resumes); those log reads return 403 naming `security`. Span and
 waterfall responses keep the Command's other stages and omit those sessions,
 including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
-and their auditing are described below; `run` and `admin` endpoints arrive in
-later Console API tickets. A missing route scope returns 403 JSON naming that
+and their auditing are described below. `run` starts Ticket and Spec runs;
+`admin` reads and changes User config, updates thirdshift, imports Themes and
+manages Eval data. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -527,6 +528,7 @@ by later Console API tickets appear when they are served.
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
 | Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
+| Known Launch directories | `/api/v1/launch-directories` | `launch-directories` |
 | Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
 | Available Themes | `/api/v1/themes` | `console theme list` |
 
@@ -542,12 +544,14 @@ address's scopes, including the Security finding limits above.
 | --- | --- |
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
-| `act` | The action POSTs below, including Theme and hidden sections |
-| `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
+| `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
+| `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
+| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 
-Actions take `application/x-www-form-urlencoded` bodies, using the page's
-field names below, except Theme import, which takes an `application/json` Theme
-document. Bearer requests need no CSRF token; sign-in sessions and
+The actions in the following table take `application/x-www-form-urlencoded`
+bodies using the listed fields; Theme import takes `application/json` instead.
+Starting work and the additional CLI twins below also take JSON where listed.
+Bearer requests need no CSRF token; sign-in sessions and
 `--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
 The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 
@@ -561,6 +565,58 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/theme` | `theme` | `console theme <name>` |
 | `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
+| `/update` | none | `update` |
+| `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+
+Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
+JSON bodies use `Content-Type: application/json`. GET calls take no body.
+
+| Method and path | Scope | Body | CLI twin |
+| --- | --- | --- | --- |
+| GET `/help`, `/version` | `read` | none | `--help`, `--version` |
+| GET `/processes`, `/processes/<name>` | `read` | none | `process list`, `process show <name>` |
+| POST `/processes/check` | `run` | JSON `repository`, `name`, optional Process run options | `process check <name>` |
+| GET `/evals` | `read` | none | `evals list` |
+| POST `/evals/touched` | `read` | JSON `paths` array of changed path names | `evals touched <paths>...` |
+| POST `/evals/verify` | `read` | JSON `repository` (a known Launch directory's owner/name), `base` commit | `evals verify <repository> <base>` |
+| GET `/other-accounts` | `read` | none | `console other-accounts --json` |
+| POST `/other-accounts` | `admin` | JSON `value` (`none`, `readable`, or account list) | `console other-accounts <value>` |
+| POST `/email-test` | `admin` | JSON with optional `address` | `email-test [<address>]` |
+| POST `/experiments/<id>/name` | `admin` | JSON `name` | `experiments <id> --name <name> --json` |
+| POST `/experiments/<id>/difficulty` | `admin` | none | `experiments <id> --record-difficulty --json` |
+| GET `/experiments/<id>/rechecks` | `read` | none | `recheck <id> --pending --json` |
+| POST `/experiments/<id>/rechecks` | `act` | JSON `trial` or `fingerprint`, `decision` (`pass` or `fail`), `reason`, optional `wrong_finding` | `recheck <id> <trial> <decision> --reason <reason> --json`, or `--batch <fingerprint>` |
+
+See OpenAPI for each CLI twin's response and full argument schema. The route
+inventory and its explicit CLI-only exclusions are checked against the CLI.
+
+#### Updating and administering a machine
+
+With `admin`, open **Update thirdshift** in the Console navigation. It shows the
+current and latest stable versions. Choose **Update thirdshift** to install the
+release, then reload after the Console restarts. The install receipt must belong
+to the running copy, just as for `thirdshift update`; source builds need a shell
+reinstall. If checking the latest release fails, the page says so and offers Reload.
+
+`GET /api/v1/update` returns `{"current":"…","latest":"…"}`, the same as
+`thirdshift update --check --json`. POST runs the same updater as the CLI and
+returns its result as a JSON string (`thirdshift update --json`). It answers once
+the installer has placed the binary, before the Console re-executes itself:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+curl -X POST -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+```
+
+Theme import requires `admin` and takes the Theme document itself as JSON;
+a file path or a `path` field is refused. Selecting an existing Theme still
+requires `act`. POST `/api/v1/evals/import-replays` imports the machine's private
+replay manifests and grading index from their standard locations, like the CLI.
+It accepts no paths. Eval task approval remains an `act` judgment. Eval verification
+uses a known Launch directory through POST `/api/v1/evals/verify` with `read`.
+Eval preparation and Arm preparation write caller-selected local paths, so remain
+CLI-only. Updates, imports and judgments name their requester
+in the Console log.
 
 Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for
@@ -568,6 +624,123 @@ token Stops and Dismissals say `by token <holder>`, alongside the CLI and
 Console callers already recorded there. A token naming a person records
 `by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
+
+#### Starting Commands through the API
+
+<a id="starting-ticket-and-spec-runs-through-the-api" name="starting-ticket-and-spec-runs-through-the-api"></a>
+
+`GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
+return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
+inventory. Known Launch directories come from this account's thirdshift cron
+jobs with literal `cd <directory> && ... thirdshift ...` commands, including
+`env NAME=value thirdshift` wrappers, plus the
+top-level `launch_directories` list in User config. Paths may be absolute or
+start with `~/`; aliases of the same directory are listed once. Each directory
+is resolved through its GitHub `origin` remote. Stale cron directories are
+omitted; an invalid configured directory is an error. Cron shell text is never
+evaluated. For complex shell scripts or wrappers, list their directory explicitly.
+An account without `crontab` can use the config list alone.
+
+A client with `run` starts work with structured JSON:
+
+On the Console's Inbox, a signed-in person with `run` can open **Start work**,
+choose a repository from the known Launch directories and enter an issue number
+or URL. **Shared options** offers merge, email, Harness, Model, Effort, parallel
+Tickets, Base fix, Security review, Security fix and closing Security findings.
+**Review start** shows the request and its Harness; only **Start now** submits
+it. Cancel or Escape starts nothing. The result names the new Command, which
+appears in the Inbox, or explains a refused start. Check Inbox and logs before
+retrying after a lost response.
+
+On **Cron jobs**, **Run now** offers the same confirmation for each recognizable
+Pass, preserving its CLI arguments. Literal `cd` directories and Pass arguments
+are supported; shell expressions and per-invocation environment wrappers remain
+display-only. The result names a Command
+or gives the Pass's skip reason, with a link to Inbox for started work.
+Both controls require JavaScript and are hidden without `run`. Each confirmed
+start uses the same scoped, CSRF-protected API as a client.
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"repository":"acme/widgets","issue":7,"merge":false,"email":{"mode":"never"},"harness":"codex","model":"gpt-6.1-sol","effort":"high","base_fix":false,"security_review":true,"security_fix":false}' \
+  https://console.example.com/api/v1/runs
+```
+
+`issue` accepts a positive number, its decimal string or a full Issue URL in
+the named repository. `merge`, `base_fix`, `security_review` and `security_fix`
+are optional booleans; `harness`, `model` and `effort` are optional strings.
+`email` has `mode` `always`, `unless_merged` or `never`, with an optional
+`address` for the first two. Omitted options use the CLI's User config defaults.
+Unknown fields and invalid arguments are refused. A repository without a known
+Launch directory is refused before anything starts. If several directories
+name it, the first path in the inventory is used.
+
+The optional `command` selects the CLI twin; leaving it out means `ticket`,
+which also starts a Spec run when the issue has Tickets. Every request names
+`repository`. These commands are startable on the same `POST /api/v1/runs` path:
+
+| `command` | Target and command-specific options |
+| --- | --- |
+| `ticket` | Required `issue`; shared run options above, plus positive `parallel` and boolean `security_close` |
+| `architect` | Optional `base`, `focus`, `plan_only`; shared run options, `parallel`, `security_close` |
+| `pickup` | Optional `base`, `order` (`lowest-first` or `highest-first`); shared run options, `parallel`, `security_close` |
+| `secure` | Optional `base`; shared run options, `parallel`, `security_close` |
+| `review` | Required `pull_request` URL or `author` login; optional `recommend_only`, `email`, `harness`, `model`, `effort`, `security_review` |
+| `fix` | Optional `pull_request` URL for a targeted Fix run, or `base` and `author` for a Fix Pass; optional `merge`, `base_fix`, `email`, `harness`, `model`, `effort` |
+| `process` | Required `name`; optional `issue` or `pull_request` URL, `plan_only`, `merge`, `email`, `harness`, `model`, `effort`, `security_review`, `security_fix`, `security_close` |
+| `skill` | Required `name`; optional `issue` |
+| `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
+| `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
+| `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
+
+Booleans use `true` or `false`. All options and combinations are checked by
+the CLI argument parser; for example, Architect `plan_only` refuses options
+for a dispatched run. Issue and pull request URLs must belong to the named
+repository. Triage receives the Report verbatim through standard input;
+`file`, `path` and arbitrary CLI arguments are refused. `read_machine` has
+the same meaning as the CLI's `--read-machine`, including User config defaults.
+
+For example, start a Pickup run on `main`, taking the highest issue first:
+
+```json
+{"repository":"acme/widgets","command":"pickup","base":"main","order":"highest-first"}
+```
+
+Or compare two commits in an Experiment using the machine's Eval suites:
+
+```json
+{"repository":"acme/widgets","command":"experiment","experiment":{"candidate":"HEAD","baseline":"HEAD~1","baseline_harness":"claude","candidate_harness":"codex","suite":["code-review"]}}
+```
+
+Experiment option names match the CLI's long flags with underscores in place
+of hyphens. `suite` is an array of suite names, and `candidate` is a Git reference.
+The same CLI parser validates the combination; OpenAPI lists the option types.
+
+The Console starts the same binary in that directory, in its own OS session
+with the account's login shell environment. Standard output and errors append
+to the cron command's literal `>>` or `>` output path when present, otherwise
+to `<logs.dir>/cron.log`, the shared cron log used in the scheduling examples.
+It waits at most 30 seconds for the Command record and returns
+`{"version":1,"name":"acme/widgets#7"}`. Passes use the same gates as cron,
+including the Command limit. A skip before a Command record exists returns
+`{"version":1,"outcome":"skipped","reason":"..."}`, even with quiet skips
+or a repeated skip reason. A Custom process's skip retains its Command record
+as in the CLI, so returns its name. Skill runs keep no Command record in the
+CLI; after preflight they return
+`{"version":1,"outcome":"started","process_id":1234}` instead. Their API start
+names the requester in the repository's Activity log. An early failure returns an error naming
+the exit status and log; a timeout names the process and warns that it may still
+start, so check `status` before retrying. Follow the Command with the usual
+`show`, `status` and log views. It keeps running through a Console restart.
+The generated systemd service uses `KillMode=process` to preserve these
+Commands during a service restart; regenerate an older installed service to
+apply that setting.
+
+An issue with sub-issues starts a Spec run. As with a typed Issue URL, the
+Command limit never skips this work. The Command record and Activity log keep
+the token holder or the named person and calling machine. Every start attempt
+goes in the Console log. Cron and terminal starts keep their usual wording.
 
 #### Console on a server
 
@@ -1895,7 +2068,48 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
+Read every setting with its value and default, read one, or set one:
+
+```sh
+thirdshift config
+thirdshift config spec.parallel
+thirdshift config spec.parallel 6
+thirdshift config harness.codex.model gpt-6.1-sol --json
+thirdshift config console.hidden_sections '["done", "resolved"]'
+thirdshift config email.to_by_repo '{ "acme/widgets" = "team@example.com" }'
+```
+
+All three forms accept `--json`, before or after their arguments. The whole
+config returns `{"version":1,"settings":[...]}`; a read or write of one key
+returns its `key`, `value`, `default`, `editable` and `reason`. Strings accept
+bare text or TOML quotes; arrays and maps use TOML. `null` means no default
+for `email.to`. A write validates exactly as `setup` does and preserves the
+other settings, comments and layout. An invalid value leaves the file intact.
+
+Open **User config** in the Console navigation (`/config`) to see the same
+inventory. A session with `admin` can save one setting at a time; a `read`
+session sees values and defaults without edit controls. The API requires
+`admin` for both GET `/api/v1/config` and GET `/api/v1/config/<key>`, and for
+POST `/api/v1/config/<key>` with an `application/x-www-form-urlencoded`
+`value` field. Its response equals the CLI's JSON. Session writes need CSRF
+as other Console actions do; bearer writes do not.
+
+The sign-in list (`console.allowed_emails`) and address scopes
+(`console.address_scopes`) cannot be read or written with `config` or its API
+twins. The inventory names them with `null` values and explains the refusal:
+edit the sign-in list on the machine or use `setup`, and use `console scopes`
+for address scopes. They control who can get access. Credentials are never
+read by this command; nonempty `otlp.endpoint` values are redacted because
+export URLs can contain credentials. Enter a replacement URL to change one,
+or blank to disable export. Every actual config change through these three
+ways in records the caller, key, old value and new value in the Console log,
+with sensitive values redacted. Reads and unchanged saves record no config
+change. New values apply on subsequent config reads; restart the Console
+after changing its listening port.
+
 ```toml
+launch_directories = ["~/repos/widgets"]  # additional known Launch directories for API starts
+
 [merge]
 always = true   # every Ticket run Self-merges, without the merge word
 
@@ -1956,6 +2170,8 @@ effort = "medium"
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
 ```toml
+launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
+
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 

@@ -1,0 +1,30 @@
+<section class="start-controls" aria-label="Start work" data-start-area data-csrf="{{ csrf }}">
+  <details><summary>Start work</summary>
+    <noscript><p>Starting work from this page requires JavaScript for confirmation. The CLI is also available.</p></noscript>
+    {% if let Some(error) = start.error %}<p role="alert">Could not load Launch directories: {{ error }}</p>{% endif %}
+    {% if start.repositories.is_empty() %}<p>No known Launch directories. Add a repository to <code>launch_directories</code> in User config, or use it in a thirdshift cron job.</p>{% else %}
+    <form data-start-form class="start-form">
+      <div class="start-field"><label for="start-repository">Repository</label><select id="start-repository" name="repository" required>{% for repository in start.repositories %}<option>{{ repository }}</option>{% endfor %}</select></div>
+      <label>Issue number or URL <input name="issue" required placeholder="7 or https://github.com/owner/repo/issues/7"></label>
+      <div class="start-field"><label for="start-harness">Harness</label><select id="start-harness" name="harness">{% for name in start.harnesses %}<option{% if name.as_str() == start.harness %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
+      <details><summary>Shared options</summary>
+        <p>Unchanged options use User config and the CLI defaults. Step choices in the Process can override the Command's Harness, Model and Effort.</p>
+        <div class="start-options">
+          <div class="start-field"><label for="start-merge">Merge</label><select id="start-merge" name="merge"><option value="">User config</option><option value="true">Self-merge</option><option value="false">Ready for review</option></select></div>
+          <div class="start-field"><label for="start-email">Email</label><select id="start-email" name="email"><option value="">User config</option><option value="always">Always</option><option value="unless_merged">Unless merged</option><option value="never">Never</option></select></div>
+          <label>Email address <input name="email_address" type="email" placeholder="User config"></label>
+          <label>Model <input name="model" placeholder="User config / Harness default"></label>
+          <label>Effort <input name="effort" placeholder="User config / Harness default"></label>
+          <label>Parallel Tickets <input name="parallel" type="number" min="1" step="1" placeholder="User config"></label>
+          <div class="start-field"><label for="start-base-fix">Base fix</label><select id="start-base-fix" name="base_fix"><option value="">User config</option><option value="true">Allow</option><option value="false">Forbid</option></select></div>
+          <div class="start-field"><label for="start-security-review">Security review</label><select id="start-security-review" name="security_review"><option value="">User config</option><option value="true">Allow</option><option value="false">Forbid</option></select></div>
+          <div class="start-field"><label for="start-security-fix">Security fix</label><select id="start-security-fix" name="security_fix"><option value="">User config</option><option value="true">Allow</option><option value="false">Forbid</option></select></div>
+          <div class="start-field"><label for="start-security-close">Close Security findings</label><select id="start-security-close" name="security_close"><option value="">User config</option><option value="true">Allow</option><option value="false">Forbid</option></select></div>
+        </div>
+      </details>
+      <button type="submit" disabled data-start-enable>Review start</button>
+    </form>
+    {% endif %}
+  </details>
+  <p data-start-result role="status" aria-live="polite"></p>
+</section>
