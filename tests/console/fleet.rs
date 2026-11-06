@@ -3,7 +3,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Output;
 
-fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
+pub(super) fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .args(["console", "fleet", "add", name, address])
         .env("HOME", home)
@@ -14,6 +14,119 @@ fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
         .unwrap();
     let _ = writeln!(child.stdin.take().unwrap(), "{token}");
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn cli_remote_dismiss_and_undo_use_only_the_owning_machine() {
+    let caller = tempfile::tempdir().unwrap();
+    let owner = tempfile::tempdir().unwrap();
+    configure(caller.path());
+    configure(owner.path());
+    let mut fixture = record(owner.path(), 7, Some("failed"), 0);
+    fixture["name"] = json!("acme/widgets#7");
+    write_record(owner.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), owner.path());
+    let token = tokens::create(owner.path(), "caller", &["--scopes", "read,act"]);
+    assert!(
+        add(caller.path(), "owner", &console.address, &token)
+            .status
+            .success()
+    );
+    let before = api::cli(caller.path(), &["console", "log", "--json"]);
+    let dismissed = api::cli(
+        caller.path(),
+        &["dismiss", "widgets#7", "--machine", "owner", "--json"],
+    );
+    assert_eq!(dismissed["dismissal"]["who"], "token caller");
+    let undone = api::cli(
+        caller.path(),
+        &[
+            "dismiss",
+            "widgets#7",
+            "--machine",
+            "owner",
+            "--undo",
+            "--json",
+        ],
+    );
+    assert_eq!(undone["undone"], true);
+    assert_eq!(
+        api::cli(caller.path(), &["console", "log", "--json"]),
+        before
+    );
+    assert!(
+        !caller
+            .path()
+            .join(".thirdshift/logs/acme/widgets/activity.log")
+            .exists()
+    );
+    let activity = fs::read_to_string(
+        owner
+            .path()
+            .join(".thirdshift/logs/acme/widgets/activity.log"),
+    )
+    .unwrap();
+    assert!(activity.contains("by token caller"), "{activity}");
+}
+
+#[test]
+fn remote_other_account_rows_have_no_controls_and_refuse_forced_actions() {
+    let caller = tempfile::tempdir().unwrap();
+    configure(caller.path());
+    let machine = other_accounts::Machine::new();
+    machine.setting("conductor");
+    record(&machine.home("conductor"), 7, Some("failed"), 0);
+    let owner = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let token = tokens::create(
+        &machine.home("serving"),
+        "caller",
+        &["--scopes", "read,act"],
+    );
+    assert!(
+        add(caller.path(), "owner", &owner.address, &token)
+            .status
+            .success()
+    );
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console", "--no-sign-in"])
+            .env("HOME", caller.path())
+            .env("THIRDSHIFT_FLEET_INTERVAL_MS", "100");
+        command
+    });
+    let _events = console.get("/events");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let html = console.get("/").text().unwrap();
+        if let Some(row) = html
+            .split("<li class=\"command")
+            .find(|row| row.contains("account-tag"))
+        {
+            assert!(row.contains("conductor"));
+            assert!(
+                !row.contains(">Dismiss</button>") && !row.contains(">Stop</button>"),
+                "{row}"
+            );
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{html}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let refused = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["dismiss", "widgets#7", "--machine", "owner", "--json"])
+        .env("HOME", caller.path())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("read-only"),
+        "{refused:?}"
+    );
 }
 
 fn stand_in() -> (std::net::TcpListener, String) {

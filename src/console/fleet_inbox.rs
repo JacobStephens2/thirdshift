@@ -12,10 +12,12 @@ use crate::logs::status::{
     fleet::{Document, Reachability},
 };
 
+type PersonAnswers = BTreeMap<(Option<String>, String), Answer>;
+
 #[derive(Clone)]
 pub(super) struct Fleet {
-    answers: Arc<Mutex<BTreeMap<String, Answer>>>,
-    pages: watch::Sender<usize>,
+    answers: Arc<Mutex<PersonAnswers>>,
+    pages: watch::Sender<BTreeMap<Option<String>, usize>>,
 }
 
 struct Answer {
@@ -23,12 +25,23 @@ struct Answer {
     good: Option<Document>,
     fetched_at: Option<DateTime<Utc>>,
     error: Option<(Reachability, String)>,
+    scopes: Vec<super::Scope>,
 }
 
-pub(super) struct Lease(watch::Sender<usize>);
+pub(super) struct Lease(
+    watch::Sender<BTreeMap<Option<String>, usize>>,
+    Option<String>,
+);
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.0.send_modify(|pages| *pages -= 1);
+        self.0.send_modify(|pages| {
+            if let Some(count) = pages.get_mut(&self.1) {
+                *count -= 1;
+                if *count == 0 {
+                    pages.remove(&self.1);
+                }
+            }
+        });
     }
 }
 
@@ -53,16 +66,18 @@ fn timing(variable: &str, seconds: u64) -> Duration {
 
 impl Fleet {
     pub fn new() -> Self {
-        let (pages, _) = watch::channel(0);
+        let (pages, _) = watch::channel(BTreeMap::new());
         Self {
             answers: Arc::default(),
             pages,
         }
     }
 
-    pub fn subscribe(&self) -> Lease {
-        self.pages.send_modify(|pages| *pages += 1);
-        Lease(self.pages.clone())
+    pub fn subscribe(&self, person: Option<&str>) -> Lease {
+        let person = person.map(str::to_owned);
+        self.pages
+            .send_modify(|pages| *pages.entry(person.clone()).or_default() += 1);
+        Lease(self.pages.clone(), person)
     }
 
     pub fn follow(&self, notifier: super::changes::Notifier) -> tokio::task::JoinHandle<()> {
@@ -71,8 +86,11 @@ impl Fleet {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(timing("THIRDSHIFT_FLEET_INTERVAL_MS", 15));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut jobs =
-                tokio::task::JoinSet::<(Entry, Result<Document, (Reachability, String)>)>::new();
+            let mut jobs = tokio::task::JoinSet::<(
+                Option<String>,
+                Entry,
+                Result<(Document, Vec<super::Scope>), (Reachability, String)>,
+            )>::new();
             let mut fetching = BTreeSet::new();
             loop {
                 tokio::select! {
@@ -80,32 +98,33 @@ impl Fleet {
                     result = pages.changed() => {
                         if result.is_err() { break; }
                         // Catch up as soon as the first page opens.
-                        if *pages.borrow_and_update() != 1 { continue; }
+                        if pages.borrow_and_update().is_empty() { continue; }
                     },
                     Some(result) = jobs.join_next(), if !jobs.is_empty() => {
-                        if let Ok((entry, result)) = result {
-                            fetching.remove(&entry.name);
+                        if let Ok((person, entry, result)) = result {
+                            fetching.remove(&(person.clone(), entry.name.clone()));
                             let mut answers = fleet.answers.lock().unwrap();
-                            let answer = answers.entry(entry.name.clone()).or_insert_with(|| Answer {
-                                entry: entry.clone(), good: None, fetched_at: None, error: None,
+                            let answer = answers.entry((person, entry.name.clone())).or_insert_with(|| Answer {
+                                entry: entry.clone(), good: None, fetched_at: None, error: None, scopes: Vec::new(),
                             });
                             if answer.entry != entry {
-                                *answer = Answer { entry, good: None, fetched_at: None, error: None };
+                                *answer = Answer { entry, good: None, fetched_at: None, error: None, scopes: Vec::new() };
                             }
                             match result {
-                                Ok(document) => {
+                                Ok((document, scopes)) => {
                                     answer.good = Some(document);
+                                    answer.scopes = scopes;
                                     answer.fetched_at = Some(Utc::now());
                                     answer.error = None;
                                 },
-                                Err(error) => answer.error = Some(error),
+                                Err(error) => { answer.error = Some(error); answer.scopes.clear(); },
                             }
                             notifier.commands();
                         }
                         continue;
                     },
                 }
-                if *pages.borrow() == 0 {
+                if pages.borrow().is_empty() {
                     continue;
                 }
                 let live = tokio::task::spawn_blocking(|| -> anyhow::Result<_> {
@@ -125,37 +144,59 @@ impl Fleet {
                 let Ok(Ok(live)) = live else {
                     continue;
                 };
-                fleet.answers.lock().unwrap().retain(|name, answer| {
-                    live.iter()
-                        .any(|(entry, _)| entry.name == *name && *entry == answer.entry)
-                });
-                for (entry, token) in live {
-                    if !fetching.insert(entry.name.clone()) {
-                        continue;
-                    }
-                    jobs.spawn_blocking(move || {
-                        let result = reqwest::blocking::Client::builder()
-                            .timeout(Duration::from_secs(3))
-                            .redirect(reqwest::redirect::Policy::none())
-                            .build()
-                            .map_err(|_| {
-                                (
-                                    Reachability::Unreachable,
-                                    "Can't create Inbox client".into(),
-                                )
-                            })
-                            .and_then(|client| status::fleet::fetch(&client, &entry, &token, false))
-                            .and_then(|document| {
-                                status::validate_remote(&document).map_err(|_| {
-                                    (
-                                        Reachability::NeedsUpdate,
-                                        "incompatible Inbox presentation".into(),
-                                    )
-                                })?;
-                                Ok(document)
-                            });
-                        (entry, result)
+                let people = pages.borrow().keys().cloned().collect::<Vec<_>>();
+                fleet
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .retain(|(person, name), answer| {
+                        people.contains(person)
+                            && live
+                                .iter()
+                                .any(|(entry, _)| entry.name == *name && *entry == answer.entry)
                     });
+                for person in people {
+                    for (entry, token) in live.iter().cloned() {
+                        if !fetching.insert((person.clone(), entry.name.clone())) {
+                            continue;
+                        }
+                        let person = person.clone();
+                        jobs.spawn_blocking(move || {
+                            let result = reqwest::blocking::Client::builder()
+                                .timeout(Duration::from_secs(3))
+                                .redirect(reqwest::redirect::Policy::none())
+                                .build()
+                                .map_err(|_| {
+                                    (
+                                        Reachability::Unreachable,
+                                        "Can't create Inbox client".into(),
+                                    )
+                                })
+                                .and_then(|client| {
+                                    let scopes = super::fleet::effective_scopes(
+                                        &client,
+                                        &entry,
+                                        &token,
+                                        person.as_deref(),
+                                    )?;
+                                    let document = status::fleet::fetch_for_person(
+                                        &client,
+                                        &entry,
+                                        &token,
+                                        false,
+                                        person.as_deref(),
+                                    )?;
+                                    status::validate_remote(&document).map_err(|_| {
+                                        (
+                                            Reachability::NeedsUpdate,
+                                            "incompatible Inbox presentation".into(),
+                                        )
+                                    })?;
+                                    Ok((document, scopes))
+                                });
+                            (person, entry, result)
+                        });
+                    }
                 }
                 // Ages and the unreachable threshold advance even without good answers.
                 if !fleet.answers.lock().unwrap().is_empty() {
@@ -170,6 +211,7 @@ impl Fleet {
         config: &UserConfig,
         inbox: &mut status::Inbox,
         selected: &str,
+        person: Option<&str>,
     ) -> anyhow::Result<Vec<Machine>> {
         let hostname = crate::host::name().unwrap_or_else(|| "unknown".into());
         let local_count = inbox.active_runs;
@@ -204,7 +246,7 @@ impl Fleet {
                 continue;
             }
             let Some(answer) = answers
-                .get(&entry.name)
+                .get(&(person.map(str::to_owned), entry.name.clone()))
                 .filter(|answer| answer.entry == *entry)
             else {
                 continue;
@@ -222,6 +264,10 @@ impl Fleet {
             let count = answer.good.as_ref().map_or(0, |good| good.active_runs);
             if let Some(good) = &answer.good {
                 inbox.merge_remote(good, entry, stale)?;
+                inbox.remote_actions(
+                    &entry.name,
+                    !stale && answer.error.is_none() && answer.scopes.contains(&super::Scope::Act),
+                );
             }
             inbox.active_runs += count;
             machines.push(Machine {

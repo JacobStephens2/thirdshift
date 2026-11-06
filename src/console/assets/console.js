@@ -208,10 +208,13 @@ let peekCommand = null;
 let pendingPeek = null;
 // Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
+function dismissalKey(form) {
+  return JSON.stringify([form.elements.machine?.value ?? '', form.elements.command.value]);
+}
 
 function showDismissal() {
   for (const form of document.querySelectorAll('form[data-dismiss]')) {
-    const state = dismissals.get(form.elements.command.value);
+    const state = dismissals.get(dismissalKey(form));
     form.querySelector('button').disabled = state?.pending ?? false;
     form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
       ? state.message : '';
@@ -220,12 +223,12 @@ function showDismissal() {
 
 function removeDismissalNotice(command) {
   for (const form of document.querySelectorAll('#dismissal-notices form')) {
-    if (form.elements.command.value === command) form.parentElement.remove();
+    if (dismissalKey(form) === command) form.parentElement.remove();
   }
 }
 
 function dismissalNotice(form, subject) {
-  const command = form.elements.command.value;
+  const command = dismissalKey(form);
   removeDismissalNotice(command);
   const notices = document.querySelector('#dismissal-notices');
   const notice = document.createElement('div');
@@ -235,6 +238,7 @@ function dismissalNotice(form, subject) {
   undo.action = '/dismiss/undo';
   undo.dataset.dismiss = '';
   for (const name of ['command', 'csrf']) undo.append(form.elements[name].cloneNode(true));
+  if (form.elements.machine) undo.append(form.elements.machine.cloneNode(true));
   const button = document.createElement('button');
   button.textContent = 'Undo';
   const status = document.createElement('span');
@@ -508,7 +512,7 @@ document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
   event.preventDefault();
-  const command = form.elements.command.value;
+  const command = dismissalKey(form);
   if (dismissals.get(command)?.pending) return;
   const undo = new URL(form.action).pathname === '/dismiss/undo';
   const row = form.closest('.one-line .command');
@@ -530,7 +534,7 @@ document.addEventListener('submit', async event => {
     saved = true;
     if (row && !undo) {
       dismissalNotice(form, subject);
-      if (selected?.dataset.command === command) {
+      if (selected === row) {
         const nextRow = next !== row ? document.getElementById(next?.id) : null;
         select(nextRow);
         nextRow?.focus({ preventScroll: true });

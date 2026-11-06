@@ -16,6 +16,10 @@ async function fixture(t, commands) {
   await mkdir(root);
   const remote = createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/v1/whoami') {
+      res.end(JSON.stringify({ version: 1, api_version: 'v1', hostname: 'fixture', thirdshift_version: 'fixture', scopes: ['read'] }));
+      return;
+    }
     res.end(JSON.stringify({version: 2, hostname: 'fixture', active_runs: 0, commands, machines: []}));
   });
   let child, exited, browser;

@@ -54,6 +54,14 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
+    pub fn fleet_person(&self) -> Option<&str> {
+        match &self.identity {
+            Identity::Session { address } => Some(address),
+            Identity::Token { person, .. } => person.as_deref(),
+            Identity::Local { .. } => None,
+        }
+    }
+
     pub fn activity_actor(&self) -> crate::logs::Actor {
         let (who, holder) = match &self.identity {
             Identity::Token {

@@ -169,7 +169,7 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
 
-`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console currently shows its own machine's Inbox; its Fleet poller is a separate Ticket. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
+`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines its Fleet's Inboxes. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
 ```json
 {
@@ -463,6 +463,33 @@ Existing `other_consoles` addresses are read as link-only Fleet entries named
 after each address's host. Names that collide receive `-2`, `-3`, and so on.
 Setup and Console settings writes replace `other_consoles` with `fleet`, keeping
 the links and other settings.
+
+Act on a paired machine from the shell:
+
+```sh
+thirdshift stop widgets#7 --machine server
+thirdshift stop widgets#7 --machine server --requeue --json
+thirdshift dismiss widgets#7 --machine server
+thirdshift dismiss widgets#7 --machine server --undo --json
+```
+
+The Console's remote rows offer Stop with confirmation, Dismiss and Undo when
+the owning machine's live `whoami` answer allows `act`. It intersects the saved
+token's scopes with the signed-in person's scopes on that machine. The person
+must also be on that machine's sign-in list. A read-only token or person sees
+no action controls; the owning machine also refuses a forced request with 403.
+Other-account Commands stay read-only on every machine. Stale or refused
+answers offer no controls until access is checked again.
+
+The caller sends the action to the owning machine's `/api/v1`, naming the
+signed-in person in `X-Thirdshift-Person`, and shows that machine's answer,
+including refusals. Dismiss takes the remote row out of Needs you or Ready for
+review; Undo brings it back when it still needs attention. The next Fleet
+refresh reflects the change. The owning machine signals its own processes,
+keeps its Dismissals beside its Command records, and writes its own Activity log:
+`by <person> from the Console on <holder>`. No Command logs or Activity log
+entries are written on the caller. CLI requests name no person and are
+attributed to the token's holder on the owning machine.
 
 #### Console API
 

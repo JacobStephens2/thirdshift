@@ -10,6 +10,7 @@ mod cronjobs;
 mod experiments;
 mod filters;
 pub(crate) mod fleet;
+pub(crate) mod fleet_actions;
 mod fleet_inbox;
 mod github;
 pub(crate) use account_commands::Scopes;
@@ -909,7 +910,7 @@ impl InboxPage {
             row,
             csrf: &self.csrf,
             can_copy: can_copy && row.console.is_empty(),
-            can_act: self.page.can_act() && row.console.is_empty(),
+            can_act: self.page.can_act(),
             can_security: self.page.can_security(),
         }
     }
@@ -1034,7 +1035,7 @@ async fn render_page(
             let mut inbox = read.inbox(&config)?;
             let machine = query_value(&query, "machine");
             let machines = if archive_page.is_none() {
-                fleet.merge(&config, &mut inbox, &machine)?
+                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())?
             } else {
                 Vec::new()
             };

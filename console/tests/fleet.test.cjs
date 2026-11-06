@@ -66,7 +66,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
     return child;
   }
   const remote = await start(homes[1]);
-  const token = cli(homes[1], ['console', 'token', 'create', 'caller']).trim();
+  const token = cli(homes[1], ['console', 'token', 'create', 'caller', '--scopes', 'read,act']).trim();
   cli(homes[0], ['console', 'fleet', 'add', 'remote-workstation-with-a-long-name', remote.origin], `${token}\n`);
   const caller = await start(homes[0]);
   const before = await files(homes[0]);
@@ -82,6 +82,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   });
   const page = await context.newPage();
   await page.goto(caller.origin);
+  await page.locator('.command[data-machine="remote-workstation-with-a-long-name"]').first().waitFor();
   if (process.env.FLEET_CAPTURE_BEFORE) {
     for (const [width, height, path] of [[1440, 900, process.env.BEFORE_DESKTOP], [390, 844, process.env.BEFORE_MOBILE]]) {
       await page.setViewportSize({ width, height });
@@ -94,7 +95,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await remoteRows.first().waitFor();
   assert.match(await page.title(), /^2 need you/);
   assert.equal(await page.locator('.command').count(), 2);
-  assert.equal(await remoteRows.locator('form').count(), 0, 'remote rows cannot dismiss a local Command');
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   assert.match(await remoteRows.locator('.machine-tag').textContent(), /remote-workstation/);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   if (process.env.AFTER_DESKTOP) {
@@ -113,6 +114,10 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.equal(await page.locator('.command').count(), 1, 'local machine filter');
   await page.goto(caller.origin);
   await remoteRows.first().waitFor();
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await waitUntil(async () => await remoteRows.locator('button').filter({ hasText: /^Dismiss$/ }).count() === 0, 'remote row leaves Needs you');
+  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
   // The enabled observer establishes its baseline through a real Inbox read.

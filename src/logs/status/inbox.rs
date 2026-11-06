@@ -40,6 +40,8 @@ pub(crate) struct Row {
     pub log_growth: String,
     pub selector: String,
     pub can_dismiss: bool,
+    pub remote_stop: bool,
+    pub remote_undo: bool,
     pub logs_url: String,
     pub subject: String,
     /// The pull request or issue's `https://` address, which the subject links to.
@@ -146,7 +148,6 @@ impl Row {
         self.stale = stale;
         self.id = identity(&format!("{name}\0{}", self.id));
         if !console.is_empty() {
-            self.can_dismiss = false;
             self.logs_url = format!("{}/logs", self.console);
         }
         for child in &mut self.children {
@@ -156,6 +157,26 @@ impl Row {
 }
 
 impl Inbox {
+    pub fn remote_actions(&mut self, machine: &str, allowed: bool) {
+        fn apply(row: &mut Row, allowed: bool) {
+            row.can_dismiss &= allowed;
+            row.remote_stop &= allowed;
+            row.remote_undo &= allowed;
+            for child in &mut row.children {
+                apply(child, allowed);
+            }
+        }
+        for row in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.rows)
+        {
+            if row.machine == machine && !row.console.is_empty() {
+                apply(row, allowed);
+            }
+        }
+    }
+
     /// Received rows keep the owning machine's grouping and presentation facts;
     /// this path never opens their paths or evaluates them against local GitHub.
     pub fn merge_remote(
@@ -362,14 +383,34 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         console: String::new(),
         stale: false,
         id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
-        account: facts.account,
+        account: facts.account.clone(),
         started_ms: timestamp(&facts.started_at),
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
         log_growth: String::new(),
         selector,
-        can_dismiss: false,
+        can_dismiss: facts.account.is_none()
+            && value["source"] == "command_record"
+            && matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            )
+            && value["collapsed"].as_array().is_none_or(|rows| {
+                rows.iter()
+                    .all(|row| row["account"].is_null() && row["source"] == "command_record")
+            }),
+        remote_stop: facts.account.is_none()
+            && live
+            && value["source"] == "command_record"
+            && value["parent_record"].is_null()
+            && value["stopping"] != true,
+        remote_undo: facts.account.is_none()
+            && facts.dismissal.is_some()
+            && !matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            ),
         logs_url: String::new(),
         subject,
         subject_url,
@@ -543,6 +584,8 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 can_dismiss: false,
+                remote_stop: false,
+                remote_undo: false,
                 logs_url: command
                     .command_log
                     .as_ref()
