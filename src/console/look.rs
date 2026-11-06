@@ -42,12 +42,20 @@ pub(super) async fn export_document(
     }
 }
 
+pub(super) async fn list_themes(Extension(format): Extension<super::api::Format>) -> Response {
+    super::api::read(format, || Ok(Json(themes::names()?).into_response())).await
+}
+
 pub(super) async fn import_document(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     text: String,
 ) -> Response {
     let theme = match Theme::parse(&text) {
         Ok(theme) => theme,
+        Err(error) if format == super::api::Format::Json => {
+            return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error);
+        }
         Err(error) => return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
     };
     match tokio::task::spawn_blocking(move || {
@@ -57,6 +65,9 @@ pub(super) async fn import_document(
     .await
     {
         Ok(Ok(theme)) => Json(theme).into_response(),
+        Ok(Err(error)) if format == super::api::Format::Json => {
+            super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)
+        }
         error => failed(error),
     }
 }
@@ -121,8 +132,15 @@ pub fn sections(hide: &[String], show: &[String], json_output: bool) -> Result<S
 
 pub(super) async fn get(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Extension(assets): Extension<super::assets::Development>,
 ) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::read(format, || {
+            Ok(Json(UserConfig::load()?.console).into_response())
+        })
+        .await;
+    }
     match tokio::task::spawn_blocking(|| {
         let config = UserConfig::load()?;
         let revision = super::accounts::digest(&export_theme(&config.console.theme)?);

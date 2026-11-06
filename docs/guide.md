@@ -518,13 +518,16 @@ by later Console API tickets appear when they are served.
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
 | Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
+| Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
+| Available Themes | `/api/v1/themes` | `console theme list` |
 
 Finite log reads support `--json`, returning `{"version":1,"contents":"..."}`;
 `--follow` stays a separate streaming option. Other-account Commands retain
 their account tags and remain read-only: Stop and Dismissal refuse them and
 name the owning account. CLI refusals return 422 JSON with an `error` message.
-A signed-in session and
-`console --no-sign-in` hold every scope, so their JSON still matches the CLI.
+An unrestricted signed-in session and `console --no-sign-in` hold every scope,
+so their JSON still matches the CLI. A restricted session's JSON follows its
+address's scopes, including the Security finding limits above.
 
 | Scope | Calls |
 | --- | --- |
@@ -534,7 +537,8 @@ A signed-in session and
 | `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
 
 Actions take `application/x-www-form-urlencoded` bodies, using the page's
-field names below. Bearer requests need no CSRF token; sign-in sessions and
+field names below, except Theme import, which takes an `application/json` Theme
+document. Bearer requests need no CSRF token; sign-in sessions and
 `--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
 The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 
@@ -547,6 +551,7 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/experiments/proposals/<suite>/<task>/approve` | none | `evals approve <suite> <task>` |
 | `/theme` | `theme` | `console theme <name>` |
 | `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
+| `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
 
 Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for

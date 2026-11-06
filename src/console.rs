@@ -177,6 +177,7 @@ enum View {
     SignInPage,
     SignIn,
     Look,
+    Themes,
     Theme,
     ThemeImport,
     ThemeExport,
@@ -214,6 +215,9 @@ impl PageRoute {
                 | View::CommandLogs
                 | View::Reader
                 | View::ConsoleLog
+                | View::Look
+                | View::Themes
+                | View::ThemeImport
                 | View::ThemeExport
                 | View::Stop
                 | View::Dismiss
@@ -369,6 +373,14 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/themes",
         api: "/api/v1/themes",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console theme list --json"],
+        method: Method::GET,
+        view: View::Themes,
+    },
+    PageRoute {
+        path: "/themes",
+        api: "/api/v1/themes",
         scope: Some(Scope::Act),
         cli: &["thirdshift console theme import theme.json"],
         method: Method::POST,
@@ -386,10 +398,7 @@ const PAGES: &[PageRoute] = &[
         path: "/look",
         api: "/api/v1/look",
         scope: Some(Scope::Read),
-        cli: &[
-            "thirdshift console theme list --json",
-            "thirdshift console sections --json",
-        ],
+        cli: &["thirdshift console sections --json"],
         method: Method::GET,
         view: View::Look,
     },
@@ -733,6 +742,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SignInPage, Method::GET) => get(auth::sign_in_page),
             (View::SignIn, Method::POST) => post(auth::sign_in),
             (View::Look, Method::GET) => get(look::get),
+            (View::Themes, Method::GET) => get(look::list_themes),
             (View::Theme, Method::POST) => post(look::set_theme),
             (View::ThemeImport, Method::POST) => post(look::import_document),
             (View::ThemeExport, Method::GET) => get(look::export_document),
@@ -1363,33 +1373,28 @@ mod tests {
                 .with_state(changes),
         );
         // Each unique path has one fallback; merged methods share it.
-        let unique_paths = super::PAGES
+        let mut registrations = Vec::new();
+        for page in super::PAGES {
+            let is_get = page.method == axum::http::Method::GET;
+            registrations.push((page.path, is_get));
+            if page.serves_api() && page.api != page.path {
+                registrations.push((page.api, is_get));
+            }
+        }
+        let unique_paths = registrations
             .iter()
-            .map(|page| page.path)
+            .map(|(path, _)| path)
             .collect::<std::collections::BTreeSet<_>>()
             .len();
-        let shared_fallbacks = super::PAGES.len() - unique_paths;
-        let expected = super::PAGES
+        let shared_fallbacks = registrations.len() - unique_paths;
+        let expected = registrations
             .iter()
-            .map(|page| {
-                if page.method == axum::http::Method::GET {
-                    get_methods
-                } else {
-                    post_methods
-                }
-            })
+            .map(
+                |(_, is_get)| {
+                    if *is_get { get_methods } else { post_methods }
+                },
+            )
             .sum::<usize>()
-            + super::PAGES
-                .iter()
-                .filter(|page| page.serves_api() && page.api != page.path)
-                .map(|page| {
-                    if page.method == axum::http::Method::GET {
-                        get_methods
-                    } else {
-                        post_methods
-                    }
-                })
-                .sum::<usize>()
             + get_methods
             - shared_fallbacks;
         assert_eq!(

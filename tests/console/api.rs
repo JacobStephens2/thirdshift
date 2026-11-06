@@ -27,6 +27,140 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
 }
 
 #[test]
+fn theme_import_is_available_through_the_versioned_api() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let token = tokens::create(home.path(), "theme-importer", &["--scopes", "act"]);
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let mut theme = cli(home.path(), &["console", "theme", "export", "focus-auto"]);
+    theme["name"] = json!("api-custom");
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/themes", console.address))
+        .bearer_auth(&token)
+        .header("content-type", "application/json")
+        .body(serde_json::to_vec(&theme).unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(json(response), theme);
+    assert_eq!(
+        cli(home.path(), &["console", "theme", "export", "api-custom"]),
+        theme
+    );
+    let client = reqwest::blocking::Client::new();
+    let refused = client
+        .post(format!("{}/api/v1/themes", console.address))
+        .bearer_auth(reader)
+        .json(&theme)
+        .send()
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    assert!(
+        refused.json::<Value>().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("act")
+    );
+    let invalid = client
+        .post(format!("{}/api/v1/themes", console.address))
+        .bearer_auth(token)
+        .json(&json!({"name": "../invalid"}))
+        .send()
+        .unwrap();
+    assert_eq!(invalid.status(), 422);
+    assert!(invalid.json::<Value>().unwrap()["error"].is_string());
+    let events = cli(home.path(), &["console", "log", "--json"]);
+    let calls: Vec<_> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event"] == "api-call")
+        .collect();
+    assert_eq!(calls.len(), 3);
+    for (call, (holder, outcome)) in calls.iter().zip([
+        ("theme-importer", 200),
+        ("reader", 403),
+        ("theme-importer", 422),
+    ]) {
+        assert_eq!(call["email"], holder);
+        assert_eq!(call["endpoint"], "/api/v1/themes");
+        assert_eq!(call["outcome"], outcome);
+    }
+}
+
+#[test]
+fn existing_look_read_has_its_declared_api_route() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    cli(home.path(), &["console", "theme", "press-dark", "--json"]);
+    let expected = cli(
+        home.path(),
+        &["console", "sections", "--hide", "done", "--json"],
+    );
+    let token = tokens::create(home.path(), "reader", &[]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let before = cli(home.path(), &["console", "log", "--json"]);
+    assert_eq!(console.get("/look").status(), 200);
+    assert_eq!(console.get("/api/v1/look").status(), 200);
+    assert_eq!(
+        json(
+            tokens::request(&console, &token, "/api/v1/look")
+                .send()
+                .unwrap()
+        ),
+        expected
+    );
+    assert_eq!(cli(home.path(), &["console", "log", "--json"]), before);
+}
+
+#[test]
+fn read_token_can_list_available_themes_without_changing_the_console() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let token = tokens::create(home.path(), "reader", &[]);
+    let expected = cli(home.path(), &["console", "theme", "list", "--json"]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let before = cli(home.path(), &["console", "log", "--json"]);
+    assert_eq!(
+        json(
+            tokens::request(&console, &token, "/api/v1/themes")
+                .send()
+                .unwrap()
+        ),
+        expected
+    );
+    assert_eq!(cli(home.path(), &["console", "log", "--json"]), before);
+}
+
+#[test]
+fn read_token_can_read_an_ordinary_log_without_a_command_record() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("7-20261003T120000-0400.log"),
+        "ordinary retained output\n",
+    )
+    .unwrap();
+    let token = tokens::create(home.path(), "reader", &[]);
+    let listed = cli(home.path(), &["logs", "--json"]);
+    let id = listed["logs"][0]["id"].as_str().unwrap();
+    let expected = cli(home.path(), &["logs", "--file", id, "--json"]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    assert_eq!(
+        json(
+            tokens::request(&console, &token, &format!("/api/v1/logs/{id}"))
+                .send()
+                .unwrap()
+        ),
+        expected
+    );
+}
+
+#[test]
 fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -46,6 +180,8 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
         "/api/v1/peek",
         "/api/v1/whoami",
         "/api/v1/openapi.json",
+        "/api/v1/look",
+        "/api/v1/themes",
     ] {
         assert!(paths.contains_key(path), "missing {path}");
     }

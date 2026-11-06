@@ -206,9 +206,10 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::ConsoleLog => array(object(
             json!({"time": integer, "email": text, "event": text}),
         )),
-        View::ThemeExport => object(json!({
+        View::ThemeImport | View::ThemeExport => object(json!({
             "name": text, "base": text, "tokens": {"type": "object", "additionalProperties": text}
         })),
+        View::Themes => array(text),
         View::Stop => object(json!({"version": version, "name": text, "outcome": text,
             "issue_branches": array(text.clone()), "pull_requests": array(text)})),
         View::Dismiss | View::UndoDismissal => record,
@@ -217,15 +218,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::ApproveEvalTask => {
             object(json!({"suite": text, "task": text, "state": {"const": "approved"}}))
         }
-        View::Theme | View::Sections => record,
+        View::Look | View::Theme | View::Sections => record,
         View::Changes
         | View::LogStream
         | View::Account
         | View::SignOut
         | View::SignInPage
         | View::SignIn
-        | View::Look
-        | View::ThemeImport
         | View::StopPage
         | View::SetPasswordPage
         | View::SendCode
@@ -237,6 +236,14 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
     let (properties, required) = match view {
+        View::ThemeImport => {
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "required": ["name"], "properties": {
+                    "name": text, "base": text,
+                    "tokens": {"type": "object", "additionalProperties": text}
+                }
+            }}}});
+        }
         View::Stop => (
             json!({"command": text, "requeue": {"type":"boolean", "default":false}}),
             vec!["command"],
@@ -289,7 +296,7 @@ fn action_body(view: View) -> Value {
         | View::SignInPage
         | View::SignIn
         | View::Look
-        | View::ThemeImport
+        | View::Themes
         | View::ThemeExport
         | View::StopPage
         | View::SetPasswordPage

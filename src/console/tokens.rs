@@ -44,21 +44,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Action> {
                 let value = options.next().context(usage)?;
                 match flag.as_str() {
                     "--scopes" if scopes.is_none() => {
-                        let mut selected = Vec::new();
-                        for name in value.split(',') {
-                            let scope = Scope::ALL
-                                .into_iter()
-                                .find(|scope| scope.name() == name)
-                                .with_context(|| {
-                                format!(
-                                    "unknown scope {name:?}; expected read,security,act,run,admin"
-                                )
-                            })?;
-                            if !selected.contains(&scope) {
-                                selected.push(scope);
-                            }
-                        }
-                        scopes = Some(selected);
+                        ensure!(!value.is_empty(), "at least one token scope is required");
+                        scopes = Some(Scope::parse(value)?);
                     }
                     "--expires" if expires_at.is_none() => {
                         expires_at = Some(expiry(value)?);

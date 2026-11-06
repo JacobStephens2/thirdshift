@@ -524,13 +524,24 @@ by later Console API tickets appear when they are served.</p>
 <td><code>/api/v1/cronjobs</code>, <code>/api/v1/resources</code>, <code>/api/v1/console-log</code>, <code>/api/v1/themes/&lt;name&gt;</code></td>
 <td><code>cronjobs</code>, <code>resources</code>, <code>console log</code>, <code>console theme export &lt;name&gt;</code> (already JSON)</td>
 </tr>
+<tr>
+<td>Selected Theme and hidden sections</td>
+<td><code>/api/v1/look</code></td>
+<td><code>console sections</code></td>
+</tr>
+<tr>
+<td>Available Themes</td>
+<td><code>/api/v1/themes</code></td>
+<td><code>console theme list</code></td>
+</tr>
 </tbody></table>
 <p>Finite log reads support <code>--json</code>, returning <code>{&quot;version&quot;:1,&quot;contents&quot;:&quot;...&quot;}</code>;
 <code>--follow</code> stays a separate streaming option. Other-account Commands retain
 their account tags and remain read-only: Stop and Dismissal refuse them and
 name the owning account. CLI refusals return 422 JSON with an <code>error</code> message.
-A signed-in session and
-<code>console --no-sign-in</code> hold every scope, so their JSON still matches the CLI.</p>
+An unrestricted signed-in session and <code>console --no-sign-in</code> hold every scope,
+so their JSON still matches the CLI. A restricted session&#39;s JSON follows its
+address&#39;s scopes, including the Security finding limits above.</p>
 <table>
 <thead>
 <tr>
@@ -556,7 +567,8 @@ A signed-in session and
 </tr>
 </tbody></table>
 <p>Actions take <code>application/x-www-form-urlencoded</code> bodies, using the page&#39;s
-field names below. Bearer requests need no CSRF token; sign-in sessions and
+field names below, except Theme import, which takes an <code>application/json</code> Theme
+document. Bearer requests need no CSRF token; sign-in sessions and
 <code>--no-sign-in</code> requests must send the page&#39;s CSRF token in <code>X-CSRF-Token</code>.
 The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <table>
@@ -601,6 +613,11 @@ The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <td><code>/sections</code></td>
 <td>comma-separated <code>hide</code>, <code>show</code></td>
 <td><code>console sections --hide &lt;section&gt; --show &lt;section&gt;</code></td>
+</tr>
+<tr>
+<td><code>/themes</code></td>
+<td>JSON Theme document</td>
+<td><code>console theme import &lt;file&gt;</code> (already JSON)</td>
 </tr>
 </tbody></table>
 <p>Every attempted API change records its holder or session address, endpoint and

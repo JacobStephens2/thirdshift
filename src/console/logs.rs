@@ -128,8 +128,7 @@ async fn security_refusal(viewer: &super::auth::Viewer, id: &str) -> Option<Resp
     match tokio::task::spawn_blocking(move || -> Result<bool> {
         let config = UserConfig::load()?;
         let log = catalog::find(&config, &selected)?;
-        Ok(crate::logs::owner::security_session(&log.path)
-            || super::api::security_command(&config, &log.selector)?)
+        Ok(log.security_details)
     })
     .await
     {

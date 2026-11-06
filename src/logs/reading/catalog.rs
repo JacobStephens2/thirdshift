@@ -45,12 +45,15 @@ pub(crate) struct Log {
     #[serde(skip)]
     pub selector: String,
     #[serde(skip)]
+    pub security_details: bool,
+    #[serde(skip)]
     pub reader: Reader,
 }
 
 #[derive(Default)]
 struct Observed {
     live: bool,
+    security_details: bool,
     command: String,
     owners: Vec<String>,
     selector: String,
@@ -142,8 +145,10 @@ pub(super) fn list(
         command: &Command,
         source: &Source,
         ancestors: &[String],
+        security_details: bool,
         observed: &mut BTreeMap<PathBuf, Observed>,
     ) -> Result<()> {
+        let security_details = security_details || command.record.kind == "Security run";
         let mut owners = ancestors.to_vec();
         owners.push(source.id(&command.record_path)?);
         let subject = command
@@ -156,8 +161,10 @@ pub(super) fn list(
         let selector = observation.selector().context("Command has no selector")?;
         observed
             .entry(command.command_log.clone())
+            .and_modify(|entry| entry.security_details |= security_details)
             .or_insert(Observed {
                 live: command.state == "live",
+                security_details,
                 command: subject.clone(),
                 owners: owners.clone(),
                 selector: selector.clone(),
@@ -179,6 +186,7 @@ pub(super) fn list(
                 session.clone(),
                 Observed {
                     live,
+                    security_details,
                     command: subject.clone(),
                     owners: owners.clone(),
                     selector: selector.clone(),
@@ -187,13 +195,19 @@ pub(super) fn list(
             );
         }
         for child in command.dispatched.iter().chain(&command.children) {
-            collect(child, source, &owners, observed)?;
+            collect(child, source, &owners, security_details, observed)?;
         }
         Ok(())
     }
     for entry in &snapshot.commands {
-        if let Entry::Record(command) = entry {
-            collect(command, source, &[], &mut observed)?;
+        match entry {
+            Entry::Record(command) => collect(command, source, &[], false, &mut observed)?,
+            Entry::History(command) if command.kind == "Security run" => {
+                for path in command.command_log.iter().chain(&command.session_logs) {
+                    observed.entry(path.clone()).or_default().security_details = true;
+                }
+            }
+            Entry::History(_) => {}
         }
     }
     let mut logs = Vec::new();
@@ -215,6 +229,7 @@ pub(super) fn list(
                 let relative = path.strip_prefix(root)?;
                 let Observed {
                     live,
+                    security_details,
                     command,
                     mut owners,
                     selector,
@@ -224,6 +239,12 @@ pub(super) fn list(
                     owners.push(source.id(&decoded.command_log(&path))?);
                 }
                 logs.push(Log {
+                    security_details: security_details
+                        || folder
+                            .path
+                            .file_name()
+                            .is_some_and(|name| name == crate::logs::CommandKind::Secure.folder())
+                        || owner::security_session(&path),
                     account: source.account.clone(),
                     reader: reader
                         .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
