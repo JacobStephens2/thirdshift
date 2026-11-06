@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::path::Path;
 
-use super::{age, stage_text, ticket_text};
+use super::{age, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
@@ -164,7 +164,16 @@ impl Inbox {
         entry: &crate::config::console::fleet::Entry,
         stale: bool,
     ) -> Result<()> {
-        for value in &document.commands {
+        let rows = document
+            .commands
+            .iter()
+            .map(|value| present(value, chrono::Local::now()))
+            .collect::<Result<Vec<_>>>()?;
+        let listed = rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (value, mut row) in document.commands.iter().zip(rows) {
             let checked = super::text::Row::read(value)?;
             let Some(section) = self
                 .sections
@@ -173,7 +182,7 @@ impl Inbox {
             else {
                 continue;
             };
-            let mut row = received(value, chrono::Local::now())?;
+            row.children.retain(|child| !listed.contains(&child.id));
             row.tag_machine(&entry.name, &entry.address, stale);
             let subject = row.subject.clone();
             section.rows.push(row);
@@ -216,12 +225,14 @@ impl Inbox {
 
 pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
     for value in &document.commands {
-        received(value, chrono::Local::now())?;
+        present(value, chrono::Local::now())?;
     }
     Ok(())
 }
 
-fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
+/// Pure presentation shared by local observations and received Commands.
+/// Only the local caller attaches captured paths, activity and Session inventory.
+fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     use serde::Deserialize;
     #[derive(Deserialize)]
     struct Facts {
@@ -244,6 +255,7 @@ fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         stage: Option<crate::logs::reading::CurrentStage>,
         health: Option<Health>,
         resume_command: Option<String>,
+        process_name: Option<String>,
         github_ci: Option<crate::github::InboxCi>,
         github_mergeable: Option<crate::github::InboxMergeable>,
         #[serde(default)]
@@ -276,8 +288,14 @@ fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             }
         })
         .unwrap_or_default();
-    let (mut subject, mut title) =
-        subject(&facts.repository, &facts.kind, facts.issue.as_ref(), None);
+    let process =
+        (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
+    let name = if value["source"] == "command_record" {
+        &facts.name
+    } else {
+        &facts.kind
+    };
+    let (mut subject, mut title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
     let mut subject_url = issue_url(facts.issue.as_ref());
     let ready = value["group"] == "ready for review";
     if ready && let Some(pr) = &facts.pull_request {
@@ -329,7 +347,9 @@ fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
         count: value["count"].as_u64().unwrap_or(1) as usize,
         cause: facts.cause.unwrap_or_default(),
-        resume_command: facts.resume_command,
+        resume_command: facts
+            .resume_command
+            .filter(|_| facts.outcome.as_deref() == Some("paused")),
         fix_command: None,
         left: facts
             .dismissal
@@ -358,7 +378,7 @@ fn received(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             .dispatched
             .iter()
             .chain(&facts.children)
-            .map(|child| received(child, now))
+            .map(|child| present(child, now))
             .collect::<Result<_>>()?,
         findings: facts.security_findings,
         sessions: Vec::new(),
@@ -667,78 +687,49 @@ pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
 }
 
 fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
-    let facts = &command.record;
-    let (log_length, session_length) = command.activity_lengths();
-    let live = command.state == "live";
-    let (subject, title) = row_subject(facts);
-    Ok(Row {
-        machine: String::new(),
-        console: String::new(),
-        stale: false,
-        account: command.account.clone(),
+    fn attach_local(
+        row: &mut Row,
+        command: &Command,
+        now: DateTime<Local>,
+        root: &Path,
+    ) -> Result<()> {
+        let facts = &command.record;
+        let (log_length, session_length) = command.activity_lengths();
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.
-        id: identity(&format!(
+        row.id = identity(&format!(
             "{}\0{}\0{}\0{}\0{}",
             command.record_path.to_string_lossy(),
             facts.kind,
             facts.name,
             facts.issue.as_ref().map_or("", |issue| issue.url.as_str()),
             facts.started_at
-        )),
-        started_ms: timestamp(&facts.started_at),
-        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
-        live,
-        logging: live && !matches!(command.health, Some(Health::Silent { .. })),
-        log_growth: format!("{log_length}:{session_length}"),
-        selector: Observation::Record(command).selector().unwrap_or_default(),
-        can_dismiss: false,
-        logs_url: logs_url(&command.record_path, root, command.account.as_deref()),
-        subject,
-        subject_url: issue_url(facts.issue.as_ref()),
-        title,
-        state: command.state.into(),
-        now_line: stage_text(command),
-        timing: Timing::new(
-            live,
+        ));
+        row.log_growth = format!("{log_length}:{session_length}");
+        row.selector = Observation::Record(command).selector().unwrap_or_default();
+        row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
+        row.timing = Timing::new(
+            row.live,
             &facts.started_at,
             facts
                 .ended_at
                 .as_deref()
                 .filter(|_| !facts.end_time_estimated),
             now,
-        ),
-        count: 1,
-        cause: facts.cause.clone().unwrap_or_default(),
-        resume_command: facts
-            .resume_command
-            .clone()
-            .filter(|_| facts.outcome.as_deref() == Some("paused")),
-        fix_command: None,
-        left: String::new(),
-        harness: format!(
-            "{} · {} · {}",
-            facts.harness,
-            facts.model.as_deref().unwrap_or("default Model"),
-            facts.effort.as_deref().unwrap_or("default Effort")
-        ),
-        pull_request: facts.pull_request.clone().unwrap_or_default(),
-        ci: None,
-        merge_conflict: false,
-        tickets: facts
-            .tickets
-            .iter()
-            .map(|ticket| ticket_text(ticket, &facts.repository))
-            .collect(),
-        children: command
-            .dispatched
-            .iter()
-            .chain(&command.children)
-            .map(|child| row(child, now, root))
-            .collect::<Result<_>>()?,
-        findings: facts.security_findings.clone(),
-        sessions: command.sessions()?,
-    })
+        );
+        row.sessions = command.sessions()?;
+        for (child, command) in row
+            .children
+            .iter_mut()
+            .zip(command.dispatched.iter().chain(&command.children))
+        {
+            attach_local(child, command, now, root)?;
+        }
+        Ok(())
+    }
+    let mut row = present(&serde_json::to_value(command)?, now)?;
+    attach_local(&mut row, command, now, root)?;
+    Ok(row)
 }
 
 fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {

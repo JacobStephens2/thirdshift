@@ -718,7 +718,6 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
 fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
     let mut router = Router::new();
     for page in PAGES {
-        let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
             (View::Whoami, Method::GET) => get(identity::show),
@@ -735,9 +734,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Resources, Method::GET) => get(resources::show),
             (View::ResourceStatus, Method::GET) => get(resources::status),
             (View::Metrics, Method::GET) => get(metrics),
-            (View::Inbox, Method::GET) => get(move |viewer, format, fleet, query| {
-                inbox(cli, path, viewer, format, fleet, query)
-            }),
+            (View::Inbox, Method::GET) => {
+                get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
+            }
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
@@ -964,7 +963,6 @@ fn query_value(query: &Option<String>, key: &str) -> String {
 }
 
 async fn inbox(
-    cli: &'static str,
     path: &'static str,
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
     axum::Extension(format): axum::Extension<api::Format>,
@@ -1005,12 +1003,11 @@ async fn inbox(
     {
         return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
     }
-    render_page(format, cli, archive_page, query, viewer, fleet).await
+    render_page(format, archive_page, query, viewer, fleet).await
 }
 
 async fn render_page(
     format: api::Format,
-    cli: &'static str,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
     viewer: auth::Viewer,
@@ -1031,7 +1028,7 @@ async fn render_page(
                 "Security",
                 "thirdshift status --local --all --json · thirdshift show <command> --json",
             ),
-            None => ("Inbox", cli),
+            None => ("Inbox", "thirdshift status"),
         };
         format.render(read.json(&config, all)?, |_| {
             let mut inbox = read.inbox(&config)?;
