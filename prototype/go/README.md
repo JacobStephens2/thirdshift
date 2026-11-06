@@ -18,6 +18,39 @@ CGO_ENABLED=0 go build -o /tmp/thirdshift-go .
 
 The build produces a single static Linux binary; the CLI tests inspect its
 ELF program headers and imported libraries. No Go dependencies are needed.
+
+## Reproducible comparison
+
+The [empirical Go/Rust report](../../docs/research/go-vs-rust-prototype.md)
+records the measured revision, scope and limitations for #1835. From the
+repository root, on native GNU/Linux with Go on `PATH`, the native Rust musl
+target installed (`rustup target add x86_64-unknown-linux-musl` on x86_64),
+its C linker (`musl-tools` on Ubuntu), and binutils (`readelf`):
+
+```sh
+python3 prototype/go/benchmark.py --ref HEAD --samples 3 --jobs 2 --output /tmp/thirdshift-benchmark-results
+```
+
+The output directory must be new or empty. Only committed sources at `--ref`
+are measured. Each sample gets a fresh detached Worktree, private Go build/module
+caches and a private Cargo target directory. Rust dependencies are downloaded
+before timing. Timings exclude Worktree creation and cleanup, toolchain setup
+and downloads; they include compiler/linker processes and their children.
+Cold and edited incremental builds use development profiles. Test compilation,
+compiled test execution, ADR-0017 checks and stripped static release builds
+are separate metrics. JSON records every command and the source-count manifest;
+logs retain full tool output. Failed commands fail the runner and remove its
+Worktree, leaving logs but no completed `results.json`. No GitHub/LLM credentials
+are needed. Allow several minutes per sample and several GB of temporary disk.
+
+Rust builds the production executable that owns the equivalent slices; the
+prototype does not have feature parity. Rust test execution selects `fresh_run`,
+`pickup_run`, `harness`, `ci` and `pickup_model`. Go executes its prototype tests,
+excluding `TestBenchmark*` to prevent recursion. The report explains why these
+numbers cannot estimate a complete rewrite's speedup.
+
+## Running a Ticket
+
 Run it from the Launch directory of a disposable repository:
 
 ```sh

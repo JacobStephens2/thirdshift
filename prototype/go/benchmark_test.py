@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -41,7 +42,7 @@ with open(os.environ["BENCH_CALLS"], "a") as out:
         "gocache": os.environ.get("GOCACHE"), "target": os.environ.get("CARGO_TARGET_DIR")}) + "\\n")
 if "--version" in args or args == ["version"] or args == ["-vV"]:
     print("host: x86_64-unknown-linux-gnu" if args == ["-vV"] else "fixture 1.0")
-elif os.environ.get("BENCH_FAIL") == name:
+elif os.environ.get("BENCH_FAIL") == name and "build" in args:
     print("intentional tool failure", file=sys.stderr)
     sys.exit(19)
 elif name == "readelf":
@@ -94,7 +95,7 @@ elif name == "cargo":
                 self.assertGreater(row["static_bytes"], 0)
         self.assertEqual(data["source_lines"]["go"]["lines"], 1)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
-        caches = {call["gocache"] for call in calls if call["gocache"]}
+        caches = {call["gocache"] for call in calls if call["tool"] == "go" and "build" in call["args"]}
         self.assertEqual(len(caches), 2, "each sample needs a private cache")
         self.assertTrue(all(str(self.repo) != call["cwd"] for call in calls if call["tool"] == "go" and "build" in call["args"]))
         self.assertEqual(self.git("worktree", "list", "--porcelain").count("worktree "), 1)
@@ -112,6 +113,31 @@ elif name == "cargo":
         result = self.run_benchmark(BENCH_DYNAMIC="1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("static", result.stderr)
+
+
+class PublishedReport(unittest.TestCase):
+    def test_report_is_complete_and_numbers_match_measured_artifact(self):
+        root = RUNNER.parents[2]
+        report = (root / "docs/research/go-vs-rust-prototype.md").read_text()
+        artifact = root / "docs/research/go-vs-rust-benchmark-2026-11-06/results.json"
+        data = json.loads(artifact.read_text())
+        self.assertIn("go-vs-rust-benchmark-2026-11-06/results.json", report)
+        for topic in ["Reproduce", "Scope", "Subprocess", "Exhaustiveness", "Model checking", "ADR-0001"]:
+            self.assertIn(topic, report)
+        self.assertRegex(data["revision"], r"^[0-9a-f]{40}$")
+        self.assertGreaterEqual(len(data["samples"]), 2)
+        for metric in ["cold_build", "incremental_build", "test_compile", "test_execution", "model_check", "static_build"]:
+            row = re.search(r"^\| " + metric + r" \| (.+) \|$", report, re.MULTILINE)
+            self.assertIsNotNone(row, metric)
+            for language in ["go", "rust"]:
+                for sample in data["samples"]:
+                    value = sample[language]["seconds"][metric]
+                    self.assertGreater(value, 0)
+                    self.assertIn(f"{value:.3f}", row.group(1), metric)
+        for language in ["go", "rust"]:
+            self.assertIn(str(data["source_lines"][language]["lines"]), report)
+            for sample in data["samples"]:
+                self.assertIn(str(sample[language]["static_bytes"]), report)
 
 
 if __name__ == "__main__":
