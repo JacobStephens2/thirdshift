@@ -350,70 +350,20 @@ fn start_schema() -> Value {
              "properties":{"mode":{"const":"never"}}}
         ]}
     });
-    let shared = [
-        "merge",
-        "email",
-        "harness",
-        "model",
-        "effort",
-        "base_fix",
-        "security_review",
-        "security_fix",
-        "security_close",
-        "parallel",
-    ];
     let mut variants = Vec::new();
-    for (command, own, common, required) in [
-        ("ticket", vec!["issue"], shared.to_vec(), vec!["issue"]),
-        (
-            "architect",
-            vec!["base", "focus", "plan_only"],
-            shared.to_vec(),
-            vec![],
-        ),
-        ("pickup", vec!["base", "order"], shared.to_vec(), vec![]),
-        ("secure", vec!["base"], shared.to_vec(), vec![]),
-        (
-            "review",
-            vec!["pull_request", "author", "recommend_only"],
-            vec!["email", "harness", "model", "effort", "security_review"],
-            vec![],
-        ),
-        (
-            "process",
-            vec!["name", "issue", "pull_request", "plan_only"],
-            vec![
-                "merge",
-                "email",
-                "harness",
-                "model",
-                "effort",
-                "security_review",
-                "security_fix",
-                "security_close",
-            ],
-            vec!["name"],
-        ),
-        ("skill", vec!["name", "issue"], vec![], vec!["name"]),
-        ("score", vec![], vec![], vec![]),
-        (
-            "triage",
-            vec![
-                "report",
-                "read_machine",
-                "recommend_only",
-                "allow_ready_for_agent",
-            ],
-            vec!["email", "harness", "model", "effort"],
-            vec!["report"],
-        ),
-    ] {
+    for kind in super::start::Kind::ALL {
+        let command = kind.word();
         let mut properties = serde_json::Map::new();
-        for key in ["repository"].into_iter().chain(own).chain(common) {
+        for key in ["repository"].into_iter().chain(kind.fields()) {
             properties.insert(key.into(), fields[key].clone());
         }
         properties.insert("command".into(), json!({"const":command}));
-        let mut required: Vec<_> = required.into_iter().chain(["repository"]).collect();
+        let mut required: Vec<_> = kind
+            .required()
+            .iter()
+            .copied()
+            .chain(["repository"])
+            .collect();
         if command != "ticket" {
             required.push("command");
         }

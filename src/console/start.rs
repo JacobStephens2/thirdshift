@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::{Extension, Json, response::Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{api, auth::Viewer};
+use crate::logs::start_notice::EarlyOutcome;
 use crate::{
     asks::Flags,
     base_fix::BaseFixAsk,
@@ -19,6 +20,20 @@ use crate::{
     notification::NotificationAsk,
     run::Goal,
 };
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Started {
+    Command {
+        version: u8,
+        name: String,
+    },
+    Early {
+        version: u8,
+        #[serde(flatten)]
+        outcome: EarlyOutcome,
+    },
+}
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -84,9 +99,9 @@ pub(super) struct Request {
     allow_ready_for_agent: Option<bool>,
 }
 
-#[derive(Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum Kind {
+pub(super) enum Kind {
     #[default]
     Ticket,
     Architect,
@@ -108,7 +123,19 @@ enum Order {
 }
 
 impl Kind {
-    fn word(&self) -> &'static str {
+    pub(super) const ALL: [Self; 9] = [
+        Self::Ticket,
+        Self::Architect,
+        Self::Pickup,
+        Self::Secure,
+        Self::Review,
+        Self::Process,
+        Self::Skill,
+        Self::Score,
+        Self::Triage,
+    ];
+
+    pub(super) fn word(self) -> &'static str {
         match self {
             Self::Ticket => "ticket",
             Self::Architect => "architect",
@@ -119,6 +146,64 @@ impl Kind {
             Self::Skill => "skill",
             Self::Score => "score",
             Self::Triage => "triage",
+        }
+    }
+
+    /// One command-option inventory shared by admission and OpenAPI. The CLI
+    /// parser still decides allowed values and combinations.
+    pub(super) fn fields(self) -> impl Iterator<Item = &'static str> {
+        let own: &[&str] = match self {
+            Self::Ticket => &["issue"],
+            Self::Architect => &["base", "focus", "plan_only"],
+            Self::Pickup => &["base", "order"],
+            Self::Secure => &["base"],
+            Self::Review => &["pull_request", "author", "recommend_only"],
+            Self::Process => &["name", "issue", "pull_request", "plan_only"],
+            Self::Skill => &["name", "issue"],
+            Self::Score => &[],
+            Self::Triage => &[
+                "report",
+                "read_machine",
+                "recommend_only",
+                "allow_ready_for_agent",
+            ],
+        };
+        let flags: &[&str] = match self {
+            Self::Ticket | Self::Architect | Self::Pickup | Self::Secure => &[
+                "merge",
+                "email",
+                "harness",
+                "model",
+                "effort",
+                "base_fix",
+                "security_review",
+                "security_fix",
+                "security_close",
+                "parallel",
+            ],
+            Self::Review => &["email", "harness", "model", "effort", "security_review"],
+            Self::Process => &[
+                "merge",
+                "email",
+                "harness",
+                "model",
+                "effort",
+                "security_review",
+                "security_fix",
+                "security_close",
+            ],
+            Self::Triage => &["email", "harness", "model", "effort"],
+            Self::Skill | Self::Score => &[],
+        };
+        own.iter().chain(flags).copied()
+    }
+
+    pub(super) fn required(self) -> &'static [&'static str] {
+        match self {
+            Self::Ticket => &["issue"],
+            Self::Process | Self::Skill => &["name"],
+            Self::Triage => &["report"],
+            Self::Architect | Self::Pickup | Self::Secure | Self::Review | Self::Score => &[],
         }
     }
 }
@@ -196,69 +281,62 @@ impl Request {
         crate::args::public_flag_words(&self.flags()?, &mut args);
         // The CLI decides allowed options and combinations. Also verify positional
         // JSON values stayed positional rather than becoming a CLI flag/subcommand.
-        match crate::args::parse(&args)? {
-            crate::args::Command::Architect(parsed) => ensure!(
+        let parsed = crate::args::parse(&args)?;
+        if let crate::args::Command::Architect(parsed) = &parsed {
+            ensure!(
                 parsed.focus == self.focus,
                 "focus must be literal focus text"
-            ),
-            crate::args::Command::Process(crate::args::ProcessAction::Run(parsed)) => ensure!(
+            );
+        }
+        if self.command == Kind::Process {
+            let crate::args::Command::Process(crate::args::ProcessAction::Run(parsed)) = parsed
+            else {
+                bail!("only a Process run can be started");
+            };
+            ensure!(
                 Some(&parsed.name) == self.name.as_ref(),
                 "name must be a Process name"
-            ),
-            crate::args::Command::Process(_) => bail!("only a Process run can be started"),
-            _ => {}
+            );
         }
         Ok((repo, args))
     }
 
     fn check_fields(&self) -> Result<()> {
-        use Kind::*;
-        let kind = &self.command;
-        for (present, allowed, field) in [
-            (
-                self.issue.is_some(),
-                matches!(kind, Ticket | Process | Skill),
-                "issue",
-            ),
-            (self.name.is_some(), matches!(kind, Process | Skill), "name"),
-            (
-                self.pull_request.is_some(),
-                matches!(kind, Review | Process),
-                "pull_request",
-            ),
-            (self.author.is_some(), matches!(kind, Review), "author"),
-            (
-                self.base.is_some(),
-                matches!(kind, Architect | Pickup | Secure),
-                "base",
-            ),
-            (self.focus.is_some(), matches!(kind, Architect), "focus"),
-            (
-                self.plan_only.is_some(),
-                matches!(kind, Architect | Process),
-                "plan_only",
-            ),
-            (self.order.is_some(), matches!(kind, Pickup), "order"),
-            (
-                self.recommend_only.is_some(),
-                matches!(kind, Review | Triage),
-                "recommend_only",
-            ),
-            (self.report.is_some(), matches!(kind, Triage), "report"),
-            (
-                self.read_machine.is_some(),
-                matches!(kind, Triage),
-                "read_machine",
-            ),
+        let kind = self.command;
+        for (present, field) in [
+            (self.issue.is_some(), "issue"),
+            (self.name.is_some(), "name"),
+            (self.pull_request.is_some(), "pull_request"),
+            (self.author.is_some(), "author"),
+            (self.base.is_some(), "base"),
+            (self.focus.is_some(), "focus"),
+            (self.plan_only.is_some(), "plan_only"),
+            (self.order.is_some(), "order"),
+            (self.recommend_only.is_some(), "recommend_only"),
+            (self.report.is_some(), "report"),
+            (self.read_machine.is_some(), "read_machine"),
             (
                 self.allow_ready_for_agent.is_some(),
-                matches!(kind, Triage),
                 "allow_ready_for_agent",
             ),
+            (self.merge.is_some(), "merge"),
+            (self.email.is_some(), "email"),
+            (self.harness.is_some(), "harness"),
+            (self.model.is_some(), "model"),
+            (self.effort.is_some(), "effort"),
+            (self.base_fix.is_some(), "base_fix"),
+            (self.security_review.is_some(), "security_review"),
+            (self.security_fix.is_some(), "security_fix"),
+            (self.security_close.is_some(), "security_close"),
+            (self.parallel.is_some(), "parallel"),
         ] {
-            ensure!(!present || allowed, "{} takes no {field}", kind.word());
+            ensure!(
+                !present || kind.fields().any(|allowed| allowed == field),
+                "{} takes no {field}",
+                kind.word()
+            );
         }
-        if *kind == Triage {
+        if kind == Kind::Triage {
             ensure!(
                 self.report
                     .as_ref()
@@ -356,7 +434,7 @@ pub(super) async fn submit(
     api::action(api::Format::Json, "/", move || start(request, viewer)).await
 }
 
-fn start(request: Request, viewer: Viewer) -> Result<serde_json::Value> {
+fn start(request: Request, viewer: Viewer) -> Result<Started> {
     let (repo, args) = request.arguments()?;
     let inventory = crate::launch_directories::load()?;
     let directory = inventory
@@ -444,30 +522,36 @@ fn wait_for_record(
     log: &std::path::Path,
     started_after: chrono::DateTime<chrono::Local>,
     notice: &std::path::Path,
-) -> Result<serde_json::Value> {
+) -> Result<Started> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(response) = crate::logs::start_notice::read(notice, child.id())?
-            && response["outcome"] == "started"
+        if let Some(outcome @ EarlyOutcome::Started { .. }) =
+            crate::logs::start_notice::read(notice, child.id())?
         {
-            return Ok(response);
+            return Ok(Started::Early {
+                version: 1,
+                outcome,
+            });
         }
         if let Some(name) =
             crate::logs::command_for_process(config, repo, child.id(), started_after)?
         {
-            return Ok(serde_json::json!({"version":1,"name":name}));
+            return Ok(Started::Command { version: 1, name });
         }
         if let Some(status) = child.try_wait()? {
             // A very short run can publish and finish between the first read and exit.
             if let Some(name) =
                 crate::logs::command_for_process(config, repo, child.id(), started_after)?
             {
-                return Ok(serde_json::json!({"version":1,"name":name}));
+                return Ok(Started::Command { version: 1, name });
             }
             if status.success()
                 && let Some(skipped) = crate::logs::start_notice::read(notice, child.id())?
             {
-                return Ok(skipped);
+                return Ok(Started::Early {
+                    version: 1,
+                    outcome: skipped,
+                });
             }
             bail!(
                 "thirdshift exited with {status} before a Command record appeared; see {}",

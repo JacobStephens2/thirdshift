@@ -598,9 +598,9 @@ Console callers already recorded there. A token naming a person records
 `by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
 
-<a name="starting-ticket-and-spec-runs-through-the-api"></a>
-
 #### Starting Commands through the API
+
+<a id="starting-ticket-and-spec-runs-through-the-api" name="starting-ticket-and-spec-runs-through-the-api"></a>
 
 `GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
 return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
