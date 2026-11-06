@@ -2208,6 +2208,7 @@ dependencies = [
  "signal-hook",
  "stateright",
  "subtle",
+ "syn 2.0.119",
  "sysinfo",
  "tempfile",
  "tokio",

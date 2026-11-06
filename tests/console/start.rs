@@ -3,6 +3,201 @@ use std::time::Instant;
 
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+#[test]
+fn api_checks_the_same_named_process_as_the_cli() {
+    let scenario = fixture();
+    let directory = scenario.path("home/.thirdshift/processes");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("inspect.v1.toml"), "version = 1\ndescription = \"Inspect\"\n[[steps]]\nname = \"inspect\"\ncommand = \"printf inspected\"\n").unwrap();
+    let expected = scenario.run(&["process", "check", "inspect.v1"]);
+    assert_eq!(expected.code, Some(0), "{}", expected.stderr);
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/processes/check", console.address))
+        .bearer_auth(runner)
+        .json(&json!({"repository":"acme/widgets","name":"inspect.v1"}))
+        .send()
+        .unwrap();
+    assert_eq!(api::json(response), json!(expected.stdout));
+}
+
+#[test]
+fn api_test_email_uses_the_cli_sender_and_is_audited() {
+    let scenario = fixture();
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"test-email"}"#);
+    let admin = tokens::create(&scenario.path("home"), "owner", &["--scopes", "admin"]);
+    let mut command = scenario.command(&["console", "--no-sign-in"]);
+    command
+        .env("RESEND_API_KEY", "re_test_123")
+        .env("THIRDSHIFT_RESEND_URL", resend.url());
+    let console = Console::start_command(command);
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/email-test", console.address))
+        .bearer_auth(admin)
+        .json(&json!({"address":"me@example.com"}))
+        .send()
+        .unwrap();
+    assert_eq!(
+        api::json(response),
+        json!("accepted by Resend; check your inbox")
+    );
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body["to"], "me@example.com");
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer re_test_123")
+    );
+    let log = api::cli(&scenario.path("home"), &["console", "log", "--json"]);
+    assert!(
+        log.as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"] == "api-call"
+                && event["email"] == "owner"
+                && event["endpoint"] == "/api/v1/email-test"
+                && event["outcome"] == 200)
+    );
+}
+
+#[test]
+fn api_repeated_completed_experiment_is_successful() {
+    use sha2::{Digest, Sha256};
+    #[derive(serde::Serialize)]
+    struct ArmFixture<'a> {
+        commit: &'a str,
+        harness: &'a str,
+        model: Option<String>,
+        effort: Option<String>,
+    }
+    let scenario = fixture();
+    let output = Command::new("git")
+        .current_dir(scenario.launch_dir())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let commit = String::from_utf8(output.stdout).unwrap();
+    let commit = commit.trim();
+    let baseline = ArmFixture {
+        commit,
+        harness: "claude",
+        model: None,
+        effort: None,
+    };
+    let candidate = ArmFixture {
+        commit,
+        harness: "codex",
+        model: None,
+        effort: None,
+    };
+    let id = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(&baseline, &candidate, ["code-review"])).unwrap())
+    );
+    let suite = scenario.path("home/.thirdshift/evals/suites/code-review");
+    fs::create_dir_all(&suite).unwrap();
+    fs::write(suite.join("suite.toml"), "format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n").unwrap();
+    let directory = scenario.path(&format!("home/.thirdshift/evals/experiments/{id}"));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("started"), "").unwrap();
+    fs::write(directory.join("experiment.json"), serde_json::to_vec(&json!({
+        "format": 1, "id": id, "state": "completed", "created_at": "2026-10-24T10:00:00Z",
+        "baseline": baseline, "candidate": candidate, "suites": ["code-review"], "prepared": null,
+        "bar": {"margin": -0.1, "credible_level": 0.95, "prior": 1.0, "seed": 0, "draws": 100,
+            "trials_per_task": {"code-review": 1}, "timeout_seconds": 1800,
+            "void_rules": {"retries": 2, "causes": ["memory_cap"]}}, "tasks": []
+    })).unwrap()).unwrap();
+    let output = scenario.run(&[
+        "experiment",
+        "HEAD",
+        "--baseline",
+        "HEAD",
+        "--baseline-harness",
+        "claude",
+        "--candidate-harness",
+        "codex",
+        "--suite",
+        "code-review",
+        "--pass-level",
+        "0.95",
+        "--fail-level",
+        "0.95",
+        "--draws",
+        "100",
+        "--json",
+    ]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.stdout).unwrap()["state"],
+        "completed"
+    );
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let response = post(
+        &console,
+        &runner,
+        &json!({
+            "repository":"acme/widgets", "command":"experiment", "experiment": {
+                "candidate":"HEAD", "baseline":"HEAD", "baseline_harness":"claude", "candidate_harness":"codex",
+                "suite":["code-review"], "pass_level":0.95, "fail_level":0.95, "draws":100
+            }
+        }),
+    );
+    assert_eq!(response.status(), 200, "{}", response.text().unwrap());
+}
+
+#[test]
+fn api_experiment_release_skip_and_repository_verification_use_known_launch_directories() {
+    let scenario = fixture();
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let reader = tokens::create(&scenario.path("home"), "reader", &[]);
+    let console = Console::start_command(scenario.command(&["console", "--no-sign-in"]));
+    let result = api::json(post(
+        &console,
+        &runner,
+        &json!({"repository":"acme/widgets", "command":"experiment", "experiment":{"candidate":"HEAD", "baseline":"HEAD", "release":true}}),
+    ));
+    assert_eq!(result["outcome"], "skipped");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no Eval suite touched")
+    );
+    let invalid = post(
+        &console,
+        &runner,
+        &json!({"repository":"acme/widgets", "command":"experiment", "experiment":{"file":"/etc/passwd"}}),
+    );
+    assert_eq!(invalid.status(), 422);
+    assert!(
+        invalid
+            .text()
+            .unwrap()
+            .contains("unknown Experiment option")
+    );
+    let base = Command::new("git")
+        .current_dir(scenario.launch_dir())
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(base.status.success());
+    let base = String::from_utf8(base.stdout).unwrap();
+    let client = reqwest::blocking::Client::new();
+    let verify = |repository| {
+        client
+            .post(format!("{}/api/v1/evals/verify", console.address))
+            .bearer_auth(&reader)
+            .json(&json!({"repository":repository,"base":base.trim()}))
+            .send()
+            .unwrap()
+    };
+    assert_eq!(api::json(verify("acme/widgets")), json!({"safe":true}));
+    assert_eq!(verify("/etc").status(), 422);
+}
+
 fn fixture() -> support::Scenario {
     let scenario = support::Scenario::new();
     scenario.user_config_is("[console]\nport = 0\n");

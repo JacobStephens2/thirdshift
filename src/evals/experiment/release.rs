@@ -32,6 +32,7 @@ pub(super) fn supports_trials(repository: &Path, root: &Path, commit: &str) -> R
 }
 
 pub(super) fn skip(code: &str, reason: &str, json: bool) -> Result<()> {
+    crate::logs::start_notice::skipped(reason);
     crate::progress::step(reason);
     if json {
         println!(

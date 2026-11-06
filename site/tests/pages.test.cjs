@@ -7,6 +7,14 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("API start lists include the Experiment command", async () => {
+  for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html"]) {
+    const source = await readFile(join(__dirname, "..", file), "utf8");
+    const paragraph = source.match(/<p\b[^>]*>.*?<\/p>/gs).find(text => text.includes("POST /api/v1/runs"));
+    assert.match(paragraph.replace(/<[^>]+>/g, ""), /Experiment/, file);
+  }
+});
+
 let server, browser, origin;
 before(async () => {
   server = createServer(async (request, response) => {

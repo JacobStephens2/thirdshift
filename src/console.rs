@@ -23,8 +23,11 @@ pub use look::{export_theme, import_theme, sections, theme};
 mod openapi;
 pub use openapi::print as openapi;
 mod changes;
+mod commands;
 mod dismiss;
 mod evals;
+#[cfg(test)]
+mod parity;
 mod peek;
 mod resources;
 mod restart;
@@ -160,6 +163,21 @@ impl Scope {
 
 #[derive(Clone, Copy)]
 enum View {
+    Help,
+    Version,
+    Processes,
+    Process,
+    CheckProcess,
+    Evals,
+    TouchedEvals,
+    VerifyEval,
+    OtherAccounts,
+    SetOtherAccounts,
+    EmailTest,
+    RenameExperiment,
+    RecordDifficulty,
+    PendingRechecks,
+    Recheck,
     Update,
     RunUpdate,
     ImportReplays,
@@ -216,7 +234,22 @@ impl PageRoute {
     fn serves_api(&self) -> bool {
         matches!(
             self.view,
-            View::Whoami
+            View::Help
+                | View::Version
+                | View::Processes
+                | View::Process
+                | View::CheckProcess
+                | View::Evals
+                | View::TouchedEvals
+                | View::VerifyEval
+                | View::OtherAccounts
+                | View::SetOtherAccounts
+                | View::EmailTest
+                | View::RenameExperiment
+                | View::RecordDifficulty
+                | View::PendingRechecks
+                | View::Recheck
+                | View::Whoami
                 | View::Update
                 | View::RunUpdate
                 | View::ImportReplays
@@ -261,6 +294,129 @@ impl PageRoute {
 
 const PAGES: &[PageRoute] = &[
     PageRoute {
+        path: "/api/v1/help",
+        api: "/api/v1/help",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift help"],
+        method: Method::GET,
+        view: View::Help,
+    },
+    PageRoute {
+        path: "/api/v1/version",
+        api: "/api/v1/version",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift version"],
+        method: Method::GET,
+        view: View::Version,
+    },
+    PageRoute {
+        path: "/api/v1/processes",
+        api: "/api/v1/processes",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift process list"],
+        method: Method::GET,
+        view: View::Processes,
+    },
+    PageRoute {
+        path: "/api/v1/processes/{name}",
+        api: "/api/v1/processes/{name}",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift process show inspect"],
+        method: Method::GET,
+        view: View::Process,
+    },
+    PageRoute {
+        path: "/api/v1/processes/check",
+        api: "/api/v1/processes/check",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift process check inspect"],
+        method: Method::POST,
+        view: View::CheckProcess,
+    },
+    PageRoute {
+        path: "/api/v1/evals",
+        api: "/api/v1/evals",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals list --json"],
+        method: Method::GET,
+        view: View::Evals,
+    },
+    PageRoute {
+        path: "/api/v1/evals/touched",
+        api: "/api/v1/evals/touched",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals touched src/main.rs"],
+        method: Method::POST,
+        view: View::TouchedEvals,
+    },
+    PageRoute {
+        path: "/api/v1/evals/verify",
+        api: "/api/v1/evals/verify",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals verify repository 0123456789012345678901234567890123456789"],
+        method: Method::POST,
+        view: View::VerifyEval,
+    },
+    PageRoute {
+        path: "/api/v1/other-accounts",
+        api: "/api/v1/other-accounts",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console other-accounts --json"],
+        method: Method::GET,
+        view: View::OtherAccounts,
+    },
+    PageRoute {
+        path: "/api/v1/other-accounts",
+        api: "/api/v1/other-accounts",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift console other-accounts readable --json"],
+        method: Method::POST,
+        view: View::SetOtherAccounts,
+    },
+    PageRoute {
+        path: "/api/v1/email-test",
+        api: "/api/v1/email-test",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift email-test"],
+        method: Method::POST,
+        view: View::EmailTest,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/name",
+        api: "/api/v1/experiments/{id}/name",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift experiments id --name name --json"],
+        method: Method::POST,
+        view: View::RenameExperiment,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/difficulty",
+        api: "/api/v1/experiments/{id}/difficulty",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift experiments id --record-difficulty --json"],
+        method: Method::POST,
+        view: View::RecordDifficulty,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/rechecks",
+        api: "/api/v1/experiments/{id}/rechecks",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift recheck id --pending --json"],
+        method: Method::GET,
+        view: View::PendingRechecks,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/rechecks",
+        api: "/api/v1/experiments/{id}/rechecks",
+        scope: Some(Scope::Act),
+        cli: &[
+            "thirdshift recheck id trial pass --reason reviewed --json",
+            "thirdshift recheck id --batch fingerprint fail --reason reviewed --json",
+        ],
+        method: Method::POST,
+        view: View::Recheck,
+    },
+    PageRoute {
         path: "/api/v1/runs",
         api: "/api/v1/runs",
         scope: Some(Scope::Run),
@@ -274,6 +430,7 @@ const PAGES: &[PageRoute] = &[
             "thirdshift skill to-spec",
             "thirdshift score",
             "thirdshift triage",
+            "thirdshift experiment HEAD",
         ],
         method: Method::POST,
         view: View::StartRun,
@@ -813,6 +970,21 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Help, Method::GET) => get(commands::help),
+            (View::Version, Method::GET) => get(commands::version),
+            (View::Processes, Method::GET) => get(commands::processes),
+            (View::Process, Method::GET) => get(commands::process),
+            (View::CheckProcess, Method::POST) => post(start::check_process),
+            (View::Evals, Method::GET) => get(commands::evals),
+            (View::TouchedEvals, Method::POST) => post(commands::touched),
+            (View::VerifyEval, Method::POST) => post(commands::verify),
+            (View::OtherAccounts, Method::GET) => get(commands::other_accounts),
+            (View::SetOtherAccounts, Method::POST) => post(commands::set_other_accounts),
+            (View::EmailTest, Method::POST) => post(commands::email_test),
+            (View::RenameExperiment, Method::POST) => post(commands::rename),
+            (View::RecordDifficulty, Method::POST) => post(commands::difficulty),
+            (View::PendingRechecks, Method::GET) => get(commands::pending),
+            (View::Recheck, Method::POST) => post(commands::recheck),
             (View::Update, Method::GET) => get(update::show),
             (View::RunUpdate, Method::POST) => post(update::run),
             (View::ImportReplays, Method::POST) => post(evals::import_replays),
