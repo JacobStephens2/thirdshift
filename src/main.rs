@@ -649,6 +649,7 @@ fn score() -> ExitCode {
     let _lock = match scoring::lock() {
         Ok(Some(lock)) => lock,
         Ok(None) => {
+            logs::start_notice::skipped("another Scoring run is running on this machine");
             progress::step("Scoring run skipped: another Scoring run is running on this machine");
             return ExitCode::SUCCESS;
         }

@@ -542,7 +542,7 @@ address's scopes, including the Security finding limits above.
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
-| `run` | `POST /api/v1/runs` starts a Ticket or Spec run |
+| `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring and Triage runs |
 | `admin` | GET `/api/v1/config`, GET and POST `/api/v1/config/<key>`, GET and POST `/api/v1/update`, POST `/api/v1/themes`, POST `/api/v1/evals/import-replays` |
 
 Actions take `application/x-www-form-urlencoded` bodies, using the page's
@@ -598,7 +598,9 @@ Console callers already recorded there. A token naming a person records
 `by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
 
-#### Starting Ticket and Spec runs through the API
+#### Starting Commands through the API
+
+<a id="starting-ticket-and-spec-runs-through-the-api" name="starting-ticket-and-spec-runs-through-the-api"></a>
 
 `GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
 return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
@@ -629,12 +631,48 @@ Unknown fields and invalid arguments are refused. A repository without a known
 Launch directory is refused before anything starts. If several directories
 name it, the first path in the inventory is used.
 
+The optional `command` selects the CLI twin; leaving it out means `ticket`,
+which also starts a Spec run when the issue has Tickets. Every request names
+`repository`. These commands are startable on the same `POST /api/v1/runs` path:
+
+| `command` | Target and command-specific options |
+| --- | --- |
+| `ticket` | Required `issue`; shared run options above, plus positive `parallel` and boolean `security_close` |
+| `architect` | Optional `base`, `focus`, `plan_only`; shared run options, `parallel`, `security_close` |
+| `pickup` | Optional `base`, `order` (`lowest-first` or `highest-first`); shared run options, `parallel`, `security_close` |
+| `secure` | Optional `base`; shared run options, `parallel`, `security_close` |
+| `review` | Required `pull_request` URL or `author` login; optional `recommend_only`, `email`, `harness`, `model`, `effort`, `security_review` |
+| `process` | Required `name`; optional `issue` or `pull_request` URL, `plan_only`, `merge`, `email`, `harness`, `model`, `effort`, `security_review`, `security_fix`, `security_close` |
+| `skill` | Required `name`; optional `issue` |
+| `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
+| `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
+
+Booleans use `true` or `false`. All options and combinations are checked by
+the CLI argument parser; for example, Architect `plan_only` refuses options
+for a dispatched run. Issue and pull request URLs must belong to the named
+repository. Triage receives the Report verbatim through standard input;
+`file`, `path` and arbitrary CLI arguments are refused. `read_machine` has
+the same meaning as the CLI's `--read-machine`, including User config defaults.
+
+For example, start a Pickup run on `main`, taking the highest issue first:
+
+```json
+{"repository":"acme/widgets","command":"pickup","base":"main","order":"highest-first"}
+```
+
 The Console starts the same binary in that directory, in its own OS session
 with the account's login shell environment. Standard output and errors append
 to the cron command's literal `>>` or `>` output path when present, otherwise
 to `<logs.dir>/cron.log`, the shared cron log used in the scheduling examples.
 It waits at most 30 seconds for the Command record and returns
-`{"version":1,"name":"acme/widgets#7"}`. An early exit returns an error naming
+`{"version":1,"name":"acme/widgets#7"}`. Passes use the same gates as cron,
+including the Command limit. A skip before a Command record exists returns
+`{"version":1,"outcome":"skipped","reason":"..."}`, even with quiet skips
+or a repeated skip reason. A Custom process's skip retains its Command record
+as in the CLI, so returns its name. Skill runs keep no Command record in the
+CLI; after preflight they return
+`{"version":1,"outcome":"started","process_id":1234}` instead. Their API start
+names the requester in the repository's Activity log. An early failure returns an error naming
 the exit status and log; a timeout names the process and warns that it may still
 start, so check `status` before retrying. Follow the Command with the usual
 `show`, `status` and log views. It keeps running through a Console restart.
