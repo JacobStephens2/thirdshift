@@ -1,4 +1,5 @@
-import { writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { issueFile, readIssue, record } from "./github";
 import { Claim } from "./claim";
@@ -33,7 +34,7 @@ export async function main(skills: [string, string][]): Promise<void> {
     const base = await commands.run(["git", "branch", "--show-current"], launch);
     if (!base) throw new Error("Expected a checked-out Base branch");
     const worktree = await createWorktree(commands, launch, branch, skills);
-    await writeFile(join(worktree, ".thirdshift-issue.md"), text);
+    await writeIssue(join(worktree, ".thirdshift-issue.md"), text);
     let resultSeen = false;
     await commands.run(["claude", "--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "auto",
       `/thirdshift-implement ${canonical}\nThe Base branch is ${base}. Work on ${branch}. Read .thirdshift-issue.md; do not fetch issue comments yourself.`], worktree, {
@@ -60,5 +61,21 @@ export async function main(skills: [string, string][]): Promise<void> {
     }
     if (commands.interrupted) process.exitCode = 130;
     commands.close();
+  }
+}
+
+// O_NOFOLLOW applies to the final path component, so a symlink checked out at
+// .thirdshift-issue.md cannot replace a file outside the worktree.
+async function writeIssue(path: string, text: string): Promise<void> {
+  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o644).catch((error: unknown) => {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ELOOP") {
+      throw new Error("Refusing to follow a symlink for .thirdshift-issue.md");
+    }
+    throw error;
+  });
+  try {
+    await handle.writeFile(text);
+  } finally {
+    await handle.close();
   }
 }

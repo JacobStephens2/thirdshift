@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmod, lstat, mkdtemp, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -170,6 +170,22 @@ test("a non-canonical Issue URL is rejected before any GitHub call", async () =>
   expect(`${result.stdout}\n${result.stderr}`).not.toContain("inject=run-this");
   expect(await Bun.file(join(f.directory, "calls")).exists()).toBe(false);
   expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
+}, 120_000);
+
+test("issue file write does not follow a symlink outside the worktree", async () => {
+  const f = await fixture();
+  await symlink("../../../config", join(f.directory, ".thirdshift-issue.md"));
+  f.git("add", ".thirdshift-issue.md");
+  f.git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "symlink");
+  const result = await f.run();
+  const config = await readFile(join(f.directory, ".git/config"), "utf8");
+  expect(config).toContain('[remote "origin"]');
+  expect(config).toContain("https://github.com/test/project.git");
+  expect(config).not.toContain("Implement it");
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("Refusing to follow a symlink");
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([{ name: "ready-for-agent" }]);
 }, 120_000);
 
 async function waitForFile(path: string): Promise<string> {
