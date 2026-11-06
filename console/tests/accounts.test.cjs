@@ -7,9 +7,17 @@ const { tmpdir, hostname } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("./playwright.cjs");
+const { createServer } = require("node:http");
 
-let home, server, exited, browser, origin;
+let home, server, exited, browser, origin, releases;
 before(async () => {
+  releases = createServer((request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ tag_name: "v99.0.0", name: "v99.0.0", url: "http://localhost/release", prerelease: false,
+      assets: [{ name: "thirdshift-installer.sh", url: "http://localhost/installer", browser_download_url: "http://localhost/installer" }] }));
+  });
+  releases.listen(0, "127.0.0.1");
+  await once(releases, "listening");
   home = await mkdtemp(join(tmpdir(), "thirdshift-console-accounts-"));
   const root = join(home, ".thirdshift");
   await mkdir(root);
@@ -23,7 +31,7 @@ before(async () => {
     }
   }), { mode: 0o600 });
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift"), ["console"], {
-    env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "inherit"]
+    env: { ...process.env, HOME: home, THIRDSHIFT_INSTALLER_GHE_BASE_URL: `http://127.0.0.1:${releases.address().port}/` }, stdio: ["ignore", "pipe", "inherit"]
   });
   exited = once(server, "exit");
   const lines = createInterface({ input: server.stdout });
@@ -35,7 +43,46 @@ after(async () => {
   await browser?.close();
   if (server && server.exitCode === null) server.kill();
   await exited;
+  if (releases) await new Promise(resolve => releases.close(resolve));
   if (home) await rm(home, { recursive: true, force: true });
+});
+
+test("Update shows versions only for admin and Theme import controls follow admin", async t => {
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
+  const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
+  t.after(() => scopes("read,security,act,run,admin"));
+  for (const scope of ["read,act", "read,act,admin"]) {
+    scopes(scope);
+    for (const viewport of [{width:1440,height:900}, {width:390,height:844}]) {
+      const context = await browser.newContext({viewport});
+      try {
+        const page = await context.newPage();
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.goto(`${origin}/sign-in`);
+        await page.getByLabel("Email").fill("owner@example.test");
+        await page.getByLabel("Password", {exact:true}).fill("browser test password");
+        await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", {name:"Sign in",exact:true}).click()]);
+        const admin = scope.includes("admin");
+        assert.equal(await page.getByRole("link", {name:"Update thirdshift",exact:true}).count(), admin ? 1 : 0);
+        await page.locator("[data-open-themes]").click();
+        assert.equal(await page.locator("#edit-theme").count(), admin ? 1 : 0);
+        assert.equal(await page.locator("#save-theme").count(), admin ? 1 : 0);
+        await page.locator("#export-theme").click();
+        await page.waitForFunction(() => document.querySelector("#theme-document").value.length > 0);
+        const response = await page.goto(`${origin}/update`);
+        assert.equal(response.status(), admin ? 200 : 403);
+        if (admin) {
+          await page.getByText("Latest stable version: 99.0.0", {exact:true}).waitFor();
+          assert.match(await page.locator("main").textContent(), /Current version:/);
+          await page.getByRole("button", {name:"Update thirdshift",exact:true}).waitFor();
+          assert.equal((await context.request.post(`${origin}/update`)).status(), 403, "CSRF is required");
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        }
+        assert.deepEqual(errors, []);
+      } finally { await context.close(); }
+    }
+  }
 });
 
 test("User config is editable for admin sessions and read-only for read sessions", async t => {

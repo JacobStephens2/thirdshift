@@ -114,6 +114,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Update => object(json!({"current": text, "latest": text})),
+        View::RunUpdate => text,
+        View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
         View::Config => object(json!({"version": version, "settings": array(setting())})),
         View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
@@ -272,8 +275,9 @@ fn action_body(view: View) -> Value {
                 "type":"object", "properties":properties,"required":required
             }}}});
         }
-        View::ApproveEvalTask => (json!({}), vec![]),
+        View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
         View::Whoami
+        | View::Update
         | View::Config
         | View::ConfigSetting
         | View::OpenApi

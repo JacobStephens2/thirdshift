@@ -414,7 +414,7 @@ waterfall responses keep the Command's other stages and omit those sessions,
 including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
 and their auditing are described below. The `admin` scope reads and changes
-User config; starting Commands arrives in a later Console API ticket. A missing route scope returns 403 JSON naming that
+User config, updates thirdshift, imports Themes and manages Eval data; starting Commands arrives in a later Console API ticket. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -539,8 +539,8 @@ address's scopes, including the Security finding limits above.
 | --- | --- |
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
-| `act` | The action POSTs below, including Theme and hidden sections |
-| `admin` | GET `/api/v1/config`, GET and POST `/api/v1/config/<key>` |
+| `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
+| `admin` | GET `/api/v1/config`, GET and POST `/api/v1/config/<key>`, GET and POST `/api/v1/update`, POST `/api/v1/themes`, POST `/api/v1/evals/import-replays` |
 | `run` | Reserved for starting Commands in a later API ticket |
 
 Actions take `application/x-www-form-urlencoded` bodies, using the page's
@@ -559,6 +559,35 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/theme` | `theme` | `console theme <name>` |
 | `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
+| `/update` | none | `update` |
+| `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+
+#### Updating and administering a machine
+
+With `admin`, open **Update thirdshift** in the Console navigation. It shows the
+current and latest stable versions. Choose **Update thirdshift** to install the
+release, then reload after the Console restarts. The install receipt must belong
+to the running copy, just as for `thirdshift update`; source builds need a shell
+reinstall. If checking the latest release fails, the page says so and offers Reload.
+
+`GET /api/v1/update` returns `{"current":"…","latest":"…"}`, the same as
+`thirdshift update --check --json`. POST runs the same updater as the CLI and
+returns its result as a JSON string (`thirdshift update --json`). It answers once
+the installer has placed the binary, before the Console re-executes itself:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+curl -X POST -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+```
+
+Theme import requires `admin` and takes the Theme document itself as JSON;
+a file path or a `path` field is refused. Selecting an existing Theme still
+requires `act`. POST `/api/v1/evals/import-replays` imports the machine's private
+replay manifests and grading index from their standard locations, like the CLI.
+It accepts no paths. Eval task approval remains an `act` judgment. Eval preparation,
+verification and Arm preparation use local working directories or write local
+paths, so remain CLI-only. Updates, imports and judgments name their requester
+in the Console log.
 
 Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for

@@ -183,7 +183,7 @@ if (themes) {
       editorStatus.textContent = copy ? 'Choose a name and edit the tokens, then save.' : 'Exported JSON. Copy it to a file or paste it into another Console.';
     } catch (error) { editorStatus.textContent = `Could not export Theme: ${error.message}`; }
   };
-  document.querySelector('#edit-theme').addEventListener('click', () => exportDocument(true));
+  document.querySelector('#edit-theme')?.addEventListener('click', () => exportDocument(true));
   document.querySelector('#export-theme').addEventListener('click', () => exportDocument(false));
   document.querySelector('#theme-editor').addEventListener('submit', async event => {
     event.preventDefault();
