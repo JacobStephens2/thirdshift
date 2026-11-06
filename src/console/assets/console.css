@@ -263,7 +263,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 }
 /* A Command name must never push its repository out of view. */
 .row-head > .subject:has(> .subject-command) { min-width: 0; max-width: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
-.subject-command { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.subject-command { display: block; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (scripting: enabled) and (min-width: 761px) {
   .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
   .one-line .subject > .account-tag { flex: none; }
