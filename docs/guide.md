@@ -438,6 +438,37 @@ Use `thirdshift status --machine server` to show only that paired machine;
 behaves like plain `status`, including its Fleet. Unknown and link-only names
 are rejected. Human-readable rows carry machine tags once a live Fleet exists.
 
+**Start work** lists known Launch directories across the Fleet, labelled by
+machine. Select the repository and machine, review the request, then confirm.
+**Cron jobs**, **User config** and **Update** offer machine links; their
+`?machine=<name>` selection remains in forms and confirmation dialogs. A control
+appears only when that machine's live `whoami` includes `run` or `admin` for
+the signed-in person. The owning machine checks the token and that person's
+own scopes again on submission, so a forced request still receives its 403.
+Only the owner starts work or changes settings. Its Activity log names
+`by <person> from the Console on <token holder>`; name the pairing token for the
+calling Console. Its Command appears in the merged Inbox when the token also
+has `read`. The sign-in list and address scopes remain shell-only.
+
+The CLI uses the saved token holder's identity, without naming a signed-in
+person. `start` runs detached in a known Launch directory on the selected
+machine and returns JSON. It accepts the shared Ticket options:
+
+```sh
+thirdshift start acme/widgets 7 no-merge no-email --machine server
+thirdshift start --options --json --machine server
+thirdshift config spec.parallel --json --machine server
+thirdshift config spec.parallel 5 --machine server
+thirdshift update --check --json --machine server
+thirdshift update --machine server
+```
+
+Remote `config` and `update` return the owner's JSON. Unknown and link-only
+machines are refused. Omitting `--machine`, or giving this machine's hostname,
+selects local work. `/api/v1/start-options` requires `run` and returns known
+repositories and startable Passes; `whoami` accepts any authenticated scope so
+`run`-only and `admin`-only tokens can pair without general read access.
+
 Open a remote row to see its Command details in the same Console, including
 child Ticket runs and stages. Waterfall, Full Command log and Session trace
 links keep the owning machine selected. Details are fetched live from its

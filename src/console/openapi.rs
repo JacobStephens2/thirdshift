@@ -19,7 +19,7 @@ pub(super) fn document() -> Value {
         paths.entry(route.api).or_insert_with(|| json!({}))
             [route.method.as_str().to_ascii_lowercase()] = json!({
             "description": format!("CLI twins: {}. The required scope is declared in x-scope.", route.cli.join("; ")),
-            "x-scope": route.scope,
+            "x-scope": route.scope.map(|scope| scope.name()).unwrap_or("authenticated"),
             "x-cli-twins": route.cli,
             "parameters": parameters,
             "responses": {
@@ -229,6 +229,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::LaunchDirectories => object(json!({
             "directories": array(object(json!({"repository": text, "path": text})))
         })),
+        View::StartOptions => {
+            object(json!({"form": record, "passes": array(record.clone()), "inventory": record}))
+        }
         View::StartRun => json!({"oneOf": [
             object(json!({"version": version, "name": text})),
             object(json!({"version": version, "outcome": {"const":"skipped"}, "reason": text})),
@@ -257,7 +260,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             object(json!({"suite": text, "task": text, "state": {"const": "approved"}}))
         }
         View::Look | View::Theme | View::Sections => record,
-        View::Changes
+        View::FleetRun
+        | View::Changes
         | View::LogStream
         | View::Account
         | View::SignOut
@@ -372,6 +376,8 @@ fn action_body(view: View) -> Value {
         | View::ExperimentSession
         | View::CronJobs
         | View::LaunchDirectories
+        | View::StartOptions
+        | View::FleetRun
         | View::Resources
         | View::ResourceStatus
         | View::Metrics

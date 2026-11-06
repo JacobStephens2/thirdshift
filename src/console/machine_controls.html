@@ -1,0 +1,1 @@
+<nav aria-label="Machine controls">{% for target in targets %}<span>{{ target.name }}: {% if target.run %}<a href="/cronjobs{{ target.suffix }}">Cron jobs</a>{% endif %} {% if target.admin %}<a href="/config{{ target.suffix }}">User config</a> · <a href="/update{{ target.suffix }}">Update</a>{% endif %}</span> {% endfor %}</nav>

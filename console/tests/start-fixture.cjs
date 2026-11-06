@@ -65,6 +65,7 @@ else:
     finally { lines.close(); }
     browser = await chromium.launch({ headless: true });
     return { home, repo, browser, origin, close,
+      cli(args, input) { return execFileSync(binary, args, { env, input, encoding: 'utf8' }); },
       scopes(value) { execFileSync(binary, ['console', 'scopes', '--scopes', value], { env }); },
       async page(options) {
         const page = await browser.newPage(options);

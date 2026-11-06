@@ -408,6 +408,32 @@ count shown separately. Link-only entries are not fetched.</p>
 <code>--json</code> and <code>--all</code> can be combined with it. Giving this machine&#39;s own hostname
 behaves like plain <code>status</code>, including its Fleet. Unknown and link-only names
 are rejected. Human-readable rows carry machine tags once a live Fleet exists.</p>
+<p><strong>Start work</strong> lists known Launch directories across the Fleet, labelled by
+machine. Select the repository and machine, review the request, then confirm.
+<strong>Cron jobs</strong>, <strong>User config</strong> and <strong>Update</strong> offer machine links; their
+<code>?machine=&lt;name&gt;</code> selection remains in forms and confirmation dialogs. A control
+appears only when that machine&#39;s live <code>whoami</code> includes <code>run</code> or <code>admin</code> for
+the signed-in person. The owning machine checks the token and that person&#39;s
+own scopes again on submission, so a forced request still receives its 403.
+Only the owner starts work or changes settings. Its Activity log names
+<code>by &lt;person&gt; from the Console on &lt;token holder&gt;</code>; name the pairing token for the
+calling Console. Its Command appears in the merged Inbox when the token also
+has <code>read</code>. The sign-in list and address scopes remain shell-only.</p>
+<p>The CLI uses the saved token holder&#39;s identity, without naming a signed-in
+person. <code>start</code> runs detached in a known Launch directory on the selected
+machine and returns JSON. It accepts the shared Ticket options:</p>
+<pre><code class="language-sh">thirdshift start acme/widgets 7 no-merge no-email --machine server
+thirdshift start --options --json --machine server
+thirdshift config spec.parallel --json --machine server
+thirdshift config spec.parallel 5 --machine server
+thirdshift update --check --json --machine server
+thirdshift update --machine server
+</code></pre>
+<p>Remote <code>config</code> and <code>update</code> return the owner&#39;s JSON. Unknown and link-only
+machines are refused. Omitting <code>--machine</code>, or giving this machine&#39;s hostname,
+selects local work. <code>/api/v1/start-options</code> requires <code>run</code> and returns known
+repositories and startable Passes; <code>whoami</code> accepts any authenticated scope so
+<code>run</code>-only and <code>admin</code>-only tokens can pair without general read access.</p>
 <p>Open a remote row to see its Command details in the same Console, including
 child Ticket runs and stages. Waterfall, Full Command log and Session trace
 links keep the owning machine selected. Details are fetched live from its

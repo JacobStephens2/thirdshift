@@ -3,6 +3,64 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Output;
 
+#[test]
+fn cli_config_selects_the_owning_machine_and_keeps_access_settings_refused() {
+    let caller = tempfile::tempdir().unwrap();
+    let owner = tempfile::tempdir().unwrap();
+    configure(caller.path());
+    configure(owner.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), owner.path());
+    let token = tokens::create(owner.path(), "caller", &["--scopes", "admin"]);
+    assert!(
+        add(caller.path(), "owner", &console.address, &token)
+            .status
+            .success()
+    );
+    let changed = api::cli(
+        caller.path(),
+        &[
+            "config",
+            "spec.parallel",
+            "5",
+            "--machine",
+            "owner",
+            "--json",
+        ],
+    );
+    assert_eq!(changed["value"], 5);
+    assert_eq!(
+        api::cli(owner.path(), &["config", "spec.parallel", "--json"])["value"],
+        5
+    );
+    assert_eq!(
+        api::cli(caller.path(), &["config", "spec.parallel", "--json"])["value"],
+        3
+    );
+    let refused = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .env("HOME", caller.path())
+        .args([
+            "config",
+            "console.allowed_emails",
+            "['intruder@example.test']",
+            "--machine",
+            "owner",
+        ])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("access"),
+        "{refused:?}"
+    );
+    let log = api::cli(owner.path(), &["console", "log", "--json"]);
+    assert!(
+        log.as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["email"] == "caller" && e["event"] == "api-call")
+    );
+}
+
 pub(super) fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .args(["console", "fleet", "add", name, address])

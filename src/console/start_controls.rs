@@ -1,5 +1,6 @@
 //! Page choices for the existing structured start API.
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
@@ -8,9 +9,17 @@ use crate::{
 
 use super::start::Request;
 
+#[derive(Serialize, Deserialize)]
+pub(super) struct Repository {
+    pub repository: String,
+    pub machine: String,
+    pub label: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub(super) struct Form {
-    pub repositories: Vec<String>,
-    pub harness: &'static str,
+    pub repositories: Vec<Repository>,
+    pub harness: String,
     pub harnesses: Vec<String>,
     pub error: Option<String>,
 }
@@ -19,7 +28,12 @@ impl Form {
     pub fn load(config: &UserConfig) -> Self {
         let mut form = Self {
             repositories: Vec::new(),
-            harness: config.harness.default.unwrap_or(Harness::Claude).name(),
+            harness: config
+                .harness
+                .default
+                .unwrap_or(Harness::Claude)
+                .name()
+                .into(),
             harnesses: Harness::ALL
                 .into_iter()
                 .map(|harness| harness.name().to_owned())
@@ -28,24 +42,109 @@ impl Form {
         };
         match crate::launch_directories::load() {
             Ok(inventory) => {
-                form.repositories = inventory
+                let mut repositories: Vec<_> = inventory
                     .directories
                     .into_iter()
                     .map(|d| d.repository)
                     .collect();
-                form.repositories.sort();
-                form.repositories.dedup();
+                repositories.sort();
+                repositories.dedup();
+                form.repositories = repositories
+                    .into_iter()
+                    .map(|repository| Repository {
+                        label: format!("{repository} · {}", super::hostname()),
+                        repository,
+                        machine: String::new(),
+                    })
+                    .collect();
             }
             Err(error) => form.error = Some(error.to_string()),
         }
         form
     }
+
+    pub fn fleet(
+        config: &UserConfig,
+        viewer: &super::auth::Viewer,
+        targets: &[super::fleet_control::Target],
+    ) -> Option<Self> {
+        if !targets.iter().any(|target| target.run) {
+            return None;
+        }
+        let mut form = Self::load(config);
+        if !viewer.scopes.contains(&super::Scope::Run) {
+            form.repositories.clear();
+        }
+        for target in targets
+            .iter()
+            .filter(|target| target.run && !target.machine.is_empty())
+        {
+            let result = super::fleet::read::Remote::select(
+                config,
+                &target.machine,
+                viewer.fleet_person().map(str::to_owned),
+            )
+            .and_then(|remote| remote.unwrap().get("/start-options"))
+            .and_then(|value| Ok(serde_json::from_value::<Options>(value)?));
+            match result {
+                Ok(options) => form
+                    .repositories
+                    .extend(options.form.repositories.into_iter().map(|mut repository| {
+                        repository.label = format!("{} · {}", repository.repository, target.name);
+                        repository.machine = target.machine.clone();
+                        repository
+                    })),
+                Err(error) => form.error = Some(error.to_string()),
+            }
+        }
+        Some(form)
+    }
 }
 
+#[derive(Serialize, Deserialize)]
 pub(super) struct Pass {
     pub command: String,
     pub request: String,
-    pub harness: &'static str,
+    pub harness: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct Options {
+    pub form: Form,
+    pub passes: Vec<Pass>,
+    pub inventory: crate::cronjobs::CronJobs,
+}
+
+impl Options {
+    pub fn load(config: &UserConfig) -> Result<Self> {
+        let inventory = match crate::cronjobs::load() {
+            Ok(inventory) => inventory,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                crate::cronjobs::CronJobs {
+                    jobs: Vec::new(),
+                    pass_starts: crate::logs::pass_starts::load(&config.logs_dir)?,
+                }
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(Self {
+            form: Form::load(config),
+            passes: passes(config, &inventory.jobs)?,
+            inventory,
+        })
+    }
+}
+
+pub(super) async fn options() -> axum::response::Response {
+    super::api::read(super::api::Format::Json, || {
+        use axum::response::IntoResponse;
+        Ok(axum::Json(Options::load(&UserConfig::load()?)?).into_response())
+    })
+    .await
 }
 
 /// Preserve the cron Pass's CLI options, while the API still decides admission.
@@ -152,6 +251,7 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
             | args::Command::Status { .. }
             | args::Command::Show { .. }
             | args::Command::RemoteDetails { .. }
+            | args::Command::FleetControl(_)
             | args::Command::Metrics(_)
             | args::Command::Spans { .. }
             | args::Command::Stop { .. }
@@ -186,13 +286,13 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
         passes.push(Pass {
             command: job.command.clone(),
             request: serde_json::to_string(&request)?,
-            harness: harness.harness.name(),
+            harness: harness.harness.name().into(),
         });
     }
     Ok(passes)
 }
 
-fn add_flags(request: &mut Value, flags: &Flags) {
+pub(super) fn add_flags(request: &mut Value, flags: &Flags) {
     let mut put = |key: &str, value: Option<Value>| {
         if let Some(value) = value {
             request[key] = value;

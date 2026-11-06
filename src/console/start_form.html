@@ -1,10 +1,11 @@
 <section class="start-controls" aria-label="Start work" data-start-area data-csrf="{{ csrf }}">
   <details><summary>Start work</summary>
+    <p>Choose the repository's machine. <a href="/cronjobs">Run a Pass now</a>.</p>
     <noscript><p>Starting work from this page requires JavaScript for confirmation. The CLI is also available.</p></noscript>
     {% if let Some(error) = start.error %}<p role="alert">Could not load Launch directories: {{ error }}</p>{% endif %}
     {% if start.repositories.is_empty() %}<p>No known Launch directories. Add a repository to <code>launch_directories</code> in User config, or use it in a thirdshift cron job.</p>{% else %}
     <form data-start-form class="start-form">
-      <div class="start-field"><label for="start-repository">Repository</label><select id="start-repository" name="repository" required>{% for repository in start.repositories %}<option>{{ repository }}</option>{% endfor %}</select></div>
+      <div class="start-field"><label for="start-repository">Repository</label><select id="start-repository" name="repository" required>{% for repository in start.repositories %}<option value="{{ repository.repository }}" data-machine="{{ repository.machine }}">{{ repository.label }}</option>{% endfor %}</select></div>
       <label>Issue number or URL <input name="issue" required placeholder="7 or https://github.com/owner/repo/issues/7"></label>
       <div class="start-field"><label for="start-harness">Harness</label><select id="start-harness" name="harness">{% for name in start.harnesses %}<option{% if name.as_str() == start.harness %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
       <details><summary>Shared options</summary>

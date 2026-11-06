@@ -54,6 +54,15 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
+    pub(super) fn local_cli() -> Self {
+        Self {
+            caller_label: "local CLI".into(),
+            scopes: Scope::ALL.to_vec(),
+            identity: Identity::local(),
+            token: None,
+            csrf: String::new(),
+        }
+    }
     pub fn fleet_person(&self) -> Option<&str> {
         match &self.identity {
             Identity::Session { address } => Some(address),

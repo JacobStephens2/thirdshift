@@ -2,18 +2,18 @@
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::UserConfig;
 use crate::logs::pass_starts::{self, PassStart};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct CronJobs {
     pub jobs: Vec<CronJob>,
     pub pass_starts: Vec<PassStart>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,

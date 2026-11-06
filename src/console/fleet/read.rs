@@ -60,6 +60,56 @@ impl Remote {
         self.read(route, None)
     }
 
+    pub fn post_json(&self, route: &str, value: &Value) -> Result<Value> {
+        self.mutate(self.client.post(self.api_url(route)?).json(value))
+    }
+
+    pub fn post_form(&self, route: &str, fields: &[(&str, &str)]) -> Result<Value> {
+        self.mutate(self.client.post(self.api_url(route)?).form(fields))
+    }
+
+    fn api_url(&self, route: &str) -> Result<String> {
+        ensure!(
+            route.starts_with('/') && !route.starts_with("//"),
+            "invalid Fleet route"
+        );
+        Ok(format!(
+            "{}/api/v1{route}",
+            self.entry.address.trim_end_matches('/')
+        ))
+    }
+
+    fn mutate(&self, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
+        let mut request = request
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(300));
+        if let Some(person) = &self.person {
+            request = request.header(super::super::auth::PERSON_HEADER, person);
+        }
+        let response = request.send().map_err(|_| {
+            self.refusal(
+                reqwest::StatusCode::BAD_GATEWAY,
+                format!(
+                    "{} request failed or timed out; check its Inbox before retrying",
+                    self.entry.name
+                ),
+            )
+        })?;
+        let status = response.status();
+        let value: Value = response.json().context("incompatible Fleet response")?;
+        ensure!(
+            status.is_success(),
+            self.refusal(
+                status,
+                format!(
+                    "{} refused the request (HTTP {status}): {}",
+                    self.entry.name, value
+                )
+            )
+        );
+        Ok(value)
+    }
+
     pub fn preview(&self, command: &str) -> Result<String> {
         let route = crate::logs::status::inspect::url("/log", command, None);
         // 4096 raw bytes can expand sixfold when JSON escapes them. Refuse an

@@ -202,7 +202,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
-       thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
+       thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
+       thirdshift start --options --json [--machine <name>]  List start choices and Passes
+       thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -220,7 +222,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON; --export <dir> writes its whole Trace
-       thirdshift update [--check] [--json]             Update to the latest release, or check its version
+       thirdshift update [--check] [--json] [--machine <name>]  Update, or check the latest version
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
@@ -259,6 +261,7 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        Ok(Command::FleetControl(command)) => return printed(command.run()),
         Ok(Command::Update { check, json }) => {
             return if check || json {
                 printed(update::command(check, json))
