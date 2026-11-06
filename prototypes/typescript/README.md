@@ -15,9 +15,12 @@ bun run build
 ```
 
 Run the executable from the target repository's Launch directory on its Base
-branch. It checks Origin match and the issue's open state and Trusted account
-authorship, takes the Claim, and starts `claude` with null stdin, streaming JSON
-output and `--permission-mode auto`. SSH and HTTPS GitHub origins are supported.
+branch. It accepts only a canonical `https://github.com/owner/repository/issues/N`
+URL: userinfo, a port, a query, and a fragment are rejected before any GitHub
+call or session. It then checks Origin match and the issue's open state and
+Trusted account authorship, takes the Claim, and starts `claude` with null
+stdin, streaming JSON output and `--permission-mode auto`. SSH and HTTPS GitHub
+origins are supported.
 The executable needs `git`, authenticated `gh` and `claude` on PATH; Bun and a
 checkout of this prototype are needed only to build it.
 

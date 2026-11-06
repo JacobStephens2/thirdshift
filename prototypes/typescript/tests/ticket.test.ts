@@ -161,6 +161,17 @@ test("Origin match fails before claiming or starting a session", async () => {
   expect(await Bun.file(join(f.directory, "calls")).exists()).toBe(false);
 }, 120_000);
 
+test("a non-canonical Issue URL is rejected before any GitHub call", async () => {
+  const f = await fixture();
+  const result = await f.run("https://user:ghp_testsecret@github.com/test/project/issues/7?inject=run-this");
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("Expected a GitHub Issue URL");
+  expect(`${result.stdout}\n${result.stderr}`).not.toContain("ghp_testsecret");
+  expect(`${result.stdout}\n${result.stderr}`).not.toContain("inject=run-this");
+  expect(await Bun.file(join(f.directory, "calls")).exists()).toBe(false);
+  expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
+}, 120_000);
+
 async function waitForFile(path: string): Promise<string> {
   const deadline = performance.now() + 30_000;
   while (performance.now() < deadline) {
