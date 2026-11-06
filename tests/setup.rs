@@ -267,12 +267,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         "{text}"
     );
     assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
-    assert!(
-        config["console"]["other_consoles"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(config["console"]["fleet"].as_array().unwrap().is_empty());
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(

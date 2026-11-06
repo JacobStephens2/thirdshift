@@ -207,6 +207,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift console token <create|list|revoke> ... | scopes ...  Manage tokens or address scopes; CLI-only
        thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
+       thirdshift console fleet <add|list|remove> ...  Pair and list the machines in this Console's Fleet
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
@@ -322,6 +323,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
+        Ok(Command::ConsoleFleet(action)) => return printed(action.run()),
         Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
         Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {

@@ -123,13 +123,19 @@ stdout. To require sign-in, set the allowlist in `~/.thirdshift/config.toml`:
 address = "https://console.example.com" # used by console install
 port = 8711
 allowed_emails = ["you@example.com"]
-other_consoles = ["https://console.example.test"]
+fleet = [{ name = "other", address = "https://console.example.test" }]
 other_accounts = "none" # or "readable", or ["conductor", "operator"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 
 For a persistent service behind Caddy, Apache or nginx, see the manual's
 [server installation instructions](../docs/guide.md#console-on-a-server).
+
+Fleet entries without a saved token are header links. Pair a machine with
+`thirdshift console fleet add <name> <address>`, supplying its token on stdin;
+`console fleet list --json` shows saved identity, scopes and last contact.
+`console fleet remove <name>` deletes the entry and its Credentials token.
+See [Fleet](../docs/guide.md#fleet) for pairing and legacy link migration.
 
 Each allowed address must contain exactly one `@`, a nonempty local part,
 and a domain containing a dot, with no leading or trailing dot. Whitespace

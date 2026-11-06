@@ -9,6 +9,7 @@ pub(crate) mod conversation;
 mod cronjobs;
 mod experiments;
 mod filters;
+pub(crate) mod fleet;
 mod github;
 pub(crate) use account_commands::Scopes;
 pub use account_commands::{password, print_log, sign_out};
@@ -61,7 +62,7 @@ fn hostname() -> String {
 struct PageContext {
     scopes: Vec<Scope>,
     hostname: String,
-    consoles: Vec<String>,
+    consoles: Vec<crate::config::console::fleet::Entry>,
     theme: String,
     resources: resources::Status,
 }
@@ -71,7 +72,7 @@ impl PageContext {
         Self {
             scopes: scopes.to_vec(),
             hostname: hostname(),
-            consoles: config.console.other_consoles.clone(),
+            consoles: config.console.fleet.clone(),
             theme: config.console.theme.clone(),
             resources: resources::Status::new(config),
         }
