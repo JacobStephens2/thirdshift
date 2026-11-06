@@ -54,7 +54,10 @@ pub struct ProcessRun {
 pub enum Command {
     Help,
     Version,
-    Update,
+    Update {
+        check: bool,
+        json: bool,
+    },
     Setup,
     Config {
         key: Option<String>,
@@ -411,7 +414,18 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
-        Some("update") => return Ok(Command::Update),
+        Some("update") => {
+            let mut check = false;
+            let mut json = false;
+            for arg in &args[1..] {
+                match arg.as_str() {
+                    "--check" if !check => check = true,
+                    "--json" if !json => json = true,
+                    _ => bail!("usage: thirdshift update [--check] [--json]"),
+                }
+            }
+            return Ok(Command::Update { check, json });
+        }
         Some("config") => {
             let mut words = Vec::new();
             let mut json = false;

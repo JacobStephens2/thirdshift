@@ -389,8 +389,8 @@ waterfall responses keep the Command&#39;s other stages and omit those sessions,
 including their prompts and tool output. A token that
 has <code>security</code> receives the finding records and those traces. The <code>act</code> endpoints
 and their auditing are described below. <code>run</code> starts Ticket and Spec runs;
-<code>admin</code> reads and changes User config. Other start and administration endpoints
-arrive in later Console API tickets. A missing route scope returns 403 JSON naming that
+<code>admin</code> reads and changes User config, updates thirdshift, imports Themes and
+manages Eval data. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.</p>
 <p>The machine stores only SHA-256 hashes in the owner-only
 <code>~/.thirdshift/console-tokens.json</code>, beside the Credentials. List shows holder,
@@ -569,7 +569,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>act</code></td>
-<td>The action POSTs below, including Theme and hidden sections</td>
+<td>Stop, Dismissal, judgments, selecting a Theme and hidden sections</td>
 </tr>
 <tr>
 <td><code>run</code></td>
@@ -577,7 +577,7 @@ address&#39;s scopes, including the Security finding limits above.</p>
 </tr>
 <tr>
 <td><code>admin</code></td>
-<td>GET <code>/api/v1/config</code>, GET and POST <code>/api/v1/config/&lt;key&gt;</code></td>
+<td>GET <code>/api/v1/config</code>, GET and POST <code>/api/v1/config/&lt;key&gt;</code>, GET and POST <code>/api/v1/update</code>, POST <code>/api/v1/themes</code>, POST <code>/api/v1/evals/import-replays</code></td>
 </tr>
 </tbody></table>
 <p>Actions take <code>application/x-www-form-urlencoded</code> bodies, using the page&#39;s
@@ -633,7 +633,40 @@ The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <td>JSON Theme document</td>
 <td><code>console theme import &lt;file&gt;</code> (already JSON)</td>
 </tr>
+<tr>
+<td><code>/update</code></td>
+<td>none</td>
+<td><code>update</code></td>
+</tr>
+<tr>
+<td><code>/evals/import-replays</code></td>
+<td>none</td>
+<td><code>evals import-replays</code> (already JSON)</td>
+</tr>
 </tbody></table>
+</div></details>
+<details class="fold"><summary><h4>Updating and administering a machine</h4></summary>
+<div class="manual-content" id="updating-and-administering-a-machine">
+<p>With <code>admin</code>, open <strong>Update thirdshift</strong> in the Console navigation. It shows the
+current and latest stable versions. Choose <strong>Update thirdshift</strong> to install the
+release, then reload after the Console restarts. The install receipt must belong
+to the running copy, just as for <code>thirdshift update</code>; source builds need a shell
+reinstall. If checking the latest release fails, the page says so and offers Reload.</p>
+<p><code>GET /api/v1/update</code> returns <code>{&quot;current&quot;:&quot;…&quot;,&quot;latest&quot;:&quot;…&quot;}</code>, the same as
+<code>thirdshift update --check --json</code>. POST runs the same updater as the CLI and
+returns its result as a JSON string (<code>thirdshift update --json</code>). It answers once
+the installer has placed the binary, before the Console re-executes itself:</p>
+<pre><code class="language-sh">curl -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; https://console.example.com/api/v1/update
+curl -X POST -H &quot;Authorization: Bearer $THIRDSHIFT_TOKEN&quot; https://console.example.com/api/v1/update
+</code></pre>
+<p>Theme import requires <code>admin</code> and takes the Theme document itself as JSON;
+a file path or a <code>path</code> field is refused. Selecting an existing Theme still
+requires <code>act</code>. POST <code>/api/v1/evals/import-replays</code> imports the machine&#39;s private
+replay manifests and grading index from their standard locations, like the CLI.
+It accepts no paths. Eval task approval remains an <code>act</code> judgment. Eval preparation,
+verification and Arm preparation use local working directories or write local
+paths, so remain CLI-only. Updates, imports and judgments name their requester
+in the Console log.</p>
 <p>Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for
 token Stops and Dismissals say <code>by token &lt;holder&gt;</code>, alongside the CLI and

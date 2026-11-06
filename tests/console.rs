@@ -10,6 +10,9 @@ mod start;
 #[path = "console/user_config.rs"]
 mod user_config;
 
+#[path = "console/admin.rs"]
+mod admin;
+
 #[path = "console/actions.rs"]
 mod actions;
 

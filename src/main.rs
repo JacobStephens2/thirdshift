@@ -218,7 +218,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--follow | --json]  Read a log; --export <dir> writes its whole Trace
-       thirdshift update                              Update to the latest release
+       thirdshift update [--check] [--json]             Update to the latest release, or check its version
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
@@ -257,7 +257,13 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Update) => return outcome(update::update()),
+        Ok(Command::Update { check, json }) => {
+            return if check || json {
+                printed(update::command(check, json))
+            } else {
+                outcome(update::update())
+            };
+        }
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::Score) => return score(),
         Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
