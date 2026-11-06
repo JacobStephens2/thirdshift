@@ -3,7 +3,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Output;
 
-fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
+pub(super) fn add(home: &Path, name: &str, address: &str, token: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .args(["console", "fleet", "add", name, address])
         .env("HOME", home)

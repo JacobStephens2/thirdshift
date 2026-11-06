@@ -54,6 +54,14 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
+    pub fn person(&self) -> Option<String> {
+        match &self.identity {
+            Identity::Session { address } => Some(address.clone()),
+            Identity::Token { person, .. } => person.clone(),
+            Identity::Local { .. } => None,
+        }
+    }
+
     pub fn activity_actor(&self) -> crate::logs::Actor {
         let (who, holder) = match &self.identity {
             Identity::Token {

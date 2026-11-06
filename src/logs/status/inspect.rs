@@ -39,6 +39,13 @@ pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>)
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
+pub(crate) fn machine_url(route: &str, machine: &str) -> String {
+    let mut url = reqwest::Url::parse("http://localhost").expect("fixed URL");
+    url = url.join(route).expect("Console route");
+    url.query_pairs_mut().append_pair("machine", machine);
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
 fn shown_heading(command: &Command) -> String {
     if let Some(name) = command.record.process_label() {
         return format!("Process {name}");

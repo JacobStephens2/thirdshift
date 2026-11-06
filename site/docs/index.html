@@ -195,7 +195,7 @@ thirdshift console other-accounts none
 <p><code>status</code> and the Console Inbox also show <code>Pickup last fired &lt;age&gt; ago on &lt;owner&gt;/&lt;repo&gt;</code> (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in <code>&lt;logs.dir&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;pickup|architect|secure&gt;.last-fired</code>. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.</p>
 <p>When no Commands are running, each bullet in the Inbox&#39;s <strong>Last recorded skipped Passes</strong> and <strong>Last fired Passes</strong> starts with its recorded date and time. A skipped reason uses its Activity log time, which repeated skips do not advance; a last-fired entry uses the saved Pass start and keeps its relative age. An unreadable skip time shows <strong>Time unknown</strong>.</p>
 <p><code>thirdshift cronjobs</code> and the Console&#39;s Cron jobs page show this same per-repository start inventory alongside this account&#39;s thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. <code>cronjobs --json</code> returns an object with <code>jobs</code> (each entry&#39;s <code>schedule</code> and <code>command</code>) and <code>pass_starts</code>. Both it and <code>status --json</code> expose <code>pass_starts</code> entries with <code>repository</code>, <code>kind</code>, RFC 3339 <code>last_fired_at</code> and nonnegative <code>age_seconds</code>.</p>
-<p><code>thirdshift status --json</code> is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command&#39;s <code>machine</code> (the owning machine&#39;s hostname) and <code>machine_name</code> (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a <code>machines</code> section. The Command&#39;s recorded <code>hostname</code> remains unchanged. The Console currently shows its own machine&#39;s Inbox; its Fleet poller is a separate Ticket. Its <code>/api/v1/status</code> is the twin of <code>status --local --json</code>, which reads only this machine and never traverses its Fleet. Version 2 has this shape:</p>
+<p><code>thirdshift status --json</code> is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command&#39;s <code>machine</code> (the owning machine&#39;s hostname) and <code>machine_name</code> (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a <code>machines</code> section. The Command&#39;s recorded <code>hostname</code> remains unchanged. The Console combines those same Fleet groups in its Inbox. Its <code>/api/v1/status</code> is the twin of <code>status --local --json</code>, which reads only this machine and never traverses its Fleet. Version 2 has this shape:</p>
 <pre><code class="language-json">{
   &quot;version&quot;: 2,
   &quot;hostname&quot;: &quot;factory&quot;,
@@ -406,6 +406,28 @@ count shown separately. Link-only entries are not fetched.</p>
 <code>--json</code> and <code>--all</code> can be combined with it. Giving this machine&#39;s own hostname
 behaves like plain <code>status</code>, including its Fleet. Unknown and link-only names
 are rejected. Human-readable rows carry machine tags once a live Fleet exists.</p>
+<p>Open a remote row to see its Command details in the same Console, including
+child Ticket runs and stages. Waterfall, Full Command log and Session trace
+links keep the owning machine selected. Details are fetched live from its
+<code>/api/v1</code> and kept only for that request: remote logs and traces are never
+written under the caller&#39;s home. Log readers show a snapshot; reload for newer
+output. Every remote row and details view also links to the owning Console.
+Security run details and findings need <code>security</code> on the owning machine&#39;s
+token, and on the signed-in person&#39;s account there. A refusal says
+&quot;needs the <code>security</code> scope on <code>&lt;machine&gt;</code>&quot;.</p>
+<p>The details commands accept the same machine selection and return the owning
+machine&#39;s JSON:</p>
+<pre><code class="language-sh">thirdshift show widgets#7 --machine server --json
+thirdshift show widgets#7 --spans --machine server --json
+thirdshift show widgets#7 --span &lt;span-id&gt; --machine server --json
+thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --session implement --machine server --json
+</code></pre>
+<p>Remote reads do not follow redirects or cache details between requests. A
+local hostname selects the ordinary local command. Remote log following and
+Trace export remain on the owning machine. The details API reads its own
+machine; the Console page and CLI call that owning API directly, rather than
+relaying an API caller through another Console&#39;s Fleet credentials.</p>
 <p><code>thirdshift status --local</code> reads only this machine. It can be combined with
 <code>--all</code> and <code>--json</code>, but not <code>--machine</code>. This is the Console API&#39;s owning-machine
 read, so Consoles paired in both directions never recursively fetch one another.</p>

@@ -1,4 +1,6 @@
-//! CLI-only Fleet pairing. No token enters arguments, output or User config.
+//! Fleet pairing (CLI-only) and remote details. No token enters arguments,
+//! output or User config.
+pub(crate) mod read;
 use std::fs::{self, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::os::unix::fs::OpenOptionsExt;

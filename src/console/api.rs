@@ -17,6 +17,17 @@ pub(super) enum Format {
 }
 
 impl Format {
+    /// Fleet clients call the selected machine directly. Keeping the API local
+    /// prevents a caller's token from borrowing this Console's Fleet scopes.
+    pub fn owning_machine(self, query: &Option<String>) -> Option<Response> {
+        (self == Self::Json && !super::machine_is_local(query)).then(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "Call the owning machine's API directly for remote details.",
+            )
+        })
+    }
+
     pub fn render<T: Serialize>(
         self,
         value: T,
@@ -74,6 +85,18 @@ pub(super) async fn read(
 ) -> Response {
     match tokio::task::spawn_blocking(work).await {
         Ok(Ok(response)) => response,
+        Ok(Err(failure)) if failure.is::<super::fleet::read::Refusal>() => {
+            let refusal = failure.downcast::<super::fleet::read::Refusal>().unwrap();
+            if format == Format::Json {
+                error(refusal.status, &refusal.message)
+            } else {
+                (refusal.status, Html(format!(
+                    "<p role=\"status\">{}</p><p><a href=\"{}\">Open the owning Console</a></p>",
+                    super::filters::escaped(&refusal.message),
+                    super::filters::escaped(&refusal.address)
+                ))).into_response()
+            }
+        }
         Ok(Err(failure)) if format == Format::Json => {
             error(StatusCode::UNPROCESSABLE_ENTITY, failure)
         }

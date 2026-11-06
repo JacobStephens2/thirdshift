@@ -16,7 +16,7 @@
     <h3>Recent Command output</h3>
     {% match output %}{% when Some with (output) %}{% if output.is_empty() %}<p>No Command output yet.</p>{% else %}<pre>{{ output }}</pre>{% endif %}{% when None %}<p>Command output unavailable.</p>{% endmatch %}
   </section>
-  <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a>{% match experiment_url %}{% when Some with (url) %} · <a href="{{ url }}">Experiment</a>{% when None %}{% endmatch %}</p>
+  <p><a href="{{ log_url }}">Full Command log</a> · <a href="{{ waterfall_url }}">Waterfall</a>{% match owning_console %}{% when Some with (url) %} · <a href="{{ url }}">Open the owning Console</a>{% when None %}{% endmatch %}{% match experiment_url %}{% when Some with (url) %} · <a href="{{ url }}">Experiment</a>{% when None %}{% endmatch %}</p>
   {% if !logs.is_empty() %}<details class="peek-traces" data-fact="session traces"><summary>Session traces <span class="count">{{ logs.len() }}</span></summary>{% for log in logs %}<p class="peek-trace"><a href="{{ log.url }}" title="{{ log.name }}"><span>Session trace:</span> <span class="tail"><bdi>{{ log.name }}</bdi></span></a></p>{% endfor %}</details>{% endif %}
   <dl class="peek-facts">{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
 </section>

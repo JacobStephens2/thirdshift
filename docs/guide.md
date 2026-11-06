@@ -169,7 +169,7 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
 
-`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console currently shows its own machine's Inbox; its Fleet poller is a separate Ticket. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
+`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
 ```json
 {
@@ -433,6 +433,33 @@ Use `thirdshift status --machine server` to show only that paired machine;
 `--json` and `--all` can be combined with it. Giving this machine's own hostname
 behaves like plain `status`, including its Fleet. Unknown and link-only names
 are rejected. Human-readable rows carry machine tags once a live Fleet exists.
+
+Open a remote row to see its Command details in the same Console, including
+child Ticket runs and stages. Waterfall, Full Command log and Session trace
+links keep the owning machine selected. Details are fetched live from its
+`/api/v1` and kept only for that request: remote logs and traces are never
+written under the caller's home. Log readers show a snapshot; reload for newer
+output. Every remote row and details view also links to the owning Console.
+Security run details and findings need `security` on the owning machine's
+token, and on the signed-in person's account there. A refusal says
+"needs the `security` scope on `<machine>`".
+
+The details commands accept the same machine selection and return the owning
+machine's JSON:
+
+```sh
+thirdshift show widgets#7 --machine server --json
+thirdshift show widgets#7 --spans --machine server --json
+thirdshift show widgets#7 --span <span-id> --machine server --json
+thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --session implement --machine server --json
+```
+
+Remote reads do not follow redirects or cache details between requests. A
+local hostname selects the ordinary local command. Remote log following and
+Trace export remain on the owning machine. The details API reads its own
+machine; the Console page and CLI call that owning API directly, rather than
+relaying an API caller through another Console's Fleet credentials.
 
 `thirdshift status --local` reads only this machine. It can be combined with
 `--all` and `--json`, but not `--machine`. This is the Console API's owning-machine

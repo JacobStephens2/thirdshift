@@ -119,25 +119,22 @@ impl Row {
         }
     }
     pub fn peek_url(&self) -> String {
-        format!(
-            "{}{}",
-            self.console,
-            super::inspect::url("/peek", &self.selector, None)
-        )
+        self.details_url("/peek", None)
     }
     pub fn log_url(&self) -> String {
-        format!(
-            "{}{}",
-            self.console,
-            super::inspect::url("/log", &self.selector, None)
-        )
+        self.details_url("/log", None)
     }
     pub fn session_url(&self, session: &std::path::Path) -> String {
-        format!(
-            "{}{}",
-            self.console,
-            super::inspect::url("/log", &self.selector, Some(session))
-        )
+        self.details_url("/log", Some(session))
+    }
+
+    fn details_url(&self, route: &str, session: Option<&std::path::Path>) -> String {
+        let url = super::inspect::url(route, &self.selector, session);
+        if self.console.is_empty() {
+            url
+        } else {
+            super::inspect::machine_url(&url, &self.machine)
+        }
     }
 
     pub fn tag_machine(&mut self, name: &str, console: &str, stale: bool) {
