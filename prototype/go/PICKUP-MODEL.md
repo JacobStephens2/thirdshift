@@ -42,7 +42,7 @@ consistency. No external model checker or Go dependency is required.
 | `CreateReservation` | `reserve`: push unique parentless commit with empty create lease |
 | `RefreshIssue` | `pickupReserved` → `readReady`: current issue/labels, retained as Claim entry |
 | `RefreshHistory` | `readReady`: history check; `pickupReserved`: selected-generation comparison |
-| `PutClaimLabels` | `runTicket` → `makeClaim`: `gh issue edit`, Ready off / Claim on |
+| `PutClaimLabels` | `runTicket` → `makeClaim` → `changeLabels`: single REST whole-label PUT, Ready off / Claim on |
 | `PrepareWorktree` | `runTicket`: local preparation after successful Claim |
 | `Dispatch` | `runTicket` → `harnessSession`: start the opening Harness session |
 | `FailBeforeDispatch` | Claim request/setup/session-start failure; no dispatched session |
@@ -58,6 +58,9 @@ consistency. No external model checker or Go dependency is required.
 | `DayWithdrawsReady`, `DayHandsBack` | Day shift label changes |
 
 The Go slice applies Claim **before Harness dispatch**, as requested by #1834.
+`TestPickupClaimRequestsMatchModelAtomicTransitions` keeps acquisition and ending
+on single whole-label PUTs: `gh issue edit` splits add/remove into concurrent
+mutations and does not implement the modeled swap.
 The Rust model's documented pre-Claim dispatch counterexample concerns its
 earlier dispatch marker. It is not silently removed from the Rust model and a
 green Go suite does not establish the Rust literal property. Here, both

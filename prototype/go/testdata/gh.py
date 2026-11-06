@@ -18,7 +18,7 @@ number = match[1] if match else next((arg[7:] for arg in args if arg.startswith(
 reads_path = root / "reads.json"
 reads = json.loads(reads_path.read_text()) if reads_path.exists() else {}
 config = pickup.get("issues", {}).get(number, {})
-if match and "/events?" not in args[1] and "/comments" not in args[1]:
+if match and "/events?" not in args[1] and "/comments" not in args[1] and not args[1].endswith("/labels"):
     reads[number] = reads.get(number, 0) + 1
     reads_path.write_text(json.dumps(reads))
 if reads.get(number, 0) >= 2:
@@ -47,6 +47,16 @@ if args[:1] == ["api"]:
             print(json.dumps({"errors": [{"message": "unavailable"}]}))
         else:
             print(json.dumps({"data": {"repository": {"issue": facts}}}))
+    elif args[1].endswith("/labels"):
+        assert args[args.index("--method") + 1] == "PUT"
+        payload = json.load(sys.stdin)
+        assert isinstance(payload["labels"], list)
+        state["labels"] = [{"name": name} for name in sorted(set(payload["labels"]))]
+        (root / "state.json").write_text(json.dumps(state))
+        if "in-progress" in payload["labels"] and state["mode"] == "interrupt-claim":
+            os.kill(os.getppid(), signal.SIGINT)
+            time.sleep(60)
+        print(json.dumps(state["labels"]))
     elif "/issues?" in args[1]:
         print(json.dumps(pickup.get("pages", [[{"number": 7}]])))
     elif "/events?" in args[1]:
@@ -59,16 +69,6 @@ if args[:1] == ["api"]:
         print(json.dumps(state | config.get("data", {})))
 elif args[:2] == ["label", "create"]:
     pass
-elif args[:2] == ["issue", "edit"]:
-    labels = {item["name"] for item in state["labels"]}
-    for index, arg in enumerate(args):
-        if arg == "--add-label": labels.update(args[index + 1].split(","))
-        if arg == "--remove-label": labels.difference_update(args[index + 1].split(","))
-    state["labels"] = [{"name": name} for name in sorted(labels)]
-    (root / "state.json").write_text(json.dumps(state))
-    if "--add-label" in args and args[args.index("--add-label") + 1] == "in-progress" and state["mode"] == "interrupt-claim":
-        os.kill(os.getppid(), signal.SIGINT)
-        time.sleep(60)
 elif args[:2] == ["pr", "list"]:
     branch = args[args.index("--head") + 1] if "--head" in args else args[args.index("--search") + 1][5:]
     print(json.dumps(pickup.get("prs", {}).get(branch, [])))

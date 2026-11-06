@@ -9,16 +9,11 @@ import (
 )
 
 func pickupRun(ctx context.Context) error {
-	root, err := command(ctx, "", "git", "rev-parse", "--show-toplevel")
+	launch, origin, err := launchOrigin(ctx)
 	if err != nil {
 		return err
 	}
-	launch := string(root)
-	origin, err := command(ctx, launch, "git", "config", "--get", "remote.origin.url")
-	if err != nil {
-		return err
-	}
-	repo := originRepo(string(origin))
+	repo := originRepo(origin)
 	if repo == "" {
 		return fmt.Errorf("Pickup requires a GitHub origin")
 	}

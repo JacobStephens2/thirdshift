@@ -152,10 +152,6 @@ func TestTicketRunLinksEmbeddedSkillsAndStreamsSession(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "Good and Bad Tests") {
 		t.Fatalf("embedded supporting skill file: %v", err)
 	}
-	calls, _ := os.ReadFile(filepath.Join(f.root, "calls.jsonl"))
-	if !strings.Contains(string(calls), `"--add-label", "in-progress"`) || !strings.Contains(string(calls), `"--remove-label", "ready-for-agent"`) {
-		t.Fatalf("missing Claim transition: %s", calls)
-	}
 	f.assertLabels("enhancement", "ready-for-agent")
 }
 

@@ -32,7 +32,9 @@ Launch directory must have a checked-out Base branch. This first slice creates
 or directory fails safely rather than resuming or overwriting it.
 
 The Claim replaces `ready-for-agent` and clears `agent-failed`, preserving
-other labels. The session gets `.thirdshift-issue.md` with the title, body,
+other labels from its issue read. Acquisition and ending each use one whole-label
+REST PUT to swap Ready/Claim atomically, matching the model's transition.
+The session gets `.thirdshift-issue.md` with the title, body,
 and paginated comments, replacing each untrusted comment with a notice.
 Factory skills are linked under `.claude/skills/thirdshift-*`. Both those
 links and the issue file are excluded through the shared Git `info/exclude`.
