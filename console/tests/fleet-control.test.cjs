@@ -1,9 +1,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { createServer } = require('node:http');
 const { startFixture } = require('./start-fixture.cjs');
 
 test('Fleet starts, Passes and config keep their machine through confirmation and scopes', async t => {
-  const owner = await startFixture();
+  const release = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({tag_name: 'v99.0.0', name: 'v99.0.0', url: 'http://127.0.0.1/release', prerelease: false, assets: []}));
+  });
+  await new Promise(resolve => release.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => release.close(resolve)));
+  const owner = await startFixture({ THIRDSHIFT_INSTALLER_GHE_BASE_URL: `http://127.0.0.1:${release.address().port}/` });
   t.after(() => owner.close());
   const caller = await startFixture();
   t.after(() => caller.close());
@@ -40,6 +47,7 @@ test('Fleet starts, Passes and config keep their machine through confirmation an
     await page.goto(`${caller.origin}/update?machine=owner`);
     await page.getByRole('button', { name: 'Update thirdshift', exact: true }).waitFor();
     assert.match(await page.locator('main').textContent(), /Machine: owner/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Update errors fit the viewport');
     await page.context().close();
   }
   // The caller's own privileges do not make remote controls appear.

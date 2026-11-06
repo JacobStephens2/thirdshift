@@ -100,9 +100,7 @@ fn choices(config: &UserConfig, viewer: &Viewer, required: &[Scope]) -> Vec<Targ
                         viewer.fleet_person().map(str::to_owned),
                     )
                     .ok()??;
-                    let identity = remote.get("/whoami").ok()?;
-                    let scopes: Vec<Scope> =
-                        serde_json::from_value(identity["scopes"].clone()).ok()?;
+                    let scopes = remote.identity().ok()?.scopes;
                     required
                         .iter()
                         .any(|scope| scopes.contains(scope))

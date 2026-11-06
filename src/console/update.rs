@@ -33,7 +33,7 @@ pub(super) async fn show(
         let selection = super::fleet_control::Selection::query(&query);
         let config = UserConfig::load()?;
         if let Some(remote) = selection.remote(&config, &viewer, format)? {
-            let identity = remote.get("/whoami")?;
+            let identity = remote.identity()?;
             let (latest, failure) = match remote.get("/update") {
                 Ok(versions) => (versions["latest"].as_str().map(str::to_owned), None),
                 Err(error)
@@ -53,10 +53,7 @@ pub(super) async fn show(
                     csrf: viewer.csrf.clone(),
                     machine: selection.machine.clone(),
                     suffix: selection.suffix(),
-                    current: identity["thirdshift_version"]
-                        .as_str()
-                        .unwrap_or("unknown")
-                        .into(),
+                    current: identity.thirdshift_version,
                     latest,
                     failure,
                     result: None,

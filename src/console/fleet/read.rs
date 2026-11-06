@@ -60,6 +60,16 @@ impl Remote {
         self.read(route, None)
     }
 
+    pub(in crate::console) fn identity(&self) -> Result<super::Whoami> {
+        let identity: super::Whoami = serde_json::from_value(self.get("/whoami")?)
+            .context("incompatible owning-machine identity")?;
+        ensure!(
+            identity.version == 1 && identity.api_version == "v1",
+            "unsupported owning-machine API version"
+        );
+        Ok(identity)
+    }
+
     pub fn post_json(&self, route: &str, value: &Value) -> Result<Value> {
         self.mutate(self.client.post(self.api_url(route)?).json(value))
     }

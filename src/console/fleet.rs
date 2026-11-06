@@ -143,7 +143,7 @@ pub(super) struct Whoami {
     version: u8,
     api_version: String,
     hostname: String,
-    thirdshift_version: String,
+    pub(super) thirdshift_version: String,
     pub scopes: Vec<Scope>,
 }
 

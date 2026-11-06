@@ -81,12 +81,10 @@ pub(super) async fn show(
         let config = UserConfig::load()?;
         let remote = selection.remote(&config, &viewer, format)?;
         let (settings, admin) = if let Some(remote) = &remote {
-            let identity = remote.get("/whoami")?;
+            let identity = remote.identity()?;
             (
                 serde_json::from_value(remote.get("/config")?)?,
-                identity["scopes"]
-                    .as_array()
-                    .is_some_and(|scopes| scopes.contains(&serde_json::json!("admin"))),
+                identity.scopes.contains(&Scope::Admin),
             )
         } else {
             (settings::read()?, viewer.scopes.contains(&Scope::Admin))

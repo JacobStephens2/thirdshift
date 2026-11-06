@@ -31,11 +31,8 @@ pub(super) async fn show(
         let remote = selection.remote(&config, &viewer, format)?;
         let mut remote_options = None;
         let inventory = if let Some(remote) = &remote {
-            let identity = remote.get("/whoami")?;
-            if identity["scopes"]
-                .as_array()
-                .is_some_and(|scopes| scopes.contains(&serde_json::json!("run")))
-            {
+            let identity = remote.identity()?;
+            if identity.scopes.contains(&super::Scope::Run) {
                 let options: super::start_controls::Options =
                     serde_json::from_value(remote.get("/start-options")?)?;
                 remote_options = Some(options.passes);

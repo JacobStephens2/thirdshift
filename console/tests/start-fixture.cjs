@@ -6,7 +6,7 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 
-async function startFixture() {
+async function startFixture(extraEnv = {}) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-start-page-'));
   let server, exited, browser;
   const close = async () => {
@@ -56,7 +56,7 @@ else:
     await writeFile(shell, '#!/bin/sh\n[ "$1" = -l ] || exit 91\nshift\nexec /bin/sh "$@"\n', { mode: 0o755 });
     await writeFile(join(home, 'crontab'), `*/5 * * * * cd '${repo}' && thirdshift pickup base main highest-first no-email harness codex\n`);
     const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
-    const env = { ...process.env, HOME: home, SHELL: shell, PATH: `${join(home, 'bin')}:${process.env.PATH}` };
+    const env = { ...process.env, ...extraEnv, HOME: home, SHELL: shell, PATH: `${join(home, 'bin')}:${process.env.PATH}` };
     server = spawn(binary, ['console'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
     exited = once(server, 'exit');
     const lines = createInterface({ input: server.stdout });
