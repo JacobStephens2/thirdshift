@@ -414,7 +414,8 @@ waterfall responses keep the Command's other stages and omit those sessions,
 including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
 and their auditing are described below. `run` starts Ticket and Spec runs;
-other start and `admin` endpoints arrive in later Console API tickets. A missing route scope returns 403 JSON naming that
+`admin` reads and changes User config. Other start and administration endpoints
+arrive in later Console API tickets. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -542,7 +543,7 @@ address's scopes, including the Security finding limits above.
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | The action POSTs below, including Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts a Ticket or Spec run |
-| `admin` | Other administration follows in later API tickets |
+| `admin` | GET `/api/v1/config`, GET and POST `/api/v1/config/<key>` |
 
 Actions take `application/x-www-form-urlencoded` bodies, using the page's
 field names below, except Theme import and starting a run, which take
@@ -1942,6 +1943,45 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 ### User config
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
+
+Read every setting with its value and default, read one, or set one:
+
+```sh
+thirdshift config
+thirdshift config spec.parallel
+thirdshift config spec.parallel 6
+thirdshift config harness.codex.model gpt-6.1-sol --json
+thirdshift config console.hidden_sections '["done", "resolved"]'
+thirdshift config email.to_by_repo '{ "acme/widgets" = "team@example.com" }'
+```
+
+All three forms accept `--json`, before or after their arguments. The whole
+config returns `{"version":1,"settings":[...]}`; a read or write of one key
+returns its `key`, `value`, `default`, `editable` and `reason`. Strings accept
+bare text or TOML quotes; arrays and maps use TOML. `null` means no default
+for `email.to`. A write validates exactly as `setup` does and preserves the
+other settings, comments and layout. An invalid value leaves the file intact.
+
+Open **User config** in the Console navigation (`/config`) to see the same
+inventory. A session with `admin` can save one setting at a time; a `read`
+session sees values and defaults without edit controls. The API requires
+`admin` for both GET `/api/v1/config` and GET `/api/v1/config/<key>`, and for
+POST `/api/v1/config/<key>` with an `application/x-www-form-urlencoded`
+`value` field. Its response equals the CLI's JSON. Session writes need CSRF
+as other Console actions do; bearer writes do not.
+
+The sign-in list (`console.allowed_emails`) and address scopes
+(`console.address_scopes`) cannot be read or written with `config` or its API
+twins. The inventory names them with `null` values and explains the refusal:
+edit the sign-in list on the machine or use `setup`, and use `console scopes`
+for address scopes. They control who can get access. Credentials are never
+read by this command; nonempty `otlp.endpoint` values are redacted because
+export URLs can contain credentials. Enter a replacement URL to change one,
+or blank to disable export. Every actual config change through these three
+ways in records the caller, key, old value and new value in the Console log,
+with sensitive values redacted. Reads and unchanged saves record no config
+change. New values apply on subsequent config reads; restart the Console
+after changing its listening port.
 
 ```toml
 launch_directories = ["~/repos/widgets"]  # additional known Launch directories for API starts

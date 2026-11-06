@@ -200,6 +200,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
+       thirdshift config [<key> [<value>]] [--json]   Read or change User config, with defaults
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -227,8 +228,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
-  harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>, effort <level>       Choose the Harness's Model and Effort
+  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands: architect, pickup, secure, review --author <login>. For architect, pickup and secure, base <branch> selects an origin branch.
@@ -280,6 +280,9 @@ fn main() -> ExitCode {
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
+        Ok(Command::Config { key, value, json }) => {
+            return printed(console::config(key.as_deref(), value.as_deref(), json));
+        }
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {

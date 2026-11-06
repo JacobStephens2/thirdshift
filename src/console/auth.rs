@@ -526,6 +526,18 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
     response
 }
 
+pub(super) async fn require_config_view(
+    Extension(viewer): Extension<Viewer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if viewer.scopes.contains(&Scope::Read) || viewer.scopes.contains(&Scope::Admin) {
+        next.run(request).await
+    } else {
+        super::api::error(StatusCode::FORBIDDEN, "Missing scope: read or admin")
+    }
+}
+
 pub(super) async fn require_scope(
     State(scope): State<Scope>,
     viewer: Option<Extension<Viewer>>,

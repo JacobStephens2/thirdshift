@@ -32,6 +32,8 @@ mod start;
 mod stop;
 mod subscription;
 mod time;
+mod user_config;
+pub use user_config::command as config;
 pub(crate) mod tokens;
 mod watching;
 mod waterfall;
@@ -83,6 +85,9 @@ impl PageContext {
     }
     fn can_read(&self) -> bool {
         self.scopes.contains(&Scope::Read)
+    }
+    fn can_admin(&self) -> bool {
+        self.scopes.contains(&Scope::Admin)
     }
     fn can_security(&self) -> bool {
         self.scopes.contains(&Scope::Security)
@@ -149,6 +154,9 @@ impl Scope {
 
 #[derive(Clone, Copy)]
 enum View {
+    Config,
+    ConfigSetting,
+    SetConfig,
     Whoami,
     OpenApi,
     BugOrigins,
@@ -200,6 +208,9 @@ impl PageRoute {
         matches!(
             self.view,
             View::Whoami
+                | View::Config
+                | View::ConfigSetting
+                | View::SetConfig
                 | View::BugOrigins
                 | View::OpenApi
                 | View::Scores
@@ -252,6 +263,30 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift launch-directories --json"],
         method: Method::GET,
         view: View::LaunchDirectories,
+    },
+    PageRoute {
+        path: "/config",
+        api: "/api/v1/config",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config --json"],
+        method: Method::GET,
+        view: View::Config,
+    },
+    PageRoute {
+        path: "/config/{key}",
+        api: "/api/v1/config/{key}",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config spec.parallel --json"],
+        method: Method::GET,
+        view: View::ConfigSetting,
+    },
+    PageRoute {
+        path: "/config/{key}",
+        api: "/api/v1/config/{key}",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config spec.parallel 3 --json"],
+        method: Method::POST,
+        view: View::SetConfig,
     },
     PageRoute {
         path: "/whoami",
@@ -732,6 +767,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Config, Method::GET) => get(user_config::show),
+            (View::ConfigSetting, Method::GET) => get(user_config::one),
+            (View::SetConfig, Method::POST) => post(user_config::set),
             (View::Whoami, Method::GET) => get(identity::show),
             (View::OpenApi, Method::GET) => get(openapi::serve),
             (View::Experiments, Method::GET) => get(experiments::index),
@@ -796,7 +834,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
                 continue;
             }
         }
-        let handler = if let Some(scope) = page.scope {
+        let handler = if matches!(page.view, View::Config) {
+            // The API is admin-only; a person with read may see the page.
+            handler.layer(middleware::from_fn(auth::require_config_view))
+        } else if let Some(scope) = page.scope {
             handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
         } else {
             handler

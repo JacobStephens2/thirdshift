@@ -264,8 +264,36 @@ fn http_cannot_write_or_show_address_scopes_even_with_admin() {
             "{route}"
         );
     }
+    // The config read now exists, but there is no bulk config write.
+    assert_eq!(
+        actions::post(
+            &console,
+            &token,
+            "/api/v1/config",
+            &[("address_scopes", "admin")]
+        )
+        .status(),
+        405
+    );
+    for (key, value) in [
+        ("console.allowed_emails", "['stranger@example.test']"),
+        ("console.address_scopes", "{}"),
+    ] {
+        let response = actions::post(
+            &console,
+            &token,
+            &format!("/api/v1/config/{key}"),
+            &[("value", value)],
+        );
+        assert_eq!(response.status(), 422, "{key}");
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("access")
+        );
+    }
     for route in [
-        "/api/v1/config",
         "/api/v1/scopes",
         "/api/v1/allowed-emails",
         "/console/scopes",

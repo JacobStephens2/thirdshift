@@ -44,6 +44,7 @@ pub(super) enum EventKind {
     ThemeSaved,
     SectionsChanged,
     ApiCall,
+    ConfigChanged,
 }
 
 impl std::fmt::Display for EventKind {
@@ -59,6 +60,7 @@ impl std::fmt::Display for EventKind {
             Self::ThemeSaved => "theme-saved",
             Self::SectionsChanged => "sections-changed",
             Self::ApiCall => "api-call",
+            Self::ConfigChanged => "config-changed",
         })
     }
 }
@@ -72,10 +74,25 @@ pub(super) struct Event {
     pub endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<ConfigChange>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub(super) struct ConfigChange {
+    key: String,
+    old: serde_json::Value,
+    new: serde_json::Value,
 }
 
 impl Event {
     pub fn summary(&self) -> String {
+        if let Some(change) = &self.change {
+            return format!(
+                "{} {}: {} → {}",
+                self.event, change.key, change.old, change.new
+            );
+        }
         match (&self.endpoint, self.outcome) {
             (Some(endpoint), Some(outcome)) => format!("{} {endpoint} {outcome}", self.event),
             _ => self.event.to_string(),
@@ -272,6 +289,7 @@ impl Accounts {
             event,
             endpoint: None,
             outcome: None,
+            change: None,
         })
     }
 
@@ -282,6 +300,28 @@ impl Accounts {
             event: EventKind::ApiCall,
             endpoint: Some(endpoint),
             outcome: Some(outcome),
+            change: None,
+        })
+    }
+
+    pub(super) fn record_config(
+        &self,
+        actor: &str,
+        key: &str,
+        old: serde_json::Value,
+        new: serde_json::Value,
+    ) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: actor.into(),
+            event: EventKind::ConfigChanged,
+            endpoint: None,
+            outcome: None,
+            change: Some(ConfigChange {
+                key: key.into(),
+                old,
+                new,
+            }),
         })
     }
 

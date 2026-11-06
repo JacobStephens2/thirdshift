@@ -56,6 +56,11 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Config {
+        key: Option<String>,
+        value: Option<String>,
+        json: bool,
+    },
     Score,
     Scores {
         pull_request: Option<String>,
@@ -407,6 +412,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("config") => {
+            let mut words = Vec::new();
+            let mut json = false;
+            for word in &args[1..] {
+                if word == "--json" {
+                    anyhow::ensure!(!json, "repeated argument: --json");
+                    json = true;
+                } else {
+                    words.push(word.clone());
+                }
+            }
+            anyhow::ensure!(
+                words.len() <= 2,
+                "usage: thirdshift config [<key> [<value>]] [--json]"
+            );
+            return Ok(Command::Config {
+                key: words.first().cloned(),
+                value: words.get(1).cloned(),
+                json,
+            });
+        }
         Some("review") => return parse_review(&args[1..]).map(Command::Review),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
         Some("bug-origins") => {
