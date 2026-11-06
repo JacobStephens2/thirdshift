@@ -119,6 +119,7 @@ pub enum Command {
         json: bool,
         all: bool,
         machine: Option<String>,
+        local: bool,
     },
     Show {
         command: String,
@@ -777,14 +778,15 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("status") => {
-            let usage = "usage: thirdshift status [--all] [--json] [--machine <name>]";
-            let (mut json, mut all, mut machine) = (false, false, None);
+            let usage = "usage: thirdshift status [--all] [--json] [--machine <name> | --local]";
+            let (mut json, mut all, mut machine, mut local) = (false, false, None, false);
             let mut words = args[1..].iter();
             while let Some(word) = words.next() {
                 match word.as_str() {
                     "--json" if !json => json = true,
                     "--all" if !all => all = true,
-                    "--machine" if machine.is_none() => {
+                    "--local" if !local && machine.is_none() => local = true,
+                    "--machine" if machine.is_none() && !local => {
                         let name = words
                             .next()
                             .filter(|name| !name.starts_with('-') && !name.is_empty())
@@ -794,7 +796,12 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     _ => bail!(usage),
                 }
             }
-            return Ok(Command::Status { json, all, machine });
+            return Ok(Command::Status {
+                json,
+                all,
+                machine,
+                local,
+            });
         }
         Some("--release-summary") => {
             return match &args[1..] {

@@ -146,23 +146,17 @@ pub(crate) fn fetch_and_merge(
         machine.fetched_at = Utc::now();
         local.machines.push(machine);
     }
-    local.commands.sort_by_key(|row| group_order(&row["group"]));
+    // Both local and received rows are validated presentations. Sorting uses the
+    // same key as the owning Inbox, without re-evaluating groups or collapsing
+    // independent Commands from different machines.
+    let mut rows = local
+        .commands
+        .into_iter()
+        .map(|value| Ok((super::text::Row::read(&value)?.order(), value)))
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort_by_key(|(order, _)| *order);
+    local.commands = rows.into_iter().map(|(_, value)| value).collect();
     Ok(local)
-}
-
-fn group_order(group: &Value) -> usize {
-    [
-        "needs you",
-        "ready for review",
-        "landing",
-        "working",
-        "done",
-        "resolved",
-        "history",
-    ]
-    .iter()
-    .position(|name| group == name)
-    .unwrap_or(usize::MAX)
 }
 
 fn fetch(
@@ -213,11 +207,10 @@ fn fetch(
     tag(&mut document.commands, &document.hostname, &entry.name)
         .map_err(|_| (NeedsUpdate, "invalid Inbox Command tree".into()))?;
     if document.version != VERSION
-        || document.commands.iter().any(|row| {
-            !row.is_object()
-                || group_order(&row["group"]) == usize::MAX
-                || super::remote::Row::read(row).is_err()
-        })
+        || document
+            .commands
+            .iter()
+            .any(|row| !row.is_object() || super::text::Row::read(row).is_err())
     {
         return Err((NeedsUpdate, "unsupported Inbox version or rows".into()));
     }

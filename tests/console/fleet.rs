@@ -366,6 +366,44 @@ fn status_preserves_remote_accounts_children_and_history_without_copying_logs() 
 }
 
 #[test]
+fn status_keeps_fleet_order_and_rows_whose_entry_name_matches_the_local_hostname() {
+    for case in ["order", "name-collision"] {
+        let output = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/console/fleet_regressions.py"
+            ))
+            .args([case, env!("CARGO_BIN_EXE_thirdshift")])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{case}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn local_status_is_the_console_api_twin_when_a_fleet_is_paired() {
+    let output = Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/console/fleet_api_parity.py"
+        ))
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn pairs_two_consoles_and_removes_the_entry_and_owner_only_token() {
     let remote_home = tempfile::tempdir().unwrap();
     let local_home = tempfile::tempdir().unwrap();

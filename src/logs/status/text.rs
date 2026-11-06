@@ -1,10 +1,10 @@
-//! A checked presentation of received rows; durable facts stay owned remotely.
+//! One checked text presentation for local and received Inbox rows.
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::logs::command_record::{CommandRecord, Issue};
-use crate::logs::reading::{CurrentStage, Group, Health, NeedsYouKind};
+use crate::logs::reading::{CurrentStage, Departure, Group, Health, NeedsYouKind};
 
 pub(super) struct Row {
     pub group: Group,
@@ -24,17 +24,9 @@ struct Metadata {
     count: usize,
     github_ci: Option<crate::github::InboxCi>,
     github_mergeable: Option<crate::github::InboxMergeable>,
-    left_from: Option<String>,
-    left_reason: Option<String>,
-    left_at: Option<String>,
-    dismissal: Option<Dismissal>,
-}
-
-#[derive(Deserialize)]
-struct Dismissal {
-    who: String,
-    source: String,
-    dismissed_at: String,
+    #[serde(flatten)]
+    departure: Option<Departure>,
+    dismissal: Option<crate::logs::dismiss::DismissalView>,
 }
 
 enum Command {
@@ -96,7 +88,18 @@ impl Command {
         }
     }
 
-    fn print(&self, state: &str, indent: &str, machine: &str) {
+    fn ended_or_started(&self) -> Option<&str> {
+        match self {
+            Self::Record(record) => record
+                .facts
+                .ended_at
+                .as_deref()
+                .or(Some(&record.facts.started_at)),
+            Self::History(history) => history.ended_at.as_deref().or(Some(&history.started_at)),
+        }
+    }
+
+    fn print(&self, state: &str, indent: &str, machine: Option<&str>) {
         match self {
             Self::Record(record) => {
                 let stage = super::stage_details(
@@ -111,7 +114,7 @@ impl Command {
                     record.view.account.as_deref(),
                     state,
                     indent,
-                    Some(machine),
+                    machine,
                 );
                 super::print_tickets(&record.facts, &format!("{indent}  "));
                 super::print_pause(&record.facts, indent);
@@ -131,7 +134,10 @@ impl Command {
                     .map(|issue| format!("#{}", issue.number))
                     .unwrap_or_default();
                 println!(
-                    "{indent}[{machine}] {account}{}{issue} {} · {} → {} · {}",
+                    "{indent}{}{account}{}{issue} {} · {} → {} · {}",
+                    machine
+                        .map(|machine| format!("[{machine}] "))
+                        .unwrap_or_default(),
                     history.repository,
                     crate::logs::display_name(&history.kind),
                     history.started_at,
@@ -154,41 +160,29 @@ impl Row {
         })
     }
 
-    pub fn print(&self) {
+    pub fn order(&self) -> crate::logs::reading::RowOrder {
+        self.group
+            .row_order(self.meta.needs_you_kind, self.command.ended_or_started())
+    }
+
+    pub fn print(&self, tags: bool) {
         let meta = &self.meta;
-        let state = if let Some(kind) = meta.needs_you_kind {
-            kind.title()
-        } else if meta.stopping {
-            "Stopping"
-        } else {
-            match self.group {
-                Group::ReadyForReview => "Ready",
-                Group::Landing => "Landing",
-                _ => self.command.state(),
-            }
-        };
-        self.command.print(state, "", &meta.machine);
+        let state = self
+            .group
+            .state_word(meta.needs_you_kind, meta.stopping, self.command.state());
+        self.command
+            .print(state, "", tags.then_some(meta.machine.as_str()));
         if self.group == Group::ReadyForReview {
             println!("  {}", meta.github_ci.unwrap_or_default().label());
             if meta.github_mergeable == Some(crate::github::InboxMergeable::Conflicting) {
                 println!("  Merge conflict");
             }
         }
-        if let (Some(from), Some(reason), Some(at)) =
-            (&meta.left_from, &meta.left_reason, &meta.left_at)
-        {
-            let when = if reason == "taken up by a later Command" {
-                "started at"
-            } else {
-                "at"
-            };
-            println!("  left {from}: {reason} {when} {at}");
+        if let Some(departure) = &meta.departure {
+            println!("  {}", departure.line());
         }
         if let Some(dismissal) = &meta.dismissal {
-            println!(
-                "  dismissed by {} from the {} at {}",
-                dismissal.who, dismissal.source, dismissal.dismissed_at
-            );
+            println!("  {}", dismissal.line());
         }
         if meta.count > 1
             && let Command::Record(record) = &self.command
@@ -201,7 +195,7 @@ impl Row {
         }
     }
 
-    pub fn print_reference(&self) {
+    pub fn print_reference(&self, tags: bool) {
         if let Command::Record(record) = &self.command {
             let name = record
                 .facts
@@ -216,8 +210,12 @@ impl Row {
                 .map(|account| format!("[{account}] "))
                 .unwrap_or_default();
             println!(
-                "[{}] {account}{name} · {} · see Needs you",
-                self.meta.machine,
+                "{}{account}{name} · {} · see Needs you",
+                if tags {
+                    format!("[{}] ", self.meta.machine)
+                } else {
+                    String::new()
+                },
                 self.meta
                     .needs_you_kind
                     .map(|kind| kind.title())

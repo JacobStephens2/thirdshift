@@ -3,7 +3,7 @@
 pub(crate) mod fleet;
 mod inbox;
 pub mod inspect;
-mod remote;
+mod text;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::{Archive, ArchivePage};
@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use super::command_record::CommandRecord;
 use super::pass_starts::PassStart;
-use super::reading::{Command, Group, IdlePass, InboxItem, Observation, Snapshot};
+use super::reading::{Command, Group, IdlePass, InboxItem, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
 
@@ -106,22 +106,6 @@ impl Read {
     }
 }
 
-fn print_command(command: &Command, state_word: &str, indent: &str, machine: Option<&str>) {
-    print_command_line(
-        &command.record,
-        &stage_text(command),
-        command.account.as_deref(),
-        state_word,
-        indent,
-        machine,
-    );
-    print_tickets(&command.record, &format!("{indent}  "));
-    print_pause(&command.record, indent);
-    for nested in command.dispatched.iter().chain(&command.children) {
-        print_command(nested, nested.state, &format!("{indent}  "), machine);
-    }
-}
-
 fn print_command_line(
     facts: &CommandRecord,
     stage: &str,
@@ -200,7 +184,7 @@ pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
     );
 }
 
-pub fn show(json: bool, all: bool, machine: Option<&str>) -> Result<()> {
+pub fn show(json: bool, all: bool, machine: Option<&str>, local_only: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let waiting = config.effective_waiting_line_interval();
     if waiting != config.waiting_line_interval {
@@ -215,13 +199,13 @@ pub fn show(json: bool, all: bool, machine: Option<&str>) -> Result<()> {
     }
     let status = read.status(&config, all);
     let local = fleet::local(serde_json::to_value(&status)?, read.now.into())?;
-    let document = fleet::fetch_and_merge(&config, local, machine, all)?;
+    let document = if local_only {
+        local
+    } else {
+        fleet::fetch_and_merge(&config, local, machine, all)?
+    };
     let include_local = machine.is_none_or(|machine| machine == status.hostname);
-    let tags = document
-        .machines
-        .iter()
-        .any(|machine| machine.name != status.hostname);
-    let local_tag = tags.then_some(status.hostname.as_str());
+    let tags = document.machines.len() > 1 || !include_local;
     if json {
         println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
@@ -246,96 +230,28 @@ pub fn show(json: bool, all: bool, machine: Option<&str>) -> Result<()> {
         if include_local && let Some(warning) = read.kept.warning() {
             println!("Warning: {warning}");
         }
-        let remote: Vec<_> = document
+        let rows: Vec<_> = document
             .commands
             .iter()
-            .filter(|row| row["machine_name"] != status.hostname)
-            .map(remote::Row::read)
+            .map(text::Row::read)
             .collect::<Result<_>>()?;
         for group in Group::ORDER {
-            let items: Vec<_> = status
-                .commands
-                .iter()
-                .filter(|item| include_local && item.group == group)
-                .collect();
-            let references: Vec<_> = status
-                .commands
-                .iter()
-                .filter(|item| {
-                    include_local
-                        && group == Group::Landing
-                        && item.landing
-                        && item.group == Group::NeedsYou
-                })
-                .collect();
-            let remote_items: Vec<_> = remote.iter().filter(|row| row.group == group).collect();
-            let remote_references: Vec<_> = remote
+            let items: Vec<_> = rows.iter().filter(|row| row.group == group).collect();
+            let references: Vec<_> = rows
                 .iter()
                 .filter(|row| {
                     group == Group::Landing && row.landing && row.group == Group::NeedsYou
                 })
                 .collect();
-            if items.is_empty()
-                && references.is_empty()
-                && remote_items.is_empty()
-                && remote_references.is_empty()
-            {
+            if items.is_empty() && references.is_empty() {
                 continue;
             }
             println!("{}:", group.title());
             for item in items {
-                match item.command {
-                    Observation::Record(command) => {
-                        print_command(command, item.state_word(), "", local_tag)
-                    }
-                    Observation::History(command) => {
-                        if let Some(machine) = local_tag {
-                            print!("[{machine}] ");
-                        }
-                        print_history(command);
-                    }
-                }
-                if item.group == Group::ReadyForReview {
-                    println!("  {}", item.github.ci.unwrap_or_default().label());
-                    if item.github.mergeable == Some(crate::github::InboxMergeable::Conflicting) {
-                        println!("  Merge conflict");
-                    }
-                }
-                if let Some(line) = item.left_line() {
-                    println!("  {line}");
-                }
-                if let Some(dismissal) = &item.dismissal {
-                    println!("  {}", dismissal.line());
-                }
-                if item.count > 1 {
-                    let cause = item.cause().unwrap_or_default();
-                    println!("  {} Commands with this cause: {cause}", item.count);
-                }
-            }
-            for row in remote_items {
-                row.print();
+                item.print(tags);
             }
             for item in references {
-                if let Observation::Record(command) = item.command {
-                    let facts = &command.record;
-                    let name = facts.issue.as_ref().map_or_else(
-                        || facts.name.clone(),
-                        |issue| format!("{}#{}", facts.repository, issue.number),
-                    );
-                    if let Some(machine) = local_tag {
-                        print!("[{machine}] ");
-                    }
-                    if let Some(account) = &command.account {
-                        print!("[{account}] ");
-                    }
-                    println!(
-                        "{name} · {} · see Needs you",
-                        item.needs_you_kind.expect("Needs you has a kind").title()
-                    );
-                }
-            }
-            for row in remote_references {
-                row.print_reference();
+                item.print_reference(tags);
             }
         }
         for pass in status.idle_passes.iter().filter(|_| include_local) {

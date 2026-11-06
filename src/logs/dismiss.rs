@@ -42,7 +42,7 @@ impl DismissedRow {
         DismissalView {
             who: self.who.clone(),
             dismissed_at: self.at.clone(),
-            source: self.source(),
+            source: self.source().to_owned(),
             kind: current_kind.unwrap_or(&self.kind).to_owned(),
             kinds: self.kinds.clone(),
         }
@@ -52,11 +52,11 @@ impl DismissedRow {
 /// A row's dismissal as `status --json` reports it: who, when, from where
 /// and every kind it covers. `kind` is the current kind, or the last one
 /// dismissed while a live row has no problem.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct DismissalView {
     pub who: String,
     pub dismissed_at: String,
-    pub source: &'static str,
+    pub source: String,
     pub kind: String,
     pub kinds: Vec<String>,
 }
