@@ -118,7 +118,7 @@ test('Run now recognizes all Pass kinds and leaves shell expressions display-onl
   const original = `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base main highest-first no-email harness codex\n`;
   t.after(() => writeFile(join(fixture.home, 'crontab'), original));
   await writeFile(join(fixture.home, 'crontab'), [
-    `*/5 * * * * cd '${fixture.repo}' && thirdshift architect 'Console starts' base main --plan-only harness claude >> /tmp/fixture-cron.log 2>&1`,
+    `*/5 * * * * cd '${fixture.repo}' && thirdshift architect 'Console starts' base main --plan-only >> /tmp/fixture-cron.log 2>&1`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift secure base main no-security-fix`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift review --author fixture --recommend-only`,
     `*/5 * * * * cd '${fixture.repo}' && thirdshift pickup base "$BRANCH"`
@@ -127,7 +127,7 @@ test('Run now recognizes all Pass kinds and leaves shell expressions display-onl
   t.after(() => page.context().close());
   await page.goto(`${fixture.origin}/cronjobs`);
   assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 3);
-  for (const [index, kind, harness] of [[0, 'architect', 'claude'], [1, 'secure', 'codex'], [2, 'review', 'codex']]) {
+  for (const [index, kind, harness] of [[0, 'architect', 'codex'], [1, 'secure', 'codex'], [2, 'review', 'codex']]) {
     await page.getByRole('button', { name: 'Run now', exact: true }).nth(index).click();
     const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
     await confirm.waitFor();
