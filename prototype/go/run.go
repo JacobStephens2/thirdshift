@@ -40,21 +40,25 @@ func originRepo(raw string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(u.Path, "/"), ".git")
 }
 
+func launchOrigin(ctx context.Context) (string, string, error) {
+	root, err := command(ctx, "", "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", "", err
+	}
+	origin, err := command(ctx, string(root), "git", "config", "--get", "remote.origin.url")
+	return string(root), string(origin), err
+}
+
 func ticketRun(ctx context.Context, raw string, repairLimit int) (runErr error) {
 	issue, err := parseIssue(raw)
 	if err != nil {
 		return err
 	}
-	root, err := command(ctx, "", "git", "rev-parse", "--show-toplevel")
+	launch, origin, err := launchOrigin(ctx)
 	if err != nil {
 		return err
 	}
-	launch := string(root)
-	origin, err := command(ctx, launch, "git", "config", "--get", "remote.origin.url")
-	if err != nil {
-		return err
-	}
-	if !strings.EqualFold(originRepo(string(origin)), issue.repo) {
+	if !strings.EqualFold(originRepo(origin), issue.repo) {
 		return fmt.Errorf("Origin match failed: %s does not match %s", origin, issue.repo)
 	}
 	data, err := readIssue(ctx, issue)
@@ -67,6 +71,12 @@ func ticketRun(ctx context.Context, raw string, repairLimit int) (runErr error) 
 	if !trusted(data.Association) {
 		return fmt.Errorf("issue author is not a Trusted account")
 	}
+	return runTicket(ctx, launch, issue, data, repairLimit)
+}
+
+// Pickup supplies the issue it re-verified while holding its reservation.
+// A successful Claim precedes any dispatch to the Harness.
+func runTicket(ctx context.Context, launch string, issue issueURL, data issueData, repairLimit int) (runErr error) {
 	base, err := command(ctx, launch, "git", "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return err

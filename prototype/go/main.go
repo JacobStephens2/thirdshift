@@ -20,10 +20,15 @@ func entry() int {
 		return 2
 	}
 	if flags.NArg() != 1 || *repairLimit < 0 || *repairLimit > 5 {
-		fmt.Fprintln(os.Stderr, "usage: thirdshift [--repair-limit 0..5] <https://github.com/owner/repo/issues/number>")
+		fmt.Fprintln(os.Stderr, "usage: thirdshift [--repair-limit 0..5] <https://github.com/owner/repo/issues/number> | pickup")
 		return 2
 	}
-	err := ticketRun(ctx, flags.Arg(0), *repairLimit)
+	var err error
+	if flags.Arg(0) == "pickup" {
+		err = pickupRun(ctx, *repairLimit)
+	} else {
+		err = ticketRun(ctx, flags.Arg(0), *repairLimit)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
