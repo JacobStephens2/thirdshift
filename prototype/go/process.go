@@ -47,8 +47,13 @@ func supervise(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func command(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return commandInput(ctx, dir, nil, name, args...)
+}
+
+func commandInput(ctx context.Context, dir string, input []byte, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := supervise(ctx, cmd); err != nil {
