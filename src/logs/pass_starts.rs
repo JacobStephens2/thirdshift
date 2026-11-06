@@ -45,6 +45,7 @@ pub(super) fn path(root: &Path, pass: Pass) -> PathBuf {
         Pass::Pickup => "pickup",
         Pass::Security => "secure",
         Pass::Review => "review",
+        Pass::Fix => "fix",
     };
     root.join(format!("{kind}.last-fired"))
 }

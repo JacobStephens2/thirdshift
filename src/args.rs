@@ -32,7 +32,7 @@ pub struct ReviewArgs {
 }
 
 pub struct FixArgs {
-    pub pull_request: crate::review::PullRequestInput,
+    pub target: crate::fix::Target,
     pub flags: Flags,
 }
 
@@ -930,14 +930,18 @@ fn parse_review(args: &[String]) -> Result<ReviewArgs> {
 }
 
 fn parse_fix(args: &[String]) -> Result<FixArgs> {
-    let Some(target) = args.first() else {
-        bail!("usage: thirdshift fix <PR URL or number> [options]");
-    };
-    let pull_request = crate::review::PullRequestInput::parse(target)?;
+    let mut pull_request = None;
+    let mut base = None;
+    let mut author = None;
     let mut flags = Flags::default();
-    let mut words = args[1..].iter().peekable();
+    let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
-        if !take_flag(&mut flags, arg, &mut words)? {
+        if matches!(arg.as_str(), "author" | "--author") {
+            ask_word(&mut author, arg, words.next(), "a login")?;
+        } else if take_pass_flag(&mut base, &mut flags, arg, &mut words)? {
+        } else if pull_request.is_none() {
+            pull_request = Some(crate::review::PullRequestInput::parse(arg)?);
+        } else {
             bail!("unexpected fix argument: {arg}");
         }
     }
@@ -948,8 +952,15 @@ fn parse_fix(args: &[String]) -> Result<FixArgs> {
     {
         bail!("parallel and security flags do not apply to Fix runs");
     }
+    anyhow::ensure!(
+        pull_request.is_none() || (base.is_none() && author.is_none()),
+        "base and author apply only to a Fix Pass, not a targeted pull request"
+    );
     Ok(FixArgs {
-        pull_request,
+        target: match pull_request {
+            Some(pr) => crate::fix::Target::PullRequest(pr),
+            None => crate::fix::Target::Pass { base, author },
+        },
         flags,
     })
 }
