@@ -269,7 +269,7 @@ if (root / 'changed').exists() and args[:2] == ['api', 'repos/test/project/issue
   expect(session.args).toEqual(expect.arrayContaining([expect.stringContaining("issues/8")]));
 }, 120_000);
 
-test.each(["author", "ready-actor", "body-edit", "title-edit", "active-history", "unready-label"])("Pickup rejects unsafe Ready input: %s", async reason => {
+test.each(["author", "ready-actor", "body-edit", "title-edit", "active-history", "cased-history", "unready-label"])("Pickup rejects unsafe Ready input: %s", async reason => {
   const f = await fixture();
   if (reason === "author") await f.issueChange({ author_association: "NONE" });
   if (reason === "unready-label") await f.issueChange({ labels: [{ name: "ready-for-agent" }, { name: "needs-info" }] });
@@ -277,6 +277,7 @@ test.each(["author", "ready-actor", "body-edit", "title-edit", "active-history",
   let source = await readFile(gh, "utf8");
   if (reason === "ready-actor") source = source.replace("'actor': {'login': 'test'}", "'actor': None");
   if (reason === "active-history") source = source.replace("'name': 'ready-for-agent'}, 'created_at'", "'name': 'in-progress'}, 'created_at'");
+  if (reason === "cased-history") source = source.replace("'name': 'ready-for-agent'}, 'created_at'", "'name': 'In-Progress'}, 'created_at'");
   if (reason === "body-edit" || reason === "title-edit") source = source.replace("connection = {'nodes': [],", `query = args[args.index('-f') + 1]
     edits = [{'editedAt':'2026-02-01T00:00:00Z','createdAt':'2026-02-01T00:00:00Z','actor':None}] if '${reason === "body-edit" ? "userContentEdits" : "RENAMED_TITLE_EVENT"}' in query else []
     connection = {'nodes': edits,`);
@@ -286,6 +287,18 @@ test.each(["author", "ready-actor", "body-edit", "title-edit", "active-history",
   expect(result.stdout).toContain("Pickup skipped");
   expect(await Bun.file(join(f.directory, "session")).exists()).toBe(false);
   expect(f.git("ls-remote", "--refs", "origin", "refs/heads/thirdshift/pickup/*")).toBe("");
+}, 120_000);
+
+test("Pickup accepts a differently cased Ready label and preserves unrelated spelling", async () => {
+  const f = await fixture();
+  await f.issueChange({ labels: [{ name: "Ready-For-Agent" }, { name: "Bug" }] });
+  const gh = join(f.directory, "gh");
+  await writeFile(gh, (await readFile(gh, "utf8")).replace("'name': 'ready-for-agent'}, 'created_at'", "'name': 'Ready-For-Agent'}, 'created_at'"));
+  const result = await f.run("pickup");
+  expect(result.code).toBe(0);
+  expect(await Bun.file(join(f.directory, "session")).exists()).toBe(true);
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([{ name: "Bug" }, { name: "ready-for-agent" }]);
 }, 120_000);
 
 test("Pickup reads later edit-history pages before trusting the issue", async () => {

@@ -6,7 +6,7 @@ type Protocol = "Current" | "WithoutClaimCount" | "UnconditionalCreate";
 type Phase = "List" | "History" | "Reserve" | "RefreshIssue" | "RefreshHistory"
   | "ClaimWrite" | "Dispatch" | "Running" | "EndRead" | "EndWrite" | "Release" | "Done" | "Crashed";
 type Labels = { ready: boolean; claimed: boolean };
-type Host = { phase: Phase; generation: number; dispatched: boolean; claimedDispatch: boolean; ending: Labels };
+type Host = { phase: Phase; generation: number; dispatched: boolean; claimedDispatch: boolean };
 type State = { hosts: Host[]; labels: Labels; count: number; owner: number | null; observed: number | null };
 type Step = { action: string; state: State };
 function assertNever(value: never): never { throw new Error(`Unhandled model phase: ${value}`); }
@@ -59,7 +59,6 @@ function successors(state: State, protocol: Protocol): Step[] {
         action("KeepClaim", (_next, h) => { h.phase = "Release"; });
         break;
       case "EndRead": action("ReadEndingLabels", (next, h) => {
-        h.ending = { ...next.labels };
         h.phase = next.labels.claimed ? "EndWrite" : "Release";
       }); break;
       case "EndWrite": action("PutEndingLabels", (next, h) => { next.labels = { ready: true, claimed: false }; h.phase = "Release"; }); break;
@@ -102,7 +101,7 @@ function key(state: State): string {
 type Node = { state: State; parent: number; action: string };
 function check(protocol: Protocol) {
   const initial: State = {
-    hosts: Array.from({ length: 3 }, () => ({ phase: "List", generation: 0, dispatched: false, claimedDispatch: false, ending: { ready: false, claimed: false } })),
+    hosts: Array.from({ length: 3 }, () => ({ phase: "List", generation: 0, dispatched: false, claimedDispatch: false })),
     labels: { ready: true, claimed: false }, count: 0, owner: null, observed: null,
   };
   const queue: Node[] = [{ state: initial, parent: -1, action: "Initial" }];

@@ -1,4 +1,4 @@
-import { readLabels, record } from "./github";
+import { labelIs, readLabels, record } from "./github";
 import type { Commands } from "./process";
 
 type State = { kind: "unchanged" } | { kind: "changed"; addedProgress: boolean; removedReady: boolean };
@@ -14,14 +14,14 @@ export class Claim {
   ) {}
 
   async make(labels: string[]): Promise<void> {
-    const addedProgress = !labels.includes("in-progress");
-    const removedReady = labels.includes("ready-for-agent");
+    const addedProgress = !labels.some(label => labelIs(label, "in-progress"));
+    const removedReady = labels.some(label => labelIs(label, "ready-for-agent"));
     if (!addedProgress && !removedReady) return;
     if (addedProgress) {
       const existing: unknown = JSON.parse(await this.commands.run(["gh", "label", "list", "--repo", this.issue.repository,
         "--search", "in-progress", "--limit", "100", "--json", "name"], this.launch));
       if (!Array.isArray(existing)) throw new Error("Invalid repository labels response");
-      if (!existing.some(label => record(label) && label.name === "in-progress")) {
+      if (!existing.some(label => record(label) && labelIs(label.name, "in-progress"))) {
         await this.commands.run(["gh", "label", "create", "in-progress", "--repo", this.issue.repository,
           "--color", "FBCA04", "--description", "A Ticket run has taken this issue"], this.launch);
       }
@@ -29,7 +29,7 @@ export class Claim {
     // GitHub may apply the mutation before cancellation or a transport error.
     // Ending reloads labels before deciding what is still ours to undo.
     this.state = { kind: "changed", addedProgress, removedReady };
-    await this.setLabels([...labels.filter(label => label !== "ready-for-agent" && label !== "in-progress"), "in-progress"]);
+    await this.setLabels([...labels.filter(label => !labelIs(label, "ready-for-agent") && !labelIs(label, "in-progress")), "in-progress"]);
   }
 
   private async setLabels(labels: string[], finishing = false): Promise<void> {
@@ -47,9 +47,9 @@ export class Claim {
     const current: unknown = JSON.parse(await commands.run(["gh", "api", `repos/${issue.repository}/issues/${issue.number}`], launch, { finishing: true }));
     if (!record(current)) throw new Error("Invalid GitHub issue response at Claim ending");
     const labels = readLabels(current.labels);
-    if (!labels.includes("in-progress")) return;
+    if (!labels.some(label => labelIs(label, "in-progress"))) return;
     if (current.state === "closed") {
-      await this.setLabels(labels.filter(label => label !== "in-progress"), true);
+      await this.setLabels(labels.filter(label => !labelIs(label, "in-progress")), true);
       return;
     }
     if (current.state !== "open") throw new Error("Invalid issue state at Claim ending");
@@ -61,8 +61,8 @@ export class Claim {
         const prs: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--json", "number"], launch, { finishing: true }));
         if (!Array.isArray(prs)) throw new Error("Invalid pull-request response");
         if (!remote && prs.length === 0) {
-          const restored = labels.filter(label => !addedProgress || label !== "in-progress");
-          if (removedReady && !restored.includes("ready-for-agent")) restored.push("ready-for-agent");
+          const restored = labels.filter(label => !addedProgress || !labelIs(label, "in-progress"));
+          if (removedReady && !restored.some(label => labelIs(label, "ready-for-agent"))) restored.push("ready-for-agent");
           await this.setLabels(restored, true);
         }
         return;

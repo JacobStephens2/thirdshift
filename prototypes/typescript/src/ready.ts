@@ -1,4 +1,4 @@
-import { readIssue, record, trusted } from "./github";
+import { labelIs, readIssue, record, trusted } from "./github";
 import type { Issue } from "./github";
 import type { Commands } from "./process";
 
@@ -83,12 +83,12 @@ export class ReadyIssues {
     const raw = object(JSON.parse(await this.commands.run(["gh", "api", `repos/${this.repository}/issues/${number}`], this.launch)));
     if (raw.state !== "open" || !trusted(raw.author_association) || raw.pull_request !== undefined) return undefined;
     const issue = readIssue(JSON.stringify(raw));
-    if (!issue.labels.includes("ready-for-agent") || issue.labels.some(label => ["in-progress", "ready-for-human", "needs-info", "wontfix", "needs-triage", "base-fix", "security-fix"].includes(label))) return undefined;
+    if (!issue.labels.some(label => labelIs(label, "ready-for-agent")) || issue.labels.some(label => ["in-progress", "ready-for-human", "needs-info", "wontfix", "needs-triage", "base-fix", "security-fix"].includes(label.toLowerCase()))) return undefined;
     const events = pages(await this.commands.run(["gh", "api", `repos/${this.repository}/issues/${number}/events?per_page=100`, "--paginate", "--slurp"], this.launch));
     const labels = events.filter(event => event.event === "labeled" || event.event === "unlabeled");
     // Normalize a same-second swap, preserving order among Claim events.
     labels.sort((a, b) => timestamp(a.created_at) - timestamp(b.created_at)
-      || Number(object(a.label).name === "ready-for-agent") - Number(object(b.label).name === "ready-for-agent"));
+      || Number(labelIs(object(a.label).name, "ready-for-agent")) - Number(labelIs(object(b.label).name, "ready-for-agent")));
     let generation = 0;
     let claimed = false;
     let lastRelease = -Infinity;
@@ -97,11 +97,11 @@ export class ReadyIssues {
     for (const event of labels) {
       const name = object(event.label).name;
       const applied = event.event === "labeled";
-      if (name === "in-progress") {
+      if (labelIs(name, "in-progress")) {
         if (applied) { generation++; claimed = true; }
         else { claimed = false; lastRelease = timestamp(event.created_at); }
       }
-      if (name === "ready-for-agent" && applied) { readyAt = timestamp(event.created_at); readyActor = event.actor; }
+      if (labelIs(name, "ready-for-agent") && applied) { readyAt = timestamp(event.created_at); readyActor = event.actor; }
     }
     if (claimed || !Number.isFinite(readyAt) || !await this.member(readyActor)) return undefined;
     const body = await this.connection(number, "edits:userContentEdits(first:100,after:$after){nodes{editedAt actor:editor{login}} pageInfo{hasNextPage endCursor}}");
