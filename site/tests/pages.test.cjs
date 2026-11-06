@@ -447,8 +447,8 @@ test("hand-written pages use the five workflow names outside the recorded replay
       return copy.textContent;
     });
     assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
-    // Run remains a verb and part of Run notification / Run metrics.
-    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    // Run remains a verb, the Run now control, and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from| now)/, path);
     assert.match(prose, /Ticket run/, path);
     assert.match(prose, /Failed ticket run/, path);
   }
