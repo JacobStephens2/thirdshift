@@ -91,7 +91,18 @@ fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
     let thirdshift = rest
         .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
         .find(|part| {
-            part.first().is_some_and(|word| {
+            let executable = if part.first().is_some_and(|word| {
+                Path::new(word)
+                    .file_name()
+                    .is_some_and(|name| name == "env")
+            }) {
+                // A literal env wrapper still uses this cd directory. Keep the
+                // wrapper words below so Run now cannot discard its environment.
+                part.iter().skip(1).find(|word| !word.contains('='))
+            } else {
+                part.first()
+            };
+            executable.is_some_and(|word| {
                 Path::new(word)
                     .file_name()
                     .is_some_and(|name| name == "thirdshift")

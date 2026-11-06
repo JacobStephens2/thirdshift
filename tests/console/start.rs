@@ -261,6 +261,34 @@ fn launch_directories_understand_adjacent_shell_operators() {
 }
 
 #[test]
+fn launch_directories_include_literal_env_wrapped_cron_commands() {
+    let scenario = fixture();
+    let expected = json!({"directories": [{
+        "repository": "acme/widgets", "path": scenario.launch_dir()
+    }]});
+    for launcher in [
+        "env NO_COLOR=1 thirdshift",
+        "/usr/bin/env NO_COLOR=1 thirdshift",
+    ] {
+        fs::write(
+            scenario.path("home/crontab"),
+            format!(
+                "*/5 * * * * cd '{}' && {launcher} pickup\n",
+                scenario.launch_dir().display()
+            ),
+        )
+        .unwrap();
+        let output = scenario.run(&["launch-directories", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(
+            serde_json::from_str::<Value>(&output.stdout).unwrap(),
+            expected,
+            "{launcher}"
+        );
+    }
+}
+
+#[test]
 fn launch_directories_merge_user_config_and_never_evaluate_cron_text() {
     let scenario = fixture();
     std::os::unix::fs::symlink(scenario.launch_dir(), scenario.path("home/repo")).unwrap();
@@ -427,6 +455,91 @@ fn run_token_starts_an_attributed_ticket_that_survives_console_restart() {
             .unwrap()
             .contains("starting on")
     );
+}
+
+#[test]
+fn api_start_returns_the_record_for_case_insensitive_issue_inputs() {
+    for (repository, issue) in [
+        ("ACME/WIDGETS", json!(7)),
+        (
+            "acme/widgets",
+            json!("https://github.com/ACME/WIDGETS/issues/7"),
+        ),
+    ] {
+        let scenario = fixture();
+        scenario.agent_does("exit 1\n");
+        let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+        let console = server(&scenario);
+        let response = post(
+            &console,
+            &token,
+            &json!({"repository":repository, "issue":issue}),
+        );
+        let status = response.status();
+        let body: Value = response.json().unwrap();
+        assert_eq!(status, 200, "{repository}, {issue}: {body}");
+        assert_eq!(body, json!({"version":1,"name":"ACME/WIDGETS#7"}));
+        let shown = scenario.run(&["show", "ACME/WIDGETS#7", "--json"]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let _ = scenario.run(&["stop", "ACME/WIDGETS#7", "--json"]);
+    }
+}
+
+#[test]
+fn api_start_returns_mixed_case_pull_request_record() {
+    for kind in ["review", "process"] {
+        let scenario = fixture();
+        scenario.agent_does("exit 1\n");
+        scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+        let url = scenario
+            .github_has_pr("colleague", "main", "OPEN")
+            .replace("/acme/widgets/", "/ACME/WIDGETS/");
+        let mut body = json!({"repository":"acme/widgets", "command":kind, "pull_request":url});
+        if kind == "review" {
+            body["recommend_only"] = json!(true);
+        } else {
+            let directory = scenario.path("home/.thirdshift/processes");
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("inspect.toml"), "version = 1\ndescription = \"Inspect\"\n[worktrees.review]\nkind = \"pull-request\"\n[[steps]]\nname = \"inspect\"\nskill = \"code-review\"\nworktree = \"review\"\n").unwrap();
+            body["name"] = json!("inspect");
+        }
+        let token = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+        let console = server(&scenario);
+        let response = post(&console, &token, &body);
+        let status = response.status();
+        let response: Value = response.json().unwrap();
+        assert_eq!(status, 200, "{kind}: {response}");
+        let name = response["name"].as_str().expect("started Command name");
+        let shown = scenario.run(&["show", name, "--json"]);
+        assert_eq!(shown.code, Some(0), "{kind}: {}", shown.stderr);
+        let _ = scenario.run(&["stop", name, "--json"]);
+    }
+}
+
+#[test]
+fn api_review_start_returns_record_with_differently_cased_pr_url() {
+    let scenario = fixture();
+    scenario.agent_does("exit 1\n");
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let pr = scenario
+        .github_has_pr("colleague", "main", "OPEN")
+        .replace("/acme/widgets/", "/ACME/WIDGETS/");
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let console = server(&scenario);
+    let response = post(
+        &console,
+        &runner,
+        &json!({
+            "repository":"acme/widgets", "command":"review",
+            "pull_request":pr, "recommend_only":true, "email":{"mode":"never"}
+        }),
+    );
+    let status = response.status();
+    let body = response.text().unwrap();
+    assert_eq!(status, 200, "{body}");
+    let started: Value = serde_json::from_str(&body).unwrap();
+    assert!(started["name"].is_string(), "{started}");
+    let _ = scenario.run(&["stop", started["name"].as_str().unwrap(), "--json"]);
 }
 
 #[test]

@@ -487,6 +487,26 @@ pub(super) async fn check_process(Json(mut request): Json<Request>) -> Response 
 fn start(request: Request, viewer: Viewer) -> Result<Started> {
     let (repo, args) = request.arguments()?;
     let directory = super::commands::directory(&repo.slug())?;
+    // Records follow the exact target URL sent to the CLI, including repository
+    // spelling that differs from the origin's case.
+    let record_repo = if let Some(url) = &request.pull_request {
+        crate::review::PullRequestUrl::parse(url)?.issue.repo()
+    } else {
+        match request.command {
+            Kind::Ticket => IssueUrl::parse(&args[0])?.repo(),
+            Kind::Score | Kind::Experiment => crate::scoring::repository(),
+            Kind::Architect
+            | Kind::Pickup
+            | Kind::Secure
+            | Kind::Review
+            | Kind::Process
+            | Kind::Skill
+            | Kind::Triage => {
+                Repo::of_origin(&format!("https://github.com/{}", directory.repository))
+                    .context("known Launch directory must name a GitHub repository")?
+            }
+        }
+    };
     let config = UserConfig::load()?;
     std::fs::create_dir_all(&config.logs_dir)?;
     let log_path = directory
@@ -535,12 +555,6 @@ fn start(request: Request, viewer: Viewer) -> Result<Started> {
             Ok(())
         });
     }
-    let record_repo = if matches!(request.command, Kind::Score | Kind::Experiment) {
-        crate::scoring::repository()
-    } else {
-        Repo::of_origin(&format!("https://github.com/{}", directory.repository))
-            .context("known Launch directory must name a GitHub repository")?
-    };
     let started_after = chrono::Local::now();
     let mut child = command
         .spawn()

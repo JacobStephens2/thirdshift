@@ -377,7 +377,7 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. With `run`, use **Start work** on Inbox or **Run now** on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system's scheduler remain available too.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
 
@@ -542,12 +542,13 @@ address's scopes, including the Security finding limits above.
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
 | `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
-| `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring and Triage runs |
-| `admin` | GET `/api/v1/config`, GET and POST `/api/v1/config/<key>`, GET and POST `/api/v1/update`, POST `/api/v1/themes`, POST `/api/v1/evals/import-replays` |
+| `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
+| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 
-Actions take `application/x-www-form-urlencoded` bodies, using the page's
-field names below, except Theme import and starting a run, which take
-`application/json`. Bearer requests need no CSRF token; sign-in sessions and
+The actions in the following table take `application/x-www-form-urlencoded`
+bodies using the listed fields; Theme import takes `application/json` instead.
+Starting work and the additional CLI twins below also take JSON where listed.
+Bearer requests need no CSRF token; sign-in sessions and
 `--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
 The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 
@@ -563,6 +564,28 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
 | `/update` | none | `update` |
 | `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+
+Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
+JSON bodies use `Content-Type: application/json`. GET calls take no body.
+
+| Method and path | Scope | Body | CLI twin |
+| --- | --- | --- | --- |
+| GET `/help`, `/version` | `read` | none | `--help`, `--version` |
+| GET `/processes`, `/processes/<name>` | `read` | none | `process list`, `process show <name>` |
+| POST `/processes/check` | `run` | JSON `repository`, `name`, optional Process run options | `process check <name>` |
+| GET `/evals` | `read` | none | `evals list` |
+| POST `/evals/touched` | `read` | JSON `paths` array of changed path names | `evals touched <paths>...` |
+| POST `/evals/verify` | `read` | JSON `repository` (a known Launch directory's owner/name), `base` commit | `evals verify <repository> <base>` |
+| GET `/other-accounts` | `read` | none | `console other-accounts --json` |
+| POST `/other-accounts` | `admin` | JSON `value` (`none`, `readable`, or account list) | `console other-accounts <value>` |
+| POST `/email-test` | `admin` | JSON with optional `address` | `email-test [<address>]` |
+| POST `/experiments/<id>/name` | `admin` | JSON `name` | `experiments <id> --name <name> --json` |
+| POST `/experiments/<id>/difficulty` | `admin` | none | `experiments <id> --record-difficulty --json` |
+| GET `/experiments/<id>/rechecks` | `read` | none | `recheck <id> --pending --json` |
+| POST `/experiments/<id>/rechecks` | `act` | JSON `trial` or `fingerprint`, `decision` (`pass` or `fail`), `reason`, optional `wrong_finding` | `recheck <id> <trial> <decision> --reason <reason> --json`, or `--batch <fingerprint>` |
+
+See OpenAPI for each CLI twin's response and full argument schema. The route
+inventory and its explicit CLI-only exclusions are checked against the CLI.
 
 #### Updating and administering a machine
 
@@ -586,9 +609,10 @@ Theme import requires `admin` and takes the Theme document itself as JSON;
 a file path or a `path` field is refused. Selecting an existing Theme still
 requires `act`. POST `/api/v1/evals/import-replays` imports the machine's private
 replay manifests and grading index from their standard locations, like the CLI.
-It accepts no paths. Eval task approval remains an `act` judgment. Eval preparation,
-verification and Arm preparation use local working directories or write local
-paths, so remain CLI-only. Updates, imports and judgments name their requester
+It accepts no paths. Eval task approval remains an `act` judgment. Eval verification
+uses a known Launch directory through POST `/api/v1/evals/verify` with `read`.
+Eval preparation and Arm preparation write caller-selected local paths, so remain
+CLI-only. Updates, imports and judgments name their requester
 in the Console log.
 
 Every attempted API change records its holder or session address, endpoint and
@@ -605,7 +629,8 @@ never written to that audit record.
 `GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
 return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
 inventory. Known Launch directories come from this account's thirdshift cron
-jobs with literal `cd <directory> && ... thirdshift ...` commands, plus the
+jobs with literal `cd <directory> && ... thirdshift ...` commands, including
+`env NAME=value thirdshift` wrappers, plus the
 top-level `launch_directories` list in User config. Paths may be absolute or
 start with `~/`; aliases of the same directory are listed once. Each directory
 is resolved through its GitHub `origin` remote. Stale cron directories are
@@ -626,7 +651,8 @@ retrying after a lost response.
 
 On **Cron jobs**, **Run now** offers the same confirmation for each recognizable
 Pass, preserving its CLI arguments. Literal `cd` directories and Pass arguments
-are supported; shell expressions remain display-only. The result names a Command
+are supported; shell expressions and per-invocation environment wrappers remain
+display-only. The result names a Command
 or gives the Pass's skip reason, with a link to Inbox for started work.
 Both controls require JavaScript and are hidden without `run`. Each confirmed
 start uses the same scoped, CSRF-protected API as a client.
@@ -662,6 +688,7 @@ which also starts a Spec run when the issue has Tickets. Every request names
 | `skill` | Required `name`; optional `issue` |
 | `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
 | `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
+| `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
 
 Booleans use `true` or `false`. All options and combinations are checked by
 the CLI argument parser; for example, Architect `plan_only` refuses options
@@ -675,6 +702,16 @@ For example, start a Pickup run on `main`, taking the highest issue first:
 ```json
 {"repository":"acme/widgets","command":"pickup","base":"main","order":"highest-first"}
 ```
+
+Or compare two commits in an Experiment using the machine's Eval suites:
+
+```json
+{"repository":"acme/widgets","command":"experiment","experiment":{"candidate":"HEAD","baseline":"HEAD~1","baseline_harness":"claude","candidate_harness":"codex","suite":["code-review"]}}
+```
+
+Experiment option names match the CLI's long flags with underscores in place
+of hyphens. `suite` is an array of suite names, and `candidate` is a Git reference.
+The same CLI parser validates the combination; OpenAPI lists the option types.
 
 The Console starts the same binary in that directory, in its own OS session
 with the account's login shell environment. Standard output and errors append
