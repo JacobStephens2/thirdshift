@@ -173,7 +173,6 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
        thirdshift merge <Issue URL>                   Run, then merge the pull request
-       thirdshift --no-merge <Issue URL>              Run, leaving the pull request for review
        thirdshift --email <Issue URL>                 Run, then email the outcome
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
@@ -222,7 +221,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift logs --file <id> [--follow | --json]  Read a log
        thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON; --export <dir> writes its whole Trace
        thirdshift update [--check] [--json] [--machine <name>]  Update, or check the latest version
-       thirdshift version | help                      Print the version or this reference
+       thirdshift version                             Print the version
+       thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command; -- prefixes accepted, once each, without opposites):
