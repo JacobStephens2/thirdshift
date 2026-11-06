@@ -3679,7 +3679,10 @@ so the Experiment prints its cost without asking about it.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to `main` during interruption does
-not change the Candidate on restart. The pin is removed after the branch push,
+not change the Candidate on restart. If a release tag now on `main` is not an
+ancestor of that pin, the script selects a new base. It also rechecks that the
+requested version is higher than `main` before reusing a pin, refusing if not.
+The pin is removed after the branch push,
 when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
 intervals and asks `release anyway? [y/N]`, including without `--review`.
@@ -3694,7 +3697,9 @@ open or merged bump PR before tagging. An already pushed tag waits for publicati
 an open PR, skipping the Experiment unless recovering with a newer green base. Python 3 is needed to read the Experiment results.
 
 The release base is the newest commit on `main` whose latest push `CI` run
-succeeded, newer than the last release tag. The script uses it immediately even
+succeeded, strictly newer than and descending from the last release tag on
+`origin/main`. A green commit from before that tag merged into `main` cannot
+qualify. The script uses a qualifying commit immediately even
 if the tip's CI is pending or failed. If none qualifies, it waits for a run to
 succeed, still considering older pending commits when `main` moves. The
 Experiment's Candidate is that release base. The tag names exactly that content
@@ -3711,7 +3716,18 @@ It works from `origin/main` in a temporary worktree, so your checked-out branch 
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
+If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
+
+An untagged pushed branch or open bump PR is re-cut if its content base does
+not descend from the last release tag now on `origin/main`, excluding its own
+tag. After validating the existing version-only bump, the script rechecks that
+the requested version is higher than `main` and waits for a green base
+descending from that release tag. It prints the new base, runs the Experiment
+when requested, regenerates the summary and version diff, force-pushes the
+branch, and updates an open PR's body or opens its PR before waiting for checks
+on the new head. With `--review`, declining the new summary exits `1` before
+moving the branch or changing the PR body. Tagged and merged releases keep
+their existing resume behavior.
 
 On resume after a completed failed release workflow with no GitHub Release yet, the script looks for the newest `main` commit newer than the bump commit's parent whose latest push `CI` run succeeded. When one exists, it re-cuts `release-<version>` from that commit: it runs the release Experiment when `--with-experiment` is passed, regenerates the summary and version diff (honoring `--review`), force-pushes the new bump commit to the branch, updates the open PR body, waits for its new checks, then force-pushes `v<version>` to the new bump commit. An old merged bump gets a new bump PR. The summary and Experiment exclude the unpublished tag and retain the prior release boundary; release Experiments accept `--baseline <ref>` for this recovery. It waits for the new release workflow before merging. A recovery stopped between pushing the branch and moving the tag resumes that checked version bump. If no newer green commit exists, it automatically runs `gh run rerun --failed <run id>`, prints a stamped progress line, and waits for the rerun before merging. A published GitHub Release is never re-cut: its branch and tag are never moved. If the publication check cannot be completed, the script refuses and moves nothing. A tag on an unrelated commit is still refused. You can stop either wait with Ctrl-C and run the script again to continue.
 
