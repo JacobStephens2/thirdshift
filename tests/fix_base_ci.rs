@@ -309,6 +309,46 @@ fn external_check_text_cannot_close_issues_from_the_repair_pr_body() {
     assert!(!body.contains("closes #4"), "{body}");
 }
 
+/// The same check text lands in the pull request title. `gh pr merge --merge`
+/// sends no subject or body, and every documented merge-commit message format
+/// includes the title. A keyword in that commit closes issues when the commit
+/// reaches the default branch, so the title has to break the reference too.
+#[test]
+fn external_check_text_cannot_close_issues_from_the_repair_pr_title() {
+    let scenario = Scenario::new();
+    failed_base(&scenario, 1);
+    let mut state = scenario.gh_state();
+    state["runs"][0]["head_sha"] = "old-commit".into();
+    let tip = scenario.origin_git(&["rev-parse", "main"]);
+    state["checks"][tip.trim()] = json!([
+        {
+            "name": "Fixes: #15\nresolves acme/widgets#8",
+            "conclusion": "failure",
+            "url": "https://ci.example/failed"
+        },
+        {
+            "name": "gate",
+            "conclusion": "failure",
+            "url": "https://ci.example/run closes #4"
+        }
+    ]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(FIX);
+    let result = scenario.run(&["fix", "no-merge", "no-email"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let title = scenario.gh_state()["prs"][0]["title"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !description_closes_an_issue(&title),
+        "repair PR title still has a GitHub closing reference:\n{title}"
+    );
+    assert!(title.contains("Fixes: \\#15"), "{title}");
+    assert!(title.contains("resolves acme/widgets\\#8"), "{title}");
+    assert!(!title.contains('\n'), "{title}");
+}
+
 /// GitHub's closing-keyword syntax in a pull request description: a keyword
 /// (`close`, `fix`, `resolve`, and their inflections), optional colon, then
 /// `#n` or `owner/repo#n`. Case-insensitive. Whitespace, including a newline

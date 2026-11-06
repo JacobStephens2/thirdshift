@@ -691,10 +691,10 @@ pub fn check_list(checks: &[Check]) -> String {
 
 /// `checks` as a pull request description list. GitHub closes an issue when a
 /// pull request merged into the default branch says `fixes #1` or
-/// `fixes owner/repo#1` in its description (any case, optional colon). A check
-/// name or URL is chosen by whoever can post a status, which is not permission
-/// to close issues. Session prompts keep [`check_list`]: the repair still has
-/// to find the check.
+/// `fixes owner/repo#1` in its description or in a commit message (any case,
+/// optional colon). A check name or URL is chosen by whoever can post a status,
+/// which is not permission to close issues. Session prompts keep [`check_list`]:
+/// the repair still has to find the check.
 pub fn description_check_list(checks: &[Check]) -> String {
     checks
         .iter()
@@ -703,6 +703,14 @@ pub fn description_check_list(checks: &[Check]) -> String {
             format!("- {shown}\n")
         })
         .collect()
+}
+
+/// `checks` as the check-name portion of a pull request title. Every documented
+/// merge-commit message includes the title, and [`GitHub::merge`] supplies no
+/// subject of its own, so a closing reference here reaches the default branch
+/// in the merge commit. Same break as [`description_check_list`].
+pub fn title_check_names(checks: &[Check]) -> String {
+    break_closing_references(&flatten_published(&check_names(checks)))
 }
 
 /// Drop line breaks and other controls so a check cannot escape its list item.
