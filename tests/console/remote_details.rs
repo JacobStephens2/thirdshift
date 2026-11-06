@@ -102,6 +102,27 @@ fn remote_command_details_render_locally_and_fetch_fresh_without_writing_content
         preview(owner.get("/peek?command=widgets%237").text().unwrap()),
         "remote preview matches the owning Console's bounded tail"
     );
+    fs::write(
+        &command_log,
+        format!("{}\nlast remote line\n", "x".repeat(1024 * 1024)),
+    )
+    .unwrap();
+    let tail = api::json(owner.get("/api/v1/log?command=widgets%237&tail=true"));
+    assert_eq!(tail["contents"].as_str().unwrap().len(), 4096);
+    assert_eq!(
+        tail,
+        api::cli(
+            owner_home.path(),
+            &["logs", "widgets#7", "--tail", "--json"]
+        )
+    );
+    assert!(
+        caller
+            .get("/peek?machine=remote&command=widgets%237")
+            .text()
+            .unwrap()
+            .contains("last remote line")
+    );
     fs::write(command_log, "Fresh remote output\n").unwrap();
     assert!(
         caller
@@ -247,6 +268,7 @@ fn details_cli_machine_returns_the_owning_json_and_local_hostname_keeps_local_be
         vec!["show", "widgets#7", "--json"],
         vec!["show", "widgets#7", "--spans", "--json"],
         vec!["logs", "widgets#7", "--json"],
+        vec!["logs", "widgets#7", "--tail", "--json"],
         vec!["logs", "widgets#99", "--session", "implement", "--json"],
     ] {
         let mut expected = api::cli(owner_home.path(), &args);

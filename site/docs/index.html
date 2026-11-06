@@ -421,6 +421,7 @@ machine&#39;s JSON:</p>
 thirdshift show widgets#7 --spans --machine server --json
 thirdshift show widgets#7 --span &lt;span-id&gt; --machine server --json
 thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --tail --machine server --json
 thirdshift logs widgets#7 --session implement --machine server --json
 </code></pre>
 <p>Remote reads do not follow redirects or cache details between requests. A
@@ -428,6 +429,9 @@ local hostname selects the ordinary local command. Remote log following and
 Trace export remain on the owning machine. The details API reads its own
 machine; the Console page and CLI call that owning API directly, rather than
 relaying an API caller through another Console&#39;s Fleet credentials.</p>
+<p><code>logs &lt;command&gt; --tail [--json]</code> reads only the last 4 KiB, on either machine.
+It cannot be combined with <code>--follow</code>. Command details use this bounded tail
+through the existing <code>/api/v1/log?tail=true</code> endpoint for their recent output.</p>
 <p><code>thirdshift status --local</code> reads only this machine. It can be combined with
 <code>--all</code> and <code>--json</code>, but not <code>--machine</code>. This is the Console API&#39;s owning-machine
 read, so Consoles paired in both directions never recursively fetch one another.</p>

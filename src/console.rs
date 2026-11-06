@@ -559,6 +559,7 @@ const PAGES: &[PageRoute] = &[
         cli: &[
             "thirdshift logs widgets#7 --json",
             "thirdshift logs widgets#7 --session implement --json",
+            "thirdshift logs widgets#7 --tail --json",
         ],
         method: Method::GET,
         view: View::Log,
@@ -1111,10 +1112,7 @@ async fn inspect(
         if let Some(remote) = fleet::read::Remote::select(&config, &machine, viewer.person())? {
             let document = remote.get(&status::inspect::url("/peek", &command, None))?;
             return format.render(document, |document| {
-                let output = remote
-                    .get(&status::inspect::url("/log", &command, None))
-                    .ok()
-                    .and_then(|value| value["contents"].as_str().map(str::to_owned));
+                let output = remote.preview(&command).ok();
                 Ok(
                     peek::Peek::remote(command, document["command"].clone(), output, &remote)
                         .render()?,
@@ -1161,6 +1159,7 @@ async fn log(
     }
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
+    let tail = query_value(&query, "tail") == "true";
     if !machine_is_local(&query) {
         let machine = query_value(&query, "machine");
         return api::read(format, move || {
@@ -1206,6 +1205,7 @@ async fn log(
                 &config,
                 &command,
                 (!session.is_empty()).then_some(session.as_str()),
+                tail,
             )?)
             .into_response())
         })

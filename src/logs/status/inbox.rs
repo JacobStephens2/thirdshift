@@ -306,20 +306,30 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     }
     let facts: Facts = serde_json::from_value(value.clone())?;
     let live = facts.state == "live";
-    let selector = facts
-        .command_log
-        .as_ref()
+    // A child Ticket shares its outer Command log, but owns a different
+    // record. Use the owning observation's path rather than the log stem.
+    let selector = value["record_path"]
+        .as_str()
         .map(|path| {
-            let path = if value["source"] == "command_record" {
-                path.with_extension("command.json")
-            } else {
-                path.clone()
-            };
             if facts.name.is_empty() {
-                path.to_string_lossy().into_owned()
+                path.to_owned()
             } else {
-                format!("{}::{}", path.display(), facts.name)
+                format!("{path}::{}", facts.name)
             }
+        })
+        .or_else(|| {
+            facts.command_log.as_ref().map(|path| {
+                let path = if value["source"] == "command_record" {
+                    path.with_extension("command.json")
+                } else {
+                    path.clone()
+                };
+                if facts.name.is_empty() {
+                    path.to_string_lossy().into_owned()
+                } else {
+                    format!("{}::{}", path.display(), facts.name)
+                }
+            })
         })
         .unwrap_or_default();
     let process =

@@ -129,11 +129,7 @@ pub(super) fn remote(
             stream: String::new(),
             cli,
             details_url: remote.command_url("/peek", command, None),
-            owning_console: Some(format!(
-                "{}{}",
-                remote.entry.address.trim_end_matches('/'),
-                route
-            )),
+            owning_console: Some(super::fleet::read::owning_url(&remote.entry, &route)),
         }
         .render()?)
     })
@@ -146,11 +142,7 @@ pub(super) fn preview(config: &UserConfig, path: &std::path::Path) -> Result<Str
         .into_iter()
         .find(|log| log.path == path)
         .context("Command log is unavailable")?;
-    let offset = std::fs::metadata(&log.path)?
-        .len()
-        .saturating_sub(BUDGET as u64);
-    let batch = log.reader.read(offset, Framing::Raw, BUDGET)?;
-    Ok(recent_output(&batch.bytes))
+    Ok(recent_output(&log.reader.tail(BUDGET)?))
 }
 
 pub(super) fn recent_output(bytes: &[u8]) -> String {

@@ -132,10 +132,9 @@ impl Peek {
             " --machine '{}'",
             remote.entry.name.replace('\'', "'\\''")
         ));
-        peek.owning_console = Some(format!(
-            "{}{}",
-            remote.entry.address.trim_end_matches('/'),
-            crate::logs::status::inspect::url("/peek", &command, None)
+        peek.owning_console = Some(super::fleet::read::owning_url(
+            &remote.entry,
+            &crate::logs::status::inspect::url("/peek", &command, None),
         ));
         // Experiment pages, recovery commands and actions belong to their
         // own workflows; remote details offer the owning Console for them.

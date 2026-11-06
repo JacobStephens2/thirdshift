@@ -1,4 +1,5 @@
 //! Request-owned Fleet details. Remote paths are identifiers, never local files.
+use std::io::Read;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -27,6 +28,10 @@ impl std::fmt::Display for Refusal {
     }
 }
 impl std::error::Error for Refusal {}
+
+pub(crate) fn owning_url(entry: &Entry, route: &str) -> String {
+    format!("{}{}", entry.address.trim_end_matches('/'), route)
+}
 
 impl Remote {
     pub fn cli(machine: &str, route: &str) -> Result<String> {
@@ -65,6 +70,21 @@ impl Remote {
     }
 
     pub fn get(&self, route: &str) -> Result<Value> {
+        self.read(route, None)
+    }
+
+    pub fn preview(&self, command: &str) -> Result<String> {
+        let route = crate::logs::status::inspect::url("/log", command, None);
+        // 4096 raw bytes can expand sixfold when JSON escapes them. Refuse an
+        // older endpoint that ignores tail instead of downloading a full log.
+        let value = self.read(&format!("{route}&tail=true"), Some(32 * 1024))?;
+        value["contents"]
+            .as_str()
+            .map(str::to_owned)
+            .context("incompatible remote preview")
+    }
+
+    fn read(&self, route: &str, limit: Option<usize>) -> Result<Value> {
         ensure!(
             route.starts_with('/') && !route.starts_with("//"),
             "invalid details route"
@@ -105,6 +125,23 @@ impl Remote {
                 )
             };
             return Err(self.refusal(status, message).into());
+        }
+        if let Some(limit) = limit {
+            let mut bytes = Vec::new();
+            response
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| {
+                    self.refusal(
+                        reqwest::StatusCode::BAD_GATEWAY,
+                        "Remote preview body failed".into(),
+                    )
+                })?;
+            ensure!(
+                bytes.len() <= limit,
+                "owning Console needs an update for bounded previews"
+            );
+            return serde_json::from_slice(&bytes).context("incompatible remote preview");
         }
         response.json().map_err(|_| {
             self.refusal(

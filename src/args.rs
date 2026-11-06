@@ -150,6 +150,7 @@ pub enum Command {
         session: Option<String>,
         follow: bool,
         json: bool,
+        tail: bool,
     },
     LogsList {
         json: bool,
@@ -701,7 +702,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
                 _ => {}
             }
-            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow | --json] | thirdshift logs <command> --export <dir>";
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] | thirdshift logs <command> --export <dir>";
             let command = args
                 .get(1)
                 .filter(|name| !name.starts_with('-'))
@@ -718,11 +719,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
             let mut session = None;
             let mut follow = false;
             let mut json = false;
+            let mut tail = false;
             let mut flags = args[2..].iter();
             while let Some(flag) = flags.next() {
                 match flag.as_str() {
                     "--follow" if !follow => follow = true,
                     "--json" if !json => json = true,
+                    "--tail" if !tail => tail = true,
                     "--session" if session.is_none() => {
                         session = Some(
                             flags
@@ -736,11 +739,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
             }
             anyhow::ensure!(!(follow && json), "--json cannot be combined with --follow");
+            anyhow::ensure!(!(follow && tail), "--tail cannot be combined with --follow");
             return Ok(Command::Logs {
                 command: command.clone(),
                 session,
                 follow,
                 json,
+                tail,
             });
         }
         Some("cronjobs") => {
@@ -979,12 +984,20 @@ fn parse_remote_details(args: &[String]) -> Result<Command> {
             command,
             session,
             follow: false,
+            tail,
             ..
-        } => url(
-            "/log",
-            &command,
-            session.as_deref().map(std::path::Path::new),
-        ),
+        } => {
+            let route = url(
+                "/log",
+                &command,
+                session.as_deref().map(std::path::Path::new),
+            );
+            if tail {
+                format!("{route}&tail=true")
+            } else {
+                route
+            }
+        }
         Command::LogsList { owner, .. } => {
             owner.map_or_else(|| "/logs".into(), |id| format!("/logs/command/{id}"))
         }

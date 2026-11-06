@@ -159,14 +159,13 @@ fn owning_console(config: &UserConfig, query: &Option<String>) -> Option<String>
         .iter()
         .find(|entry| entry.name == machine)
         .map(|entry| {
-            format!(
-                "{}{}",
-                entry.address.trim_end_matches('/'),
-                crate::logs::status::inspect::url(
+            super::fleet::read::owning_url(
+                entry,
+                &crate::logs::status::inspect::url(
                     "/waterfall",
                     &super::query_value(query, "command"),
-                    None
-                )
+                    None,
+                ),
             )
         })
 }

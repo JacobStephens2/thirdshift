@@ -452,6 +452,7 @@ thirdshift show widgets#7 --machine server --json
 thirdshift show widgets#7 --spans --machine server --json
 thirdshift show widgets#7 --span <span-id> --machine server --json
 thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --tail --machine server --json
 thirdshift logs widgets#7 --session implement --machine server --json
 ```
 
@@ -460,6 +461,10 @@ local hostname selects the ordinary local command. Remote log following and
 Trace export remain on the owning machine. The details API reads its own
 machine; the Console page and CLI call that owning API directly, rather than
 relaying an API caller through another Console's Fleet credentials.
+
+`logs <command> --tail [--json]` reads only the last 4 KiB, on either machine.
+It cannot be combined with `--follow`. Command details use this bounded tail
+through the existing `/api/v1/log?tail=true` endpoint for their recent output.
 
 `thirdshift status --local` reads only this machine. It can be combined with
 `--all` and `--json`, but not `--machine`. This is the Console API's owning-machine
