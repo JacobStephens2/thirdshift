@@ -176,13 +176,13 @@ test artifacts. TypeScript explicitly enables `tsc` incremental metadata. Rust
 uses four build jobs and separate empty target directories for check, release
 build and test. Rust's test bundle covers fresh Ticket runs, Pickup, the model,
 and Console status/OpenAPI/Dismissal tests. TypeScript also runs Playwright.
-OS and dependency-download caches stay warm. Allow several
+OS and dependency-download caches stay warm. Allow tens of
 minutes and several GB of temporary disk space. Rust compiles the full production
 binary, so these workloads are not feature-equivalent. The JSON retains exact
 commands, output, host/tool versions, per-file physical line counts and owner-file
 slice inventories. Normal completion and command failures remove the Worktree
 and build directories. Only committed files are measured.
-Per-command logs remain beside the output as `<output>.logs/`, including on
+Measurement logs remain beside the output as `<output>.logs/`, including on
 measurement failure, so diagnostics survive Worktree cleanup.
 
 The [empirical report](../../docs/research/typescript-vs-rust.md) contains the
