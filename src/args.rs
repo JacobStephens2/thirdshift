@@ -137,11 +137,13 @@ pub enum Command {
     },
     Stop {
         command: String,
+        machine: Option<String>,
         requeue: bool,
         json: bool,
     },
     Dismiss {
         command: String,
+        machine: Option<String>,
         undo: bool,
         json: bool,
     },
@@ -556,7 +558,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("stop") => {
-            let usage = "usage: thirdshift stop <command> [--requeue] [--json]";
+            let usage = "usage: thirdshift stop <command> [--machine <name>] [--requeue] [--json]";
             let Some((command, options)) = args[1..].split_first() else {
                 bail!(usage)
             };
@@ -564,8 +566,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 bail!(usage);
             }
             let (mut requeue, mut json) = (false, false);
-            for option in options {
+            let mut machine = None;
+            let mut options = options.iter();
+            while let Some(option) = options.next() {
                 match option.as_str() {
+                    "--machine" if machine.is_none() => {
+                        machine = Some(
+                            options
+                                .next()
+                                .filter(|name| !name.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
                     "--requeue" if !requeue => requeue = true,
                     "--json" if !json => json = true,
                     _ => bail!(usage),
@@ -573,6 +586,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             return Ok(Command::Stop {
                 command: command.clone(),
+                machine,
                 requeue,
                 json,
             });
@@ -581,7 +595,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return metrics(&args[1..]).map(Command::Metrics);
         }
         Some("dismiss") => {
-            let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
+            let usage = "usage: thirdshift dismiss <command> [--machine <name>] [--undo] [--json]";
             let Some((command, options)) = args[1..].split_first() else {
                 bail!(usage)
             };
@@ -589,8 +603,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 bail!(usage);
             }
             let (mut undo, mut json) = (false, false);
-            for option in options {
+            let mut machine = None;
+            let mut options = options.iter();
+            while let Some(option) = options.next() {
                 match option.as_str() {
+                    "--machine" if machine.is_none() => {
+                        machine = Some(
+                            options
+                                .next()
+                                .filter(|name| !name.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
                     "--undo" if !undo => undo = true,
                     "--json" if !json => json = true,
                     _ => bail!(usage),
@@ -598,6 +623,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             return Ok(Command::Dismiss {
                 command: command.clone(),
+                machine,
                 undo,
                 json,
             });

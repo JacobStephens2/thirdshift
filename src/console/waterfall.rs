@@ -32,7 +32,11 @@ fn span_view(
 ) -> anyhow::Result<View> {
     let command = super::query_value(query, "command");
     let machine = super::query_value(query, "machine");
-    if let Some(remote) = super::fleet::read::Remote::select(config, &machine, viewer.person())? {
+    if let Some(remote) = super::fleet::read::Remote::select(
+        config,
+        &machine,
+        viewer.fleet_person().map(str::to_owned),
+    )? {
         let value = remote.get(&crate::logs::status::inspect::url("/spans", &command, None))?;
         let mut tree: spans::Tree = serde_json::from_value(value)?;
         for span in &mut tree.spans {

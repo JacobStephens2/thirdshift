@@ -10,6 +10,7 @@ mod cronjobs;
 mod experiments;
 mod filters;
 pub(crate) mod fleet;
+pub(crate) mod fleet_actions;
 mod fleet_inbox;
 mod github;
 pub(crate) use account_commands::Scopes;
@@ -910,7 +911,7 @@ impl InboxPage {
             row,
             csrf: &self.csrf,
             can_copy: can_copy && row.console.is_empty(),
-            can_act: self.page.can_act() && row.console.is_empty(),
+            can_act: self.page.can_act(),
             can_security: self.page.can_security(),
         }
     }
@@ -1035,7 +1036,7 @@ async fn render_page(
             let mut inbox = read.inbox(&config)?;
             let machine = query_value(&query, "machine");
             let machines = if archive_page.is_none() {
-                fleet.merge(&config, &mut inbox, &machine)?
+                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())?
             } else {
                 Vec::new()
             };
@@ -1109,7 +1110,11 @@ async fn inspect(
     let machine = query_value(&query, "machine");
     let response = api::read(format, move || {
         let config = UserConfig::load()?;
-        if let Some(remote) = fleet::read::Remote::select(&config, &machine, viewer.person())? {
+        if let Some(remote) = fleet::read::Remote::select(
+            &config,
+            &machine,
+            viewer.fleet_person().map(str::to_owned),
+        )? {
             let document = remote.get(&status::inspect::url("/peek", &command, None))?;
             return format.render(document, |document| {
                 let output = remote.preview(&command).ok();
@@ -1164,8 +1169,12 @@ async fn log(
         let machine = query_value(&query, "machine");
         return api::read(format, move || {
             let config = UserConfig::load()?;
-            let remote = fleet::read::Remote::select(&config, &machine, viewer.person())?
-                .expect("remote machine");
+            let remote = fleet::read::Remote::select(
+                &config,
+                &machine,
+                viewer.fleet_person().map(str::to_owned),
+            )?
+            .expect("remote machine");
             logs::remote(&remote, &config, &viewer, format, &command, &session)
         })
         .await;

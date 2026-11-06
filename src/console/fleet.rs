@@ -115,12 +115,54 @@ pub(crate) fn pairing_address(address: &str) -> Result<reqwest::Url> {
 }
 
 #[derive(Deserialize)]
-struct Whoami {
+pub(super) struct Whoami {
     version: u8,
     api_version: String,
     hostname: String,
     thirdshift_version: String,
-    scopes: Vec<Scope>,
+    pub scopes: Vec<Scope>,
+}
+
+pub(super) fn effective_scopes(
+    client: &reqwest::blocking::Client,
+    entry: &Entry,
+    token: &str,
+    person: Option<&str>,
+) -> std::result::Result<Vec<Scope>, (crate::logs::status::fleet::Reachability, String)> {
+    use crate::logs::status::fleet::Reachability::{NeedsUpdate, Refused, Unreachable};
+    pairing_address(&entry.address).map_err(|_| (Refused, "unsafe Fleet address".into()))?;
+    let mut request = client
+        .get(format!(
+            "{}/api/v1/whoami",
+            entry.address.trim_end_matches('/')
+        ))
+        .bearer_auth(token);
+    if let Some(person) = person {
+        request = request.header(super::auth::PERSON_HEADER, person);
+    }
+    let response = request
+        .send()
+        .map_err(|_| (Unreachable, "whoami failed or timed out (3 seconds)".into()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err((
+            if status == reqwest::StatusCode::NOT_FOUND {
+                NeedsUpdate
+            } else if status.is_client_error() || status.is_redirection() {
+                Refused
+            } else {
+                Unreachable
+            },
+            format!("whoami returned HTTP {status}"),
+        ));
+    }
+    let identity: Whoami = response
+        .json()
+        .map_err(|_| (NeedsUpdate, "invalid whoami response".into()))?;
+    if identity.version != 1 || identity.api_version != "v1" {
+        return Err((NeedsUpdate, "unsupported whoami version".into()));
+    }
+    Ok(identity.scopes)
 }
 
 fn check(name: String, address: String, token: &str) -> Result<Entry> {

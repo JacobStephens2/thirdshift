@@ -54,10 +54,10 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
-    pub fn person(&self) -> Option<String> {
+    pub fn fleet_person(&self) -> Option<&str> {
         match &self.identity {
-            Identity::Session { address } => Some(address.clone()),
-            Identity::Token { person, .. } => person.clone(),
+            Identity::Session { address } => Some(address),
+            Identity::Token { person, .. } => person.as_deref(),
             Identity::Local { .. } => None,
         }
     }

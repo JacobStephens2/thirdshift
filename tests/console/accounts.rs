@@ -23,6 +23,9 @@ mod dismiss;
 #[path = "address_scopes.rs"]
 mod address_scopes;
 
+#[path = "fleet_actions.rs"]
+mod fleet_actions;
+
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

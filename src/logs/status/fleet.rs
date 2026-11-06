@@ -165,23 +165,35 @@ pub(crate) fn fetch(
     token: &str,
     all: bool,
 ) -> std::result::Result<Document, (Reachability, String)> {
+    fetch_for_person(client, entry, token, all, None)
+}
+
+pub(crate) fn fetch_for_person(
+    client: &reqwest::blocking::Client,
+    entry: &Entry,
+    token: &str,
+    all: bool,
+    person: Option<&str>,
+) -> std::result::Result<Document, (Reachability, String)> {
     use Reachability::{NeedsUpdate, Refused, Unreachable};
     // Recheck edited config before transmitting the saved bearer token.
     crate::console::fleet::pairing_address(&entry.address)
         .map_err(|_| (Refused, "unsafe Fleet address".into()))?;
-    let response = client
+    let mut request = client
         .get(format!(
             "{}/api/v1/status?all={all}",
             entry.address.trim_end_matches('/')
         ))
-        .bearer_auth(token)
-        .send()
-        .map_err(|_| {
-            (
-                Unreachable,
-                "Inbox request failed or timed out (3 seconds)".into(),
-            )
-        })?;
+        .bearer_auth(token);
+    if let Some(person) = person {
+        request = request.header("x-thirdshift-person", person);
+    }
+    let response = request.send().map_err(|_| {
+        (
+            Unreachable,
+            "Inbox request failed or timed out (3 seconds)".into(),
+        )
+    })?;
     let status = response.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         return Err((NeedsUpdate, "Console has no /api/v1/status".into()));

@@ -455,6 +455,28 @@ commands are CLI-only and have no API endpoints.</p>
 after each address&#39;s host. Names that collide receive <code>-2</code>, <code>-3</code>, and so on.
 Setup and Console settings writes replace <code>other_consoles</code> with <code>fleet</code>, keeping
 the links and other settings.</p>
+<p>Act on a paired machine from the shell:</p>
+<pre><code class="language-sh">thirdshift stop widgets#7 --machine server
+thirdshift stop widgets#7 --machine server --requeue --json
+thirdshift dismiss widgets#7 --machine server
+thirdshift dismiss widgets#7 --machine server --undo --json
+</code></pre>
+<p>The Console&#39;s remote rows offer Stop with confirmation, Dismiss and Undo when
+the owning machine&#39;s live <code>whoami</code> answer allows <code>act</code>. It intersects the saved
+token&#39;s scopes with the signed-in person&#39;s scopes on that machine. The person
+must also be on that machine&#39;s sign-in list. A read-only token or person sees
+no action controls; the owning machine also refuses a forced request with 403.
+Other-account Commands stay read-only on every machine. Stale or refused
+answers offer no controls until access is checked again.</p>
+<p>The caller sends the action to the owning machine&#39;s <code>/api/v1</code>, naming the
+signed-in person in <code>X-Thirdshift-Person</code>, and shows that machine&#39;s answer,
+including refusals. Dismiss takes the remote row out of Needs you or Ready for
+review; Undo brings it back when it still needs attention. The next Fleet
+refresh reflects the change. The owning machine signals its own processes,
+keeps its Dismissals beside its Command records, and writes its own Activity log:
+<code>by &lt;person&gt; from the Console on &lt;holder&gt;</code>. No Command logs or Activity log
+entries are written on the caller. CLI requests name no person and are
+attributed to the token&#39;s holder on the owning machine.</p>
 </div></details>
 <details class="fold"><summary><h4>Console API</h4></summary>
 <div class="manual-content" id="console-api">

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fleet action · {{ machine }} · thirdshift</title><link rel="stylesheet" href="/assets/console.css"></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main>
+  <h1>{{ machine }} · {{ command }}</h1>
+  {% if confirm %}
+  <h2>Stop this Command?</h2>
+  <p>Its issue will be labelled <code>needs-triage</code> for the Day shift. Requeue instead puts it back in line with <code>ready-for-agent</code>.</p>
+  <form method="post" action="/stop">
+    <input type="hidden" name="machine" value="{{ machine }}">
+    <input type="hidden" name="command" value="{{ command }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="confirmed" value="yes">
+    <button name="ending" value="triage">Confirm Stop</button>
+    <button name="ending" value="requeue">Requeue instead</button>
+    <a href="/">Cancel</a>
+  </form>
+  {% else %}
+  <p>Answer from {{ machine }}:</p><pre>{{ answer }}</pre>
+  {% if undo %}<form method="post" action="/dismiss/undo"><input type="hidden" name="machine" value="{{ machine }}"><input type="hidden" name="command" value="{{ command }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Undo</button></form>{% endif %}
+  <a href="/">Back to Inbox</a>
+  {% endif %}
+</main></body></html>

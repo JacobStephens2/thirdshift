@@ -496,6 +496,33 @@ after each address's host. Names that collide receive `-2`, `-3`, and so on.
 Setup and Console settings writes replace `other_consoles` with `fleet`, keeping
 the links and other settings.
 
+Act on a paired machine from the shell:
+
+```sh
+thirdshift stop widgets#7 --machine server
+thirdshift stop widgets#7 --machine server --requeue --json
+thirdshift dismiss widgets#7 --machine server
+thirdshift dismiss widgets#7 --machine server --undo --json
+```
+
+The Console's remote rows offer Stop with confirmation, Dismiss and Undo when
+the owning machine's live `whoami` answer allows `act`. It intersects the saved
+token's scopes with the signed-in person's scopes on that machine. The person
+must also be on that machine's sign-in list. A read-only token or person sees
+no action controls; the owning machine also refuses a forced request with 403.
+Other-account Commands stay read-only on every machine. Stale or refused
+answers offer no controls until access is checked again.
+
+The caller sends the action to the owning machine's `/api/v1`, naming the
+signed-in person in `X-Thirdshift-Person`, and shows that machine's answer,
+including refusals. Dismiss takes the remote row out of Needs you or Ready for
+review; Undo brings it back when it still needs attention. The next Fleet
+refresh reflects the change. The owning machine signals its own processes,
+keeps its Dismissals beside its Command records, and writes its own Activity log:
+`by <person> from the Console on <holder>`. No Command logs or Activity log
+entries are written on the caller. CLI requests name no person and are
+attributed to the token's holder on the owning machine.
+
 #### Console API
 
 The Console serves read views as JSON under `/api/v1`, using a bearer token or
