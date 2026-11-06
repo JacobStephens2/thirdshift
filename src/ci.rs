@@ -710,7 +710,15 @@ enum Reading {
     Failed,
 }
 
-/// The reading of `check`: CI watch is the one place a conclusion is read.
+/// A settled red head is eligible for an unattended Fix run.
+pub(crate) fn needs_repair(checks: &[Check]) -> bool {
+    !checks
+        .iter()
+        .any(|check| reading(check) == Reading::Pending)
+        && checks.iter().any(|check| reading(check) == Reading::Failed)
+}
+
+/// Interpret a check consistently for selection and CI watch.
 fn reading(check: &Check) -> Reading {
     match &check.conclusion {
         Conclusion::Unfinished | Conclusion::Pending => Reading::Pending,

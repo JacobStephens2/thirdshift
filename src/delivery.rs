@@ -138,16 +138,16 @@ impl Delivery<'_> {
             return Err(anyhow::anyhow!("fix-run must deliver then self-merge").into());
         }
         let tracker = Tracker::new(Stage::Push, CommandLog);
+        let context = RepairContext::PullRequest(pr);
         run_checked(
             CheckedRun {
                 logs: self.logs,
-                issue: self.issue,
                 started: self.started,
                 harness: &self.child_asks.harness,
                 security_review: None,
                 security_review_default: None,
                 base: self.base,
-                pull_request_context: Some(pr),
+                context,
             },
             worktree.for_fix_run(),
             pull_request,
@@ -185,7 +185,7 @@ impl Delivery<'_> {
                     pull_request,
                     repair_cap: self.repair_cap,
                     protected_paths: self.protected_paths,
-                    pull_request_context: true,
+                    context,
                 };
                 outside.push()?;
                 outside.stage(Stage::PullRequestReadiness);
@@ -269,16 +269,16 @@ impl Delivery<'_> {
         let protected_paths = self.protected_paths;
         let child_asks = self.child_asks;
         let base_fix = self.base_fix;
+        let context = RepairContext::Issue(issue);
         run_checked(
             CheckedRun {
                 logs,
-                issue,
                 started,
                 harness: &child_asks.harness,
                 security_review: child_asks.security_review_harness.as_ref(),
                 security_review_default: child_asks.security_review_default.as_ref(),
                 base,
-                pull_request_context: None,
+                context,
             },
             worktree,
             pull_request,
@@ -316,7 +316,7 @@ impl Delivery<'_> {
                     pull_request,
                     repair_cap,
                     protected_paths,
-                    pull_request_context: false,
+                    context,
                 };
                 route.process_steps(&mut outside, &opening, steps, checklist)
             },
@@ -349,16 +349,16 @@ impl Delivery<'_> {
         let protected_paths = self.protected_paths;
         let child_asks = self.child_asks;
         let base_fix = self.base_fix;
+        let context = RepairContext::Issue(issue);
         run_checked(
             CheckedRun {
                 logs,
-                issue,
                 started,
                 harness: &child_asks.harness,
                 security_review: child_asks.security_review_harness.as_ref(),
                 security_review_default: child_asks.security_review_default.as_ref(),
                 base,
-                pull_request_context: None,
+                context,
             },
             worktree,
             pull_request,
@@ -378,7 +378,7 @@ impl Delivery<'_> {
                         pull_request,
                         repair_cap,
                         protected_paths,
-                        pull_request_context: false,
+                        context,
                     },
                     goal,
                     reviews,
@@ -389,13 +389,28 @@ impl Delivery<'_> {
     }
 }
 
+/// One context choice follows Delivery through session refresh and Repairs.
+#[derive(Clone, Copy)]
+enum RepairContext<'a> {
+    Issue(&'a IssueUrl),
+    PullRequest(&'a crate::review::PullRequestUrl),
+}
+
+impl<'a> RepairContext<'a> {
+    fn subject(self) -> prompt::RepairSubject<'a> {
+        match self {
+            Self::Issue(issue) => prompt::RepairSubject::Issue(issue),
+            Self::PullRequest(pr) => prompt::RepairSubject::PullRequest(&pr.url),
+        }
+    }
+}
+
 /// What the shared Delivery envelope checks before each session and names
 /// when a failure preserves the work: the issue, when the run began, where
 /// its sessions are logged, the harnesses they run on, and the Base branch.
 struct CheckedRun<'a> {
-    pull_request_context: Option<&'a crate::review::PullRequestUrl>,
+    context: RepairContext<'a>,
     logs: &'a Logs,
-    issue: &'a IssueUrl,
     started: DateTime<Utc>,
     harness: &'a Choice,
     security_review: Option<&'a Choice>,
@@ -417,23 +432,24 @@ fn run_checked<T, S>(
 ) -> Result<S, FailedRun> {
     let CheckedRun {
         logs,
-        issue,
         started,
         harness,
         security_review,
         security_review_default,
         base,
-        pull_request_context,
+        context,
     } = checked;
     pull_request.begin_delivery();
     let path = worktree.path().to_path_buf();
     let branch = worktree.branch().to_string();
-    let before_each = move || {
-        if let Some(pr) = pull_request_context {
-            return hand_over_pull_request(pr, base, &branch, &path, true, started);
+    let before_each = move || match context {
+        RepairContext::PullRequest(pr) => {
+            hand_over_pull_request(pr, base, &branch, &path, true, started)
         }
-        no_untrusted_edit_since(issue, started, "Ticket run")?;
-        hand_over_issue(issue, &path)
+        RepairContext::Issue(issue) => {
+            no_untrusted_edit_since(issue, started, "Ticket run")?;
+            hand_over_issue(issue, &path)
+        }
     };
     let (delivered, log) = Sessions::checked_within(
         logs,
@@ -945,7 +961,7 @@ impl std::error::Error for UntrustedEdit {}
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
-    pull_request_context: bool,
+    context: RepairContext<'a>,
     tracker: &'a Tracker,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
@@ -1019,7 +1035,7 @@ impl Outside for InWorktree<'_> {
             pull_request: self.pull_request,
             ci_watch: ci::Watch::new(self.issue),
             protected_paths: self.protected_paths,
-            pull_request_context: self.pull_request_context,
+            context: self.context,
         };
         repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)
     }
@@ -1087,7 +1103,7 @@ impl FailedOutside for OnFailure<'_> {
 /// What a Run's Repair loop reaches outside itself: the Run's worktree, its
 /// Repair sessions, its Base fix, its issue and its pull request.
 struct RunOutside<'a> {
-    pull_request_context: bool,
+    context: RepairContext<'a>,
     tracker: &'a Tracker,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
@@ -1176,12 +1192,8 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
-        let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
-        let subject = if self.pull_request_context {
-            prompt::RepairSubject::PullRequest(pr_url)
-        } else {
-            prompt::RepairSubject::Issue(issue)
-        };
+        let (base, pr_url) = (self.base, self.pr_url);
+        let subject = self.context.subject();
         let branch = self.worktree.branch();
         let prompt = match repair {
             Repair::Conflict(Upstream::BaseBranch) => {

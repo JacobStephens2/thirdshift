@@ -17,10 +17,10 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 - **[Review run](#review-runs)**, `thirdshift review <PR URL>`: reviews an existing pull request, addresses its Standards and Spec findings and posts one comment. Add `--recommend-only` to get findings without fixes.
-- **[Fix run](#fix-runs)**, `thirdshift fix <PR URL or number>`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review.
+- **[Fix run](#fix-runs)**, `thirdshift fix [<PR URL or number>]`: takes an existing pull request through Delivery and the Repair loop against its own Base branch, without repeating implementation or initial code review. With no target, a Pass selects the lowest-numbered eligible non-draft PR with a Merge conflict or CI red.
 - **[Triage run](#triage-runs)**, `thirdshift triage`: investigates a **Report** and files shaped issues, or recommends them with `--recommend-only`.
 
-Architect, Pickup and Security runs, and `review --author <login>`, are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -2336,12 +2336,30 @@ From a clone of the pull request's repository:
 thirdshift fix https://github.com/you/widgets/pull/42
 thirdshift fix 42 merge
 thirdshift fix 42 --no-merge base-fix harness codex model gpt-6.1-sol effort high
+thirdshift fix
+thirdshift fix base main --author colleague
 ```
 
 A Fix run accepts an open pull request by a Trusted account, ready or draft,
 with or without a linked closing issue. Origin match, fork, closed/merged and
 untrusted-author checks happen before work. The Launch directory's checked-out
 branch does not choose the Base branch: the pull request does.
+
+With no pull request target, `thirdshift fix` is a **Pass**. It searches open,
+non-draft, same-repository pull requests targeting the Launch directory's
+checked-out branch, or `base <branch>` / `--base <branch>`, in ascending number
+order. Only Trusted accounts are eligible; `--author <login>` / `author <login>`
+restricts selection to that account, which must itself be trusted. Neither
+`base` nor `author` can be combined with a targeted PR.
+
+The Pass selects the first PR with a Merge conflict or CI red on its current
+head. It skips `in-progress` PRs, pending CI without a Merge conflict, and
+mergeable PRs with green or absent CI. It reserves and rechecks each candidate;
+if another machine reserved it first, it continues to the next candidate.
+At the repository's Command limit, or with no eligible PR it can reserve,
+it exits `0`, prints a skip reason on stderr, records an Activity log skip
+when the reason changes, and sends no Run notification. A failed Fix run
+leaves a draft, so later Passes skip it until the Day shift makes it ready.
 
 The Built-in process `fix-run` is `delivery` followed by `self-merge`.
 `thirdshift processes` lists it; `thirdshift process show fix-run` prints it.
@@ -2362,6 +2380,11 @@ Check re-run and optional Base fix. A Fix run starts no implementation or initia
 Standards/Spec review session.
 
 `merge` / `--merge` and `no-merge` / `--no-merge` override `merge.always`.
+Self-merge also requires a Review-run marker by the GitHub account thirdshift
+acts as covering the adopted head. Without that evidence, Delivery still repairs
+the PR and checks CI, then holds Self-merge with the PR ready for review. Run
+`thirdshift review <PR URL>` before retrying the Fix run with `merge`; a Fix run
+never adds an opening review session. This preserves [ADR 0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)'s reviewed-code gate.
 `base-fix` / `--base-fix` and `no-base-fix` / `--no-base-fix` override `base.fix`.
 `harness`, `model` and `effort` use the usual command and User config precedence.
 `email [<address>]`, `email-unless-merged [<address>]` and `no-email` (also with
