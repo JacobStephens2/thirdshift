@@ -24,6 +24,7 @@ mod openapi;
 pub use openapi::print as openapi;
 mod changes;
 mod dismiss;
+mod evals;
 mod peek;
 mod resources;
 mod restart;
@@ -31,6 +32,7 @@ mod scoring;
 mod stop;
 mod subscription;
 mod time;
+mod update;
 mod user_config;
 pub use user_config::command as config;
 pub(crate) mod tokens;
@@ -153,6 +155,9 @@ impl Scope {
 
 #[derive(Clone, Copy)]
 enum View {
+    Update,
+    RunUpdate,
+    ImportReplays,
     Config,
     ConfigSetting,
     SetConfig,
@@ -205,6 +210,9 @@ impl PageRoute {
         matches!(
             self.view,
             View::Whoami
+                | View::Update
+                | View::RunUpdate
+                | View::ImportReplays
                 | View::Config
                 | View::ConfigSetting
                 | View::SetConfig
@@ -243,6 +251,30 @@ impl PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/update",
+        api: "/api/v1/update",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift update --check --json"],
+        method: Method::GET,
+        view: View::Update,
+    },
+    PageRoute {
+        path: "/update",
+        api: "/api/v1/update",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift update --json"],
+        method: Method::POST,
+        view: View::RunUpdate,
+    },
+    PageRoute {
+        path: "/evals/import-replays",
+        api: "/api/v1/evals/import-replays",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift evals import-replays"],
+        method: Method::POST,
+        view: View::ImportReplays,
+    },
     PageRoute {
         path: "/config",
         api: "/api/v1/config",
@@ -416,7 +448,7 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/themes",
         api: "/api/v1/themes",
-        scope: Some(Scope::Act),
+        scope: Some(Scope::Admin),
         cli: &["thirdshift console theme import theme.json"],
         method: Method::POST,
         view: View::ThemeImport,
@@ -746,6 +778,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Update, Method::GET) => get(update::show),
+            (View::RunUpdate, Method::POST) => post(update::run),
+            (View::ImportReplays, Method::POST) => post(evals::import_replays),
             (View::Config, Method::GET) => get(user_config::show),
             (View::ConfigSetting, Method::GET) => get(user_config::one),
             (View::SetConfig, Method::POST) => post(user_config::set),
@@ -814,6 +849,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let handler = if matches!(page.view, View::Config) {
             // The API is admin-only; a person with read may see the page.
             handler.layer(middleware::from_fn(auth::require_config_view))
+        } else if matches!(page.view, View::Look | View::Themes | View::ThemeExport) {
+            handler.layer(middleware::from_fn(auth::require_look_view))
         } else if let Some(scope) = page.scope {
             handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
         } else {

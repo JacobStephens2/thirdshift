@@ -45,6 +45,8 @@ pub(super) enum EventKind {
     SectionsChanged,
     ApiCall,
     ConfigChanged,
+    Updated,
+    EvalsImported,
 }
 
 impl std::fmt::Display for EventKind {
@@ -61,6 +63,8 @@ impl std::fmt::Display for EventKind {
             Self::SectionsChanged => "sections-changed",
             Self::ApiCall => "api-call",
             Self::ConfigChanged => "config-changed",
+            Self::Updated => "updated",
+            Self::EvalsImported => "evals-imported",
         })
     }
 }

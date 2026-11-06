@@ -30,7 +30,7 @@ pub(super) fn parity(console: &Console, home: &Path, path: &str, args: &[&str]) 
 fn theme_import_is_available_through_the_versioned_api() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
-    let token = tokens::create(home.path(), "theme-importer", &["--scopes", "act"]);
+    let token = tokens::create(home.path(), "theme-importer", &["--scopes", "admin"]);
     let reader = tokens::create(home.path(), "reader", &[]);
     let mut theme = cli(home.path(), &["console", "theme", "export", "focus-auto"]);
     theme["name"] = json!("api-custom");
@@ -59,7 +59,7 @@ fn theme_import_is_available_through_the_versioned_api() {
         refused.json::<Value>().unwrap()["error"]
             .as_str()
             .unwrap()
-            .contains("act")
+            .contains("admin")
     );
     let invalid = client
         .post(format!("{}/api/v1/themes", console.address))

@@ -3,6 +3,12 @@ const assert = require("node:assert/strict");
 const { readFile, stat } = require("node:fs/promises");
 const { resolve, dirname } = require("node:path");
 
+test("the architecture page describes machine administration as available", async () => {
+  const page = await readFile(resolve(__dirname, "../architecture/index.html"), "utf8");
+  assert.ok(!page.includes("Starting Commands and other administration follow in later tickets."),
+    "Architecture still describes administration as arriving in a later ticket");
+});
+
 test("the Setup defaults example includes the Trial and Grader caps", async () => {
   const { marked } = await import("marked");
   const source = await readFile(resolve(__dirname, "../../docs/guide.md"), "utf8");
