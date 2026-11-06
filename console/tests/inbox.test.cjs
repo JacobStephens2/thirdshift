@@ -255,12 +255,63 @@ test('Inbox keeps issue numbers visible for long repository and Process subjects
         await replaceRecord(path, JSON.stringify(fixture));
         await page.goto(`${origin}/?section=needs-you`);
         const full = `${process ? 'Process nightly' : 'fixture'} on ${fixture.repository}`;
-        const subject = page.locator('#inbox .row-head > .subject', { hasText: full });
-        assert.equal(await subject.textContent(), full);
+        const subject = page.locator(`#inbox .row-head > .subject[title="${full}"]`);
         assert.equal(await subject.getAttribute('title'), full);
         assert.equal(await subject.locator('a').count(), 0);
-        assert.equal(await subject.evaluate(node => getComputedStyle(node).textOverflow), 'ellipsis');
+        assert.equal(await subject.textContent(), `${fixture.repository} ${process ? 'Process nightly' : 'fixture'}`);
       });
+    }
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
+test('Inbox shows the repository of Commands without an issue before opening Details', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  fixture.issue = null;
+  fixture.tickets = [];
+  const page = await pageFor(t);
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      for (const [kind, name, process] of [
+        ['Security run', 'secure-20261106T070021-0500', null],
+        ['Triage run', 'triage-20261106T070021-0500', null],
+        ['Process', 'process-20261106T070021-0500', 'nightly-maintenance'],
+      ]) {
+        for (const repository of ['JacobStephens2/quadrille', 'Educational-Travel-Adventures/some-long-repository-name']) {
+          await t.test(`${kind} on ${repository} at ${viewport.width}px`, async () => {
+            Object.assign(fixture, { kind, name, process_name: process, repository });
+            await replaceRecord(path, JSON.stringify(fixture));
+            await page.goto(`${origin}/?section=needs-you`);
+            await page.evaluate(() => document.fonts.ready);
+            const subject = page.locator('#inbox .command[data-command*="1-fixture.command.json"] > .row-head > .subject');
+            const visibility = await subject.evaluate((node, repository) => {
+              const texts = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              let text;
+              while ((text = texts.nextNode()) && !text.textContent.includes(repository)) {}
+              if (!text) return { visible: false, reason: 'repository missing' };
+              const range = document.createRange();
+              const start = text.textContent.indexOf(repository);
+              range.setStart(text, start);
+              range.setEnd(text, start + repository.length);
+              const subject = node.getBoundingClientRect();
+              const rects = [...range.getClientRects()];
+              return { visible: rects.length > 0 && rects.every(rect =>
+                rect.left >= subject.left - 1 && rect.right <= subject.right + 1 &&
+                rect.top >= subject.top - 1 && rect.bottom <= subject.bottom + 1 &&
+                rect.left >= 0 && rect.right <= innerWidth),
+              subject: subject.toJSON(), repository: rects.map(rect => rect.toJSON()) };
+            }, repository);
+            assert.ok(visibility.visible, `repository must be readable in the row: ${JSON.stringify(visibility)}`);
+            assert.equal(await subject.getAttribute('title'), `${process ? `Process ${process}` : name} on ${repository}`);
+            assert.equal(await page.locator('body').evaluate(node => node.scrollWidth > innerWidth), false);
+            assert.equal(await page.locator('body').evaluate(node => node.classList.contains('peek-open')), false);
+          });
+        }
+      }
     }
   } finally {
     await replaceRecord(path, original);
