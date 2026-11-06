@@ -204,7 +204,20 @@ impl UserConfig {
         let file = format!("the User config {}", path.display());
         let table: Table = text
             .parse()
-            .map_err(|error| anyhow!("{error}"))
+            // TOML's Display includes source lines, which can hold credentials
+            // inside an export URL. Keep the reason and location, not the text.
+            .map_err(|error: toml::de::Error| {
+                let location = error
+                    .span()
+                    .map(|span| {
+                        let before = text.get(..span.start).unwrap_or(text);
+                        let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                        format!(" at line {line}, column {column}")
+                    })
+                    .unwrap_or_default();
+                anyhow!("{}{location}", error.message())
+            })
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {

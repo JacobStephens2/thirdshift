@@ -9,6 +9,47 @@ mod support;
 use support::{RunResult, Scenario};
 
 #[test]
+fn config_keeps_comments_of_removed_map_entries() {
+    let scenario = Scenario::new();
+    let path = scenario.user_config_is("[email.to_by_repo]\n# Important routing note\n'acme/old' = 'old@example.com' # Original team\n'acme/keep' = 'keep@example.com' # Retained team\n");
+    for value in ["{ 'acme/keep' = 'new@example.com' }", "{}"] {
+        let result = scenario.run(&["config", "email.to_by_repo", value]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for comment in [
+            "# Important routing note",
+            "# Original team",
+            "# Retained team",
+        ] {
+            assert!(saved.contains(comment), "{saved}");
+        }
+        assert!(!saved.contains("old@example.com"));
+    }
+}
+
+#[test]
+fn config_diagnostics_do_not_echo_credentials_from_malformed_toml() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[otlp]\nendpoint = 'https://private:export-secret@example.test/v1/traces\n",
+    );
+    for args in [
+        vec!["config", "--json"],
+        vec!["config", "spec.parallel"],
+        vec!["config", "spec.parallel", "6"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(1));
+        assert!(result.stderr.contains("config.toml"), "{}", result.stderr);
+        assert!(
+            !format!("{}{}", result.stdout, result.stderr).contains("export-secret"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn config_reads_defaults_and_sets_one_value_without_changing_layout() {
     let scenario = Scenario::new();
     let original =

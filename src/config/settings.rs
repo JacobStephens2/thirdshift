@@ -182,7 +182,14 @@ fn put(document: &mut DocumentMut, key: &str, value: toml_edit::Value) -> Result
     if let Some(existing) = table.get_mut(name).and_then(Item::as_table_like_mut)
         && let Some(replacement) = value.as_inline_table()
     {
-        edit_map(existing, replacement);
+        let mut comments = String::new();
+        edit_map(existing, replacement, &mut comments);
+        if !comments.is_empty() {
+            document.set_trailing(format!(
+                "{}\n{comments}",
+                document.trailing().as_str().unwrap_or("")
+            ));
+        }
     } else if table.get(name).is_some_and(Item::is_value) {
         super::set(document, section, name, value);
     } else {
@@ -191,19 +198,28 @@ fn put(document: &mut DocumentMut, key: &str, value: toml_edit::Value) -> Result
     Ok(())
 }
 
-fn edit_map(existing: &mut dyn toml_edit::TableLike, replacement: &dyn toml_edit::TableLike) {
+fn edit_map(
+    existing: &mut dyn toml_edit::TableLike,
+    replacement: &dyn toml_edit::TableLike,
+    comments: &mut String,
+) {
     let removed: Vec<_> = existing
         .iter()
         .filter(|(key, _)| !replacement.contains_key(key))
         .map(|(key, _)| key.to_owned())
         .collect();
     for key in removed {
+        let (name, item) = existing
+            .get_key_value(&key)
+            .expect("a removed map entry exists");
+        keep_decor(name.leaf_decor(), comments);
+        keep_item_comments(item, comments);
         existing.remove(&key);
     }
     for (key, next) in replacement.iter() {
         if let Some(old) = existing.get_mut(key) {
             if let (Some(old), Some(next)) = (old.as_table_like_mut(), next.as_table_like()) {
-                edit_map(old, next);
+                edit_map(old, next, comments);
                 continue;
             }
             if let (Some(old), Some(next)) = (old.as_value_mut(), next.as_value()) {
@@ -212,6 +228,55 @@ fn edit_map(existing: &mut dyn toml_edit::TableLike, replacement: &dyn toml_edit
             }
         }
         existing.insert(key, next.clone());
+    }
+}
+
+// Like Setup's array editor, retain comments from removed entries. With no
+// remaining entry to own them, they become trailing document comments.
+fn keep_decor(decor: &toml_edit::Decor, comments: &mut String) {
+    for text in [super::decor_prefix(decor), super::decor_suffix(decor)] {
+        if text.contains('#') {
+            comments.push_str(&text);
+            if !text.ends_with('\n') {
+                comments.push('\n');
+            }
+        }
+    }
+}
+
+fn keep_item_comments(item: &Item, comments: &mut String) {
+    if let Some(value) = item.as_value() {
+        keep_value_comments(value, comments);
+    }
+    if let Some(table) = item.as_table() {
+        keep_decor(table.decor(), comments);
+        for (name, item) in table.iter() {
+            keep_decor(
+                table.key(name).expect("a map entry has a key").leaf_decor(),
+                comments,
+            );
+            keep_item_comments(item, comments);
+        }
+    }
+}
+
+fn keep_value_comments(value: &toml_edit::Value, comments: &mut String) {
+    keep_decor(value.decor(), comments);
+    if let Some(array) = value.as_array() {
+        for value in array.iter() {
+            keep_value_comments(value, comments);
+        }
+        if let Some(trailing) = array.trailing().as_str().filter(|s| s.contains('#')) {
+            comments.push_str(trailing);
+            if !trailing.ends_with('\n') {
+                comments.push('\n');
+            }
+        }
+    }
+    if let Some(table) = value.as_inline_table() {
+        for (_, value) in table.iter() {
+            keep_value_comments(value, comments);
+        }
     }
 }
 
