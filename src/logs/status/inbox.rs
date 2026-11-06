@@ -266,7 +266,7 @@ fn bind_subject_link(row: &mut Row) {
     }
 }
 
-fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
+pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
     let Some(url) = url else {
         return true;
     };

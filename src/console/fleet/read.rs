@@ -159,4 +159,18 @@ impl Remote {
     ) -> String {
         self.url(&crate::logs::status::inspect::url(route, command, session))
     }
+
+    /// A paired machine for rendering tests. It never sends the stored token.
+    #[cfg(test)]
+    pub(crate) fn for_render_test(name: &str, address: &str) -> Self {
+        Self {
+            entry: Entry::link(name.to_string(), address.to_string()),
+            client: reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("test client"),
+            token: String::new(),
+            person: None,
+        }
+    }
 }

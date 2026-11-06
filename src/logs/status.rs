@@ -8,7 +8,7 @@ pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::validate_remote;
 pub(crate) use inbox::{Archive, ArchivePage};
-pub(crate) use inbox::{Inbox, Row, issue_url, subject};
+pub(crate) use inbox::{Inbox, Row, issue_url, subject, subject_link_matches};
 pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;

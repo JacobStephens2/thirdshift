@@ -10,7 +10,7 @@
   {% if stopping %}<p role="status">still ending</p><div class="stopping-bar" role="progressbar" aria-label="Command stopping"></div>{% endif %}
   {% for branch in branches %}<p>Issue branch left: {{ branch }}</p>{% endfor %}
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
-  {% for advisory in advisories %}<p>{{ advisory.label }}: <a href="{{ advisory.finding.url }}">{{ advisory.finding.title }}</a> · {{ advisory.finding.severity.as_deref().unwrap_or("ungraded") }}</p>{% endfor %}
+  {% for advisory in advisories %}<p>{{ advisory.label }}: {% if advisory.linked %}<a href="{{ advisory.finding.url }}">{{ advisory.finding.title }}</a>{% else %}{{ advisory.finding.title }}{% endif %} · {{ advisory.finding.severity.as_deref().unwrap_or("ungraded") }}</p>{% endfor %}
   <p class="peek-cli"><code title="{{ cli }}">{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy CLI</button> <span role="status"></span></p>
   <section class="peek-output" aria-label="Recent Command output">
     <h3>Recent Command output</h3>
