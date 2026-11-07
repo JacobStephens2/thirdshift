@@ -138,10 +138,10 @@ fn bearer_read_updates_last_use_and_revoke_takes_effect_on_the_next_request() {
     let token = create(home.path(), "reader", &[]);
     let console = server(home.path());
     assert_eq!(list(home.path())[0]["last_use"], Value::Null);
-    let expected = api::cli(home.path(), &["status", "--json"]);
-    assert_eq!(
+    let expected = api::cli(home.path(), &["status", "--local", "--json"]);
+    api::assert_status_facts_equal(
         api::json(request(&console, &token, "/api/v1/status").send().unwrap()),
-        expected
+        expected,
     );
     assert!(list(home.path())[0]["last_use"].as_str().is_some());
     let description = api::json(
@@ -174,7 +174,19 @@ fn route_scopes_refuse_a_token_missing_read_and_name_the_scope() {
         json!(["security", "act", "run", "admin"])
     );
     let console = server(home.path());
-    for path in ["/api/v1/status", "/api/v1/whoami", "/api/v1/openapi.json"] {
+    // Pairing can inspect a run/admin token's own identity without granting
+    // it read access to Commands or the rest of the machine's API.
+    let identity = api::json(request(&console, &token, "/api/v1/whoami").send().unwrap());
+    assert_eq!(
+        identity["scopes"],
+        json!(["security", "act", "run", "admin"])
+    );
+    assert_eq!(
+        identity["identity"],
+        json!({"kind": "token", "holder": "actor"})
+    );
+    assert!(!identity.to_string().contains(&token));
+    for path in ["/api/v1/status", "/api/v1/openapi.json"] {
         let response = request(&console, &token, path).send().unwrap();
         assert_eq!(response.status(), 403, "{path}");
         assert!(

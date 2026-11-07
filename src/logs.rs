@@ -248,6 +248,16 @@ impl serde::Serialize for Pass {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for Pass {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Self::ALL
+            .into_iter()
+            .find(|pass| pass.to_string() == name)
+            .ok_or_else(|| serde::de::Error::custom("unknown Pass kind"))
+    }
+}
+
 /// The production command's complete record, shared with reader threads.
 static RECORD: LazyLock<Mutex<Record<OnMachine>>> =
     LazyLock::new(|| Mutex::new(Record::new(OnMachine)));

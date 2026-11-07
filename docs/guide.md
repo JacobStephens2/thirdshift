@@ -128,7 +128,7 @@ Other-account Commands carry their OS account name in every Inbox section (inclu
 
 ### Inbox
 
-`thirdshift status` names this host, counts its active runs, such as `2 active runs`, and shows its **Inbox** across every repository in the selected log sources. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:
+`thirdshift status` names this host and shows the **Inbox** across every repository in the selected log sources and every live [Fleet](#fleet) entry. It counts active runs across those machines, such as `2 active runs`, with a per-machine breakdown. Each owning machine supplies its rows' groups; the caller does not regroup them. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:
 
 - **Needs you:** live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Paused (a plan-limit stop), Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or when GitHub shows its issue closed or its pull request merged. A Triage row also leaves once its issue loses `needs-triage`; Resolved counts from the first read showing the label gone. Architect and Security runs use the issue and pull request of the Spec run or Ticket run they dispatched. A failed Ticket run whose pull request closed unmerged stays while its issue is open. Live Silent and Slow rows stay until their Commands end, whatever GitHub shows. A row GitHub can speak for no longer ages out; rows with no issue or pull request, no Command record, no read yet or nothing GitHub can find still age out after `inbox.days` (7 by default), straight to History. Reopening an issue brings back a row still in Done or Resolved. Dismissals hold across GitHub changes; Undo uses the latest kept facts. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
 - **Ready for review:** Commands that ended ready, with a pull request. One leaves when a later Command on the same issue starts on this machine, or when GitHub shows its pull request merged or closed; a pull request GitHub still shows as open keeps its row however old it is. A row GitHub can't speak for still leaves after `inbox.days`: one with no pull request, one with no Command record, one not read yet, or one whose pull request GitHub can't resolve. A merged pull request takes its row to Resolved for `inbox.days` from the merge time (a closed one from the close time); a pull request reopened while its row is in Done or Resolved brings the row back. From History on, a row keeps what GitHub last showed and its issue and pull request aren't read again. The Console reads ready rows' pull requests and Needs you rows' issues and pull requests in a batched query in the background once a minute, even with no pages open, and keeps the answer in one file on the machine. Changed answers wake open Inbox pages; unchanged reads leave pages idle. `status` uses the same answer while it is under 5 minutes old, and otherwise reads GitHub itself. Neither timing is a User config setting. The reads never write to GitHub. `status --json` gives each row what GitHub last showed and when, and how old the Inbox's answer is.
@@ -169,14 +169,24 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
 
-`thirdshift status --json` is the versioned API for agents; the [Console](adr/0016-the-console-is-a-long-running-reader.md) shows the same Inbox. It runs outside a repository too. Version 1 has this shape:
+`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "hostname": "factory",
   "active_runs": 1,
+  "machines": [{
+    "name": "factory",
+    "hostname": "factory",
+    "fetched_at": "2026-10-18T12:00:53-04:00",
+    "reachability": "ok",
+    "active_runs": 1,
+    "error": null
+  }],
   "commands": [{
+    "machine": "factory",
+    "machine_name": "factory",
     "version": 2,
     "kind": "Run",
     "repository": "acme/widgets",
@@ -390,6 +400,166 @@ Every Inbox group starts open. Click its heading, or focus it and press Enter or
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
 
+#### Fleet
+
+The Fleet lists the other machines known to this Console. To pair one, create
+a token on that machine, then supply it to the watching machine through standard
+input. Choose only the scopes that machine needs:
+
+```sh
+# On the machine to pair (prints the token once):
+thirdshift console token create watcher --scopes read,act
+# On the watching machine (paste the token at the hidden prompt):
+thirdshift console fleet add server https://console.example.com
+thirdshift console fleet list
+thirdshift console fleet list --json
+thirdshift console fleet remove server
+```
+
+The token is never an argument. Piped standard input works too. Pairing checks
+`/api/v1/whoami`, then saves the hostname, thirdshift version, scopes and last
+contact. An unreachable machine, a refused token or an older Console without
+that endpoint leaves the saved Fleet and Credentials unchanged. Pairing requires
+HTTPS, with an exception for `http://127.0.0.1` for local use. Redirects are refused.
+
+Tokens are stored under `[fleet]`, keyed by entry name, in the owner-only
+`~/.thirdshift/credentials.toml`. The User config holds no token. Removing an
+entry deletes its saved token too; revoke the token on its issuer separately
+when its access is no longer wanted. Adding an existing name pairs it again.
+
+`thirdshift status` fetches each live entry's own `/api/v1/status` Inbox with
+a three-second timeout per machine. Its rows join the local Inbox groups,
+tagged with their Fleet entry name. Other-account Commands retain their account
+tag too. The total active runs includes reachable machines, with each machine's
+count shown separately. Link-only entries are not fetched.
+
+Use `thirdshift status --machine server` to show only that paired machine;
+`--json` and `--all` can be combined with it. Giving this machine's own hostname
+behaves like plain `status`, including its Fleet. Unknown and link-only names
+are rejected. Human-readable rows carry machine tags once a live Fleet exists.
+
+**Start work** lists known Launch directories across the Fleet, labelled by
+machine. Select the repository and machine, review the request, then confirm.
+**Cron jobs**, **User config** and **Update** offer machine links; their
+`?machine=<name>` selection remains in forms and confirmation dialogs. A control
+appears only when that machine's live `whoami` includes `run` or `admin` for
+the signed-in person. The owning machine checks the token and that person's
+own scopes again on submission, so a forced request still receives its 403.
+Only the owner starts work or changes settings. Its Activity log names
+`by <person> from the Console on <token holder>`; name the pairing token for the
+calling Console. Its Command appears in the merged Inbox when the token also
+has `read`. The sign-in list and address scopes remain shell-only.
+
+The CLI uses the saved token holder's identity, without naming a signed-in
+person. `start` runs detached in a known Launch directory on the selected
+machine and returns JSON. It accepts the shared Ticket options:
+
+```sh
+thirdshift start acme/widgets 7 no-merge no-email --machine server
+thirdshift start --options --json --machine server
+thirdshift config spec.parallel --json --machine server
+thirdshift config spec.parallel 5 --machine server
+thirdshift update --check --json --machine server
+thirdshift update --machine server
+```
+
+Remote `config` and `update` return the owner's JSON. Unknown and link-only
+machines are refused. Omitting `--machine` selects local work. A configured
+Fleet name always selects its owner, even when the name matches the local
+hostname; local choices then say `(local)`. An unpaired local hostname also
+selects local work. `/api/v1/start-options` requires `run` and returns known
+repositories and startable Passes; `whoami` accepts any authenticated scope so
+`run`-only and `admin`-only tokens can pair without general read access.
+
+Open a remote row to see its Command details in the same Console, including
+child Ticket runs and stages. Waterfall, Full Command log and Session trace
+links keep the owning machine selected. Details are fetched live from its
+`/api/v1` and kept only for that request: remote logs and traces are never
+written under the caller's home. Log readers show a snapshot; reload for newer
+output. Every remote row and details view also links to the owning Console.
+Security run details and findings need `security` on the owning machine's
+token, and on the signed-in person's account there. A refusal says
+"needs the `security` scope on `<machine>`".
+
+The details commands accept the same machine selection and return the owning
+machine's JSON:
+
+```sh
+thirdshift show widgets#7 --machine server --json
+thirdshift show widgets#7 --spans --machine server --json
+thirdshift show widgets#7 --span <span-id> --machine server --json
+thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --tail --machine server --json
+thirdshift logs widgets#7 --session implement --machine server --json
+```
+
+Remote reads do not follow redirects or cache details between requests. A
+local hostname selects the ordinary local command. Remote log following and
+Trace export remain on the owning machine. The details API reads its own
+machine; the Console page and CLI call that owning API directly, rather than
+relaying an API caller through another Console's Fleet credentials.
+
+`logs <command> --tail [--json]` reads only the last 4 KiB, on either machine.
+It cannot be combined with `--follow`. Command details use this bounded tail
+through the existing `/api/v1/log?tail=true` endpoint for their recent output.
+
+`thirdshift status --local` reads only this machine. It can be combined with
+`--all` and `--json`, but not `--machine`. This is the Console API's owning-machine
+read, so Consoles paired in both directions never recursively fetch one another.
+
+`status --json` version 2 includes a `machines` array with `name`, `hostname`,
+RFC 3339 `fetched_at`, `active_runs`, `reachability` and nullable `error`.
+Reachability is `ok`, `unreachable` (including a timeout), `refused` (including
+a revoked token) or `needs update` (a missing or incompatible API). A failed
+machine contributes no rows or active runs to that read; it never fails the
+rest of `status`. Reads do not follow other machines' Fleets or change the
+saved pairing's last-contact time.
+
+`fleet list` reports saved metadata without contacting the machines. **Live**
+means Credentials hold a token for the entry's name; it does not promise the
+machine is reachable or the token still valid. **Last contact** is the last
+successful pairing, not a background health check. Entries without a token are
+**link-only**. Both kinds appear as named links in the Console header. These
+commands are CLI-only and have no API endpoints.
+
+Under `[console]`, a link-only entry can be written directly:
+
+```toml
+fleet = [{ name = "server", address = "https://console.example.com" }]
+```
+
+Existing `other_consoles` addresses are read as link-only Fleet entries named
+after each address's host. Names that collide receive `-2`, `-3`, and so on.
+Setup and Console settings writes replace `other_consoles` with `fleet`, keeping
+the links and other settings.
+
+Act on a paired machine from the shell:
+
+```sh
+thirdshift stop widgets#7 --machine server
+thirdshift stop widgets#7 --machine server --requeue --json
+thirdshift dismiss widgets#7 --machine server
+thirdshift dismiss widgets#7 --machine server --undo --json
+```
+
+The Console's remote rows offer Stop with confirmation, Dismiss and Undo when
+the owning machine's live `whoami` answer allows `act`. It intersects the saved
+token's scopes with the signed-in person's scopes on that machine. The person
+must also be on that machine's sign-in list. A read-only token or person sees
+no action controls; the owning machine also refuses a forced request with 403.
+Other-account Commands stay read-only on every machine. Stale or refused
+answers offer no controls until access is checked again.
+
+The caller sends the action to the owning machine's `/api/v1`, naming the
+signed-in person in `X-Thirdshift-Person`, and shows that machine's answer,
+including refusals. Dismiss takes the remote row out of Needs you or Ready for
+review; Undo brings it back when it still needs attention. The next Fleet
+refresh reflects the change. The owning machine signals its own processes,
+keeps its Dismissals beside its Command records, and writes its own Activity log:
+`by <person> from the Console on <holder>`. No Command logs or Activity log
+entries are written on the caller. CLI requests name no person and are
+attributed to the token's holder on the owning machine.
+
 #### Console API
 
 The Console serves read views as JSON under `/api/v1`, using a bearer token or
@@ -507,7 +677,7 @@ Each response equals its CLI twin's `--json` output. A caller with `read` sees
 Security run rows and stages, with finding records withheld. Security run
 details, the Security page and Security Session traces need `security`.
 For example, `GET /api/v1/status` equals
-`thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
+`thirdshift status --local --json`, and `GET /api/v1/peek?command=widgets%237` equals
 `thirdshift show widgets#7 --json`, subject to those scope checks.
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
@@ -2098,11 +2268,13 @@ POST `/api/v1/config/<key>` with an `application/x-www-form-urlencoded`
 `value` field. Its response equals the CLI's JSON. Session writes need CSRF
 as other Console actions do; bearer writes do not.
 
-The sign-in list (`console.allowed_emails`) and address scopes
-(`console.address_scopes`) cannot be read or written with `config` or its API
+The sign-in list (`console.allowed_emails`), address scopes
+(`console.address_scopes`) and Fleet destinations (`console.fleet`)
+cannot be read or written with `config` or its API
 twins. The inventory names them with `null` values and explains the refusal:
 edit the sign-in list on the machine or use `setup`, and use `console scopes`
-for address scopes. They control who can get access. Credentials are never
+for address scopes and `console fleet` for Fleet pairing. They control who
+can get access and which destinations receive Fleet tokens. Credentials are never
 read by this command; nonempty `otlp.endpoint` values are redacted because
 export URLs can contain credentials. Enter a replacement URL to change one,
 or blank to disable export. Every actual config change through these three

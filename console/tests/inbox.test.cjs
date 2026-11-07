@@ -16,7 +16,7 @@ before(async () => {
   const configDir = join(home, ".thirdshift");
   const records = join(configDir, "logs/acme/widgets/commands/issue");
   await mkdir(records, { recursive: true });
-  await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nother_consoles = ["https://other.example.test"]\n');
+  await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nfleet = [{ name = "other.example.test", address = "https://other.example.test" }]\n');
   for (let number = 1; number <= 10; number++) {
     const now = new Date().toISOString();
     await writeFile(join(records, `${number}-fixture.command.json`), JSON.stringify({

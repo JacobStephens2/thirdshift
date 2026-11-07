@@ -39,6 +39,13 @@ pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>)
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
+pub(crate) fn machine_url(route: &str, machine: &str) -> String {
+    let mut url = reqwest::Url::parse("http://localhost").expect("fixed URL");
+    url = url.join(route).expect("Console route");
+    url.query_pairs_mut().append_pair("machine", machine);
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
 fn shown_heading(command: &Command) -> String {
     if let Some(name) = command.record.process_label() {
         return format!("Process {name}");
@@ -273,19 +280,41 @@ pub(crate) fn read_log(
     config: &UserConfig,
     input: &str,
     session: Option<&str>,
+    tail: bool,
 ) -> Result<serde_json::Value> {
     let snapshot = Snapshot::for_user(config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let path = selected_log(selection.observation, session)?;
-    super::super::catalog::contents(&selection.reader(path))
+    let reader = selection.reader(path);
+    if tail {
+        let bytes = reader.tail(4 * 1024)?;
+        return Ok(serde_json::json!({"version": 1, "contents": String::from_utf8_lossy(&bytes)}));
+    }
+    super::super::catalog::contents(&reader)
 }
 
-pub fn logs(input: &str, session: Option<&str>, follow: bool, json: bool) -> Result<()> {
+pub fn logs(
+    input: &str,
+    session: Option<&str>,
+    follow: bool,
+    json: bool,
+    tail: bool,
+) -> Result<()> {
     let config = UserConfig::load()?;
+    if tail {
+        let value = read_log(&config, input, session, true)?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            std::io::stdout()
+                .write_all(value["contents"].as_str().unwrap_or_default().as_bytes())?;
+        }
+        return Ok(());
+    }
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&read_log(&config, input, session)?)?
+            serde_json::to_string_pretty(&read_log(&config, input, session, false)?)?
         );
         return Ok(());
     }

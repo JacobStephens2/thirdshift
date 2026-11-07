@@ -232,7 +232,8 @@ export function initSpanTree({ openCommand, openDetails }) {
     const zoomButton = button(zoom ? 'Zoom out to whole Command' : children.has(span.id) ? `Zoom timeline to this ${kindName[span.kind]}` : 'Zoom timeline around this call', () => zoomTo(zoom ? null : span.id));
     zoomButton.disabled = span.start === null; actions.append(zoomButton);
     if (span.conversation_url) { const link = el('a', '', 'Open in conversation'); link.href = span.conversation_url; actions.append(link); }
-    const cli = `thirdshift show ${quote(data.command)} --span ${span.id} --json`;
+    const machine = new URL(span.command_url, location.href).searchParams.get('machine');
+    const cli = `thirdshift show ${quote(data.command)} --span ${span.id} --json${machine ? ` --machine ${quote(machine)}` : ''}`;
     const copy = button('Copy CLI', async () => {
       try { await navigator.clipboard.writeText(cli); status.textContent = 'CLI copied.'; } catch { status.textContent = cli; }
     });

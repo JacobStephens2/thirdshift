@@ -198,7 +198,7 @@ fn api_experiment_release_skip_and_repository_verification_use_known_launch_dire
     assert_eq!(verify("/etc").status(), 422);
 }
 
-fn fixture() -> support::Scenario {
+pub(super) fn fixture() -> support::Scenario {
     let scenario = support::Scenario::new();
     scenario.user_config_is("[console]\nport = 0\n");
     support::write_executable(
@@ -214,6 +214,49 @@ fn fixture() -> support::Scenario {
     )
     .unwrap();
     scenario
+}
+
+#[test]
+fn fleet_cli_start_uses_the_tokens_holder_and_the_owners_launch_directory() {
+    let scenario = fixture();
+    scenario.agent_waits_for_release(&format!(
+        "touch '{}'\nexit 1\n",
+        scenario.path("completed").display()
+    ));
+    let _release = Release(&scenario);
+    let owner = server(&scenario);
+    let token = tokens::create(&scenario.path("home"), "cli-caller", &["--scopes", "run"]);
+    let caller = support::Scenario::new();
+    caller.user_config_is("");
+    let paired = super::fleet::add(&caller.path("home"), "owner", &owner.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let options = caller.run(&["start", "--options", "--json", "--machine", "owner"]);
+    assert_eq!(options.code, Some(0), "{}", options.stderr);
+    let options: Value = serde_json::from_str(&options.stdout).unwrap();
+    assert_eq!(
+        options["form"]["repositories"][0]["repository"],
+        "acme/widgets"
+    );
+    let started = caller.run(&[
+        "start",
+        "acme/widgets",
+        "7",
+        "no-email",
+        "no-merge",
+        "--machine",
+        "owner",
+    ]);
+    assert_eq!(started.code, Some(0), "{}", started.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&started.stdout).unwrap()["name"],
+        "acme/widgets#7"
+    );
+    wait_for(&scenario.path("started"));
+    assert_eq!(
+        scenario.command_record(RECORDS)["started_by"]["who"],
+        "token cli-caller"
+    );
+    assert!(!caller.path(RECORDS).exists());
 }
 
 #[test]
@@ -320,7 +363,7 @@ fn launch_directories_merge_user_config_and_never_evaluate_cron_text() {
     assert!(!scenario.path("executed").exists());
 }
 
-fn server(scenario: &support::Scenario) -> Console {
+pub(super) fn server(scenario: &support::Scenario) -> Console {
     let shell = scenario.path("login-shell");
     support::write_executable(
         &shell,
@@ -361,7 +404,7 @@ impl Drop for Release<'_> {
     }
 }
 
-fn wait_for(path: &Path) {
+pub(super) fn wait_for(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !path.exists() {
         assert!(

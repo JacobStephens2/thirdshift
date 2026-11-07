@@ -11,6 +11,10 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
 - **CLI-only, even with `admin`:** the following exclusions are checked against the full CLI command inventory (#1775). The machine's own shell stays the root of trust, so the API can't widen its own access.
   - `console token`: Token management stays in the shell so the API cannot widen its own access.
   - `console scopes`: Address scopes stay in the shell so the API cannot widen its own access.
+  - `console fleet add`: Fleet pairing stays in the shell so the API cannot change trusted destinations or their tokens.
+  - `console fleet list`: Fleet pairing metadata is inspected through the shell alongside pairing and removal.
+  - `console fleet remove`: Fleet removal stays in the shell alongside pairing and its Credentials changes.
+  - Details commands with `--machine`: Fleet detail forwarding uses the owning machine's API directly; API reads stay local and never relay through saved Fleet tokens.
   - The Console sign-in list and `console sign-out`: Console sign-in administration, including revoking sign-ins, stays in the shell.
   - `console install`: Console installation writes the machine's proxy and service setup.
   - `setup`: Interactive setup bootstraps the machine and its Console sign-in list.
@@ -22,7 +26,6 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `--trial`: The hidden Trial protocol consumes a local request and writes local Trial artifacts.
   - `--oom-exec`: The hidden OOM wrapper replaces its process inside an existing Trial scope.
   - `--release-summary`: The hidden release-summary protocol belongs to the local release script's stdin exchange.
-  Fleet pairing is not implemented on this branch. When Spec B adds `console fleet add/remove`, those shell-only trust changes must join this list and the parity exclusions.
 
 ## Considered Options
 
