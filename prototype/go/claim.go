@@ -21,22 +21,24 @@ var claimGateLabels = []string{
 	"ready-for-human", "wontfix", "base-fix", "security-fix",
 }
 
-func makeClaim(ctx context.Context, issue issueURL, data issueData) error {
+// The bool records whether the label PUT was attempted. Even a failed response
+// may have applied our Claim; a rejected pre-flight read cannot have done so.
+func makeClaim(ctx context.Context, issue issueURL, data issueData) (bool, error) {
 	if _, err := command(ctx, "", "gh", "label", "create", "in-progress", "--repo", issue.repo,
 		"--description", "A Claim: thirdshift has taken this issue", "--force"); err != nil {
-		return err
+		return false, err
 	}
 	// The readiness snapshot is from before history, trust and reservation
 	// checks. Replace labels from a new read, and do not claim if that read
 	// shows the Day shift closed the gate.
 	fresh, err := readIssue(ctx, issue)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := rejectStaleClaim(data, fresh); err != nil {
-		return err
+		return false, err
 	}
-	return changeLabels(ctx, issue, fresh, []string{"in-progress"}, []string{"ready-for-agent", "agent-failed"})
+	return true, changeLabels(ctx, issue, fresh, []string{"in-progress"}, []string{"ready-for-agent", "agent-failed"})
 }
 
 func rejectStaleClaim(before, fresh issueData) error {

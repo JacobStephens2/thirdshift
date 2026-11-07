@@ -10,6 +10,25 @@ type ciObservation struct {
 	failed []string
 }
 
+// Check runs and workflow runs share GitHub's status and conclusion vocabulary.
+func classifyGitHubCI(status, conclusion string) (ciState, error) {
+	switch status {
+	case "queued", "in_progress", "waiting", "requested", "pending":
+		return ciPending, nil
+	case "completed":
+	default:
+		return ciAbsent, fmt.Errorf("unknown CI status %q", status)
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return ciPassed, nil
+	case "failure", "timed_out", "cancelled", "action_required", "stale", "startup_failure":
+		return ciFailed, nil
+	default:
+		return ciAbsent, fmt.Errorf("unknown CI conclusion %q", conclusion)
+	}
+}
+
 // Read checks and commit statuses for the full published SHA, never the latest
 // workflow on a branch. Only the latest status for each context counts.
 func readCI(ctx context.Context, repo, head string) (ciObservation, error) {
@@ -24,21 +43,13 @@ func readCI(ctx context.Context, repo, head string) (ciObservation, error) {
 	for _, page := range pages {
 		for _, check := range page.CheckRuns {
 			count++
-			if check.Status != "completed" {
-				switch check.Status {
-				case "queued", "in_progress", "waiting", "requested", "pending":
-					pending = true
-				default:
-					return result, fmt.Errorf("unknown CI check status %q", check.Status)
-				}
-				continue
+			state, err := classifyGitHubCI(check.Status, check.Conclusion)
+			if err != nil {
+				return result, fmt.Errorf("check %q: %w", check.Name, err)
 			}
-			switch check.Conclusion {
-			case "success", "neutral", "skipped":
-			case "failure", "timed_out", "cancelled", "action_required", "stale", "startup_failure":
+			pending = pending || state == ciPending
+			if state == ciFailed {
 				result.failed = append(result.failed, check.Name)
-			default:
-				return result, fmt.Errorf("unknown CI conclusion %q", check.Conclusion)
 			}
 		}
 	}
@@ -123,26 +134,24 @@ func workflowRuns(ctx context.Context, repo, head string, result *ciObservation)
 	}
 	open := false
 	for _, run := range latest {
-		switch run.status {
-		case "queued", "in_progress", "waiting", "requested", "pending":
-			open = true
-		case "completed":
-			if run.conclusion == nil {
-				return false, fmt.Errorf("workflow run %d completed without a conclusion", run.id)
+		if run.status == "completed" && run.conclusion == nil {
+			return false, fmt.Errorf("workflow run %d completed without a conclusion", run.id)
+		}
+		conclusion := ""
+		if run.conclusion != nil {
+			conclusion = *run.conclusion
+		}
+		state, err := classifyGitHubCI(run.status, conclusion)
+		if err != nil {
+			return false, fmt.Errorf("workflow run %d: %w", run.id, err)
+		}
+		open = open || state == ciPending
+		if state == ciFailed {
+			name := run.name
+			if name == "" {
+				name = fmt.Sprintf("workflow %d", run.id)
 			}
-			switch *run.conclusion {
-			case "success", "neutral", "skipped":
-			case "failure", "timed_out", "cancelled", "action_required", "stale", "startup_failure":
-				name := run.name
-				if name == "" {
-					name = fmt.Sprintf("workflow %d", run.id)
-				}
-				result.failed = append(result.failed, name)
-			default:
-				return false, fmt.Errorf("unknown workflow conclusion %q", *run.conclusion)
-			}
-		default:
-			return false, fmt.Errorf("unknown workflow status %q", run.status)
+			result.failed = append(result.failed, name)
 		}
 	}
 	return open, nil

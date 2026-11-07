@@ -83,12 +83,17 @@ func runTicket(ctx context.Context, launch string, issue issueURL, data issueDat
 	}
 	branch := "issue-" + issue.number
 	// Register completion before a mutation whose response may be interrupted.
+	claimAttempted := false
 	defer func() {
+		if !claimAttempted {
+			return
+		}
 		completion, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		runErr = errors.Join(runErr, endClaim(completion, launch, issue, branch, data, outcome(ctx.Err(), runErr)))
 	}()
-	if err := makeClaim(ctx, issue, data); err != nil {
+	claimAttempted, err = makeClaim(ctx, issue, data)
+	if err != nil {
 		return err
 	}
 	worktree := filepath.Join(filepath.Dir(launch), filepath.Base(launch)+"-"+branch)
