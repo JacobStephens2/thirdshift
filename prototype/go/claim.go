@@ -100,12 +100,22 @@ func endClaim(ctx context.Context, launch string, issue issueURL, branch string,
 			return fmt.Errorf("ending Claim: %w", err)
 		}
 		var prs []struct {
-			Number int `json:"number"`
+			Number            int
+			IsCrossRepository bool
 		}
-		if err := ghJSON(ctx, &prs, "pr", "list", "--repo", issue.repo, "--head", branch, "--state", "open", "--json", "number"); err != nil {
+		// A fork pull request uses this head name but is not the run's work.
+		// Counting it would keep the Claim, or mark it failed, with nothing on origin.
+		if err := ghJSON(ctx, &prs, "pr", "list", "--repo", issue.repo, "--head", branch, "--state", "open", "--json", "number,isCrossRepository"); err != nil {
 			return err
 		}
-		if len(refs) != 0 || len(prs) != 0 {
+		ownPR := false
+		for _, pr := range prs {
+			if !pr.IsCrossRepository {
+				ownPR = true
+				break
+			}
+		}
+		if len(refs) != 0 || ownPR {
 			state = claimHeld
 			if result.failed() {
 				state = claimFailed
