@@ -21,7 +21,8 @@
     "model": "Two standalone process runs after test compilation; excludes Rust compilation, includes runner startup and all model assertions/mutations. Not a cold compilation measurement.",
     "rust": "Full production binary, release size/build; dev check/test; four build jobs; three test threads, one model thread; compiler wrappers and Rust flags cleared.",
     "scope": "TypeScript Ticket/Pickup/Console slice versus Rust fresh_run/pickup_run/pickup_model plus Console status/OpenAPI/Dismissal tests. Not feature-equivalent workloads; TypeScript also runs Playwright.",
-    "samples": 1
+    "samples": 1,
+    "runtimeMemory": "Linux child ru_maxrss converted from KiB to bytes for one standalone status --json invocation per executable with empty isolated HOME/XDG state. Excludes compiler and Python parent; not aggregate process-tree or steady-state Console/Harness memory. Supplemental provenance is in runtimeMemoryEvidence."
   },
   "measurements": [
     {
@@ -396,6 +397,65 @@
   "binaryBytes": {
     "typescript": 109766832,
     "rust": 27849936
+  },
+  "runtimeMemory": {
+    "typescript": {
+      "command": [
+        "/home/jstephens/repos/thirdshift-issue-1831/prototypes/typescript/build/thirdshift",
+        "status",
+        "--json"
+      ],
+      "peakRssBytes": 26378240,
+      "exitCode": 0,
+      "output": "{\"activeRuns\":0,\"rows\":[]}\n",
+      "stderr": ""
+    },
+    "rust": {
+      "command": [
+        "/home/jstephens/repos/thirdshift-issue-1831/target/release/thirdshift",
+        "status",
+        "--json"
+      ],
+      "peakRssBytes": 7077888,
+      "exitCode": 0,
+      "output": "{\n  \"version\": 1,\n  \"hostname\": \"dev.etadventures.com\",\n  \"active_runs\": 0,\n  \"commands\": [],\n  \"idle_passes\": [],\n  \"pass_starts\": [],\n  \"github_answer_age_seconds\": null,\n  \"github_last_answered_at\": null,\n  \"github_failure\": null\n}\n",
+      "stderr": ""
+    }
+  },
+  "runtimeMemoryEvidence": {
+    "commit": "cb0c7068975978f933f863b304a9c9c036b66c72",
+    "timestamp": "2026-11-07T00:37:24.736136+00:00",
+    "python": "Python 3.9.25",
+    "bun": "1.4.4",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "buildCommands": {
+      "typescript": {
+        "cwd": "prototypes/typescript",
+        "command": [
+          "bun",
+          "run",
+          "build"
+        ]
+      },
+      "rust": {
+        "cwd": ".",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ],
+        "env": {
+          "CARGO_BUILD_JOBS": "4"
+        }
+      }
+    },
+    "sourceEquivalence": "git diff 8700be5d cb0c7068 -- prototypes/typescript/src src Cargo.toml Cargo.lock prototypes/typescript/build.ts prototypes/typescript/bun.lock is empty",
+    "samples": 1,
+    "scope": "Supplemental startup/status measurement on the same Linux host, with empty isolated HOME/XDG state; original timing observations retained."
   },
   "sources": {
     "typescript": {

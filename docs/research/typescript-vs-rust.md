@@ -73,6 +73,37 @@ the cached Rust check/build repeats took less time. Bun's embedded runtime
 made its executable larger. The test differences combine compilation and
 different workloads, so these figures do not isolate a language speed factor.
 
+## Runtime memory
+
+The Spec review added the missing memory measurement separately from the
+timing run above. The companion JSON retains those original observations and
+records the supplemental memory probe's source commit, tool versions, build
+commands and results. The measured executable sources and builders are
+unchanged between the original timing commit and `cb0c7068`.
+
+After building both standalone executables, run from the repository root:
+
+```sh
+python3 prototypes/typescript/memory.py prototypes/typescript/build/thirdshift status --json
+python3 prototypes/typescript/memory.py target/release/thirdshift status --json
+```
+
+The normal benchmark runner now makes the same measurements after its builds.
+The probe launches each executable with a new empty HOME/XDG state and records
+Linux child `ru_maxrss` converted from KiB to bytes. It excludes the compiler
+and Python parent. This is the maximum per-process resident usage reported for
+the completed invocation, not aggregate memory across a process tree. Both
+commands must exit zero; their stdout and stderr remain in the JSON.
+
+| Standalone `status --json` | Peak RSS bytes | MiB |
+| --- | ---: | ---: |
+| Bun Linux x64 executable | 26378240 | 25.16 |
+| Rust native host release | 7077888 | 6.75 |
+
+These single startup/status samples do not measure long-running Console,
+Harness or browser memory, and do not establish an idle-memory or production
+capacity ratio. Host load, runtime initialization and page residency can vary.
+
 The TypeScript bundle passed 54 tests; the Rust bundle passed 183, with three
 ignored tests (fixture entrypoints and the known literal dispatch assertion).
 These counts describe the selected workloads, not equivalent coverage.

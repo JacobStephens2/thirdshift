@@ -37,8 +37,8 @@ if [ -n "\${FAIL_BENCHMARK:-}" ]; then echo compiler-failed >&2; exit 23; fi
 case "$PWD" in */worktree|*/worktree/prototypes/typescript) ;; *) echo not-a-worktree >&2; exit 24;; esac
 case "$*" in
   *install*) exit;;
-  *build.ts*) mkdir -p build; printf binary > build/thirdshift;;
-  *'build --release'*) mkdir -p "$CARGO_TARGET_DIR/release"; printf rust-binary > "$CARGO_TARGET_DIR/release/thirdshift";;
+  *build.ts*) mkdir -p build; printf '#!/bin/sh\\necho {}\\n' > build/thirdshift; chmod +x build/thirdshift;;
+  *'build --release'*) mkdir -p "$CARGO_TARGET_DIR/release"; printf '#!/bin/sh\\necho {}\\n' > "$CARGO_TARGET_DIR/release/thirdshift"; chmod +x "$CARGO_TARGET_DIR/release/thirdshift";;
 esac
 echo measured
 `;
@@ -54,7 +54,12 @@ echo measured
     expect(report.commit).toBe(git("rev-parse", "HEAD"));
     expect(report.measurements).toHaveLength(16);
     expect(report.measurements.every((row: { seconds: number; exitCode: number }) => row.seconds >= 0 && row.exitCode === 0)).toBe(true);
-    expect(report.binaryBytes).toEqual({ typescript: 6, rust: 11 });
+    expect(report.binaryBytes).toEqual({ typescript: 18, rust: 18 });
+    for (const language of ["typescript", "rust"]) {
+      expect(report.runtimeMemory[language].peakRssBytes).toBeGreaterThan(0);
+      expect(report.runtimeMemory[language].command.slice(-2)).toEqual(["status", "--json"]);
+      expect(report.runtimeMemory[language].output.trim()).toBe("{}");
+    }
     expect(report.sources.typescript.production.lines).toBe(2);
     expect(report.sources.rust.production.lines).toBe(1);
     expect(report.sources.rust.model.lines).toBe(1);
@@ -93,5 +98,9 @@ test("empirical research report covers measured commands, sizes, scope and archi
     }
     expect(report).toContain(String(results.binaryBytes[language]));
     expect(report).toContain(String(results.sources[language].production.lines));
+    expect(results.runtimeMemory[language].peakRssBytes).toBeGreaterThan(0);
+    expect(results.runtimeMemory[language].exitCode).toBe(0);
+    expect(results.runtimeMemory[language].command.slice(-2)).toEqual(["status", "--json"]);
+    expect(report).toContain(String(results.runtimeMemory[language].peakRssBytes));
   }
 });

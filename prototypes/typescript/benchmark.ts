@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { z } from "zod";
 
 // This CLI benchmarks a committed snapshot, never the caller's dirty files.
 const options = { ref: "HEAD", output: resolve("typescript-benchmark.json") };
@@ -48,6 +49,11 @@ const measurements: {
   seconds: number; exitCode: number; output: string;
 }[] = [];
 const binaryBytes: Record<string, number> = {};
+const memoryMeasurement = z.object({
+  command: z.array(z.string()), peakRssBytes: z.number().positive(),
+  exitCode: z.literal(0), output: z.string(), stderr: z.string(),
+});
+const runtimeMemory: Record<string, z.infer<typeof memoryMeasurement>> = {};
 const logs = options.output + ".logs";
 let added = false;
 try {
@@ -60,6 +66,7 @@ try {
     rustc: (await command(["rustc", "--version"], repo)).trim(),
     cargo: (await command(["cargo", "--version"], repo)).trim(),
     git: (await command(["git", "--version"], repo)).trim(),
+    python: (await command(["python3", "--version"], repo)).trim(),
   };
   // Installation/downloads are setup, outside measured wall time.
   await command(["bun", "install", "--frozen-lockfile"], ts);
@@ -96,6 +103,9 @@ try {
   await rm(join(ts, "build"), { recursive: true, force: true });
   await pair("typescript", "build", [["bun", "run", "build.ts"]]);
   binaryBytes.typescript = (await stat(join(ts, "build/thirdshift"))).size;
+  runtimeMemory.typescript = memoryMeasurement.parse(JSON.parse(await command([
+    "python3", join(import.meta.dir, "memory.py"), join(ts, "build/thirdshift"), "status", "--json",
+  ], worktree)));
   await rm(join(ts, "build"), { recursive: true, force: true });
   // Explicit slice tests avoid recursively benchmarking this runner's own tests.
   await pair("typescript", "test", [["bun", "test", "tests/ticket.test.ts", "tests/ready.test.ts", "tests/console.test.ts", "tests/pickup-model.test.ts"]]);
@@ -108,6 +118,9 @@ try {
   const buildTarget = join(targets, "build");
   await pair("rust", "build", [["cargo", "build", "--release", "--locked", "--bin", "thirdshift"]], buildTarget);
   binaryBytes.rust = (await stat(join(buildTarget, "release/thirdshift"))).size;
+  runtimeMemory.rust = memoryMeasurement.parse(JSON.parse(await command([
+    "python3", join(import.meta.dir, "memory.py"), join(buildTarget, "release/thirdshift"), "status", "--json",
+  ], worktree)));
   await rm(buildTarget, { recursive: true, force: true });
   const testTarget = join(targets, "test");
   await pair("rust", "test", [
@@ -163,8 +176,9 @@ try {
       rust: "Full production binary, release size/build; dev check/test; four build jobs; three test threads, one model thread; compiler wrappers and Rust flags cleared.",
       scope: "TypeScript Ticket/Pickup/Console slice versus Rust fresh_run/pickup_run/pickup_model plus Console status/OpenAPI/Dismissal tests. Not feature-equivalent workloads; TypeScript also runs Playwright.",
       samples: 1,
+      runtimeMemory: "Linux wait4/getrusage child peak RSS in bytes for one standalone status --json invocation per executable, with an empty isolated HOME/XDG state. Excludes compiler and Python parent; not steady-state Console or Harness memory.",
     },
-    measurements, binaryBytes, sources, slices,
+    measurements, binaryBytes, runtimeMemory, sources, slices,
   };
   await mkdir(dirname(options.output), { recursive: true });
   await writeFile(options.output, JSON.stringify(result, null, 2) + "\n");

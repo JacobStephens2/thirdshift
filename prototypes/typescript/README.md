@@ -5,7 +5,7 @@ CI/conflict Repair (#1836 and #1837), and a Pickup run with bounded model
 checking (#1838), plus the shared-schema Console slice (#1839), under Spec #1831.
 It does not replace the Rust executable or change ADR-0001.
 
-On Linux, with Bun 1.4.4, Git and GitHub CLI installed:
+On Linux, with Bun 1.4.4, Python 3, Git and GitHub CLI installed:
 
 ```sh
 cd prototypes/typescript
@@ -162,7 +162,7 @@ the existing selector rules. Install dependencies here before using that command
 
 ## Reproducible Rust comparison
 
-From the repository root, with Bun, Rust/Cargo, Git and Chromium installed:
+From the repository root on Linux, with Bun, Python 3, Rust/Cargo, Git and Chromium installed:
 
 ```sh
 bun prototypes/typescript/benchmark.ts --ref HEAD --output /tmp/typescript-benchmark.json
@@ -184,6 +184,19 @@ slice inventories. Normal completion and command failures remove the Worktree
 and build directories. Only committed files are measured.
 Measurement logs remain beside the output as `<output>.logs/`, including on
 measurement failure, so diagnostics survive Worktree cleanup.
+
+After each standalone build the runner also invokes `memory.py` for
+`status --json`, with a new empty HOME and XDG state for each executable.
+Linux child `ru_maxrss` records peak resident bytes, excluding the Python
+parent and compiler. To repeat just that probe with existing binaries:
+
+```sh
+python3 prototypes/typescript/memory.py prototypes/typescript/build/thirdshift status --json
+python3 prototypes/typescript/memory.py target/release/thirdshift status --json
+```
+
+These are single startup/status samples, not steady-state Console or Harness
+memory measurements.
 
 The [empirical report](../../docs/research/typescript-vs-rust.md) contains the
 recorded results, scope limits and architectural comparison; its companion JSON
