@@ -10,10 +10,10 @@ export function initStarts(refresh) {
   const buttons = area.querySelectorAll('[data-start-enable]');
   for (const button of buttons) button.disabled = false;
 
-  function review(request, harness) {
+  function review(request, harness, machine = '') {
     if (sending) return;
-    pending = request;
-    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}, with Harness ${harness}.`;
+    pending = { request, machine };
+    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}, with Harness ${harness}${machine ? ` on machine ${machine}` : ''}.`;
     dialog.querySelector('[data-start-summary]').textContent = JSON.stringify(request, null, 2);
     dialog.showModal();
   }
@@ -36,24 +36,24 @@ export function initStarts(refresh) {
       return;
     }
     if (mode) request.email = { mode, ...(address ? { address } : {}) };
-    review(request, request.harness);
+    review(request, request.harness, event.target.elements.repository.selectedOptions[0].dataset.machine);
   });
   area.addEventListener('click', event => {
     const button = event.target.closest('[data-start-request]');
-    if (button) review(JSON.parse(button.dataset.startRequest), button.dataset.startHarness);
+    if (button) review(JSON.parse(button.dataset.startRequest), button.dataset.startHarness, area.dataset.machine);
   });
   dialog.querySelector('[data-start-cancel]').addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => { pending = undefined; });
   accept.addEventListener('click', async () => {
     if (!pending || sending) return;
-    const request = pending;
+    const { request, machine } = pending;
     sending = true;
     for (const button of buttons) button.disabled = true;
     accept.disabled = true;
     dialog.close();
     result.textContent = 'Starting…';
     try {
-      const response = await fetch('/api/v1/runs', {
+      const response = await fetch(machine ? `/fleet/runs?machine=${encodeURIComponent(machine)}` : '/api/v1/runs', {
         method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': area.dataset.csrf },
         body: JSON.stringify(request)
       });
@@ -62,7 +62,7 @@ export function initStarts(refresh) {
       result.replaceChildren(document.createTextNode(value.name ? `Started Command ${value.name}.` : `Pass skipped: ${value.reason}`));
       if (value.name) {
         const link = document.createElement('a');
-        link.href = `/?command=${encodeURIComponent(value.name)}`;
+        link.href = `/?command=${encodeURIComponent(value.name)}${machine ? `&machine=${encodeURIComponent(machine)}` : ''}`;
         link.textContent = 'Open Inbox';
         result.append(' ', link);
       }

@@ -15,6 +15,7 @@
   {% include "console/nav.html" %}
   <main data-time-page data-span-page>
     <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --spans --json · thirdshift logs &lt;command&gt;</code></div>
+    {% match owning_console %}{% when Some with (url) %}<p><a href="{{ url }}">Open the owning Console</a></p>{% when None %}{% endmatch %}
     <details class="command-choices"><summary>Runs <span class="count">{{ view.choices.len() }}</span>{% for choice in view.choices %}{% if choice.selected %} · <span class="chosen">{{ choice.subject }}{% match choice.title %}{% when Some with (title) %} · <span class="command-title" title="{{ title }}">{{ title }}</span>{% when None %}{% endmatch %} · {{ choice.state }}</span>{% endif %}{% endfor %}</summary>
     <nav class="command-chips" aria-label="Choose a Command">{% for choice in view.choices %}<a href="{{ choice.url }}" {% if choice.selected %}aria-current="true"{% endif %}>{{ choice.subject }}{% match choice.title %}{% when Some with (title) %} · <span class="command-title" title="{{ title }}">{{ title }}</span>{% when None %}{% endmatch %} · {{ choice.state }}</a>{% endfor %}</nav>
     </details>

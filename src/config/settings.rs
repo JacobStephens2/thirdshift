@@ -4,19 +4,19 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use toml_edit::{DocumentMut, Item, Table};
 
 use super::UserConfig;
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Setting {
     pub key: String,
     pub value: Value,
     pub default: Value,
     pub editable: bool,
-    pub reason: Option<&'static str>,
+    pub reason: Option<String>,
 }
 
 impl Setting {
@@ -31,7 +31,7 @@ impl Setting {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Settings {
     pub version: u8,
     pub settings: Vec<Setting>,
@@ -50,6 +50,9 @@ fn restriction(key: &str) -> Option<&'static str> {
         ),
         "console.address_scopes" => {
             Some("address scopes control access; use thirdshift console scopes on the machine")
+        }
+        "console.fleet" => {
+            Some("Fleet destinations control access; use thirdshift console fleet on the machine")
         }
         _ => None,
     }
@@ -112,7 +115,7 @@ fn view(table: &toml::Table) -> Result<Settings> {
                 key,
                 default,
                 editable: reason.is_none(),
-                reason,
+                reason: reason.map(str::to_owned),
             })
         })
         .collect::<Result<_>>()?;
@@ -122,19 +125,19 @@ fn view(table: &toml::Table) -> Result<Settings> {
     })
 }
 
-fn load() -> Result<(std::path::PathBuf, String)> {
+fn load() -> Result<(std::path::PathBuf, String, UserConfig)> {
     let (home, path) = super::home_and_path()?;
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error).with_context(|| format!("can't read {}", path.display())),
     };
-    UserConfig::parse(&text, &path, &home)?;
-    Ok((path, text))
+    let config = UserConfig::parse(&text, &path, &home)?;
+    Ok((path, text, config))
 }
 
 pub fn read() -> Result<Settings> {
-    let (_, text) = load()?;
+    let (_, text, _) = load()?;
     view(&text.parse()?)
 }
 
@@ -295,7 +298,7 @@ pub fn write(key: &str, input: &str) -> Result<Change> {
         .write(true)
         .open(root.join("config.lock"))?;
     lock.lock()?;
-    let (_, text) = load()?;
+    let (_, text, config) = load()?;
     let before = one(view(&text.parse()?)?, key)?;
     ensure!(
         input != "\"[redacted]\"" || key != "otlp.endpoint",
@@ -303,6 +306,7 @@ pub fn write(key: &str, input: &str) -> Result<Change> {
     );
     let next = value(input, &before.default);
     let mut document: DocumentMut = text.parse()?;
+    super::console::fleet::migrate_document(&mut document, &config.console.fleet);
     put(&mut document, key, next.to_string().parse()?)?;
     let rendered = document.to_string();
     UserConfig::parse(&rendered, &path, &home)?;

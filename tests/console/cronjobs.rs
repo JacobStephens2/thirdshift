@@ -214,3 +214,42 @@ fn cronjobs_respects_crons_command_and_stdin_separator() {
         ], "pass_starts": []})
     );
 }
+
+#[test]
+fn run_scope_cannot_read_cron_inventory_through_start_options() {
+    let home = fixture();
+    fs::write(
+        home.path().join("crontab"),
+        "0 2 * * * thirdshift console token list # cron-inventory-secret\n*/5 * * * * thirdshift pickup base main\n",
+    )
+    .unwrap();
+    let fired = chrono::Utc::now().to_rfc3339();
+    let root = home.path().join(".thirdshift/logs/hidden/cron-history");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("pickup.last-fired"), &fired).unwrap();
+    let reader = super::tokens::create(home.path(), "reader", &["--scopes", "read"]);
+    let runner = super::tokens::create(home.path(), "runner", &["--scopes", "run"]);
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    let readable = super::tokens::request(&console, &reader, "/api/v1/cronjobs")
+        .send()
+        .unwrap();
+    assert_eq!(readable.status(), 200);
+    let readable = readable.text().unwrap();
+    assert!(readable.contains("cron-inventory-secret"), "{readable}");
+    assert!(readable.contains("hidden/cron-history"), "{readable}");
+    let refused = super::tokens::request(&console, &runner, "/api/v1/cronjobs")
+        .send()
+        .unwrap();
+    assert_eq!(refused.status(), 403);
+    let options = super::tokens::request(&console, &runner, "/api/v1/start-options")
+        .send()
+        .unwrap();
+    assert_eq!(options.status(), 200);
+    let body = options.text().unwrap();
+    assert!(!body.contains("cron-inventory-secret"), "{body}");
+    assert!(!body.contains("console token list"), "{body}");
+    assert!(!body.contains("hidden/cron-history"), "{body}");
+    assert!(!body.contains("\"inventory\""), "{body}");
+}

@@ -19,6 +19,12 @@ mod actions;
 #[path = "console/tokens.rs"]
 mod tokens;
 
+#[path = "console/fleet.rs"]
+mod fleet;
+
+#[path = "console/remote_details.rs"]
+mod remote_details;
+
 #[path = "console/resources.rs"]
 mod resources;
 
@@ -199,7 +205,7 @@ fn sse_event(stream: &mut impl BufRead) -> String {
 fn configure(home: &Path) {
     fs::create_dir_all(home.join(".thirdshift")).unwrap();
     fs::write(home.join(".thirdshift/config.toml"),
-        "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
+        "[console]\nport = 0\nfleet = [{ name = 'other.example.test', address = 'https://other.example.test' }]\ntheme = \"focus-auto\"\n").unwrap();
 }
 
 /// How the Console shows `rfc3339` up to its zone name: this machine's date
@@ -789,7 +795,7 @@ fn security_lists_findings_and_sessions_from_the_cli_inventory() {
     assert!(html.contains("GHSA-test"));
     assert!(html.contains("2-fixture-security-audit.logs.jsonl"));
     assert!(!html.contains("acme/widgets#1"));
-    assert!(html.contains("thirdshift status --all --json"));
+    assert!(html.contains("thirdshift status --local --all --json"));
     assert!(html.contains("show"));
     let shown = Command::new(binary)
         .args(["show", "secure-fixture", "--json"])
@@ -1872,7 +1878,7 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
     for settings in [
         "port = -1",
         "port = 65536",
-        "other_consoles = ['javascript:alert(1)']",
+        "fleet = [{ name = 'unsafe', address = 'javascript:alert(1)' }]",
         "theme = 'typo'",
         "bind = '0.0.0.0'",
     ] {

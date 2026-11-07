@@ -29,7 +29,7 @@ class AffectedTests(unittest.TestCase):
             CALLS=str(self.calls), NEXTEST="yes",
             EXPECT_ROOT=str(self.root),
         )
-        for tool in ["cargo", "npm", "python3", "go"]:
+        for tool in ["cargo", "npm", "python3", "go", "bun"]:
             path = self.tools / tool
             path.write_text(
                 f"#!{sys.executable}\n"
@@ -110,11 +110,55 @@ class AffectedTests(unittest.TestCase):
             ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
         ])
 
+    def test_typescript_only_runs_its_typecheck_and_tests(self):
+        self.change("prototypes/typescript/src/ticket.ts")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+        ])
+
+    def test_typescript_and_rust_run_both_suites(self):
+        self.change("prototypes/typescript/src/ticket.ts", "src/main.rs")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+            ["cargo", "nextest", "run"],
+        ])
+
+    def test_typescript_and_site_do_not_select_full_rust(self):
+        self.change("prototypes/typescript/src/ticket.ts", "site/index.html")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
+
     def test_go_and_rust_run_both_suites(self):
         self.change("prototype/go/main.go", "src/main.rs")
         result, calls = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [["go", "test", "./..."], ["cargo", "nextest", "run"]])
+
+    def test_both_prototypes_and_site_keep_targeted_checks_without_full_rust(self):
+        self.change("prototype/go/main.go", "prototypes/typescript/src/ticket.ts", "site/index.html")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["go", "test", "./..."],
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
 
     def test_passing_commands_print_summaries_and_keep_distinct_ignored_logs(self):
         self.change("site/index.html")

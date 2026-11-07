@@ -3,7 +3,8 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>User config · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main class="user-config"><div class="page-title"><h1>User config</h1><code>thirdshift config --json</code></div>
-<p>This machine's defaults. Reload to see changes. Changes apply to future reads; restarting the Console applies a new listening port.</p>
+{% include "console/machine_controls.html" %}
+<p>Defaults on {{ machine }}. Reload to see changes. Changes apply to future reads; restarting the Console applies a new listening port.</p>
 {% if admin %}<p>Edit one setting at a time. Strings can be bare text; arrays and maps use TOML. Each save is recorded in the Console log.</p>{% else %}<p>Read-only. The admin scope is required to change settings.</p>{% endif %}
 <p>Credentials are kept separately. Export endpoints are redacted; enter a replacement URL or leave blank to disable export.</p>
 {% for setting in settings.settings %}
@@ -14,7 +15,7 @@
 {% else %}
 {% if admin && setting.editable %}
 {% if setting.key == "otlp.endpoint" %}<p>Value: <code>{{ setting.value }}</code></p>{% endif %}
-<form action="/config/{{ setting.key }}" method="post">
+<form action="/config/{{ setting.key }}{{ suffix }}" method="post">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label for="value-{{ loop.index }}">Value for {{ setting.key }}</label>
 <textarea id="value-{{ loop.index }}" name="value" rows="2">{{ setting.input() }}</textarea>
