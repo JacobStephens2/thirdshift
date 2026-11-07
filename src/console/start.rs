@@ -457,6 +457,13 @@ pub(super) async fn submit(
     api::action(api::Format::Json, "/", move || start(request, viewer)).await
 }
 
+pub(super) fn cli(value: serde_json::Value) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(start(
+        serde_json::from_value(value)?,
+        Viewer::local_cli(),
+    )?)?)
+}
+
 pub(super) async fn check_process(Json(mut request): Json<Request>) -> Response {
     api::action(api::Format::Json, "/", move || {
         ensure!(

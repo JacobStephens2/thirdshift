@@ -57,6 +57,7 @@ pub struct ProcessRun {
 
 /// What thirdshift was asked to do.
 pub enum Command {
+    FleetControl(crate::console::fleet_control::Cli),
     Fix(FixArgs),
     Help,
     Version,
@@ -412,6 +413,12 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
+    if args.first().is_some_and(|word| word == "start")
+        || (matches!(args.first().map(String::as_str), Some("config" | "update"))
+            && args.iter().any(|word| word == "--machine"))
+    {
+        return crate::console::fleet_control::Cli::parse(args).map(Command::FleetControl);
+    }
     if matches!(args.first().map(String::as_str), Some("show" | "logs"))
         && args.iter().any(|arg| arg == "--machine")
     {

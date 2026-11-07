@@ -5,6 +5,7 @@ use std::mem::{Discriminant, discriminant};
 use crate::args::Command;
 
 const COMMANDS: &[(&str, &str)] = &[
+    ("FleetControl", "start --options --json"),
     ("Help", "help"),
     ("Version", "version"),
     ("Update", "update"),

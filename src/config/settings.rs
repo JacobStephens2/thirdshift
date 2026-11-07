@@ -4,19 +4,19 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use toml_edit::{DocumentMut, Item, Table};
 
 use super::UserConfig;
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Setting {
     pub key: String,
     pub value: Value,
     pub default: Value,
     pub editable: bool,
-    pub reason: Option<&'static str>,
+    pub reason: Option<String>,
 }
 
 impl Setting {
@@ -31,7 +31,7 @@ impl Setting {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Settings {
     pub version: u8,
     pub settings: Vec<Setting>,
@@ -115,7 +115,7 @@ fn view(table: &toml::Table) -> Result<Settings> {
                 key,
                 default,
                 editable: reason.is_none(),
-                reason,
+                reason: reason.map(str::to_owned),
             })
         })
         .collect::<Result<_>>()?;

@@ -19,6 +19,15 @@ impl Drop for Console {
 
 #[test]
 fn admin_update_answers_after_installation_then_console_serves_the_new_version() {
+    update(false);
+}
+
+#[test]
+fn fleet_cli_update_checks_and_replaces_only_the_owners_binary() {
+    update(true);
+}
+
+fn update(fleet: bool) {
     let scenario = Scenario::new();
     scenario.user_config_is("[console]\nport = 0\n");
     let home = scenario.path("home");
@@ -114,14 +123,43 @@ server.serve_forever()
         .unwrap();
     assert_eq!(http_check, checked);
     assert!(!completed.exists(), "a version check must not install");
-    let response = client
-        .post(format!("{address}/api/v1/update"))
-        .bearer_auth(token.trim())
-        .send()
-        .unwrap();
-    let status = response.status();
-    let body = response.text().unwrap();
-    assert_eq!(status, 200, "{body}");
+    let body = if fleet {
+        let caller = Scenario::new();
+        caller.user_config_is("");
+        let mut pairing = caller
+            .command(&["console", "fleet", "add", "owner", &address])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(pairing.stdin.take().unwrap(), "{}", token.trim()).unwrap();
+        let paired = pairing.wait_with_output().unwrap();
+        assert!(paired.status.success(), "{paired:?}");
+        let remote_check = caller.run(&["update", "--check", "--json", "--machine", "owner"]);
+        assert_eq!(remote_check.code, Some(0), "{}", remote_check.stderr);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&remote_check.stdout).unwrap(),
+            checked
+        );
+        let updated = caller.run(&["update", "--json", "--machine", "owner"]);
+        assert_eq!(updated.code, Some(0), "{}", updated.stderr);
+        assert!(
+            !caller.path("home/.thirdshift/console.log").exists(),
+            "caller must not install or audit the owner's update"
+        );
+        updated.stdout
+    } else {
+        let response = client
+            .post(format!("{address}/api/v1/update"))
+            .bearer_auth(token.trim())
+            .send()
+            .unwrap();
+        let status = response.status();
+        let body = response.text().unwrap();
+        assert_eq!(status, 200, "{body}");
+        body
+    };
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body).unwrap(),
         json!(format!("updated thirdshift {VERSION} to 99.0.0"))

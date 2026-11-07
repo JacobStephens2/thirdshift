@@ -11,6 +11,7 @@ mod experiments;
 mod filters;
 pub(crate) mod fleet;
 pub(crate) mod fleet_actions;
+pub(crate) mod fleet_control;
 mod fleet_inbox;
 mod github;
 pub(crate) use account_commands::Scopes;
@@ -97,9 +98,6 @@ impl PageContext {
     }
     fn can_admin(&self) -> bool {
         self.scopes.contains(&Scope::Admin)
-    }
-    fn can_run(&self) -> bool {
-        self.scopes.contains(&Scope::Run)
     }
     fn can_security(&self) -> bool {
         self.scopes.contains(&Scope::Security)
@@ -200,6 +198,8 @@ enum View {
     CronJobs,
     LaunchDirectories,
     StartRun,
+    StartOptions,
+    FleetRun,
     Resources,
     ResourceStatus,
     Metrics,
@@ -268,6 +268,7 @@ impl PageRoute {
                 | View::CronJobs
                 | View::LaunchDirectories
                 | View::StartRun
+                | View::StartOptions
                 | View::Resources
                 | View::ResourceStatus
                 | View::Metrics
@@ -448,6 +449,22 @@ const PAGES: &[PageRoute] = &[
         view: View::LaunchDirectories,
     },
     PageRoute {
+        path: "/api/v1/start-options",
+        api: "/api/v1/start-options",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift start --options --json"],
+        method: Method::GET,
+        view: View::StartOptions,
+    },
+    PageRoute {
+        path: "/fleet/runs",
+        api: "",
+        scope: None,
+        cli: &["thirdshift start acme/widgets 7 --machine server"],
+        method: Method::POST,
+        view: View::FleetRun,
+    },
+    PageRoute {
         path: "/update",
         api: "/api/v1/update",
         scope: Some(Scope::Admin),
@@ -498,7 +515,7 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/whoami",
         api: "/api/v1/whoami",
-        scope: Some(Scope::Read),
+        scope: None,
         cli: &["thirdshift console whoami --json"],
         method: Method::GET,
         view: View::Whoami,
@@ -1012,6 +1029,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::LaunchDirectories, Method::GET) => get(known_launch_directories),
             (View::StartRun, Method::POST) => post(start::submit),
+            (View::StartOptions, Method::GET) => get(start_controls::options),
+            (View::FleetRun, Method::POST) => post(fleet_control::submit),
             (View::Scores, Method::GET) => get(scoring::show),
             (View::HumanScores, Method::POST) => post(scoring::submit),
             (View::BugOrigins, Method::GET) => get(bug_origins::show),
@@ -1052,22 +1071,25 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         }
         .route_layer(middleware::from_fn(auth::csrf_guard));
         if page.serves_api() {
-            assert!(page.scope.is_some(), "API route needs a scope");
-            router = router.route(
-                page.api,
-                handler
-                    .clone()
-                    .layer(axum::Extension(api::Format::Json))
-                    .layer(middleware::from_fn_with_state(
-                        page.scope.unwrap(),
-                        auth::require_scope,
-                    )),
+            assert!(
+                page.scope.is_some() || matches!(page.view, View::Whoami),
+                "API route needs a scope"
             );
+            let api_handler = handler.clone().layer(axum::Extension(api::Format::Json));
+            let api_handler = if let Some(scope) = page.scope {
+                api_handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
+            } else {
+                api_handler
+            };
+            router = router.route(page.api, api_handler);
             if page.api == page.path {
                 continue;
             }
         }
-        let handler = if matches!(page.view, View::Config) {
+        let handler = if matches!(
+            page.view,
+            View::Config | View::SetConfig | View::Update | View::RunUpdate
+        ) {
             // The API is admin-only; a person with read may see the page.
             handler.layer(middleware::from_fn(auth::require_config_view))
         } else if matches!(page.view, View::Look | View::Themes | View::ThemeExport) {
@@ -1113,6 +1135,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[template(path = "console/inbox.html")]
 struct InboxPage {
     page: PageContext,
+    targets: Vec<fleet_control::Target>,
     start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
@@ -1336,11 +1359,16 @@ async fn render_page(
             } else {
                 Vec::new()
             };
+            let targets = fleet_control::controls(&config, &viewer);
             Ok(InboxPage {
                 page: PageContext::new(&config, &viewer.scopes),
-                start: (archive_page.is_none() && viewer.scopes.contains(&Scope::Run))
-                    .then(|| start_controls::Form::load(&config)),
+                start: if archive_page.is_none() {
+                    start_controls::Form::fleet(&config, &viewer, &targets)
+                } else {
+                    None
+                },
                 csrf: viewer.csrf,
+                targets,
                 hidden_sections: config.console.hidden_sections.clone(),
                 cli,
                 inbox,
@@ -1812,7 +1840,11 @@ mod tests {
             "{} has no versioned API path",
             route.path
         );
-        assert!(route.scope.is_some(), "{} has no API scope", route.path);
+        assert!(
+            route.scope.is_some() || matches!(route.view, super::View::Whoami),
+            "{} has no API scope",
+            route.path
+        );
     }
 
     #[test]

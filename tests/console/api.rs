@@ -351,7 +351,7 @@ fn openapi_equals_cli_and_describes_operations_without_local_secrets() {
         assert!(path.starts_with("/api/v1/"));
         for (_, operation) in methods.as_object().unwrap() {
             assert!(
-                ["read", "security", "act", "run", "admin"]
+                ["read", "security", "act", "run", "admin", "authenticated"]
                     .contains(&operation["x-scope"].as_str().unwrap())
             );
             for twin in operation["x-cli-twins"].as_array().unwrap() {
