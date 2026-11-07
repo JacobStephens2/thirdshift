@@ -10,6 +10,12 @@ export function serve(port: number, scope: "read" | "act", assets: { html: strin
   const inbox = new Inbox();
   return Bun.serve({
     hostname: "127.0.0.1", port,
+    // Unset NODE_ENV makes Bun render a development error page that includes
+    // the working directory and source. Keep handler failures on the JSON API.
+    development: false,
+    error() {
+      return Response.json({ error: "Internal Server Error" }, { status: 500 });
+    },
     async fetch(request) {
       const url = new URL(request.url);
       const route = routes.find(route => route.path === url.pathname && route.method === request.method);

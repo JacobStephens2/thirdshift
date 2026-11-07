@@ -135,8 +135,10 @@ export THIRDSHIFT_PROTOTYPE_TOKEN="$(openssl rand -hex 32)"
 ```
 
 Open the printed localhost URL and enter that token. JSON routes require it as
-`Authorization: Bearer <token>`. The HTML login shell and bundled script are
-public and contain no Inbox data or token. The browser keeps the entered token
+`Authorization: Bearer <token>`. A handler failure returns HTTP 500 JSON
+`{"error":"Internal Server Error"}` and does not render Bun's development
+error page. The HTML login shell and bundled script are public and contain no
+Inbox data or token. The browser keeps the entered token
 in session storage for reloads. `--scope read` permits status and OpenAPI but
 refuses Dismissal/Undo with 403; `act` includes read access. This local-only
 prototype uses one configured token and binds exclusively to `127.0.0.1`; it
