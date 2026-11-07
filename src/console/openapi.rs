@@ -229,9 +229,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::LaunchDirectories => object(json!({
             "directories": array(object(json!({"repository": text, "path": text})))
         })),
-        View::StartOptions => {
-            object(json!({"form": record, "passes": array(record.clone()), "inventory": record}))
-        }
+        View::StartOptions => object(json!({"form": record, "passes": array(record.clone())})),
         View::StartRun => json!({"oneOf": [
             object(json!({"version": version, "name": text})),
             object(json!({"version": version, "outcome": {"const":"skipped"}, "reason": text})),

@@ -111,33 +111,29 @@ pub(super) struct Pass {
     pub harness: String,
 }
 
+/// Start choices for `run`. Cron inventory stays on the read-scoped cronjobs API.
 #[derive(Serialize, Deserialize)]
 pub(super) struct Options {
     pub form: Form,
     pub passes: Vec<Pass>,
-    pub inventory: crate::cronjobs::CronJobs,
 }
 
 impl Options {
     pub fn load(config: &UserConfig) -> Result<Self> {
-        let inventory = match crate::cronjobs::load() {
-            Ok(inventory) => inventory,
+        let jobs = match crate::cronjobs::jobs() {
+            Ok(jobs) => jobs,
             Err(error)
                 if error
                     .downcast_ref::<std::io::Error>()
                     .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
             {
-                crate::cronjobs::CronJobs {
-                    jobs: Vec::new(),
-                    pass_starts: crate::logs::pass_starts::load(&config.logs_dir)?,
-                }
+                Vec::new()
             }
             Err(error) => return Err(error),
         };
         Ok(Self {
             form: Form::load(config),
-            passes: passes(config, &inventory.jobs)?,
-            inventory,
+            passes: passes(config, &jobs)?,
         })
     }
 }

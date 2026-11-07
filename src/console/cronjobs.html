@@ -7,9 +7,11 @@
 {% if !machine.is_empty() %}<p>Machine: {{ machine }}</p>{% endif %}
 <p>thirdshift entries in this account's crontab (<code>crontab -l</code>). Schedules use cron's time zone. Reload to see changes.</p>
 <p>Other accounts, system crontabs and other schedulers are outside this view.</p>
+{% if show_jobs %}
 {% if !inventory.jobs.is_empty() %}<pre class="crontab" tabindex="0" role="region" aria-label="thirdshift crontab entries"><code>{% for job in inventory.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi>
 {% endfor %}</code></pre>{% endif %}
 {% if inventory.jobs.is_empty() %}<p>No thirdshift cron jobs in this account's crontab.</p>{% endif %}
+{% endif %}
 {% if can_run %}
 <section class="start-controls" aria-label="Run Passes now" data-start-area data-csrf="{{ csrf }}" data-machine="{{ machine }}">
   <h2>Run Passes now</h2>
@@ -21,8 +23,10 @@
 </section>
 {% include "console/start_confirm.html" %}
 {% endif %}
+{% if show_jobs %}
 <h2>Last fired by repository</h2>
 <p>Observed Pass starts on this host, including manual launches and skipped Passes. A start does not identify which scheduler launched it.</p>
 <ul>{% for pass in inventory.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
 {% if inventory.pass_starts.is_empty() %}<p>No Pass start times recorded on this host.</p>{% endif %}
+{% endif %}
 </main>{% include "console/chrome.html" %}</body></html>

@@ -17,6 +17,7 @@ struct CronJobsPage {
     start_error: Option<String>,
     machine: String,
     can_run: bool,
+    show_jobs: bool,
     targets: Vec<super::fleet_control::Target>,
 }
 
@@ -29,24 +30,35 @@ pub(super) async fn show(
         let selection = super::fleet_control::Selection::query(&query);
         let config = UserConfig::load()?;
         let remote = selection.remote(&config, &viewer, format)?;
-        let mut remote_options = None;
-        let inventory = if let Some(remote) = &remote {
+        let mut remote_passes = None;
+        // Run lists startable Passes. The crontab and last-fired times stay behind read.
+        let (inventory, show_jobs) = if let Some(remote) = &remote {
             let identity = remote.identity()?;
-            if identity.scopes.contains(&super::Scope::Run) {
+            let can_run = identity.scopes.contains(&super::Scope::Run);
+            let can_read = identity.scopes.contains(&super::Scope::Read);
+            if can_run {
                 let options: super::start_controls::Options =
                     serde_json::from_value(remote.get("/start-options")?)?;
-                remote_options = Some(options.passes);
-                options.inventory
+                remote_passes = Some(options.passes);
+            }
+            if can_read || !can_run {
+                (serde_json::from_value(remote.get("/cronjobs")?)?, true)
             } else {
-                serde_json::from_value(remote.get("/cronjobs")?)?
+                (
+                    CronJobs {
+                        jobs: Vec::new(),
+                        pass_starts: Vec::new(),
+                    },
+                    false,
+                )
             }
         } else {
-            cronjobs::load()?
+            (cronjobs::load()?, true)
         };
         format.render(inventory, |inventory| {
-            let can_run = remote_options.is_some()
+            let can_run = remote_passes.is_some()
                 || (remote.is_none() && viewer.scopes.contains(&super::Scope::Run));
-            let (passes, start_error) = if let Some(passes) = remote_options {
+            let (passes, start_error) = if let Some(passes) = remote_passes {
                 (passes, None)
             } else if remote.is_none() && can_run {
                 match super::start_controls::passes(&config, &inventory.jobs) {
@@ -61,6 +73,7 @@ pub(super) async fn show(
                 targets: super::fleet_control::targets(&config, &viewer, super::Scope::Run),
                 machine: selection.machine,
                 can_run,
+                show_jobs,
                 inventory,
                 csrf: viewer.csrf,
                 passes,
