@@ -34,7 +34,7 @@ def print_failures(log_path):
                 print(line.strip(), flush=True)
 
 
-def run(*command):
+def run(*command, cwd=None):
     directory = Path(".affected-tests").resolve()
     directory.mkdir(exist_ok=True)
     name = re.sub(r"[^A-Za-z0-9_-]", "-", "-".join(command))[:120]
@@ -43,7 +43,7 @@ def run(*command):
         print(f"+ {' '.join(command)} (log: {log.name})", flush=True)
         started = time.monotonic()
         try:
-            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+            result = subprocess.run(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
         except OSError as error:
             log.write(f"error: {error}\n".encode())
             result = subprocess.CompletedProcess(command, 1)
@@ -70,7 +70,9 @@ def main():
     areas = set()
     typescript = False
     for path in sorted(paths):
-        if path.startswith(b"prototypes/typescript/"):
+        if path.startswith(b"prototype/go/"):
+            areas.add("go")
+        elif path.startswith(b"prototypes/typescript/"):
             typescript = True
         elif path.startswith((b"src/console/", b"src/config/console/")) or path in {
             b"src/console.rs", b"src/config/console.rs", b"tests/console/scoring_fixture.py",
@@ -90,7 +92,10 @@ def main():
         else:
             areas.add("full")
             print(f"Conservative full-suite selection for {os.fsdecode(path)!r}.", flush=True)
-    full = "full" in areas or len(areas) > 1
+    rust_areas = areas - {"go"}
+    full = "full" in rust_areas or len(rust_areas) > 1
+    if "go" in areas:
+        run("go", "test", "./...", cwd="prototype/go")
     if typescript:
         run("bun", "run", "--cwd", "prototypes/typescript", "typecheck")
         run("bun", "test", "--cwd", "prototypes/typescript")

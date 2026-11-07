@@ -25,6 +25,7 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 
 | Changed paths | Checks |
 | --- | --- |
+| `prototype/go/**` only | `go test ./...` from `prototype/go/`; no Rust suite |
 | `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires Python 3 and `bun install --frozen-lockfile` in that directory first; Chromium setup is in the prototype README |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
@@ -33,10 +34,12 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 | Everything else, including `src/**`, shared test support/fakes, Cargo files and CI configuration | Full Rust suite |
 | Several existing areas together | Full Rust suite plus any selected site, Console and release-generator checks; the full suite subsumes the targeted Rust checks |
 
-The TypeScript prototype is isolated: prototype-only changes run no Rust
-checks, and changes outside its directory do not select its checks. Mixed
-changes add the prototype checks independently, without broadening the existing
-areas' Rust selection. See [the prototype README](../prototypes/typescript/README.md).
+The Go and TypeScript prototypes are isolated: changes confined to either or
+both prototype directories run no Rust checks, and changes outside a prototype's
+directory do not select its checks. Mixed changes add each prototype's checks
+independently, without broadening the existing areas' Rust selection. See the
+[Go README](../prototype/go/README.md) and
+[TypeScript README](../prototypes/typescript/README.md).
 
 Unknown paths print the reason for selecting the full Rust suite, and Console
 paths print the reason for selecting the Console browser tests. The mappings
@@ -84,7 +87,10 @@ and the Linux Rust suite. CI uses only Linux runners: x86_64 on every PR and
 aarch64 on `main` pushes, nightly and manual runs, plus PRs into `main` labelled
 `test:linux-arm`. See [CI performance](ci-performance.md). This script selects
 Rust, site, Console browser and release checks; it does not replace CI's
-coverage of both Linux architectures. Run local checks in Linux, including
+coverage of both Linux architectures. The isolated Go prototype has its own
+path-filtered CI workflow; ordinary Rust changes require no Go toolchain.
+See [its README](../prototype/go/README.md) for setup and static builds.
+Run local checks in Linux, including
 an ARM Linux VM when contributing from an Apple Silicon Mac.
 
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
