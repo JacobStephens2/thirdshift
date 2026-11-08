@@ -59,8 +59,9 @@ export class Claim {
         const { addedProgress, removedReady } = this.state;
         const remote = await commands.run(["git", "ls-remote", "--heads", "origin", `refs/heads/${issue.branch}`], launch, { finishing: true });
         // A fork pull request uses this head name but is not the run's work.
-        // Counting it would keep the Claim with nothing on origin.
-        const listed: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--json", "number,isCrossRepository"], launch, { finishing: true }));
+        // Counting it would keep the Claim with nothing on origin. gh lists 30
+        // by default, so a page of fork rows can hide a later same-repository one.
+        const listed: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--limit", "1000", "--json", "number,isCrossRepository"], launch, { finishing: true }));
         if (!Array.isArray(listed)) throw new Error("Invalid pull-request response");
         let published = false;
         for (const pr of listed) {

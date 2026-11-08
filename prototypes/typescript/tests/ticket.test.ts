@@ -371,16 +371,60 @@ test.each([
   expect(result.stderr).toContain("no commits ahead");
   expect(result.stderr).not.toContain("Claim ending failed");
   expect(f.git("ls-remote", "--heads", "origin", "issue-7")).toBe("");
-  const calls = await readFile(join(f.directory, "calls"), "utf8");
-  const ending = calls.trim().split("\n").map(line => JSON.parse(line) as unknown).filter(
-    (args): args is string[] => Array.isArray(args) && args[0] === "pr" && args[1] === "list" && !args.includes("--limit"),
-  );
-  expect(ending).toHaveLength(1);
-  const listed = ending[0];
-  if (!listed) throw new Error("Missing Claim ending pull-request list");
-  expect(listed[listed.indexOf("--json") + 1]?.split(",")).toContain("isCrossRepository");
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
   expect(issue.labels).toEqual(labels);
+}, 120_000);
+
+test("a same-repository pull request past gh's default page still keeps the Claim", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "no-commit"), "yes");
+  const ghPath = join(f.directory, "gh");
+  const script = await readFile(ghPath, "utf8");
+  const old = `    rows = [prs[head]] if head in prs else []
+    print(json.dumps([{field: row.get(field) for field in fields} for row in rows]))`;
+  const neu = `    limit = int(args[args.index('--limit') + 1]) if '--limit' in args else 30
+    forks = [{"number": i, "isCrossRepository": True} for i in range(1, 31)]
+    same = [{"number": 31, "isCrossRepository": False}]
+    rows = (forks + same)[:limit]
+    print(json.dumps([{field: row.get(field) for field in fields} for row in rows]))`;
+  if (!script.includes(old)) throw new Error("gh fake pr list shape changed");
+  await writeFile(ghPath, script.replace(old, neu));
+  await chmod(ghPath, 0o755);
+  const result = await f.run();
+  expect(result.stderr).not.toContain("Claim ending failed");
+  expect(f.git("ls-remote", "--heads", "origin", "issue-7")).toBe("");
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([{ name: "in-progress" }]);
+}, 120_000);
+
+test("Claim ending still counts a same-repository pull request after a default page of fork pull requests", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "no-commit"), "yes");
+  await writeFile(join(f.directory, "prs.json"), JSON.stringify({
+    "issue-7": {
+      number: 99, state: "OPEN", headRefName: "issue-7", headRefOid: "a".repeat(40),
+      baseRefName: "main", isDraft: true, mergeable: "MERGEABLE", isCrossRepository: false,
+      url: "https://github.com/test/project/pull/99",
+    },
+  }));
+  const gh = join(f.directory, "gh");
+  const source = await readFile(gh, "utf8");
+  const marker = "elif args[:2] == ['pr', 'list']:";
+  const next = source.indexOf("elif args[:2] == ['pr', 'create']:", source.indexOf(marker));
+  const replacement = `elif args[:2] == ['pr', 'list']:
+    prs = json.loads((root / 'prs.json').read_text()) if (root / 'prs.json').exists() else {}
+    head = args[args.index('--head') + 1]
+    fields = args[args.index('--json') + 1].split(',')
+    limit = int(args[args.index('--limit') + 1]) if '--limit' in args else 30
+    forks = [{'number': i, 'isCrossRepository': True} for i in range(1, 31)]
+    rows = forks + ([prs[head]] if head in prs else [])
+    print(json.dumps([{field: row.get(field) for field in fields} for row in rows[:limit]]))
+`;
+  await writeFile(gh, source.slice(0, source.indexOf(marker)) + replacement + source.slice(next));
+  const result = await f.run();
+  expect(result.stderr).not.toContain("Claim ending failed");
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([{ name: "in-progress" }]);
 }, 120_000);
 
 test("Origin match fails before claiming or starting a session", async () => {
