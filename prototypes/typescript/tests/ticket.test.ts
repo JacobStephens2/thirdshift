@@ -106,7 +106,9 @@ elif args[:2] == ['label', 'create']: (root / 'label-created').write_text('yes')
 elif args[:2] == ['pr', 'list']:
     prs = json.loads((root / 'prs.json').read_text()) if (root / 'prs.json').exists() else {}
     head = args[args.index('--head') + 1]
-    print(json.dumps([prs[head]] if head in prs else []))
+    fields = args[args.index('--json') + 1].split(',')
+    rows = [prs[head]] if head in prs else []
+    print(json.dumps([{field: row.get(field) for field in fields} for row in rows]))
 elif args[:2] == ['pr', 'create']:
     import subprocess
     prs = json.loads((root / 'prs.json').read_text()) if (root / 'prs.json').exists() else {}
@@ -349,6 +351,36 @@ test("a session with no commits fails Delivery and releases its Claim with nothi
   expect(await Bun.file(join(f.directory, "prs.json")).exists()).toBe(false);
   const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
   expect(issue.labels).toEqual([{ name: "ready-for-agent" }]);
+}, 120_000);
+
+test.each([
+  [true, [{ name: "ready-for-agent" }]],
+  [false, [{ name: "in-progress" }]],
+])("Claim ending counts a pull request only when it is in this repository (fork: %p)", async (fork, labels) => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "no-commit"), "yes");
+  await writeFile(join(f.directory, "prs.json"), JSON.stringify({
+    "issue-7": {
+      number: 9, state: "OPEN", headRefName: "issue-7", headRefOid: "a".repeat(40),
+      baseRefName: "main", isDraft: true, mergeable: "MERGEABLE", isCrossRepository: fork,
+      url: "https://github.com/test/project/pull/9",
+    },
+  }));
+  const result = await f.run();
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("no commits ahead");
+  expect(result.stderr).not.toContain("Claim ending failed");
+  expect(f.git("ls-remote", "--heads", "origin", "issue-7")).toBe("");
+  const calls = await readFile(join(f.directory, "calls"), "utf8");
+  const ending = calls.trim().split("\n").map(line => JSON.parse(line) as unknown).filter(
+    (args): args is string[] => Array.isArray(args) && args[0] === "pr" && args[1] === "list" && !args.includes("--limit"),
+  );
+  expect(ending).toHaveLength(1);
+  const listed = ending[0];
+  if (!listed) throw new Error("Missing Claim ending pull-request list");
+  expect(listed[listed.indexOf("--json") + 1]?.split(",")).toContain("isCrossRepository");
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual(labels);
 }, 120_000);
 
 test("Origin match fails before claiming or starting a session", async () => {

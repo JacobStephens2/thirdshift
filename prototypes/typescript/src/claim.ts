@@ -58,9 +58,16 @@ export class Claim {
       case "changed": {
         const { addedProgress, removedReady } = this.state;
         const remote = await commands.run(["git", "ls-remote", "--heads", "origin", `refs/heads/${issue.branch}`], launch, { finishing: true });
-        const prs: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--json", "number"], launch, { finishing: true }));
-        if (!Array.isArray(prs)) throw new Error("Invalid pull-request response");
-        if (!remote && prs.length === 0) {
+        // A fork pull request uses this head name but is not the run's work.
+        // Counting it would keep the Claim with nothing on origin.
+        const listed: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--json", "number,isCrossRepository"], launch, { finishing: true }));
+        if (!Array.isArray(listed)) throw new Error("Invalid pull-request response");
+        let published = false;
+        for (const pr of listed) {
+          if (!record(pr) || typeof pr.number !== "number" || typeof pr.isCrossRepository !== "boolean") throw new Error("Invalid pull-request response");
+          if (!pr.isCrossRepository) published = true;
+        }
+        if (!remote && !published) {
           const restored = labels.filter(label => !addedProgress || !labelIs(label, "in-progress"));
           if (removedReady && !restored.some(label => labelIs(label, "ready-for-agent"))) restored.push("ready-for-agent");
           await this.setLabels(restored, true);
