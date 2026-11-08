@@ -397,6 +397,36 @@ test("a same-repository pull request past gh's default page still keeps the Clai
   expect(issue.labels).toEqual([{ name: "in-progress" }]);
 }, 120_000);
 
+test("a same-repository pull request past the list limit still keeps the Claim", async () => {
+  const f = await fixture();
+  await writeFile(join(f.directory, "no-commit"), "yes");
+  const gh = join(f.directory, "gh");
+  const source = await readFile(gh, "utf8");
+  const marker = "elif args[:2] == ['pr', 'list']:";
+  const next = source.indexOf("elif args[:2] == ['pr', 'create']:", source.indexOf(marker));
+  const replacement = `elif args[:2] == ['pr', 'list']:
+    head = args[args.index('--head') + 1]
+    if head != 'issue-7':
+        print('[]')
+    else:
+        fields = args[args.index('--json') + 1].split(',')
+        limit = int(args[args.index('--limit') + 1]) if '--limit' in args else 30
+        forks = [{'number': i, 'isCrossRepository': True} for i in range(1, limit + 1)]
+        same = {'number': limit + 1, 'isCrossRepository': False}
+        rows = (forks + [same])[:limit]
+        print(json.dumps([{field: row.get(field) for field in fields} for row in rows]))
+`;
+  if (source.indexOf(marker) < 0 || next < 0) throw new Error("gh fake pr list shape changed");
+  await writeFile(gh, source.slice(0, source.indexOf(marker)) + replacement + source.slice(next));
+  await chmod(gh, 0o755);
+  const result = await f.run();
+  expect(result.stderr).toContain("no commits ahead");
+  expect(result.stderr).toContain("Pull-request list reached its limit before a same-repository pull request");
+  expect(f.git("ls-remote", "--heads", "origin", "issue-7")).toBe("");
+  const issue = object(JSON.parse(await readFile(join(f.directory, "issue.json"), "utf8")));
+  expect(issue.labels).toEqual([{ name: "in-progress" }]);
+}, 120_000);
+
 test("Claim ending still counts a same-repository pull request after a default page of fork pull requests", async () => {
   const f = await fixture();
   await writeFile(join(f.directory, "no-commit"), "yes");

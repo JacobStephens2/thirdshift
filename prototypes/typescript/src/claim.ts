@@ -61,12 +61,20 @@ export class Claim {
         // A fork pull request uses this head name but is not the run's work.
         // Counting it would keep the Claim with nothing on origin. gh lists 30
         // by default, so a page of fork rows can hide a later same-repository one.
-        const listed: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--limit", "1000", "--json", "number,isCrossRepository"], launch, { finishing: true }));
+        // The list stops at this limit and does not say whether more rows exist.
+        const pullRequestLimit = 1000;
+        const listed: unknown = JSON.parse(await commands.run(["gh", "pr", "list", "--repo", issue.repository, "--head", issue.branch, "--state", "all", "--limit", String(pullRequestLimit), "--json", "number,isCrossRepository"], launch, { finishing: true }));
         if (!Array.isArray(listed)) throw new Error("Invalid pull-request response");
         let published = false;
         for (const pr of listed) {
           if (!record(pr) || typeof pr.number !== "number" || typeof pr.isCrossRepository !== "boolean") throw new Error("Invalid pull-request response");
           if (!pr.isCrossRepository) published = true;
+        }
+        // A full page of fork pull requests does not prove this repository has
+        // none. Releasing then would drop the Claim while a same-repository
+        // pull request may still exist. The error leaves the Claim in place.
+        if (!remote && !published && listed.length >= pullRequestLimit) {
+          throw new Error("Pull-request list reached its limit before a same-repository pull request");
         }
         if (!remote && !published) {
           const restored = labels.filter(label => !addedProgress || !labelIs(label, "in-progress"));
