@@ -41,7 +41,10 @@ SIGINT, SIGTERM and SIGHUP record interruption. The active subprocess group gets
 SIGINT, then SIGTERM after one second, then SIGKILL after another second, even
 if its leader has exited. Claim ending runs after cancellation: a new Claim
 is restored to its prior labels when neither an Issue branch on origin nor a
-pull request exists, and otherwise retained.
+pull request in this repository exists, and otherwise retained. A fork pull
+request that reuses the Issue branch name does not keep it. A full page of
+fork pull requests does not prove none are in this repository, so the Claim
+stays.
 
 After the opening Harness session commits, Delivery pushes the Issue branch,
 opens or verifies a draft pull request against the Base branch, merges Base
