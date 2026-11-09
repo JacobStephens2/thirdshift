@@ -68,6 +68,7 @@ struct ConfigPage {
     admin: bool,
     machine: String,
     suffix: String,
+    saved: String,
     targets: Vec<super::fleet_control::Target>,
 }
 
@@ -99,6 +100,7 @@ pub(super) async fn show(
                     selection.machine.clone()
                 },
                 suffix: selection.suffix(),
+                saved: super::query_value(&query, "saved"),
                 settings,
                 csrf: viewer.csrf,
                 admin,
@@ -132,6 +134,17 @@ pub(super) async fn set(
     Form(edit): Form<Edit>,
 ) -> Response {
     let selection = super::fleet_control::Selection::query(&query);
+    let location = if format == api::Format::Html {
+        let mut parameters = Vec::new();
+        if !selection.machine.is_empty() {
+            parameters.push(("machine", selection.machine.as_str()));
+        }
+        parameters.push(("saved", key.as_str()));
+        let query = serde_urlencoded::to_string(parameters).expect("config query contains strings");
+        format!("/config?{query}#config-{key}")
+    } else {
+        "/config".to_owned()
+    };
     if !selection.machine.is_empty() {
         return api::read(format, move || {
             let config = UserConfig::load()?;
@@ -140,25 +153,21 @@ pub(super) async fn set(
                     &super::fleet_control::config_route(&key)?,
                     &[("value", &edit.value)],
                 )?;
-                Ok(
-                    axum::response::Redirect::to(&format!("/config{}", selection.suffix()))
-                        .into_response(),
-                )
             } else {
                 anyhow::ensure!(
                     viewer.scopes.contains(&Scope::Admin),
                     "Missing scope: admin"
                 );
                 change(&key, &edit.value, &viewer.caller_label)?;
-                Ok(axum::response::Redirect::to("/config").into_response())
             }
+            Ok(axum::response::Redirect::to(&location).into_response())
         })
         .await;
     }
     if !viewer.scopes.contains(&Scope::Admin) {
         return api::error(axum::http::StatusCode::FORBIDDEN, "Missing scope: admin");
     }
-    api::action(format, "/config", move || {
+    api::action(format, &location, move || {
         change(&key, &edit.value, &viewer.caller_label)
     })
     .await

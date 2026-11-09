@@ -41,7 +41,7 @@ test('Fleet starts, Passes and config keep their machine through confirmation an
     await page.locator('[data-start-result]').filter({ hasText: /Pass skipped/ }).waitFor({ timeout: 15000 });
     await page.goto(`${caller.origin}/config?machine=owner`);
     await page.getByLabel('Value for spec.parallel', { exact: true }).fill('5');
-    await Promise.all([page.waitForURL(`${caller.origin}/config?machine=owner`), page.getByRole('button', { name: 'Save spec.parallel', exact: true }).click()]);
+    await Promise.all([page.waitForURL(`${caller.origin}/config?machine=owner&saved=spec.parallel#config-spec.parallel`), page.getByRole('button', { name: 'Save spec.parallel', exact: true }).click()]);
     assert.equal(JSON.parse(owner.cli(['config', 'spec.parallel', '--json'])).value, 5);
     assert.equal(JSON.parse(caller.cli(['config', 'spec.parallel', '--json'])).value, 3);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
