@@ -461,6 +461,15 @@ impl Stored {
         if json {
             Ok(serde_json::to_string(&view)?)
         } else {
+            let mut selection = self
+                .verdict
+                .as_ref()
+                .map_or(String::new(), |verdict| verdict.selection_report());
+            if self.description.baseline.process.is_some()
+                || self.description.candidate.process.is_some()
+            {
+                selection.push_str(&format!("\nProcess Trial outcomes (stopped-to-ask counts as failed):\nBaseline: {} delivered, {} stopped-to-ask, {} failed\nCandidate: {} delivered, {} stopped-to-ask, {} failed", view.outcomes.baseline.delivered, view.outcomes.baseline.stopped_to_ask, view.outcomes.baseline.failed, view.outcomes.candidate.delivered, view.outcomes.candidate.stopped_to_ask, view.outcomes.candidate.failed));
+            }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
 Baseline: {}
@@ -498,10 +507,7 @@ Candidate: {}{}{}",
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
                     .collect::<String>(),
-                format!("{}{}", self.verdict.as_ref().map_or(String::new(), |verdict| verdict.selection_report()),
-                    if self.description.baseline.process.is_some() || self.description.candidate.process.is_some() {
-                        format!("\nProcess Trial outcomes (stopped-to-ask counts as failed):\nBaseline: {} delivered, {} stopped-to-ask, {} failed\nCandidate: {} delivered, {} stopped-to-ask, {} failed", view.outcomes.baseline.delivered, view.outcomes.baseline.stopped_to_ask, view.outcomes.baseline.failed, view.outcomes.candidate.delivered, view.outcomes.candidate.stopped_to_ask, view.outcomes.candidate.failed)
-                    } else { String::new() })
+                selection
             ))
         }
     }

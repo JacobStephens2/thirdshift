@@ -505,7 +505,15 @@ pub(crate) fn validate_local(process: &str) -> Result<()> {
             | DraftKind::SecurityReview { .. }
             | DraftKind::Skill { .. }
             | DraftKind::Command { .. } => {}
-            _ => bail!(
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::RunPublishedIssue { .. }
+            | DraftKind::LandTickets { .. }
+            | DraftKind::FixFindings { .. }
+            | DraftKind::CloseFindings { .. } => bail!(
                 "Process {process} Step {} requires GitHub before its first publishing Step",
                 step.name
             ),
