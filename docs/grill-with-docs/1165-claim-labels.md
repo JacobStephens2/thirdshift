@@ -148,7 +148,7 @@ The options:
 
 *Answer:* agreed
 
-*Checked:* written as `docs/adr/0027-in-progress-marks-only-a-live-run.md`, amending ADR 0026's take-over rule.
+*Checked:* written as `docs/adr/0029-in-progress-marks-only-a-live-run.md`, amending ADR 0026's take-over rule.
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -167,7 +167,7 @@ The options:
 - **Tickets:** a Ticket run inside a Spec run makes no Claim, so its Spec carries the outcome.
 - **Publication:** a new Spec, published `needs-triage` with the to-spec and to-tickets skills, and three Tickets: Claim endings; waiting Spec runs (blocked by 1); Recovery comments (blocked by 1 and 2). A standalone `ready-for-human` issue, blocked by the Spec, clears the old ready-for-review labels after release. The Spec closes #1165 (Q3.1).
 - **Related issues:** #585 and #833 get a comment on what the Spec settles and stay open (Q3.2).
-- **ADR 0027** records Q1.2 and Q1.5 (Q3.3).
+- **ADR 0029** records Q1.2 and Q1.5 (Q3.3).
 - **Out of scope:** a Run killed outright never ends its Claim (#710).
 - **One take-over rule for every failure,** Triage runs included: `agent-failed` comes off when the Day shift puts `ready-for-agent` back, takes `agent-failed` off, or closes the issue (Q2.1). A failed Triage run still also gets `ready-for-human`, which is #1695's business.
 - **Custom processes** count toward the Failure limit and swap `in-progress` for `agent-failed` like any other failure (Q2.2).
