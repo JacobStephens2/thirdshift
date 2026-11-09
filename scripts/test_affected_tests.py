@@ -27,7 +27,7 @@ def assert_doc_references_covered(root):
         cwd=root,
     ).decode().split("\0")
     reference = re.compile(
-        r'''["'](?:\./|\.\./)*((?:docs/[^"'\n]+|GLOSSARY|CODING_STANDARDS)\.md)["']'''
+        r'''["'`](?:\./|\.\./)*((?:docs/[^"'`\n]+|GLOSSARY|CODING_STANDARDS)\.md)["'`]'''
     )
     code_suffixes = {".rs", ".py", ".js", ".cjs", ".mjs", ".ts", ".tsx",
                      ".go", ".sh", ".toml", ".yml", ".yaml"}
@@ -358,6 +358,15 @@ class AffectedTests(unittest.TestCase):
             'const DOC: &str = include_str!("../docs/adr/example.md");\n'
         )
         with self.assertRaisesRegex(AssertionError, r"tests/reads_doc.rs:1 reads docs/adr/example.md"):
+            assert_doc_references_covered(self.root)
+
+    def test_new_backtick_doc_consumer_fails_the_reference_guard(self):
+        self.change("docs/adr/example.md", "tests/reads_doc.cjs")
+        (self.root / "tests/reads_doc.cjs").write_text(
+            'const fs = require("node:fs");\n'
+            'const doc = fs.readFileSync(`docs/adr/example.md`, "utf8");\n'
+        )
+        with self.assertRaisesRegex(AssertionError, r"tests/reads_doc.cjs:2 reads docs/adr/example.md"):
             assert_doc_references_covered(self.root)
 
     def test_reference_guard_ignores_comments_and_external_docs(self):
