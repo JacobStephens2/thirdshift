@@ -266,7 +266,7 @@ I might even want to be able to run a few models from a given family, as differe
 
 *Answer:* agreed, created with the to-spec and to-tickets rules
 
-## Round 5 (open)
+## Round 5 (answered)
 
 **Q5.1 - How small can a panel be?** Q4.2 settled a panel from at least two families. Your answer asks for anywhere from 1 to about 11 Models, with several from one family. The two fit together if the Bar allows any size and only the stricter uses demand more. The options:
 - (a) **Any panel from one Model up**, with its family make-up reported beside the Verdict. When model calls *stand in* for the human on unread pairs (Q4.1), the voting panel must span at least two families, neither of them an Arm's, or the Experiment refuses to start.
@@ -275,7 +275,7 @@ I might even want to be able to run a few models from a given family, as differe
 
 *Recommended:* (a). A single-Model panel is useful for cheap runs, where model calls are only reported. Once model calls decide the Verdict for a person, they need the cross-family check the hand-run comparison relied on.
 
-*Answer:* 
+*Answer:* agreed I think, though I'm torn between a's probably best practice guiding and the flexibility of c - which could even be used to test the claims which a is based on, so I probably lean towards c.
 
 **Q5.2 - What happens on a tie in the panel?** With an even number of voters, or with order-flipped calls counted as ties, the panel can split evenly. The options:
 - (a) **A tied merge call counts as not ready to merge, and a tied preference is a tie.** Both Arms face the same rule.
@@ -284,13 +284,37 @@ I might even want to be able to run a few models from a given family, as differe
 
 *Recommended:* (a). It's the cautious reading for an unattended factory, and it's symmetric between the Arms. (b) would make the sample depend on the outcome and break the seeded draw.
 
-*Answer:* 
+*Answer:* I'm leaning towards c if there are other non merge call counts that show the candidate as preferable, mabye the merge call count is the same but the candidate is cheaper to run for example.
 
 **Q5.3 - How is the panel's cost handled?** With 60 pairs, 2 orders and *N* Models, a panel of 11 means about 1,300 Grader sessions. Some Models (Kimi on Fireworks, DeepSeek on Baseten) are billed by API price, not subscription. The options:
 - (a) **The pre-Experiment estimate includes the panel**, per Model, priced from the same frozen price table as the Arms (Q3.5). Panel spend is reported apart from the Arms' cost, and the Bar's cost ceiling applies only to the Arms.
 - (b) As (a), plus a separate spending limit for the panel, which pauses grading when reached.
 
 *Recommended:* (b). Grading pauses rather than failing (as an unavailable Grader already does), and API-billed Models can spend real money without the plan-limit stops subscriptions have.
+
+*Answer:* agreed
+
+## Round 6 (open)
+
+**Q6.1 - Family rules as Bar settings?** Q5.1 leans toward (c), no family rule, so that an Experiment can test the very claims the rules rest on. Q4.2 agreed one family rule, and Q5.1 (a) proposed a second:
+- a Grader from either Arm's family doesn't vote while another family is available;
+- model calls can stand in for the human only when the voting panel spans two families.
+
+The options:
+- (a) **Both rules are Bar settings, on by default.** An Experiment can switch either off, and the Bar records it. The panel's family make-up and each Grader's own calls are always reported, so an Experiment with the rules off measures whether same-family Graders actually lean toward their family's Arm.
+- (b) Both are Bar settings, off by default.
+- (c) No family rules at all, only reporting.
+
+*Recommended:* (a). It gives the flexibility you want, and it lets you test the claims. The default stays where the evidence points until your own Experiments say otherwise. Research on how independent same-family Graders are is pending, and if it changes the picture, the default can move without a format change.
+
+*Answer:* 
+
+**Q6.2 - Same quality, but cheaper: how does that show?** Your Q5.2 answer is about a Candidate whose merge-ready calls match the Baseline's but which costs less. A tie rule on each side's merge call doesn't get you there. That tie happens inside one pair's call, and counting it as ready would raise *both* Arms equally, so it never favours the cheaper one. What you want is already partly there: under ADR 0025, a Candidate no worse than the Baseline beyond the margin already **passes**, and Q3.5 reports paired cost and time ratios beside the Verdict. The options:
+- (a) **Keep Q5.2 (a) for a tied merge call (not ready), and leave cost beside the Verdict.** You read "pass" next to "0.6× cost" and decide.
+- (b) (a), plus a **combined line in the Verdict**: when quality passes and the Candidate's paired cost (or time) ratio is credibly below 1, the Verdict reads "pass: no worse, and cheaper" (or "faster"). When quality passes but the Candidate costs more, it says that too. The quality decision itself stays unchanged.
+- (c) Make cost part of the quality decision, so that a cheaper Candidate can pass with a wider quality margin.
+
+*Recommended:* (b). It puts "same quality, cheaper" on the Verdict's first line without mixing cost into the quality statistics. That mixing is what (c) would do, and it would need an ADR of its own. A tied merge call stays "not ready", the same for both Arms.
 
 *Answer:* 
 
@@ -332,6 +356,10 @@ I might even want to be able to run a few models from a given family, as differe
 - The panel is fixed in the Bar. Each Grader reads every pair in both orders, and an order flip is a tie. A Grader from either Arm's family is reported but doesn't vote while another family is available. The panel can hold 1 to about 11 Models, several from one family, over any Harness thirdshift supports (Q4.2). Q5.1 and Q5.2 settle the size and tie rules, and the vote unit and Harness choices are waiting on research.
 - Difficulty is measured in batches of about 20 screened candidates, with the Built-in Ticket run on both Arms, until 20 are discriminating (Q4.3).
 - Two Specs, written with the `thirdshift-to-spec` and `thirdshift-to-tickets` rules and `docs/agents/triage-labels.md`'s publication procedure. The first covers process Trials and the code-graded suite, with a `ready-for-human` host Ticket for building and measuring the tasks. The second, blocked by the first, covers the blind human page and the pairwise model panel. #1468 is narrowed to the external-runner Arm (Q4.4). Publishing waits until this grill's frontier is empty.
+
+- A panel can be any size from one Model up, and its family make-up is always reported. Whether family rules apply is asked again as Q6.1 (Q5.1).
+- The pre-Experiment estimate includes the panel, per Model, priced from the frozen price table. Panel spend is reported apart from the Arms, and the panel has its own spending limit that pauses grading when reached. The Bar's cost ceiling covers only the Arms (Q5.3).
+- Q5.2's answer was really about Verdicts, not ties, so it's asked again as Q6.2.
 
 ## Research results (2026-11-09)
 
