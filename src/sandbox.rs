@@ -246,6 +246,17 @@ pub(crate) struct Launch {
 }
 
 impl Launch {
+    /// Bind private output needed by a local Process Step, without exposing
+    /// the Trial's other session artifacts or the factory logs.
+    pub(crate) fn with_writable_directory(mut self, directory: &Path) -> Self {
+        self.argv.extend([
+            "--bind".into(),
+            directory.as_os_str().to_owned(),
+            directory.as_os_str().to_owned(),
+        ]);
+        self
+    }
+
     /// Publish a session path to both bwrap and the retained-session reader.
     pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
         self.argv.extend([

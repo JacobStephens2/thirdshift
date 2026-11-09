@@ -323,6 +323,21 @@ pub fn fresh(issue: &IssueUrl, base: &str, branch: &str) -> String {
     )
 }
 
+/// Implementation on the local Ticket source has no publication service.
+pub fn local_implement(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    format!(
+        "/thirdshift-implement {url}\n\
+         Implement the Ticket in `{ISSUE_FILE}` on branch {branch}. The base branch is {base}. \
+         Review with the `thirdshift-code-review` skill using {base} as the fixed point. \
+         Run each behaviour finding's test or command before deciding it, fix the findings you agree with and keep regression tests. \
+         Commit your work. There is no pull request, no Claim and no GitHub service. \
+         Do not call gh, push, publish issues or edit pull requests. Keep review findings and decisions in the local reports and final message.\n\
+         {input}\n{SOURCE_EDITS}\n{HEADLESS}",
+        url = issue.url,
+        input = issue_file_instruction(issue),
+    )
+}
+
 /// The continuation prompt, for a run that picks up an existing Issue branch.
 /// With `pr_url`, the agent updates that PR; otherwise it creates one.
 pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&str>) -> String {
@@ -827,6 +842,14 @@ pub fn security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
     )
 }
 
+pub fn local_security_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    security_review_prompt(
+        &issue.url, base, branch, &issue_file_instruction(issue),
+        "There is no pull request, no Claim and no GitHub service. Do not call gh, push, publish issues or edit pull requests. Keep pre-existing findings in the private report in the Trial output only; no Security record is published. List unaddressed introduced findings in your final message.",
+    ).replace(PR_LIFECYCLE, "")
+        .replace(SECURITY_REVIEW_RECORDING, "Keep this report privately in the Trial output; no Security record is published.")
+}
+
 pub fn pull_request_security_review(
     pr: &crate::review::PullRequestUrl,
     base: &str,
@@ -840,6 +863,8 @@ pub fn pull_request_security_review(
         "Do not push, merge, edit the pull request or post comments. Delivery pushes your committed fixes with the Standards and Spec fixes and posts the report as one comment. List unaddressed introduced Security findings in your final message, with evidence and why each is unaddressed. Preserve the branch's existing commits and the review input.",
     )
 }
+
+const SECURITY_REVIEW_RECORDING: &str = "thirdshift records it privately with the Security run's fingerprint matching and reproduced-outcome format so a later Security run can fix it when allowed; existing records and the Day shift's grades are preserved.";
 
 fn security_review_prompt(
     url: &str,
@@ -857,7 +882,7 @@ fn security_review_prompt(
          Merge base commit: `{SECURITY_REVIEW_MERGE_BASE}`.\n\
          Classify introduced findings against this pinned merge base: run each proof-of-concept on HEAD and the untouched merge base; a test that also fails there is pre-existing. Never include pre-existing vulnerability details, titles, fingerprints, tests or private-record links in the pull request or final message, and do not fix those here.\n\
          Private report file: `{SECURITY_REVIEW_REPORT_FILE}`.\n\
-         Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly these fields: fingerprint (stable across reviews and audits, no newlines or backticks), title (one line), description (the private write-up and evidence), proof_of_concept (test: full test text, command: exact command run at both commits, head_exit_code: positive failing exit code, merge_base_exit_code: positive failing exit code, notes: reproduction evidence and scoring rationale, severity: critical/high/medium/low/informational scored with the skill's likelihood-and-impact rubric, fix_size: single/spec judged from whether one session can hold the fix). All text fields are nonempty. Do not commit or copy this report into the worktree. thirdshift records it privately with the Security run's fingerprint matching and reproduced-outcome format so a later Security run can fix it when allowed; existing records and the Day shift's grades are preserved. Fixing old findings belongs to a separate Security run.\n\
+         Write a JSON array to that file, even when empty ([]). Each entry is an old finding with exactly these fields: fingerprint (stable across reviews and audits, no newlines or backticks), title (one line), description (the private write-up and evidence), proof_of_concept (test: full test text, command: exact command run at both commits, head_exit_code: positive failing exit code, merge_base_exit_code: positive failing exit code, notes: reproduction evidence and scoring rationale, severity: critical/high/medium/low/informational scored with the skill's likelihood-and-impact rubric, fix_size: single/spec judged from whether one session can hold the fix). All text fields are nonempty. Do not commit or copy this report into the worktree. {SECURITY_REVIEW_RECORDING} Fixing old findings belongs to a separate Security run.\n\
          {publication}\n\
          If refused, incomplete, or missing a prerequisite, do not claim completion. Still write the private report, even when empty. End your final message with exactly:\n\
          Security review: incomplete: <one-line reason>\n\
