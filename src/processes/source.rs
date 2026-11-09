@@ -23,6 +23,8 @@ mod tests {
     }
 }
 
+/// Preserve unfinished Issue-branch work consistently for direct and
+/// dispatched Custom processes.
 pub(super) fn execute_issue_steps(
     process: &str,
     prepared: &Prepared,

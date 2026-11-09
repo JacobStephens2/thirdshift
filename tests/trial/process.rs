@@ -45,7 +45,11 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existi
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
-    assert_eq!(output["outcome"], "succeeded", "{output}\n{}", result.stderr);
+    assert_eq!(
+        output["outcome"], "succeeded",
+        "{output}\n{}",
+        result.stderr
+    );
     let calls = trial_calls(&scenario, "claude-calls.json");
     assert_eq!(calls.len(), 2, "{}", result.stderr);
     for call in &calls {

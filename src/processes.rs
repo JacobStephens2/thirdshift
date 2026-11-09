@@ -898,9 +898,6 @@ fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
     ))
 }
 
-/// Preserve unfinished Issue-branch work consistently for direct and
-/// dispatched Custom processes.
-
 fn execute_steps(
     process: &str,
     prepared: &Prepared,

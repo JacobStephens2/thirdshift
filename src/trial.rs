@@ -227,49 +227,29 @@ pub fn run(path: &Path) -> Result<String> {
             return serde_json::to_string(&output).context("could not serialize Trial result");
         }
     };
-    if matches!(request.session_kind, SessionKind::Process) {
-        let session_started = Instant::now();
-        let (result, log) = crate::processes::source::run_local(
+    let session_started = Instant::now();
+    let (ended, log) = if matches!(request.session_kind, SessionKind::Process) {
+        let (ended, log) = crate::processes::source::run_local(
             &repository,
             &request.inputs,
             &choice,
             &output_dir,
             sandbox.as_ref().map(|prepared| prepared.launch()),
         );
-        let mut output = Output::failed(started.elapsed().as_millis(), "");
-        output.timings.session_ms = session_started.elapsed().as_millis();
-        match result {
-            Ok(_) => {
-                output.outcome = Outcome::Succeeded;
-                output.cause = None;
+        (ended.map(|_| None), log)
+    } else {
+        let logs = Logs::of_trial(&output_dir);
+        let run = |sessions: &Sessions| {
+            skills::exclude(&Git::new(&repository), &format!("/{}", prompt::ISSUE_FILE))?;
+            sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
+        };
+        let (ended, log) = match &sandbox {
+            Some(prepared) => {
+                Sessions::within_sandboxed(&logs, &repository, &choice, &prepared.launch(), run)
             }
-            Err(error) => {
-                output.void_cause = void_cause(&error);
-                if output.void_cause.is_some() {
-                    output.outcome = Outcome::Void;
-                }
-                output.cause = Some(format!("{error:#}"));
-            }
-        }
-        output.model_evidence = log
-            .as_ref()
-            .map(|log| crate::logs::session::original(log).with_extension("models.json"))
-            .filter(|path| path.is_file());
-        output.log = log.as_deref().map(crate::logs::session::path);
-        skills::remove_written();
-        return serde_json::to_string(&output).context("could not serialize Trial result");
-    }
-    let logs = Logs::of_trial(&output_dir);
-    let session_started = Instant::now();
-    let run = |sessions: &Sessions| {
-        skills::exclude(&Git::new(&repository), &format!("/{}", prompt::ISSUE_FILE))?;
-        sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
-    };
-    let (ended, log) = match &sandbox {
-        Some(prepared) => {
-            Sessions::within_sandboxed(&logs, &repository, &choice, &prepared.launch(), run)
-        }
-        None => Sessions::within(&logs, &repository, &choice, run),
+            None => Sessions::within(&logs, &repository, &choice, run),
+        };
+        (ended.map(|ended| ended.session_id), log)
     };
     let ended = ended.map_err(|error| {
         sandbox
@@ -303,7 +283,7 @@ pub fn run(path: &Path) -> Result<String> {
         stream.into_session_id()
     };
     let (outcome, session_id, cause, void_cause) = match ended {
-        Ok(ended) => (Outcome::Succeeded, ended.session_id, None, None),
+        Ok(session_id) => (Outcome::Succeeded, session_id, None, None),
         Err(error) => {
             let void_cause = void_cause(&error);
             (
