@@ -45,8 +45,14 @@ crypto provider, whose `aws-lc-sys` build script compiles AWS-LC from C for
 about 30 s. `rustls` → `reqwest` → `thirdshift` cannot start until it ends,
 so the cold build is roughly that build script plus the `thirdshift` crate,
 end to end. Rust dependencies compile in parallel inside that window.
-Switching the TLS crypto provider (for example to `ring`) is the obvious
-candidate, but it changes the TLS stack and needs its own review.
+Switching reqwest to `ring` alone does not remove aws-lc:
+[#203](https://github.com/JacobStephens2/thirdshift/issues/203) found that
+`axoupdater`, through axoasset's `remote` feature, enables reqwest's
+`default-tls`. Cargo features unify, so aws-lc still builds alongside ring,
+as the [comment above `axoupdater` in `Cargo.toml`](../../Cargo.toml#L18)
+explains. Removing that stack requires replacing the updater
+([#1592](https://github.com/JacobStephens2/thirdshift/issues/1592)), not just
+changing our reqwest features.
 
 **A split library would save little on cold builds.** The `thirdshift` crate's
 29 s barely overlaps dependency compilation, so splitting it into a workspace
@@ -58,15 +64,67 @@ library would need production decoupling, not just a new `Cargo.toml`.
 
 **The edit loop is mostly codegen and linking.** After the edit, type checking
 takes 2 s and a full rebuild 8 s, so about 6 s goes to code generation and
-linking. The Go prototype's equivalent edit rebuild took about 0.6 s. Untried
-options aimed at those 6 s: a faster linker (neither mold nor lld is installed
-in the VM), the Cranelift backend for `dev` builds, and a workspace split that
-recompiles less after an edit. The repository currently sets only
-`debug = "line-tables-only"` in `[profile.dev]` and has no `.cargo/config.toml`.
+linking. The Go prototype's equivalent edit rebuild took about 0.6 s. The
+experiments below measure a faster linker and the Cranelift backend for `dev`
+builds. A workspace split that recompiles less after an edit remains unmeasured.
+The repository sets only `debug = "line-tables-only"` in `[profile.dev]` and
+has no `.cargo/config.toml`.
+
+## Experiments
+
+These measurements come from
+[#1868](https://github.com/JacobStephens2/thirdshift/issues/1868), taken on
+2026-11-09 in a scratch Worktree at `82f88ec8`, in the Lima VM (Ubuntu 24.04
+aarch64, 4 vCPUs, 8 GiB, rustc 1.99.1 except for the nightly variants).
+Each time is wall-clock seconds around `cargo build -q --bin thirdshift`.
+Each edit appended a trailing comment to the Ticket run module (`src/run.rs`).
+Linker flags were set through `RUSTFLAGS`; the first build after changing
+`RUSTFLAGS` rebuilds every crate and is excluded from the edit column. Blank
+cold-build cells mean no measurement was recorded. Nothing from the experiment
+trees was committed.
+
+| Variant | Cold build (s) | Edit rebuild (s) |
+| --- | ---: | ---: |
+| Baseline (system `cc`, GNU ld) | 58.7 | 7.0, 7.0, 7.0 |
+| `-C link-arg=-fuse-ld=lld` | | 4.0, 4.2 |
+| `-C link-arg=-fuse-ld=mold` | | 3.8, 4.5 |
+| No `axoupdater`, reqwest on `ring` | 42.4 | 6.8, 6.0, 6.5 |
+| Nightly 1.102.0 (2026-11-08), LLVM backend | 62.2 | 7.1, 6.8, 6.7 |
+| Nightly, LLVM + lld | | 4.0, 4.4 |
+| Nightly, Cranelift backend | 57.0 | 6.2, 6.1, 6.2 |
+| Nightly, Cranelift + lld | | 4.0, 3.9 |
+
+The "No `axoupdater`" variant measures #1592's end state for the build only.
+It removed the dependency, stubbed the update module's version check and update
+functions to return errors, and switched reqwest to `rustls-no-provider` plus
+rustls 0.23 with `ring` and `std`. `cargo tree -i aws-lc-sys` then found
+nothing. This measures build weight, not a working updater.
+
+**Removing the updater's aws-lc saves about 16 s (28%) of a cold build, and
+nothing on an edit rebuild.** The saving is less than the roughly 30 s build
+script because the remaining dependencies become the critical path. A Ticket
+run in a new Worktree pays for a cold build, as does each CI job.
+
+**On this aarch64 host, lld or mold cuts the edit rebuild from about 7 s to
+about 4 s.** The two are equivalent within these samples. This saving does not
+carry over to x86_64 Linux hosts: since
+[Rust 1.90](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/),
+`x86_64-unknown-linux-gnu` uses the bundled `rust-lld` by default, so the
+DigitalOcean measurements in #1835 and #1840 already used LLD. Using a faster
+linker on aarch64 Linux would require a Cargo config entry for that target and
+lld or mold installed on each such host.
+
+**Cranelift adds little once LLD is used.** Edit rebuilds still take about 4 s,
+and Cranelift needs nightly, which the pinned
+[`rust-toolchain.toml`](../../rust-toolchain.toml) rules out.
+
+**What remains of the edit loop is about 2 s of type checking and 2 s of code
+generation for the single `thirdshift` crate.** Only a smaller recompilation
+unit, such as a workspace split, targets that. A split has not been measured.
 
 ## Limits
 
-One sample per measurement, on a 4-vCPU VM. The edit was a trailing comment in
-one file, which still forces the crate to recompile and relink, but says
-nothing about edits that change many dependants. None of the candidate
-improvements above has been measured.
+One to three samples per measurement, on a 4-vCPU aarch64 VM. Each edit was a
+single trailing comment in one file, which still forces the crate to recompile
+and relink, but says nothing about edits that change many dependants. No
+workspace split has been measured.
