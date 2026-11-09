@@ -98,6 +98,62 @@ fn recommend_only_reads_the_selected_base_and_trusted_issue_without_writes() {
 }
 
 #[test]
+fn image_download_failures_warn_only_for_trusted_bodies_and_the_session_still_runs() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    let mut state = scenario.gh_state();
+    state["titles"]["7"] = json!("![title](https://github.com/title-only.png)");
+    state["bodies"]["7"] = json!(
+        "Investigate. ![body](https://github.com/body.png)\n![foreign](https://example.com/foreign.png)\n![http](http://github.com/insecure.png)"
+    );
+    state["comments"]["7"] = json!([
+        {"by":"owner", "association":"OWNER", "body":"<img src=\"https://github.com/owner.png\">"},
+        {"by":"member", "association":"MEMBER", "body":"![member](https://github.com/member.png)"},
+        {"by":"collaborator", "association":"COLLABORATOR", "body":"![collaborator](https://github.com/collaborator.png)"},
+        {"by":"stranger", "association":"NONE", "body":"![stranger](https://github.com/stranger.png)"}
+    ]);
+    // Invalid header bytes cause the real HTTP adapter to fail before any
+    // network I/O, exercising fallback without reaching live attachments.
+    state["auth_token"] = json!("invalid\nheader");
+    scenario.write_gh_state(&state);
+    recommend(&scenario, RECOMMENDATION);
+    let script = std::fs::read_to_string(scenario.path("claude-script.sh")).unwrap();
+    scenario.agent_does(&format!(
+        "cat .thirdshift-issue.md > '{}'\nfind .thirdshift-issue-images -type f > '{}'\n{script}",
+        scenario.path("image-issue-input").display(),
+        scenario.path("cached-images").display(),
+    ));
+    let result = scenario.run(&["triage", "7", "--recommend-only"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    for image in ["body", "owner", "member", "collaborator"] {
+        assert!(
+            result.stderr.contains(&format!(
+                "warning: could not download issue image https://github.com/{image}.png"
+            )),
+            "{}",
+            result.stderr
+        );
+    }
+    for ignored in [
+        "title-only.png",
+        "foreign.png",
+        "insecure.png",
+        "stranger.png",
+    ] {
+        assert!(!result.stderr.contains(ignored), "{}", result.stderr);
+    }
+    let input = std::fs::read_to_string(scenario.path("image-issue-input")).unwrap();
+    assert!(input.contains("Investigate."), "{input}");
+    assert!(!input.contains("stranger.png"), "{input}");
+    assert_eq!(
+        std::fs::read_to_string(scenario.path("cached-images")).unwrap(),
+        ""
+    );
+    assert_eq!(scenario.gh_calls_of("auth", "token").len(), 1);
+    assert!(scenario.gh_calls_of("issue", "create").is_empty());
+}
+
+#[test]
 fn invalid_issue_inputs_fail_without_claims_or_sessions() {
     for invalid in ["closed", "foreign", "author", "body", "title", "file"] {
         let scenario = Scenario::new();
