@@ -721,9 +721,11 @@ impl<'a> Cell<'a> {
         self.terminal
             && self.result.is_some_and(|r| {
                 r.outcome != Outcome::Void
-                    && r.score
-                        .as_ref()
-                        .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
+                    && r.score.as_ref().is_some_and(|s| {
+                        r.outcome == Outcome::Delivered
+                            || s.model.is_some()
+                            || s.checks.iter().any(|c| !c.passed)
+                    })
             })
     }
     fn passed(&self) -> bool {

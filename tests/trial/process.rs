@@ -3,21 +3,7 @@ use super::*;
 #[test]
 fn built_in_ticket_steps_run_locally_without_publication() {
     let scenario = Scenario::new();
-    scenario.launch_git(&[
-        "remote",
-        "set-url",
-        "origin",
-        scenario.origin_dir().to_str().unwrap(),
-    ]);
-    scenario.launch_git(&["checkout", "-b", "issue-7"]);
-    // The Trial's fresh home does not carry the host's Git identity.
-    scenario.launch_git(&["config", "user.name", "Eval"]);
-    scenario.launch_git(&["config", "user.email", "eval@example.invalid"]);
-    let request = request(&scenario);
-    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
-    document["session_kind"] = json!("process");
-    document["inputs"]["pr_url"] = json!("");
-    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    let request = prepare_local_process(&scenario);
     scenario.agent_does_in_session(
         1,
         r#"
@@ -87,6 +73,7 @@ fn prepare_local_process(scenario: &Scenario) -> PathBuf {
         scenario.origin_dir().to_str().unwrap(),
     ]);
     scenario.launch_git(&["checkout", "-b", "issue-7"]);
+    // The Trial's fresh home does not carry the host's Git identity.
     scenario.launch_git(&["config", "user.name", "Eval"]);
     scenario.launch_git(&["config", "user.email", "eval@example.invalid"]);
     let request = request(scenario);
