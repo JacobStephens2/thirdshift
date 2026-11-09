@@ -1,7 +1,7 @@
 # Trial protocol, version 1
 
-`thirdshift --trial /absolute/path/request.json` runs one session in a prepared
-repository through the same session code as a Run. This internal flag is hidden
+`thirdshift --trial /absolute/path/request.json` runs a review session or the
+local Ticket Step prefix in a prepared repository through Run execution code. This internal flag is hidden
 from `help`. `session_kind` accepts `code-review`, `spec-review` and `process`.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
