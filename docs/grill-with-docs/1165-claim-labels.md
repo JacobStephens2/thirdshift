@@ -3,7 +3,7 @@
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1165
 Research: [proposed direction](https://github.com/JacobStephens2/thirdshift/issues/1165#issuecomment-6369972244), #585, #710, #833, #1583, #1695, [#1532 grill](1532-keep-working-the-backlog.md)
 
-Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. `GLOSSARY.md` is unchanged so far: its **Claim**, **Failure limit**, **Sweep** and **Ready issue** entries wait on Q1.2, Q1.3 and Q1.5.
+Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. Round 1 answered 2026-11-09. `GLOSSARY.md` now has the new **Claim**, **Failure limit**, **Ready issue** and **Recovery** entries.
 
 Agreed in chat on 2026-10-23, before Round 1, and where each stands now:
 
@@ -11,7 +11,7 @@ Agreed in chat on 2026-10-23, before Round 1, and where each stands now:
 - `run-failed` does not count toward the limit. *Now:* the reverse shipped. `agent-failed` is exactly what the Failure limit counts (Q1.1, withdrawn).
 - A Spec run that stops only for the Day shift gets `ready-for-human`, not a failure label. Q1.3 questions this.
 
-## Round 1 (open)
+## Round 1 (answered)
 
 **Q1.1 - What stops Pickup working through every Ready issue when every Run fails?** *Withdrawn 2026-11-09, settled by the #1532 grill.* Pickup now counts open `agent-failed` issues against `pickup.failure_limit`, default 3. A broken Base branch or Harness stops the line after three failures, and pull requests waiting for review never count. One gap was left open here, and it is still open. A failure with nothing on `origin` releases its Claim to `ready-for-agent` and gets no `agent-failed`, so Pickup can take the same issue again on its next pass. See "Settled by earlier answers".
 
@@ -22,7 +22,7 @@ Agreed in chat on 2026-10-23, before Round 1, and where each stands now:
 
 *Recommended:* (c). With no limit counting these issues, a second label would only repeat what the open pull request and the Inbox already show. Under (c), `in-progress` means one thing on issues and on pull requests: a live Run. It also makes the Ticket and Spec paths match what #1388 shipped. An issue whose Self-merge merged but whose closing failed keeps its Claim as it does today, since that is a finish still owed, not a review.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q1.3 - What does a Spec run that is only waiting leave on its Spec?** This matters more now than when first asked. A Spec run whose undone Tickets are all gated or blocked ends with `Tickets not done: #22 (labelled ready-for-human)` (`src/spec_run.rs:457`). That makes it a **Failed spec run**, so it keeps its Claim and gets `agent-failed`. Three such waiting Specs would stop Pickup on the repository under the Failure limit, though nothing is broken. Pickup already passes over a Spec with no **Startable Ticket**, so a Spec labelled `ready-for-agent` whose Tickets are all gated stays put on its own, and Pickup continues it once a Ticket becomes startable. The options:
 - (a) `ready-for-human` on the Spec, with no `agent-failed`, when every undone Ticket is an **Unready Ticket** or is blocked only behind ones. A Spec waiting on ordinary work elsewhere, such as a Ticket in another running Spec, gets `agent-failed`.
@@ -33,7 +33,7 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Recommended:* (b), with one guard. The Day shift does one thing, clearing the Ticket's gate, not two. The `ready-for-human` list then shows exactly the work that is human: Tickets, not Specs. The guard comes from the **Trusted account** rule. A Ready issue needs its latest `ready-for-agent` labelling by a Trusted account, with no edit since by an account that is not one. If thirdshift relabelled the Spec itself, as the owner's account, it would clear an untrusted edit made in between. So thirdshift puts `ready-for-agent` back only if no such edit has happened since the Day shift's last labelling. Otherwise the Spec gets `needs-triage`. This reverses the chat answer, so say if the Spec itself should still show `ready-for-human`.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q1.4 - Does a Failed run post its Recovery on the issue?** **Recovery** lines are built only from factory-owned facts. They reach the command log, the Run notification if one is configured, and the Console's Needs you. Since #1769, one Console shows Needs you for every machine in its **Fleet**, which covers most of #833's "which host?" for the Day shift. On GitHub, `agent-failed` says only that a Run failed, not why or what to do next. thirdshift already posts issue comments elsewhere: Base branch CI reports, and Triage runs, which say "This comment was generated by AI." #1695 adds a lot more of them: each triaged issue gets an AI-attributed Agent Brief, Questionnaire or closure comment. A #585 comment also asks for "a comment with the cause and Recovery line" on a waiting Spec. The repository is public, and Recovery lines include the host's paths and the full continue command. A comment from the owner's account is from a Trusted account, so the next session on the issue would be given it. The options:
 - (a) A comment on the issue at each Failed run, marked as generated. It gives the cause, where the Run stopped, what was kept (the branch and pull request), the host, and how to retry ("apply `ready-for-agent`"). No local paths and no continue command.
@@ -42,7 +42,7 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Recommended:* (a), a little more firmly than before, now that #1695 makes AI comments on issues routine. The Console covers the Day shift, but only on machines in its Fleet. The comment serves anyone reading the issue on GitHub, and it hands the next Continuation session a factual account of where the last Run stopped. A Run that fails again posts again, which leaves a history of attempts. Pick (c) if you would rather keep factory chatter off issues.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q1.5 - Does a failed Run that keeps its Claim still keep `in-progress` next to `agent-failed`?** This is the heart of #1165, now that #1564 has shipped. Today a Failed run with work on `origin` leaves both labels, so `in-progress` still doesn't mean "running". The pre-Round-1 answer was to swap one for the other, but it now runs into a #1532 rule (Q3.3 there, `src/pickup.rs:423`). Pickup reads an open issue with `agent-failed` and neither `in-progress` nor `needs-triage` as the Day shift having taken it over, and takes `agent-failed` off. Swap the labels without changing that rule, and the next Pickup run would clear every failure, so the brake would never hold.
 
@@ -53,21 +53,76 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Recommended:* (a). That is what #1165 asks for, and with Q1.2 (c) it leaves `in-progress` on an issue only while a Run is live. A single take-over act, removing the label that names the failure, is easier to learn than one per kind of Command. It also answers #1583: a failed Custom process counts like any other failure. Under (b), `ready-for-human` would mean "human work" on some issues and "the factory failed" on others. **This is time-sensitive.** If you pick (a), #1891 should drop its `ready-for-human` take-over rule before it lands, so say so and I'll comment on #1891. The cost is a change to a rule shipped two weeks ago. Issues that already failed also need `in-progress` taken off once, which the Sweep could do.
 
+*Answer:* agreed
+
+*Checked:* answered on the text from before the #1695 revision, where (a) was the plain swap with one take-over rule, removing `agent-failed`. That part is settled. Applying it to #1695's Triage runs and to #1583's Custom processes was added later, so Q2.1 and Q2.2 put those to you.
+
+## Round 2 (open)
+
+**Q2.1 - Does #1695's Triage run use the same take-over rule?** Q1.5 settled one take-over rule: a failure swaps `in-progress` for `agent-failed`, and the Day shift acts by putting `ready-for-agent` back, removing `agent-failed`, or closing the issue. Spec #1695, being built now as Ticket #1891, gives a failed Triage run `ready-for-human` plus `agent-failed`, and adds a second signal: the Sweep clears `agent-failed` once `ready-for-human` comes off. The options:
+- (a) One rule. A failed Triage run still gets `ready-for-human` next to `agent-failed`, so the Triage Pass passes over it, but `agent-failed` comes off only by the Q1.5 rule. #1891 drops its `ready-for-human` signal. I comment on #1891 and #1695 now, before it lands.
+- (b) Keep #1695's extra signal for Triage runs only.
+
+*Recommended:* (a). The Day shift learns one act for every failure. Under (b), taking `ready-for-human` off would quietly clear a failure for one kind of Command only. Nothing is lost: if you answer a failed triage by relabelling the issue, you'd normally take `agent-failed` off in the same edit.
+
+*Answer:* 
+
+**Q2.2 - Does a failed Custom process count toward the Failure limit (#1583)?** Today it does: `HeldClaim` ends its Claim through the same path as a Ticket run, so with work on `origin` it gets `agent-failed`. Under Q1.5 it would also lose `in-progress`. #1583 asks whether that is right, since #1564 named only Ticket runs and Spec runs. The options:
+- (a) Yes. A failed Custom process on an issue waits for the Day shift exactly as a Failed ticket run does. Answer and close #1583 with that.
+- (b) No. A Custom process releases or keeps its Claim without the label, and doesn't count.
+
+*Recommended:* (a). A Custom process is Day-shift-authored and experimental, but an issue it failed on still waits for the Day shift. Leaving it out would also leave its failures on `in-progress`, which is what #1165 is removing.
+
+*Answer:* 
+
+**Q2.3 - Which failures post the Recovery comment (Q1.4)?** Q1.4 settled a generated comment with no local paths. Three cases need a boundary:
+- **A failed Security fix.** Its issue is a fix issue on the repository, but its cause can describe the vulnerability, which today stays in the private advisory.
+- **A failure with nothing on `origin`.** It releases to `ready-for-agent`, and Pickup can take it again at once, so a comment per failure could repeat on every Pickup pass.
+- **A Spec run that is only waiting (Q1.3).** It gets no `agent-failed`. #585 asks for the cause on the Spec: which Tickets wait, and on what.
+
+The options:
+- (a) Comment only when the issue ends `agent-failed`, except a failed Security fix, whose Recovery stays in the advisory. Also comment on a waiting Spec, naming each undone Ticket and what it waits on. No comment on a release.
+- (b) Comment on every Failed run, Security fixes and releases included.
+- (c) Only `agent-failed` issues, Security fixes included, and no waiting-Spec comment.
+
+*Recommended:* (a). It keeps vulnerability details private and can't repeat on every pass. It gives the waiting Spec what #585 asked for: "claimed and waiting for you" looks different from a failure on GitHub. A waiting Spec isn't taken again until a Ticket becomes startable, so its comment doesn't repeat either.
+
+*Answer:* 
+
+**Q2.4 - What happens to issues labelled the old way?** When this ships, open issues will still carry `in-progress` beside `agent-failed`, or `in-progress` while their pull request waits for review. Under the new rules, `in-progress` and `agent-failed` never sit on one issue, because a new Claim takes `agent-failed` off. The options:
+- (a) The Sweep also takes `in-progress` off any open issue that carries `agent-failed`. That one rule is safe forever. The ready-for-review issues are cleared by hand once, from a list in the pull request, because a live Run can't be told apart from GitHub alone.
+- (b) Clear both by hand once, with no Sweep change.
+- (c) Leave them. They fade as issues close.
+
+*Recommended:* (a). The `agent-failed` case can't be ambiguous, so the Sweep can own it. The ready-for-review case can be, because a Continuation could be live on an issue whose pull request was ready, and only a person checking the Inbox can tell.
+
+*Answer:* 
+
+**Q2.5 - File the unbraked release retry as its own issue?** A Ticket run that fails with nothing on `origin` releases to `ready-for-agent` with no `agent-failed` (unchanged by Round 1). Nothing stops Pickup taking the same issue again on every pass, as a Harness that fails before its first commit would. The options:
+- (a) File it as a `needs-triage` issue now, linking #1165 and #1532, and keep it out of this Spec.
+- (b) Fold it into this Spec: such a failure gets `agent-failed` too, with no Claim to keep.
+- (c) Leave it.
+
+*Recommended:* (a). It is a Failure-limit question, not a label-meaning one, and (b) would change what the Failure limit counts, which #1532 settled deliberately.
+
 *Answer:* 
 
 ## Settled by earlier answers (shout if any is wrong)
 
-- **#1165 still stands.** The Fleet Console's Working group shows live Runs, but only on machines in that Fleet. Anyone reading GitHub, and both hosts, see the labels.
-- **Interrupted runs:** a Failed run ended by interruption, not by a Stop, with work on `origin`, is treated like any other Failed run. The glossary already counts interruption as a Failed run.
-- **Failed Security fixes:** these keep their Claim even with nothing on `origin` and get `agent-failed` today. Whatever Q1.5 decides applies to them too.
-- **Unchanged endings:** a Stop still leaves `needs-triage`. #1695's Triage runs are the exception: they leave `ready-for-human`, since `needs-triage` is their own queue. A bug Ticket run that can't reproduce still leaves `needs-info`.
-- **Triage runs hold a Claim** under #1695, so Q1.2–Q1.5 apply to them too, and the glossary's **Claim** entry gains them.
-- **A failure with nothing on `origin`** still releases to `ready-for-agent` with no `agent-failed`, so Pickup can retry it at once and nothing brakes it. That is out of scope here, and gets its own issue if you want one.
-- **Pickup:** it never takes an `agent-failed` issue, because a Ready issue needs `ready-for-agent`. The Day shift retries by applying `ready-for-agent`, and Pickup then starts a **Continuation** on the kept Issue branch and pull request.
-- **Label upkeep:** making a Claim takes `agent-failed` off, and the **Sweep** takes both labels off closed issues. Both already ship.
+- **`in-progress` means a live Run**, on issues and on pull requests alike (Q1.2, Q1.5). It goes on when a Run starts and always comes off when it ends.
+- **Ready for review:** a Ticket run, Spec run or Custom process whose pull request is ready, or whose Self-merge was held with its pull request ready, takes `in-progress` off and puts nothing back. `Claim::remove` from #1388 becomes the ending for all of them (Q1.2).
+- **Pickup still won't retake those issues:** a started issue is Ready only after a handback (Q1.2).
+- **A merged but still open issue** keeps `in-progress` until it is closed, as today (Q1.2).
+- **Failure:** a Failed run with work on `origin`, and a failed Security fix even with nothing, swaps `in-progress` for `agent-failed`. The #1532 take-over rule "neither `in-progress` nor `needs-triage`" is replaced by "`agent-failed` taken off" (Q1.5, at `src/pickup.rs:423`).
+- **A waiting Spec run** puts `ready-for-agent` back on its Spec, takes `in-progress` off and adds no `agent-failed`. It does so only if no untrusted edit has happened since the last Trusted `ready-for-agent` labelling, and labels the Spec `needs-triage` otherwise. Waiting means every undone Ticket is an Unready Ticket, blocked, waiting on other running work, or outside the Spec's repository (Q1.3).
+- **A Spec run with any failed or interrupted Ticket** gets `agent-failed` (Q1.3).
+- **#585** keeps the outcome name, exit code, notification wording and mixed results. This grill settles only the labels (Q1.3).
+- **The Recovery comment** is marked as generated, names the machine and how to retry, and leaves out local paths and the continue command. A Run that fails again posts again (Q1.4). Its boundary is Q2.3.
+- **Interrupted runs** are treated like any other Failed run. A Stop still leaves `needs-triage`, and a bug that can't be reproduced still leaves `needs-info`.
+- **Label upkeep:** a new Claim takes `agent-failed` off, and the Sweep takes both labels off closed issues. Both already ship.
 - **Tickets:** a Ticket run inside a Spec run makes no Claim, so its Spec carries the outcome.
 - **Out of scope:** a Run killed outright never ends its Claim (#710).
-- **Glossary:** **Claim** changes with Q1.2 and Q1.5 (it also still omits the Custom process exception from #1388). **Failure limit** changes with Q1.5's take-over rule, and **Ready issue** with Q1.3's handback.
+- **Glossary:** **Claim**, **Failure limit**, **Ready issue** and **Recovery** updated on 2026-11-09. **Claim** now says it marks a live Run and includes Custom processes. Triage runs join it with Q2.1, and **Sweep** changes with Q2.4.
 
 ## Research results (2026-10-23)
 
