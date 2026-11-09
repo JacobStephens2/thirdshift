@@ -41,6 +41,7 @@ An open **Ticket** in its **Spec**'s repository, with no sub-issues of its own, 
 
 **Claim**:
 The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Ticket run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket run** in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A failed Security fix keeps its Claim even with nothing on `origin`, so it stays with the Day shift. For other Ticket runs, a Claim is released, `ready-for-agent` put back, only when the Ticket run ends with nothing on `origin` to take over and was not ended by a **Stop**: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Ticket run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed. A bug Ticket run that cannot reproduce the bug ends its Claim with `needs-info`, leaving `ready-for-agent` absent.
+An existing-issue **Triage run** also makes this mark, replacing any prior triage state and `agent-failed`; it ends with the published state on success, `needs-triage` on **Stop** with requeue, `ready-for-human` on Stop without requeue, or `ready-for-human` and `agent-failed` on other failure or interruption. A recommendation-only Triage run makes no Claim.
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Failure limit**:
@@ -140,7 +141,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Triage run**:
-One **Command** that investigates a **Report** against its repository, read-only and without waiting for a person, and files shaped issues, or only recommends them when asked. Its investigation and issue links reach the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
+One **Command** that investigates a **Report** or an existing open issue by a **Trusted account**, read-only against the selected **Base branch** and without waiting for a person; it files shaped issues for a Report or updates the existing issue in place, or only recommends when asked. Existing-issue triage reserves the issue across machines and holds a **Claim** through publication and cleanup; recommended readiness without permission becomes `ready-for-human` on that issue, while a Report's new issues remain `needs-triage`. Its investigation and issue links reach the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
 _Avoid_: intake
 
 **Pass**:

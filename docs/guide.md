@@ -3586,6 +3586,20 @@ When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](htt
 
 ## Triage runs
 
+To investigate an existing open issue in place, name its Issue URL or number, optionally followed by `base <branch>`:
+
+```sh
+thirdshift triage 123
+thirdshift triage https://github.com/acme/widgets/issues/123 base release
+thirdshift triage 123 --recommend-only
+```
+
+The Base branch defaults to the Launch directory's checked-out branch. The issue must belong to that repository, have a Trusted-account author and have no title or body edits by other accounts. Any current triage state is accepted. The session receives `.thirdshift-issue.md` with the title, body and only Trusted-account comments. Combining an issue with `--file` is refused.
+
+Unless `--recommend-only` is given, thirdshift reserves the issue on origin and replaces its prior triage state and `agent-failed` with an `in-progress` Claim. It posts one AI-attributed comment with the Agent Brief, investigation and questionnaire, or wontfix explanation, preserves existing category labels (adding the recommendation's category only when none exists), and replaces the Claim with the resulting state. `wontfix` closes the issue. A duplicate can also get a cross-reference comment on the other open issue. Splits into several Tickets or a Spec go to `ready-for-human` with a questionnaire proposing the split. Without readiness permission, recommended `ready-for-agent` becomes `ready-for-human` with a notice in the Agent Brief. The recommendation's issue entry and Run notification name the existing issue's URL.
+
+An error or interruption ends that Claim with `ready-for-human` and `agent-failed`. `thirdshift stop` instead uses `ready-for-human` without `agent-failed`; `thirdshift stop --requeue` uses `needs-triage` without `agent-failed`. The origin reservation is released after cleanup. `--recommend-only` checks the recommendation against GitHub and prints its JSON without reserving, claiming or publishing.
+
 Give a Report on standard input or with `--file` from the repository's Launch directory:
 
 ```sh
