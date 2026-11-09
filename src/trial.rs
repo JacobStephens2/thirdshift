@@ -1,5 +1,5 @@
-//! The hidden, versioned Trial protocol. Only session execution is shared
-//! with a Run: a Trial has no Command, Claim, Worktree acquisition or Delivery.
+//! The hidden, versioned Trial protocol. Sessions and the local Ticket Step
+//! prefix share Run machinery without a Command, Claim or Delivery.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -37,6 +37,7 @@ struct Request {
 enum SessionKind {
     CodeReview,
     SpecReview,
+    Process,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -203,6 +204,7 @@ pub fn run(path: &Path) -> Result<String> {
         chosen_by: ChosenBy::Command,
     };
     let (kind, prompt) = match request.session_kind {
+        SessionKind::Process => (Kind::Implementation, String::new()),
         SessionKind::CodeReview => (
             Kind::CodeReview,
             prompt::code_review(&issue, &request.inputs.base, &request.inputs.branch),
@@ -225,6 +227,38 @@ pub fn run(path: &Path) -> Result<String> {
             return serde_json::to_string(&output).context("could not serialize Trial result");
         }
     };
+    if matches!(request.session_kind, SessionKind::Process) {
+        let session_started = Instant::now();
+        let (result, log) = crate::processes::source::run_local(
+            &repository,
+            &request.inputs,
+            &choice,
+            &output_dir,
+            sandbox.as_ref().map(|prepared| prepared.launch()),
+        );
+        let mut output = Output::failed(started.elapsed().as_millis(), "");
+        output.timings.session_ms = session_started.elapsed().as_millis();
+        match result {
+            Ok(_) => {
+                output.outcome = Outcome::Succeeded;
+                output.cause = None;
+            }
+            Err(error) => {
+                output.void_cause = void_cause(&error);
+                if output.void_cause.is_some() {
+                    output.outcome = Outcome::Void;
+                }
+                output.cause = Some(format!("{error:#}"));
+            }
+        }
+        output.model_evidence = log
+            .as_ref()
+            .map(|log| crate::logs::session::original(log).with_extension("models.json"))
+            .filter(|path| path.is_file());
+        output.log = log.as_deref().map(crate::logs::session::path);
+        skills::remove_written();
+        return serde_json::to_string(&output).context("could not serialize Trial result");
+    }
     let logs = Logs::of_trial(&output_dir);
     let session_started = Instant::now();
     let run = |sessions: &Sessions| {

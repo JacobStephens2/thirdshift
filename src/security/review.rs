@@ -27,7 +27,7 @@ pub(crate) fn run(
     text: &str,
 ) -> Result<Review> {
     let merge_base = worktree.merge_base_commit(base)?;
-    run_in(sessions, issue, &merge_base, text, || {
+    run_in(sessions, issue, &merge_base, text, None, || {
         worktree.head()?;
         Ok(worktree.path())
     })
@@ -42,9 +42,27 @@ pub(crate) fn run_on_pull_request(
     text: &str,
 ) -> Result<Review> {
     let merge_base = worktree.merge_base_commit(base_commit)?;
-    run_in(sessions, &pr.issue, &merge_base, text, || {
+    run_in(sessions, &pr.issue, &merge_base, text, None, || {
         worktree.head()?;
         Ok(worktree.path())
+    })
+}
+
+/// Local review keeps validated private reports in the Trial, with no GitHub
+/// recording. The supplied Base branch pins the Issue branch's review diff.
+pub(crate) fn run_local(
+    sessions: &Sessions<'_>,
+    repository: &Path,
+    issue: &IssueUrl,
+    base: &str,
+    output: &Path,
+    text: &str,
+) -> Result<Review> {
+    let git = crate::git::Git::new(repository);
+    let merge_base = git.run(&["merge-base", base, "HEAD"])?;
+    run_in(sessions, issue, &merge_base, text, Some(output), || {
+        git.run(&["rev-parse", "HEAD"])?;
+        Ok(repository)
     })
 }
 
@@ -53,9 +71,13 @@ fn run_in<'a>(
     issue: &IssueUrl,
     merge_base: &str,
     text: &str,
+    local_output: Option<&Path>,
     checkout: impl Fn() -> Result<&'a Path>,
 ) -> Result<Review> {
-    let root = logs::root(&issue.repo()).join("security-reviews");
+    let root = local_output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| logs::root(&issue.repo()))
+        .join("security-reviews");
     fs::create_dir_all(&root)?;
     let directory = tempfile::Builder::new()
         .prefix(&format!("{}-{}-", issue.number, logs::stamp()))
@@ -100,7 +122,7 @@ fn run_in<'a>(
             Ok((finding, reproduction))
         })
         .collect::<Result<Vec<_>>>()?;
-    if !findings.is_empty() {
+    if local_output.is_none() && !findings.is_empty() {
         let github = GitHub::new();
         let repo = issue.repo_slug();
         let mut known = github.security_records(&repo)?;
