@@ -123,6 +123,9 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             .push(entry);
     }
     for task in &experiment.tasks {
+        if task.manifest.session == crate::evals::format::Session::Process {
+            continue;
+        }
         interrupt::check()?;
         let key = Sha256::new()
             .chain_update(task.suite.as_bytes())

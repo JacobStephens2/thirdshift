@@ -88,6 +88,8 @@ pub(crate) fn propose(
         format: 1,
         state: State::Proposed,
         session: Session::CodeReview,
+        provenance: None,
+        environment: None,
         repository: "repository".into(),
         base,
         change: review.head,

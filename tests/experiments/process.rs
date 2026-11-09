@@ -1,0 +1,177 @@
+use super::*;
+
+fn fixture() -> Fixture {
+    let fixture = Fixture::with_session("process", 1);
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
+    let text = fs::read_to_string(&task).unwrap();
+    fs::write(
+        task,
+        text.replace(
+            "session = \"process\"",
+            "session = \"process\"\nprovenance = \"real\"\nenvironment = \"host\"",
+        )
+        .replace(
+            &format!("change = \"{}\"", fixture.baseline),
+            &format!("change = \"{}\"", fixture.candidate),
+        ),
+    )
+    .unwrap();
+    fixture.scenario.agent_does(r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'Private report file:'; then
+    test -f feature.txt
+    report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+    printf '[]\n' > "$report"
+    printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+else
+    test ! -f src/prompt.rs
+    git config user.name Eval
+    git config user.email eval@example.invalid
+    echo implemented > feature.txt
+    git add feature.txt
+    git commit -q -m 'Implement local Ticket'
+fi
+"#);
+    fixture
+}
+
+#[test]
+fn a_final_question_stops_the_process_and_counts_as_failed() {
+    let fixture = fixture();
+    fixture
+        .scenario
+        .agent_does("printf '%s\\n' 'Which option should I use?' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "stopped_to_ask", "{result}");
+        assert_eq!(result["score"]["passed"], false);
+        assert_eq!(
+            result["attempts"][0]["steps"][0]["outcome"],
+            "stopped_to_ask"
+        );
+    }
+    assert_eq!(view["outcomes"]["baseline"]["stopped_to_ask"], 1);
+    assert_eq!(view["outcomes"]["candidate"]["stopped_to_ask"], 1);
+    assert_eq!(fixture.trial_calls().len(), 2);
+    assert!(fixture.grader_calls().is_empty());
+}
+
+#[test]
+fn github_processes_are_refused_before_any_trial_starts() {
+    for arm in ["--baseline-process", "--candidate-process"] {
+        let fixture = fixture();
+        let run = fixture.run(&[arm, "spec-run"]);
+        assert_ne!(run.code, Some(0));
+        assert!(
+            run.stderr.contains("requires GitHub before"),
+            "{}",
+            run.stderr
+        );
+        assert!(fixture.trial_calls().is_empty());
+    }
+}
+
+#[test]
+fn built_in_ticket_trials_deliver_and_keep_all_steps_and_sessions() {
+    let fixture = fixture();
+    let run = fixture.run(&[
+        "--candidate-process",
+        "ticket-run",
+        "--baseline-process",
+        "ticket-run",
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    result_format::assert_documented("Experiment", &view);
+    let results = view["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for trial in results {
+        assert_eq!(trial["outcome"], "delivered", "{trial}");
+        assert_eq!(trial["score"]["passed"], true, "{trial}");
+        let steps = trial["attempts"][0]["steps"].as_array().unwrap();
+        assert_eq!(
+            steps
+                .iter()
+                .map(|s| s["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["implement", "security-review"]
+        );
+        assert!(steps.iter().all(|s| s["outcome"] == "succeeded"));
+    }
+    assert_eq!(view["sessions"].as_array().unwrap().len(), 4, "{view}");
+    assert_eq!(view["outcomes"]["baseline"]["delivered"], 1);
+    assert_eq!(view["outcomes"]["candidate"]["delivered"], 1);
+    assert_eq!(fixture.trial_calls().len(), 4);
+    assert!(fixture.grader_calls().is_empty());
+    assert!(fixture.scenario.gh_calls().is_empty());
+    let status = fixture.scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 1, "{status}");
+    assert_eq!(commands[0]["kind"], "Experiment");
+    for session in view["sessions"].as_array().unwrap() {
+        let evidence = fixture.scenario.run(&[
+            "experiments",
+            view["id"].as_str().unwrap(),
+            "--session",
+            session["id"].as_str().unwrap(),
+            "--json",
+        ]);
+        assert_eq!(evidence.code, Some(0), "{}", evidence.stderr);
+    }
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = fixture.scenario.path("process-trace");
+    let trace = fixture.scenario.run(&[
+        "logs",
+        record["name"].as_str().unwrap(),
+        "--export",
+        export.to_str().unwrap(),
+    ]);
+    assert_eq!(trace.code, Some(0), "{}", trace.stderr);
+    let spans = trace_spans(&export.join("spans.jsonl"));
+    let steps: Vec<_> = spans
+        .iter()
+        .filter(|s| s["name"].as_str().unwrap().starts_with("Step "))
+        .collect();
+    assert_eq!(steps.len(), 4, "{spans:?}");
+    let sessions: Vec<_> = spans
+        .iter()
+        .filter(|s| s["name"].as_str().unwrap().starts_with("invoke_agent "))
+        .collect();
+    assert_eq!(sessions.len(), 4, "{spans:?}");
+    assert!(
+        sessions
+            .iter()
+            .all(|s| steps.iter().any(|step| step["spanId"] == s["parentSpanId"]))
+    );
+}
+
+#[test]
+fn a_security_review_question_keeps_its_stopped_to_ask_outcome() {
+    let fixture = fixture();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"{script}
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'Private report file:'; then
+    printf '%s\n' 'Should I fix this finding?' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+fi
+"#
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "stopped_to_ask", "{result}");
+        assert_eq!(result["score"]["passed"], false);
+        assert_eq!(
+            result["attempts"][0]["steps"][1]["outcome"],
+            "stopped_to_ask"
+        );
+    }
+}

@@ -39,6 +39,13 @@ the minimum keep their original Bar, Verdict and aggregation policy.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
 
+Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
+scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
+failed counts per Arm, excluding Void attempts. `Setup.process`, when present,
+names the Built-in process. Each process attempt's `steps` retains names,
+outcomes, start/end times and elapsed milliseconds; all sessions remain in the
+shared `sessions` listing. Existing review records omit these optional fields.
+
 ## Experiment view
 
 `id` identifies the fixed pair of Arms and selected suites. `baseline` and
@@ -90,7 +97,8 @@ trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidenc
 
 Trial result files have the `TrialResult` shape below, governed by their parent
 Experiment's format. They have no separate format field. Trial indices are
-zero-based within an Eval task and Arm; `outcome` is `succeeded`, `failed` or
+zero-based within an Eval task and Arm; `outcome` is `succeeded`, `delivered`,
+`stopped_to_ask`, `failed` or
 `void`. `attempts` retains each Trial protocol result in execution order,
 including retries/resumes. Its `version: 1`, timing milliseconds, nullable
 failure cause, Void cause, Session ID, log, Model evidence and report paths are
@@ -252,9 +260,11 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
+    "outcomes": {"baseline": "OutcomeCounts", "candidate": "OutcomeCounts"},
     "findings": ["string"]
   },
-  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?"},
+  "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
+  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
     "commit": "string", "binary": "string",
@@ -271,14 +281,15 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
-    "outcome": "succeeded|failed|void", "score": "Score?", "attempts": ["Attempt"]
+    "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"]
   },
   "Attempt": {
-    "version": 1, "outcome": "succeeded|failed|void",
+    "version": 1, "outcome": "succeeded|delivered|stopped_to_ask|failed|void",
     "timings": {"total_ms": "integer", "session_ms": "integer"},
     "void_cause": "VoidCause?", "cause": "string?", "session_id": "string?",
     "log": "string?", "model_evidence": "string?",
-    "reports": {"standards": "string?", "spec": "string?"}
+    "reports": {"standards": "string?", "spec": "string?"},
+    "steps?": [{"name": "string", "outcome": "string", "started_at": "string", "ended_at": "string", "elapsed_ms": "integer"}]
   },
   "Score": {
     "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean",
@@ -308,7 +319,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "accuracy": "Assessment", "wrong_findings": "Assessment", "verdict": "Decision",
     "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?",
     "counts?": {"judged": "integer", "measurement_only": "integer", "void_dropped": "integer", "other_setup": "integer"},
-    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
+    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
   },
   "SuiteBar": {
     "margin": "number", "pass_level?": "number", "fail_level?": "number",

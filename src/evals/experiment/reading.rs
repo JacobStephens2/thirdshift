@@ -111,6 +111,7 @@ impl Observation {
                 .collect(),
             running_trials: self.running_trials,
             sessions: self.sessions,
+            outcomes: super::store::Outcomes::of(&self.results),
             results: self.results,
             unfinished_trials: self.unfinished_trials,
             verdict: stored.verdict.clone(),

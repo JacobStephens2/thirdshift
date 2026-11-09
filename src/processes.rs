@@ -1067,6 +1067,9 @@ fn execute_groups(
         };
         let mut group_error = None;
         for (step, (elapsed, began_at, outcome)) in group.iter().zip(outcomes) {
+            prepared
+                .source
+                .record_step(step, began_at, elapsed, &outcome)?;
             match finish_step(
                 step,
                 elapsed,

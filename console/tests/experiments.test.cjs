@@ -8,6 +8,28 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+
+test('process Trial Peeks show Steps and outcome counts beside the Verdict', async t => {
+  const value = fixture.finish(fixture.record());
+  value.baseline.process = value.candidate.process = 'ticket-run';
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  const result = fixture.result('alpha', 'candidate', 0);
+  result.outcome = result.attempts[0].outcome = 'stopped_to_ask';
+  result.score.passed = false;
+  result.attempts[0].steps = [{ name: 'implement', outcome: 'stopped_to_ask', started_at: '2026-11-09T10:00:00Z', ended_at: '2026-11-09T10:00:01Z', elapsed_ms: 1000 }];
+  await writeFile(join(folder, 'results', `${fixture.key('alpha', 'candidate', 0)}.json`), JSON.stringify(result));
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(async () => { await context.close(); await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  const page = await context.newPage();
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  const counts = page.getByRole('region', { name: 'Process Trial outcomes', exact: true });
+  assert.match(await counts.textContent(), /Stopped-to-ask counts as failed/);
+  assert.match(await counts.textContent(), /0 delivered · 1 stopped-to-ask · 0 failed/);
+  await openSuites(page);
+  await page.locator(`.trial-cell[data-experiment-peek="trial-${fixture.key('alpha', 'candidate', 0)}"]`).click();
+  assert.match(await page.locator('#peek').textContent(), /Steps.*implement · stopped-to-ask · 1.0s/s);
+});
 // Trial suites open folded; a reader opens each one to see its Trials.
 async function openSuites(page) {
   for (const summary of await page.locator('details.trial-suite > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();

@@ -1283,6 +1283,17 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
+Process Eval tasks run the Built-in Ticket run's `implement` and
+`security-review` Steps at the task's base commit, stopping before Delivery.
+`--baseline-process ticket-run` and `--candidate-process ticket-run` name the
+Built-in process per Arm; both default to `ticket-run` for process tasks.
+A Process needing GitHub before publication is refused at start. The Trial
+publishes nothing and creates no factory run of its own. Its Steps and all
+sessions appear in the Experiment's Trial Peek and Trace. Process outcomes are
+delivered, stopped-to-ask or failed, with the existing Void causes.
+Stopped-to-ask counts as failed; each Arm's outcome counts appear beside the
+Verdict. Until process grading lands, the outcome alone decides its Score.
+
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial

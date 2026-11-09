@@ -117,6 +117,7 @@ impl Fixture {
             task,
             prepared,
             setup: Setup {
+                process: None,
                 commit: base,
                 harness: "opencode".into(),
                 model: None,

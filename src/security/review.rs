@@ -97,6 +97,9 @@ fn run_in<'a>(
     ));
     let message =
         sessions.run_to_final_message(Purpose::SecurityReview, Kind::SecurityReview, &text)?;
+    if local_output.is_some() {
+        crate::trial::check_question(message.as_deref())?;
+    }
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
     let worktree = checkout()?;

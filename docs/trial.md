@@ -34,8 +34,10 @@ engine's local Ticket source. The caller checks out `inputs.branch`, supplies
 directory, with a repository-local Git author identity for commits inside the
 fresh home. The engine runs `implement` and `security-review`, then stops before
 `delivery`. The local source refuses `delivery` and `self-merge` if asked to
-execute either. This is the prefactor entry for process Trials; Custom process
-selection and Experiment accounting are separate work.
+execute either. The optional `process` field names the Built-in process and
+defaults to `ticket-run`. Other Built-in processes that need GitHub before
+publication are refused before a Trial starts. Custom process selection is
+separate work.
 
 Before each session, including Resume, the local source restores the supplied
 issue file. Its prompts instruct the agent to commit locally, with no GitHub
@@ -45,6 +47,17 @@ Security record published. A failed or incomplete Security review fails the
 local Process. Step results and Session traces are also kept under `output_dir`;
 the result's `log` and `model_evidence` identify the last session. `pr_url` remains
 required by version 1 and is unused for a local Process.
+
+Process results end `delivered`, `stopped_to_ask`, `failed` or `void`.
+`delivered` means every local Step finished up to the first publishing Step;
+it publishes nothing. A final message ending in a question mark is
+`stopped_to_ask`, counted as failed in the Verdict. The existing external Void
+causes still apply. The result's `steps` array retains each completed Step's
+name, outcome, start/end times and elapsed milliseconds. Sessions and Step
+spans join the Experiment's Trace, and all evidence lives under its Trial
+attempt. Trials create no factory Command records, Activity entries or run
+metrics. Repository changes are expected for process Trials; the repository
+integrity rule applies only to review Trials.
 
 ## Request
 

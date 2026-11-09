@@ -84,7 +84,14 @@ effort = "high"
   preserving its inputs and manifest comments. Approving again is harmless.
   It starts no work and affects future Experiments only; an existing
   Experiment keeps its fixed Eval tasks, including when resumed.
-- `session` is `code-review` or `spec-review`.
+- `session` is `code-review`, `spec-review` or `process`. Process tasks also
+  require `provenance = "real"` and `environment = "host"` at the top level.
+  They start at `base`, with the Ticket inputs and a local origin; `change`
+  remains a private reference fix and is not applied to their repository.
+  Their Arm's Built-in process runs through its local Steps, stopping before
+  publication. Until process grading lands, only the outcome is scored:
+  delivered passes; stopped-to-ask and failed do not. Review task checks and
+  Model grading continue as before.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the

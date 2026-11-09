@@ -1362,6 +1362,16 @@ production code-review Factory skill on the historical diff and retain both
 axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: <code>gh</code> calls fail
 inside the sandbox and only their reports are graded.</p>
+<p>Process Eval tasks run the Built-in Ticket run&#39;s <code>implement</code> and
+<code>security-review</code> Steps at the task&#39;s base commit, stopping before Delivery.
+<code>--baseline-process ticket-run</code> and <code>--candidate-process ticket-run</code> name the
+Built-in process per Arm; both default to <code>ticket-run</code> for process tasks.
+A Process needing GitHub before publication is refused at start. The Trial
+publishes nothing and creates no factory run of its own. Its Steps and all
+sessions appear in the Experiment&#39;s Trial Peek and Trace. Process outcomes are
+delivered, stopped-to-ask or failed, with the existing Void causes.
+Stopped-to-ask counts as failed; each Arm&#39;s outcome counts appear beside the
+Verdict. Until process grading lands, the outcome alone decides its Score.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,
 prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
 Advisory minimum of <code>20</code> discriminating Eval tasks, an <code>1800</code>-second per-Trial
