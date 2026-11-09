@@ -2264,7 +2264,12 @@ other settings, comments and layout. An invalid value leaves the file intact.
 
 Open **User config** in the Console navigation (`/config`) to see the same
 inventory. A session with `admin` can save one setting at a time; a `read`
-session sees values and defaults without edit controls. The API requires
+session sees values and defaults without edit controls. Saving returns to that
+setting and confirms its key, saved value and machine, for example
+`Saved spec.parallel = 10 on orchestrate`. This works with or without JavaScript,
+including Fleet pages at `/config?machine=<name>`; export endpoints stay redacted
+in the confirmation. Invalid values and remote refusals show an error instead.
+The API requires
 `admin` for both GET `/api/v1/config` and GET `/api/v1/config/<key>`, and for
 POST `/api/v1/config/<key>` with an `application/x-www-form-urlencoded`
 `value` field. Its response equals the CLI's JSON. Session writes need CSRF
