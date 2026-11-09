@@ -257,6 +257,13 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
         },
         Prompt {
+            id: "prompt-triage-issue",
+            title: "Existing-issue Triage run",
+            when: "Investigates one existing open issue against the selected Base branch. thirdshift supplies the issue file, owns the reservation and Claim, and publishes the recommendation in place unless --recommend-only is given.",
+            sender: TriageRun,
+            text: prompt::triage_issue(std::path::Path::new(SKILL_PATH), &issue, false),
+        },
+        Prompt {
             id: "prompt-security-review",
             title: "Security review",
             when: "When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",

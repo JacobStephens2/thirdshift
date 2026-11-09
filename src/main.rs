@@ -184,6 +184,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
        thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
+       thirdshift triage <Issue URL or number> [base <branch>]  Investigate and triage an existing issue in place
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -595,8 +596,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn triage(args: args::TriageArgs) -> ExitCode {
-    let report = match triage::Report::read(args.file.as_deref()) {
-        Ok(report) => report,
+    let input = match triage::Input::read(args.issue, args.file.as_deref()) {
+        Ok(input) => input,
         Err(error) => return failure(&error),
     };
     let flags = asks::Flags {
@@ -621,7 +622,12 @@ fn triage(args: args::TriageArgs) -> ExitCode {
         read_machine: args.read_machine
             || launch::repo().is_ok_and(|repo| config.triage_reads_machine(&repo)),
     };
-    started.finish(Ending::Triage(triage::run(&report, options, &mut harness)))
+    started.finish(Ending::Triage(triage::run(
+        &input,
+        args.base.as_deref(),
+        options,
+        &mut harness,
+    )))
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the

@@ -9,9 +9,26 @@ use crate::failed_run::FailedRun;
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::harness::Choice;
-use crate::issue::{IssueUrl, Repo};
+use crate::issue::{IssueInput, IssueUrl, Repo};
 use crate::labels::{self, Label};
 use crate::{command_limit, launch, logs, prompt, session, worktree};
+
+mod existing;
+
+/// Input is resolved before Setup can consume a piped Report.
+pub enum Input {
+    Report(Report),
+    Issue(IssueUrl),
+}
+
+impl Input {
+    pub fn read(issue: Option<IssueInput>, file: Option<&str>) -> Result<Self> {
+        match issue {
+            Some(issue) => Ok(Self::Issue(launch::resolve_issue(issue)?)),
+            None => Ok(Self::Report(Report::read(file)?)),
+        }
+    }
+}
 
 /// The free text a Triage run investigates, with where it came from: the
 /// file the command named, or standard input.
@@ -126,6 +143,9 @@ impl Recommendation {
                     one_line(issue.category.as_deref().unwrap_or(&self.category)),
                     one_line(issue.state.as_deref().unwrap_or(&self.state))
                 ));
+                if let Some(url) = &issue.url {
+                    notification.push_str(&format!("Issue: {}\n", one_line(url)));
+                }
             }
         }
         if !self.comments.is_empty() {
@@ -459,43 +479,91 @@ pub struct Options {
 }
 
 /// A Triage run always takes a Command slot, even above the Command limit.
-pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<Ended, FailedRun> {
+pub fn run(
+    input: &Input,
+    base: Option<&str>,
+    options: Options,
+    harness: &mut Choice,
+) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
     logs::started(logs::Work::TriageRun(&repo), harness);
-    harness.check_without_probe()?;
-    let base = launch::checked_out_base()?;
+    let target = match input {
+        Input::Issue(issue) => Some(issue),
+        Input::Report(_) => None,
+    };
+    let base = match target {
+        Some(issue) => {
+            let directory = launch::LaunchDirectory::open_for_run(issue)?;
+            existing::check_trust(issue, &GitHub::new())?;
+            directory.prepare_base_branch(base)?
+        }
+        None => launch::checked_out_base()?,
+    };
     let launch = Git::new(std::env::current_dir().context("could not read the Launch directory")?);
+    let mut claim = target
+        .filter(|_| !options.recommend_only)
+        .map(|issue| existing::Claim::take(&launch, issue))
+        .transpose()?;
+    harness.check_without_probe()?;
     let checkout = worktree::ReviewWorktree::for_triage(&launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(&repo);
     let mut published = Vec::new();
     let investigate = |sessions: &session::Sessions<'_>| {
         let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
+        let session_prompt = match input {
+            Input::Report(report) => {
+                prompt::triage(&skill.path, &report.text, options.read_machine)
+            }
+            Input::Issue(issue) => {
+                existing::check_trust(issue, &GitHub::new())?;
+                crate::delivery::hand_over_issue(issue, checkout.path())?;
+                prompt::triage_issue(&skill.path, issue, options.read_machine)
+            }
+        };
         let message = sessions.run_to_final_message(
             session::Purpose::Ordinary,
             session::Kind::Triage,
-            &prompt::triage(&skill.path, &report.text, options.read_machine),
+            &session_prompt,
         )?;
         let mut recommendation = parse_recommendation(message.as_deref())?;
         let github = GitHub::new();
+        if let Some(target) = target {
+            existing::check_recommendation(&mut recommendation, target)?;
+        }
         let publication = check_publication(
             &recommendation,
             &repo,
             &github,
             options.allow_ready_for_agent,
         )
-        .and_then(|checked| {
+        .and_then(|mut checked| {
+            if let Some(target) = target {
+                existing::check_target(target, &github)?;
+                if checked.filings[0].readiness_held {
+                    checked.filings[0].state = labels::READY_FOR_HUMAN;
+                }
+            }
             if options.recommend_only {
                 return Ok(());
             }
-            publish(
-                &mut recommendation,
-                checked,
-                &repo,
-                report,
-                &github,
-                &mut published,
-            )
+            match input {
+                Input::Report(report) => publish(
+                    &mut recommendation,
+                    checked,
+                    &repo,
+                    report,
+                    &github,
+                    &mut published,
+                ),
+                Input::Issue(target) => existing::publish(
+                    &mut recommendation,
+                    checked,
+                    target,
+                    &github,
+                    &mut published,
+                ),
+            }
         });
         let json = serde_json::to_string(&recommendation)?;
         let notification = recommendation.notification();
@@ -519,6 +587,11 @@ pub fn run(report: &Report, options: Options, harness: &mut Choice) -> Result<En
     } else {
         session::Sessions::within(&session_logs, checkout.path(), harness, investigate)
     };
+    if result.is_ok()
+        && let Some(claim) = &mut claim
+    {
+        claim.completed();
+    }
     result.map_err(|error| {
         let mut failed = FailedRun::from(error);
         if !published.is_empty() {
