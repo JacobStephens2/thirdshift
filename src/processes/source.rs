@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::claim::{self, Claim};
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Preserve unfinished Issue-branch work consistently for direct and
 /// dispatched Custom processes.
@@ -352,7 +355,7 @@ impl Local {
         let logs = session::Logs::of_trial(&self.output.join(format!("step-{index}")));
         let before_each = || {
             self.ensure_actionable()?;
-            fs::write(self.repository.join(prompt::ISSUE_FILE), &self.issue_text)?;
+            restore_issue_file(&self.repository, &self.issue_text)?;
             Ok(())
         };
         let action = |sessions: &session::Sessions<'_>| action(sessions, index);
@@ -405,7 +408,7 @@ pub(crate) fn run_local(
         let source = Local {
             choice: choice.clone(),
             repository: repository.to_path_buf(),
-            issue_text: fs::read_to_string(repository.join(prompt::ISSUE_FILE))?,
+            issue_text: read_regular_issue(repository)?,
             issue: IssueUrl::parse(&inputs.issue_url)?,
             base: inputs.base.clone(),
             branch: inputs.branch.clone(),
@@ -464,6 +467,50 @@ pub(crate) fn run_local(
         result
     })();
     (result, last_log)
+}
+
+/// The supplied issue file, read without following a symlink. A repository
+/// can point that path at a file outside the checkout; the session must not
+/// receive that file's contents.
+fn read_regular_issue(repository: &Path) -> Result<String> {
+    let path = repository.join(prompt::ISSUE_FILE);
+    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        bail!("local Ticket source refuses a symlinked issue file");
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&path)
+        .with_context(|| format!("could not read {}", path.display()))?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file(),
+        "local Ticket source requires a regular issue file"
+    );
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .with_context(|| format!("could not read {}", path.display()))?;
+    Ok(text)
+}
+
+/// Put the sampled issue text back without following a symlink planted by an
+/// earlier sandboxed session. Following one would write outside the repository.
+fn restore_issue_file(repository: &Path, text: &str) -> Result<()> {
+    let path = repository.join(prompt::ISSUE_FILE);
+    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        fs::remove_file(&path)
+            .with_context(|| format!("could not remove symlinked {}", path.display()))?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&path)
+        .with_context(|| format!("could not write {}", path.display()))?;
+    file.write_all(text.as_bytes())
+        .with_context(|| format!("could not write {}", path.display()))?;
+    Ok(())
 }
 
 /// Ends the Claim on drop unless the run removed it or ended it already.

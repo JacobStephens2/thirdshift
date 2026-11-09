@@ -78,3 +78,74 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existi
         result.stderr
     );
 }
+
+fn prepare_local_process(scenario: &Scenario) -> PathBuf {
+    scenario.launch_git(&[
+        "remote",
+        "set-url",
+        "origin",
+        scenario.origin_dir().to_str().unwrap(),
+    ]);
+    scenario.launch_git(&["checkout", "-b", "issue-7"]);
+    scenario.launch_git(&["config", "user.name", "Eval"]);
+    scenario.launch_git(&["config", "user.email", "eval@example.invalid"]);
+    let request = request(scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["session_kind"] = json!("process");
+    document["inputs"]["pr_url"] = json!("");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    request
+}
+
+fn security_review_succeeds() -> &'static str {
+    r#"
+test "$(cat .thirdshift-issue.md)" = '# Fixture Spec
+
+Review the fixture change.'
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '[]\n' > "$report"
+printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+}
+
+#[test]
+fn local_issue_restore_does_not_follow_a_symlink_outside_the_repository() {
+    let scenario = Scenario::new();
+    let request = prepare_local_process(&scenario);
+    let sentinel = scenario.path("outside-sentinel");
+    fs::write(&sentinel, "KEEP\n").unwrap();
+    let sentinel = sentinel.display().to_string();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            r#"
+rm -f .thirdshift-issue.md
+ln -s '{sentinel}' .thirdshift-issue.md
+echo implemented > feature.txt
+git add feature.txt
+git commit -q -m 'Implement local Ticket'
+"#
+        ),
+    );
+    scenario.agent_does_in_session(2, security_review_succeeds());
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(
+        fs::read_to_string(scenario.path("outside-sentinel")).unwrap(),
+        "KEEP\n",
+        "issue restore wrote through the session's symlink\n{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let issue = scenario.launch_dir().join(".thirdshift-issue.md");
+    assert!(
+        fs::symlink_metadata(&issue).unwrap().file_type().is_file(),
+        "issue file stayed a symlink"
+    );
+    assert_eq!(
+        fs::read_to_string(issue).unwrap(),
+        "# Fixture Spec\n\nReview the fixture change.\n"
+    );
+}
