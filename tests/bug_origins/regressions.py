@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+# Before tomllib: name the Python needed rather than an import traceback.
 if sys.version_info < (3, 11):
     sys.exit("Python 3.11 or later is required; found Python "
              f"{'.'.join(map(str, sys.version_info[:3]))} at {sys.executable}")

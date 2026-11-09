@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from test_python_minimum import rejection, run_as
+
 
 SELECTOR = Path(__file__).with_name("affected-tests").resolve()
 
@@ -111,17 +113,7 @@ class AffectedTests(unittest.TestCase):
         return result, calls
 
     def run_selector_as(self, version):
-        """Run the selector with sys.version_info reporting an interpreter of `version`."""
-        wrapper = (
-            "import runpy, sys\n"
-            f"sys.version_info = {(*version, 'final', 0)!r}\n"
-            f"sys.argv = [{str(SELECTOR)!r}, 'base']\n"
-            f"runpy.run_path({str(SELECTOR)!r}, run_name='__main__')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", wrapper],
-            cwd=self.root, env=self.env, capture_output=True, text=True,
-        )
+        result = run_as(version, SELECTOR, "base", cwd=self.root, env=self.env)
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return result, calls
 
@@ -151,11 +143,7 @@ class AffectedTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls, [])
                 self.assertEqual(result.stdout, "")
-                found = ".".join(map(str, version))
-                self.assertEqual(
-                    result.stderr,
-                    f"Python 3.11 or later is required; found Python {found} at {sys.executable}\n",
-                )
+                self.assertEqual(result.stderr, rejection(version))
 
     def test_python_3_11_selects_as_before(self):
         self.change("src/main.rs")
