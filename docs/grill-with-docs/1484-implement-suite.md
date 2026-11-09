@@ -207,7 +207,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Answer:* b
 
-## Round 4 (open)
+## Round 4 (answered)
 
 **Q4.1 - With a sample, what decides the pairs the human doesn't read?** Q3.6: in counted mode a Trial passes only if the code Grader passes and it's called ready to merge. The Bar can also limit the human to a sample, say 10 of 60 pairs, while model Graders read all 60 (Q3.8 (b)). For the 50 unread pairs, someone else has to make the merge call. The options:
 - (a) **The model Graders' merge call stands in for the human's** on unread pairs. The sample is drawn by pair with the Bar's seed, so both sides of a pair always have the same reader, and Baseline and Candidate are judged the same way. The Experiment reports how often the human and the models agreed on the sampled pairs. If agreement falls below a level the Bar fixes, the Verdict is inconclusive.
@@ -216,7 +216,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). It's what you described, and it's fair between Arms because each pair has one reader. The agreement check stops a model panel that disagrees with you from quietly deciding the Verdict. The sampled pairs double as the human-agreement measure the hand-run comparison reported.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q4.2 - What is the model Grader panel?** Q3.8 (b) puts pairwise model Graders in this Spec, and Q4.1 may let their calls count. Today there's one model Grader, a fresh session that reads a packet with shuffled neutral labels. In the hand-run comparison, each Grader was the same model as one Arm, and their preferences leaned the way self-preference predicts. The options:
 - (a) **A panel fixed in the Bar, with Models from at least two families.** Each Grader reads every pair in both orders, and a call that flips with the order counts as a tie. The panel's call is the majority. A Grader from the same family as either Arm's Model is reported, but doesn't vote when another family is available.
@@ -225,7 +225,23 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). Two families and both orders were what the hand-run comparison needed in order to trust model calls at all. Leaving same-family Graders out of the vote follows the rule the scaling note gives for injectors (§2.4 risk 3).
 
-*Answer:* 
+*Answer:* agreed, and I want the option to set the model Grader panel to include a number of models - perhaps at least from 1 - 7 models. For example I might want a panel of:
+1. Fable 5.2 via claude from Anthropic
+2. Gemini 4 Argon via agy from Google
+3. GPT-6 Astra via codex from OpenAI
+4. Kimi K3.1 Pro from Fireworks on whatever harness /research suggests would be best for thirdshift to use to run this model
+5. Muse Wonder via muse from Meta
+6. Grok 4.7 via grok from SpaceXAI
+7. DeepSeek V4.1 Flash 1017 from Baseten on whatever harness /research suggests would be best for thirdshift to use to run this model
+
+I might even want to be able to run a few models from a given family, as different models within a given family can have various strengths I think (may want to /research to check me on that, but that's my current impression), so these I may also want to run:
+8. Opus 5.5 via claude from Anthropic
+9. GPT-6.1 Sol via codex from OpenAI
+10. GPT-6.1 Terra via codex from OpenAI
+11. Sonnet 5.5 via claude from Anthropic
+
+12. Muse Wonder Full via muse from Meta when it becomes publicly available
+13. Gemini 4 Carbon via agy from Google when it becomes publicly available
 
 **Q4.3 - How is Difficulty measured on process Trials?** Admission needs at least 6 Trials per candidate in an A/A (#1477). With about 60 candidates, that's about 360 Ticket runs up to Delivery, each several sessions. The options:
 - (a) **In batches.** Screen candidates by reading them (Q1.3, and SWE-bench Verified's two questions), then measure about 20 at a time with the Built-in Ticket run on both Arms. Stop once 20 are discriminating.
@@ -234,7 +250,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). At #1434's rate of about one in three, reaching 20 discriminating tasks takes about three batches, and you can stop early. (c) measures a different thing, so its Difficulty wouldn't carry over to process Trials.
 
-*Answer:* 
+*Answer:* agree
 
 **Q4.4 - How are the issues laid out?** The design now covers several things:
 - the task format (provenance, environment, Process) and how tasks are built and screened;
@@ -247,6 +263,34 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 - (b) Two Specs: one for process Trials and the code-graded suite, one for human and model pairwise grading.
 
 *Recommended:* (b). The code-graded suite is enough on its own for #1526's Experiment and your first Ticket-run edit. Pairwise grading is a large Console feature that can follow without holding it up. The second Spec is blocked by the first. #1468 is narrowed as in (a).
+
+*Answer:* agreed, created with the to-spec and to-tickets rules
+
+## Round 5 (open)
+
+**Q5.1 - How small can a panel be?** Q4.2 settled a panel from at least two families. Your answer asks for anywhere from 1 to about 11 Models, with several from one family. The two fit together if the Bar allows any size and only the stricter uses demand more. The options:
+- (a) **Any panel from one Model up**, with its family make-up reported beside the Verdict. When model calls *stand in* for the human on unread pairs (Q4.1), the voting panel must span at least two families, neither of them an Arm's, or the Experiment refuses to start.
+- (b) Always at least two families.
+- (c) Any size, with no family rule anywhere.
+
+*Recommended:* (a). A single-Model panel is useful for cheap runs, where model calls are only reported. Once model calls decide the Verdict for a person, they need the cross-family check the hand-run comparison relied on.
+
+*Answer:* 
+
+**Q5.2 - What happens on a tie in the panel?** With an even number of voters, or with order-flipped calls counted as ties, the panel can split evenly. The options:
+- (a) **A tied merge call counts as not ready to merge, and a tied preference is a tie.** Both Arms face the same rule.
+- (b) A tie goes to the human, adding that pair to the sample.
+- (c) A tied merge call counts as ready.
+
+*Recommended:* (a). It's the cautious reading for an unattended factory, and it's symmetric between the Arms. (b) would make the sample depend on the outcome and break the seeded draw.
+
+*Answer:* 
+
+**Q5.3 - How is the panel's cost handled?** With 60 pairs, 2 orders and *N* Models, a panel of 11 means about 1,300 Grader sessions. Some Models (Kimi on Fireworks, DeepSeek on Baseten) are billed by API price, not subscription. The options:
+- (a) **The pre-Experiment estimate includes the panel**, per Model, priced from the same frozen price table as the Arms (Q3.5). Panel spend is reported apart from the Arms' cost, and the Bar's cost ceiling applies only to the Arms.
+- (b) As (a), plus a separate spending limit for the panel, which pauses grading when reached.
+
+*Recommended:* (b). Grading pauses rather than failing (as an unavailable Grader already does), and API-billed Models can spend real money without the plan-limit stops subscriptions have.
 
 *Answer:* 
 
@@ -283,6 +327,11 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 - In counted mode, a Trial passes only if the code Grader passes and it's called ready to merge. Baseline Trial *k* is paired with Candidate Trial *k*. The pairwise preference (A, B, tie or both bad) is always recorded where anyone grades pairs. The Bar may limit the human to a sample of pairs, and model Graders read every pair (Q3.6).
 - Base-tests and cross-tests are run offline and given to the human page and every model Grader as evidence, never as Scores (Q3.7).
 - Pairwise model Graders are in this Spec (Q3.8). This reverses the recommendation, and follows from Q3.6's answer, since model Graders read every pair.
+
+- On pairs the human doesn't read, the model panel's merge call stands in for the human's. The sample is drawn by pair with the Bar's seed. Human–panel agreement on the sample is reported, and agreement below the Bar's level makes the Verdict inconclusive (Q4.1).
+- The panel is fixed in the Bar. Each Grader reads every pair in both orders, and an order flip is a tie. A Grader from either Arm's family is reported but doesn't vote while another family is available. The panel can hold 1 to about 11 Models, several from one family, over any Harness thirdshift supports (Q4.2). Q5.1 and Q5.2 settle the size and tie rules, and the vote unit and Harness choices are waiting on research.
+- Difficulty is measured in batches of about 20 screened candidates, with the Built-in Ticket run on both Arms, until 20 are discriminating (Q4.3).
+- Two Specs, written with the `thirdshift-to-spec` and `thirdshift-to-tickets` rules and `docs/agents/triage-labels.md`'s publication procedure. The first covers process Trials and the code-graded suite, with a `ready-for-human` host Ticket for building and measuring the tasks. The second, blocked by the first, covers the blind human page and the pairwise model panel. #1468 is narrowed to the external-runner Arm (Q4.4). Publishing waits until this grill's frontier is empty.
 
 ## Research results (2026-11-09)
 
@@ -326,4 +375,4 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 ## Waiting on research
 
-- Nothing.
+- How to run Kimi on Fireworks and DeepSeek on Baseten through a thirdshift Harness, whether Models from one family make independent or correlated judgments, and how panel size and aggregation affect accuracy. Going to `docs/research/eval-grader-panel.md`, for a later question on the vote unit (one vote per Model or per family) and the Harness choices.
