@@ -44,7 +44,7 @@ The mark that a Run is live on an issue: thirdshift labels the issue `in-progres
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Failure limit**:
-The number of open issues the factory failed on, labelled `agent-failed`, at which a **Pickup run** takes no more, set in the **User config**. thirdshift puts the label on in place of the **Claim** when a **Failed ticket run** or a **Failed spec run** leaves work on `origin`, whatever started it. A held **Self-merge** that leaves its pull request ready gets none, and neither does a **Stop** or a Spec run that is only waiting. The label comes off when the **Day shift** acts on the failure: by putting `ready-for-agent` back, by taking `agent-failed` off to take the issue over, or by closing it, which the **Sweep** clears. The next Claim also takes it off. It keeps a broken **Base branch** or **Harness** from failing every **Ready issue** in turn. A pull request that is ready for review or merged never counts, so the factory keeps working while reviews wait.
+The number of open issues the factory failed on, labelled `agent-failed`, at which a **Pickup run** takes no more, set in the **User config**. thirdshift puts the label on in place of the **Claim** when a **Failed ticket run**, a **Failed spec run** or a failed **Custom process** on an issue leaves work on `origin`, whatever started it. A held **Self-merge** that leaves its pull request ready gets none, and neither does a **Stop** or a Spec run that is only waiting. The label comes off when the **Day shift** acts on the failure: by putting `ready-for-agent` back, by taking `agent-failed` off to take the issue over, or by closing it, which the **Sweep** clears. The next Claim also takes it off. It keeps a broken **Base branch** or **Harness** from failing every **Ready issue** in turn. A pull request that is ready for review or merged never counts, so the factory keeps working while reviews wait.
 _Avoid_: Claim limit (former name), WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Commands in flight)
 
 **Command limit**:
@@ -52,7 +52,7 @@ The number of live **Commands** on one repository on one machine at which a **Pa
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
-A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
+A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, of `in-progress` from every open issue that also has `agent-failed`, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
 _Avoid_: cleanup, garbage collection
 
 ### Repository and branches
@@ -264,7 +264,7 @@ A **Ticket run** that ends, including by interruption, without an open pull requ
 _Avoid_: Failed run (former name)
 
 **Recovery**:
-The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it, except after a **Spec PR** changed under its **Spec run**, when no command would be safe; built only from factory-owned facts, never agent output. When the Failed run leaves its issue `agent-failed`, thirdshift also posts it there as a comment marked as generated: the cause, where it stopped, what was preserved, the machine, and how to retry by putting `ready-for-agent` back, without local paths or the continue command.
+The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it, except after a **Spec PR** changed under its **Spec run**, when no command would be safe; built only from factory-owned facts, never agent output. When the Failed run leaves its issue `agent-failed`, thirdshift also posts it there as a comment marked as generated, except for a failed Security fix, whose Recovery stays in its private advisory: the cause, where it stopped, what was preserved, the machine, and how to retry by putting `ready-for-agent` back, without local paths or the continue command. A **Spec run** that ends only waiting posts a comment on its **Spec** instead, naming each undone **Ticket** and what it waits on.
 
 **Continuation**:
 A **Ticket run** that picks up an existing **Issue branch**, one with no pull request or an open one, instead of starting fresh. When a pull request is open, its base is the **Base branch**.

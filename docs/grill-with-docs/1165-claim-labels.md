@@ -57,7 +57,7 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Checked:* answered on the text from before the #1695 revision, where (a) was the plain swap with one take-over rule, removing `agent-failed`. That part is settled. Applying it to #1695's Triage runs and to #1583's Custom processes was added later, so Q2.1 and Q2.2 put those to you.
 
-## Round 2 (open)
+## Round 2 (answered)
 
 **Q2.1 - Does #1695's Triage run use the same take-over rule?** Q1.5 settled one take-over rule: a failure swaps `in-progress` for `agent-failed`, and the Day shift acts by putting `ready-for-agent` back, removing `agent-failed`, or closing the issue. Spec #1695, being built now as Ticket #1891, gives a failed Triage run `ready-for-human` plus `agent-failed`, and adds a second signal: the Sweep clears `agent-failed` once `ready-for-human` comes off. The options:
 - (a) One rule. A failed Triage run still gets `ready-for-human` next to `agent-failed`, so the Triage Pass passes over it, but `agent-failed` comes off only by the Q1.5 rule. #1891 drops its `ready-for-human` signal. I comment on #1891 and #1695 now, before it lands.
@@ -65,7 +65,9 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Recommended:* (a). The Day shift learns one act for every failure. Under (b), taking `ready-for-human` off would quietly clear a failure for one kind of Command only. Nothing is lost: if you answer a failed triage by relabelling the issue, you'd normally take `agent-failed` off in the same edit.
 
-*Answer:* 
+*Answer:* agreed
+
+*Checked:* drafts of the comments for #1891 and #1695 are ready, but posting them was blocked by a permission check, so they wait for you (see "Waiting on research"). #1891 can't simply drop the `ready-for-human` signal before #1165 lands: today's `src/pickup.rs` check would clear `agent-failed` from a failed Triage run at once, since it has neither `in-progress` nor `needs-triage`. The draft says #1891 may treat `ready-for-human` like `needs-triage` in that check for now, but shouldn't document removing it as the take-over act.
 
 **Q2.2 - Does a failed Custom process count toward the Failure limit (#1583)?** Today it does: `HeldClaim` ends its Claim through the same path as a Ticket run, so with work on `origin` it gets `agent-failed`. Under Q1.5 it would also lose `in-progress`. #1583 asks whether that is right, since #1564 named only Ticket runs and Spec runs. The options:
 - (a) Yes. A failed Custom process on an issue waits for the Day shift exactly as a Failed ticket run does. Answer and close #1583 with that.
@@ -73,7 +75,7 @@ In every option, a Spec run with a failed or interrupted Ticket gets `agent-fail
 
 *Recommended:* (a). A Custom process is Day-shift-authored and experimental, but an issue it failed on still waits for the Day shift. Leaving it out would also leave its failures on `in-progress`, which is what #1165 is removing.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.3 - Which failures post the Recovery comment (Q1.4)?** Q1.4 settled a generated comment with no local paths. Three cases need a boundary:
 - **A failed Security fix.** Its issue is a fix issue on the repository, but its cause can describe the vulnerability, which today stays in the private advisory.
@@ -87,7 +89,7 @@ The options:
 
 *Recommended:* (a). It keeps vulnerability details private and can't repeat on every pass. It gives the waiting Spec what #585 asked for: "claimed and waiting for you" looks different from a failure on GitHub. A waiting Spec isn't taken again until a Ticket becomes startable, so its comment doesn't repeat either.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.4 - What happens to issues labelled the old way?** When this ships, open issues will still carry `in-progress` beside `agent-failed`, or `in-progress` while their pull request waits for review. Under the new rules, `in-progress` and `agent-failed` never sit on one issue, because a new Claim takes `agent-failed` off. The options:
 - (a) The Sweep also takes `in-progress` off any open issue that carries `agent-failed`. That one rule is safe forever. The ready-for-review issues are cleared by hand once, from a list in the pull request, because a live Run can't be told apart from GitHub alone.
@@ -96,7 +98,7 @@ The options:
 
 *Recommended:* (a). The `agent-failed` case can't be ambiguous, so the Sweep can own it. The ready-for-review case can be, because a Continuation could be live on an issue whose pull request was ready, and only a person checking the Inbox can tell.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.5 - File the unbraked release retry as its own issue?** A Ticket run that fails with nothing on `origin` releases to `ready-for-agent` with no `agent-failed` (unchanged by Round 1). Nothing stops Pickup taking the same issue again on every pass, as a Harness that fails before its first commit would. The options:
 - (a) File it as a `needs-triage` issue now, linking #1165 and #1532, and keep it out of this Spec.
@@ -104,6 +106,45 @@ The options:
 - (c) Leave it.
 
 *Recommended:* (a). It is a Failure-limit question, not a label-meaning one, and (b) would change what the Failure limit counts, which #1532 settled deliberately.
+
+*Answer:* agreed
+
+## Round 3 (open)
+
+Round 2 settles the last design branch. What's left is how to publish it.
+
+**Q3.1 - Publish as a new Spec with three Tickets?** The work spans more than one session, so `docs/agents/triage-labels.md` makes it a Spec, published `needs-triage` until its Tickets are linked. #1532 set the precedent of a new Spec issue (#1564) rather than rewriting the problem issue. The proposed split:
+1. **Claim endings.** Ready for review takes `in-progress` off on every path (Q1.2). A failure swaps it for `agent-failed`, Custom processes included (Q1.5, Q2.2). The take-over check becomes "`agent-failed` taken off" (Q1.5), and the Sweep takes `in-progress` off open `agent-failed` issues (Q2.4). These ship together, because the swap without the new check would clear every failure.
+2. **Waiting Spec runs.** Put `ready-for-agent` back with no `agent-failed`, guarded by the Trusted-account check, or label the Spec `needs-triage` (Q1.3). Blocked by 1.
+3. **Recovery comments.** A generated comment on every `agent-failed` issue except Security fixes, and the waiting-Spec comment (Q1.4, Q2.3). Blocked by 1 and 2.
+
+Each Ticket updates the guide and the hand-written site pages that its change makes wrong. The one-time clearing of ready-for-review issues (Q2.4) can't happen until the Spec is released, so per "Split a Spec at a release" it becomes a standalone `ready-for-human` issue blocked by the Spec. The options:
+- (a) A new Spec as above, which closes #1165 when it lands.
+- (b) Rewrite #1165 as the Spec.
+- (c) One Ticket for everything.
+
+*Recommended:* (a). It matches #1564 and keeps #1165's history readable. The split follows the dependencies: 1 is the label meaning, 2 and 3 build on it.
+
+*Answer:* 
+
+**Q3.2 - What happens to the related open issues?** This grill answers part of three of them:
+- **#585**, waiting Spec runs. The labels and the comment are settled here. The outcome name, exit code, notification wording and mixed results are not.
+- **#833**, which machine holds a Claim. The Recovery comment names the machine on a failure, but nothing names it while a Run is live.
+- **#1165**, closed by the Spec.
+
+The options:
+- (a) Comment on #585 and #833 with what this Spec settles, and leave both open for the rest.
+- (b) Fold #585's remaining decisions into this Spec.
+
+*Recommended:* (a). #585's remaining questions are about outcomes and notifications, not labels. Folding them in would make the Spec wait on a grill of its own.
+
+*Answer:* 
+
+**Q3.3 - Record an ADR?** A decision earns one when it is hard to reverse, surprising without context, and a real trade-off. "`in-progress` marks only a live Run: a pull request waiting for review gets no label, and a failure gets `agent-failed` instead" passes all three. It changes what both hosts and every reader of GitHub rely on. A future reader will wonder why a Claimed issue with an open pull request has no label. And `in-review` was a real alternative, rejected once #1532 stopped counting reviews.
+- (a) Yes, one short ADR covering Q1.2 and Q1.5.
+- (b) No. The glossary and this file are enough.
+
+*Recommended:* (a). The glossary says what the labels mean but not why the alternatives lost, and this file isn't where a future reader would look.
 
 *Answer:* 
 
@@ -122,7 +163,12 @@ The options:
 - **Label upkeep:** a new Claim takes `agent-failed` off, and the Sweep takes both labels off closed issues. Both already ship.
 - **Tickets:** a Ticket run inside a Spec run makes no Claim, so its Spec carries the outcome.
 - **Out of scope:** a Run killed outright never ends its Claim (#710).
-- **Glossary:** **Claim**, **Failure limit**, **Ready issue** and **Recovery** updated on 2026-11-09. **Claim** now says it marks a live Run and includes Custom processes. Triage runs join it with Q2.1, and **Sweep** changes with Q2.4.
+- **One take-over rule for every failure,** Triage runs included: `agent-failed` comes off when the Day shift puts `ready-for-agent` back, takes `agent-failed` off, or closes the issue (Q2.1). A failed Triage run still also gets `ready-for-human`, which is #1695's business.
+- **Custom processes** count toward the Failure limit and swap `in-progress` for `agent-failed` like any other failure (Q2.2).
+- **Recovery comments** go on every `agent-failed` issue except a failed Security fix, and on a waiting Spec. A released issue gets none (Q2.3).
+- **The Sweep** also takes `in-progress` off open issues that carry `agent-failed`, and keeps doing so. Issues whose pull request waits for review are cleared by hand once, after release (Q2.4).
+- **The release-retry gap** becomes its own `needs-triage` issue, outside this Spec (Q2.5).
+- **Glossary:** **Claim**, **Failure limit**, **Ready issue**, **Recovery** and **Sweep** updated on 2026-11-09. Triage runs join **Claim** when #1891 lands, since they don't hold one yet.
 
 ## Research results (2026-10-23)
 
@@ -155,4 +201,4 @@ The options:
 
 ## Waiting on research
 
-- Nothing.
+- Posting to GitHub was blocked by a permission check, so these wait for you: the comments on #1891 and #1695 (Q2.1), the answer to #1583 and closing it (Q2.2), and a new  issue for the release-retry gap (Q2.5). The drafts are in the session scratchpad, `github-drafts.md`.
