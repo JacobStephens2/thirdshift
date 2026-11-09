@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Seek};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -36,7 +37,10 @@ pub(crate) fn execute(
     timeout: Duration,
     caps: &Caps,
 ) -> Result<Vec<Check>> {
-    let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
+    let packet = tempfile::Builder::new()
+        .prefix("grader-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()?;
     // Bind sources remain visible in /proc/self/mountinfo. A neutral
     // destination alone cannot hide the original Trial's Arm pathname.
     let snapshot = packet.path().join("repository");
@@ -265,5 +269,84 @@ impl LaunchedCheck {
             _ => return Ok(()),
         };
         Err(anyhow::Error::new(Unavailable { diagnostic }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scope::Caps;
+    use crate::scope::testing::{Fixture, with_grader};
+    use crate::trial::Reports;
+    use std::process::Command;
+    use std::time::Duration;
+
+    /// `THIRDSHIFT_TRIAL_NO_SANDBOX` is process-wide. The check runs in a
+    /// child test process so other tests keep the sandboxed launcher.
+    fn isolated(name: &str, exercise: impl FnOnce()) {
+        const ROOT: &str = "THIRDSHIFT_CODE_GRADER_PACKET_TEST";
+        if std::env::var_os(ROOT).is_some() {
+            exercise();
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("sandbox::code_grader::tests::{name}"),
+                "--nocapture",
+            ])
+            .env(ROOT, "1")
+            .env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn the_code_grader_packet_directory_is_private_to_its_owner() {
+        isolated(
+            "the_code_grader_packet_directory_is_private_to_its_owner",
+            || {
+                let fixture = Fixture::new();
+                let repository = fixture.path("repository");
+                fs::create_dir(&repository).unwrap();
+                let standards = fixture.path("standards.md");
+                fs::write(&standards, "no findings\n").unwrap();
+                let mode_path = fixture.path("mode");
+                let report_mode = fixture.path("report-mode");
+                crate::test_support::write_executable(
+                    &report_mode,
+                    r#"#!/usr/bin/env python3
+import os, pathlib, sys
+report = pathlib.Path(os.environ["THIRDSHIFT_TRIAL_STANDARDS_REPORT"])
+mode = report.parent.stat().st_mode & 0o777
+pathlib.Path(sys.argv[1]).write_text(f"{mode:03o}")
+"#,
+                );
+                let checks = with_grader(&fixture, || {
+                    execute(
+                        &repository,
+                        &Reports {
+                            standards: Some(standards),
+                            spec: None,
+                        },
+                        &[vec![
+                            report_mode.display().to_string(),
+                            mode_path.display().to_string(),
+                        ]],
+                        Duration::from_secs(10),
+                        &Caps::default(),
+                    )
+                })
+                .unwrap();
+                assert!(checks[0].passed, "{}", checks[0].reason);
+                assert_eq!(fs::read_to_string(mode_path).unwrap(), "700");
+            },
+        );
     }
 }
