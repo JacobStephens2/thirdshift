@@ -102,8 +102,8 @@ nothing. This measures build weight, not a working updater.
 
 **Removing the updater's aws-lc saves about 16 s (28%) of a cold build, and
 nothing on an edit rebuild.** The saving is less than the roughly 30 s build
-script because the remaining dependencies become the critical path. Every new
-Run Worktree and CI job pays a cold build.
+script because the remaining dependencies become the critical path. A Ticket
+run in a new Worktree pays for a cold build, as does each CI job.
 
 **On this aarch64 host, lld or mold cuts the edit rebuild from about 7 s to
 about 4 s.** The two are equivalent within these samples. This saving does not
