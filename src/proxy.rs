@@ -9,8 +9,10 @@
 //! that resolve to loopback or to the host's own addresses, and anything it
 //! does not allow never resolves: the allowlist is checked before DNS.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,6 +200,7 @@ pub(crate) fn start(allowed: &[String]) -> Result<Guard> {
 fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Guard> {
     let dir = tempfile::Builder::new()
         .prefix("thirdshift-proxy-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in("/tmp")
         .context("sandbox failed to start: could not create the Trial proxy's directory")?;
     let socket_path = dir.path().join("proxy.sock");
@@ -721,6 +724,17 @@ mod tests {
         let mut status = String::new();
         reader.read_line(&mut status).unwrap();
         status.trim().to_string()
+    }
+
+    #[test]
+    fn the_trial_proxy_directory_is_private_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let guard = start(&["api.anthropic.com".to_string()]).unwrap();
+        let directory = guard.socket_path().parent().unwrap().to_path_buf();
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]
