@@ -580,5 +580,5 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 - Spec #1484 (rewritten): process Trials and a code-graded implement Eval suite. Tickets #1873–#1880.
 - Spec #1872: blind pairwise grading by a Grader panel and people. Tickets #1881–#1886. Blocked by #1484.
 - #1887 (`ready-for-human`): release #1484 and build the first 20 discriminating process tasks. Blocked by #1484.
-- #1888 (`needs-triage`): a Kimi CLI Harness.
+- #1888 (`ready-for-agent` after triage): a Kimi Code CLI Harness. Triage found that Kimi CLI is archived in favour of Kimi Code CLI, and that the session's `wire.jsonl` records real token usage, so Q7.1's plan to estimate usage from characters is dropped.
 - #1468: narrowed to the external-runner Arm.
