@@ -352,7 +352,7 @@ The options:
 
 *Answer:* b
 
-## Round 7 (open)
+## Round 7 (answered)
 
 This round should empty the frontier. When it's answered, confirm whether the design is understood well enough to publish the two Specs.
 
@@ -363,7 +363,7 @@ This round should empty the frontier. When it's answered, confirm whether the de
 
 *Recommended:* (a). It keeps your choice of Harness, and an honest "estimated" label is better than a gap. An estimate that's wrong by a factor would show up against Fireworks' billing in the first pilot.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q7.2 - Where does the Kimi CLI Harness go?** A Harness isn't just for Graders: once it exists, an Arm can use it too, and so can Ticket runs. The options:
 - (a) **Its own issue**, outside both Specs, so the Harness is built and tested like the other six (setup, sandbox hosts, sign-in, usage, session traces). Spec 2's panel Ticket is blocked by it only for Kimi seats.
@@ -371,7 +371,7 @@ This round should empty the frontier. When it's answered, confirm whether the de
 
 *Recommended:* (a). A Harness is used across thirdshift, and earlier Harnesses each came as their own piece of work. Spec 2 can start with OpenCode, claude, codex, agy, grok and muse seats while it's built.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q7.3 - Record two decisions as ADRs?** Two decisions are hard to reverse, surprising without context, and the result of a real trade-off:
 1. **A Trial carries out a Process but is not a Command** (Q3.2). A future reader will wonder why a process Trial, which runs a whole Ticket run's Steps, writes no Command record and never shows in the Console's run lists.
@@ -383,6 +383,38 @@ The options:
 - (c) Neither.
 
 *Recommended:* (a).
+
+*Answer:* On 1, I'm assuming that we still get a log of the trial run. Even though it's not a command. I'm even thinking like is is is this a good distinction to make? Or is it kind of arbitrary?
+
+Like a trial run as a command versus just a trial?
+
+On 2, For the human grading, I I would like let's say in that example where we have the human grade a sample of ten. And but all the model graders are grading 60 pairs I don't feel like that other 50 would need to be that in the human pair set I don't think it would need to be filled in by an LLM grader.
+
+We could just leave it not not graded and just take the humans sample set as their grade and contribution. 
+
+## Round 8 (open)
+
+**Q8.1 - Is "a Trial is not a Command" a real distinction?** (Q7.3's answer.) First, yes: a Trial keeps a full log. Its record holds each Step, every session's traces, the outcome, the usage and the times, and the Experiment's pages show it. What it doesn't get is a Command record of its own. The distinction isn't arbitrary. The glossary already draws it the same way for a **Command**: "A child Ticket run, whether for a Spec's Ticket or a Base fix, and a Ticket run or Spec run a Custom process starts, are part of the command that started them, not commands of their own." An **Experiment** is itself a Command, so its Trials are its parts, as a Spec run's child Ticket runs are the Spec run's parts. What being a Command of its own would bring with it:
+- a Claim, issue labels and a pull request, none of which a Trial has;
+- a row in the Console's run lists, in Needs you and in the Activity log;
+- a place in Scoring runs' samples and in Run metrics, where Trials would mix fake runs into real factory figures.
+
+The options:
+- (a) **Keep the distinction.** A Trial is part of its Experiment Command. Its record reuses the Command record's *shape* (Steps, sessions, usage), so the Console's run-detail and trace views can show it, but it's filed under the Experiment and counted only there. Write the ADR, citing the child-Ticket-run precedent.
+- (b) **Make each Trial a Command**, flagged as part of an Experiment, with every factory view filtering the flag out.
+- (c) Keep the distinction, and skip the ADR, since the glossary's Command entry already explains it.
+
+*Recommended:* (a). (b) puts a filter in every place that counts Commands, and one missed filter skews a factory figure. Reusing the record's shape gets you the views without that risk. The ADR is still worth writing, because a process Trial is the first part of a Command that runs a whole Process on its own.
+
+*Answer:* 
+
+**Q8.2 - The second ADR?** Q7.3's answer covered only the first ADR. The second records that a Grader panel can stand in for the Day shift on unread pairs, guarded by agreement on a seeded sample and by the family rules.
+
+*Recommended:* write it.
+
+*Answer:* 
+
+**Q8.3 - Shared understanding?** Every other branch is settled (see the list below). If Q8.1 and Q8.2 are agreed, is the design understood well enough to write the ADRs and publish the two Specs, the Kimi CLI Harness issue, the host Ticket and #1468's narrowing?
 
 *Answer:* 
 
@@ -434,6 +466,9 @@ The options:
 - The vote unit is a Bar setting, defaulting to one vote per family, where each family first takes the majority of its own Models. How many families the panel must span before it stands in for the human is a Bar setting too, defaulting to two (Q6.3).
 - DeepSeek on Baseten runs through OpenCode. Kimi on Fireworks gets a new Kimi CLI Harness now (Q6.4 (b), against the recommendation). thirdshift adds `api.fireworks.ai` and `inference.baseten.co` to the proxy's provider hosts, and an API key per OpenCode provider.
 - The glossary gains **Grader panel**.
+
+- The Kimi CLI Harness work starts by checking the CLI's real output. If it doesn't report usage, the Harness estimates usage from the transcript, priced from the frozen table and labelled *estimated*, and the panel's spending limit counts the estimate (Q7.1).
+- The Kimi CLI Harness is its own issue, outside both Specs. Spec 2's panel blocks on it only for Kimi seats (Q7.2).
 
 ## Research results (2026-11-09)
 
