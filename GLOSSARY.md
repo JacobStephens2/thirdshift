@@ -394,7 +394,7 @@ One setup that an **Experiment** compares: a build of thirdshift, with its **Fac
 _Avoid_: variant, provider, configuration
 
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, in an agent session of its own, within an **Experiment**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
+One attempt at an **Eval task** by one **Arm**, within an **Experiment**: an agent session of its own, or every session of the **Process** the Arm carries out, up to its first publishing **Step**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
 
 **Void Trial**:
@@ -414,7 +414,7 @@ The **Command** that compares a **Baseline arm** with a **Candidate arm** on the
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
-The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, and the rules for **Void Trials**.
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, whether the **Day shift** grades and whether that counts in the Verdict, and any cost or time ceiling.
 _Avoid_: threshold, gate, acceptance criteria
 
 **Verdict**:

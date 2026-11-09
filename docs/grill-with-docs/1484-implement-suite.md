@@ -138,7 +138,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Answer:* agree
 
-## Round 3 (open)
+## Round 3 (answered)
 
 **Q3.1 - Where does a process Trial stop?** The Built-in Ticket run is four Steps: `implement` (which includes its self-review), `security-review`, `delivery` and `self-merge` (`processes/ticket-run.toml`). Delivery pushes to `origin`, opens the pull request, watches CI, and starts Repairs for conflicts and red checks. A Trial has no GitHub and no CI. The options:
 - (a) **Stop before the first publishing Step** (`delivery` or anything after it), and grade the Issue branch's head at that point. An Arm whose Process has no such boundary, or that needs GitHub earlier, is refused.
@@ -146,7 +146,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). Every edit you want to test next sits before Delivery: a tests-on-base check would be a command Step, and a cross-family review and new review rules are review Steps. A local Delivery would mean writing a second Repair loop. If a later Experiment needs to test Repairs, it can add one then.
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.2 - Is a process Trial a Ticket run?** The glossary says a Trial "is not a Ticket run, and writes no Command record of its own". A process Trial now carries out the Ticket run's Process, or a Custom process, Step by Step. The private lessons suggest keeping its Command record, which holds Step times, Repairs and usage. The options:
 - (a) **A Trial is still not a Command**, and no Ticket run. It *carries out* a Process inside the Experiment, and keeps a Trial record shaped like a Command record (Steps, sessions, outcome, usage) under the Experiment. It never appears in the Console's run lists, Needs you, or Scoring runs.
@@ -154,7 +154,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). A Trial has no Claim, no issue to label, no pull request and no factory side effects. Making it a Command would put fake runs into every place that counts real ones: the Console, Scoring runs and Run metrics. The Experiment can still show its Steps and usage.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q3.3 - What does an Arm pin, and how?** An Arm today is a thirdshift build plus its Harness, Model and Effort, and a Trial runs with a fresh home, so `~/.thirdshift/skills` never reaches it (#1468). A Custom process Arm may load home skills, and different Steps may use different Harnesses and Models. The options:
 - (a) **The Arm names a Process (a Built-in name, or a Custom process file) and a list of home skills.** `prepare-arms` copies them into the Arm's frozen folder and records each file's content hash, along with the Harness, Model and Effort per Step. Every Trial gets those copies in its fresh home, and the hashes are checked before each Trial starts.
@@ -162,7 +162,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). Your next Experiment may well be a Custom copy of the Ticket run, and that needs home skills. Freezing by hash is what the hand-run comparison found it needed, since its skills moved dozens of commits in a few days.
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.4 - What happens when a Trial stops to ask a question?** In the hand-run comparison, one Arm stopped twice to ask a fair planning question and delivered nothing. A Trial runs unattended. The options:
 - (a) **Each Trial ends as delivered, stopped-to-ask or failed.** Stopped-to-ask and failed both count as a failed Score in the Verdict, and the category is reported beside it. An outside failure, such as a sandbox or plan-limit stop, stays a Void Trial, under rules fixed with the Bar.
@@ -171,7 +171,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). Under an unattended factory, a Process that stops to ask has delivered nothing, which is just what the Verdict should see. Reporting the category keeps a fair question visible rather than hidden in "failed".
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.5 - Do cost and time enter the Verdict?** A process Trial can run many sessions across providers. The hand-run comparison priced every session's tokens from a frozen price table, labelled each by role, took usage-limit stalls out of the time, and reported paired median cost and time ratios. One of its Arms cost several times more. The options:
 - (a) **Reported beside the Verdict**: per-Arm cost and time, paired median ratios and a per-role breakdown. A Trial with incomplete accounting is a Void Trial. The Verdict itself stays about quality.
@@ -179,7 +179,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (b), with the ceiling optional and off by default. The hand-run comparison pre-registered exactly that kind of rule, and the Bar is where a rule fixed before an Experiment belongs. With the ceiling off, it's the same as (a).
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.6 - How does human grading work in each of its three modes?** Q2.3: the Bar chooses one of three modes: no human grading, human grading reported beside the Verdict, or human grading counted in it. On the blind page the human makes a merge call per side, and can also say which side is better (A, B, tie or both bad). With 20 tasks, 3 Trials and 2 Arms, that's 60 pairs to read. The options for the counted mode:
 - (a) **A Trial passes only if the code Grader passes *and* the human calls it ready to merge.** Baseline Trial *k* is paired with Candidate Trial *k*, and every pair is read.
@@ -188,7 +188,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a), with the pairwise preference always recorded and reported, in any mode where the human grades. The per-side merge call fits the Verdict's per-Trial pass/fail as it stands. A second Verdict needs new statistics. Sampling makes some Trials easier to pass than others.
 
-*Answer:* 
+*Answer:* agreed. I also want to make it so that an experiment can be set up such that the human only reads a sample of the pairs. So in that example with the 60 pairs to read, I would probably have LLM graders go through all 60 pairs and whatever deterministic testing or checking or evaluation we can do, but I might only want to have ten pairs gone through by humans. 
 
 **Q3.7 - What evidence do Graders and the human page get?** The hand-run comparison found that the evidence that worked was the cross-test: running each Arm's new tests against the other Arm's code. It also ran each Arm's new tests on the unchanged base. The options:
 - (a) **Both, as evidence, not Scores**: base-tests and cross-tests, shown on the human page and given to any agent Grader. A cross-test failure is something to look into, not an automatic defect.
@@ -197,13 +197,56 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (a). It's mechanical, it runs in the same offline sandbox the code Grader already uses, and it's what showed defects that the diffs and the fail-to-pass tests missed.
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.8 - Pairwise model Graders in this Spec?** The hand-run comparison also used model Graders: a panel from several model families, each reading a pair in both presentation orders (a flip counts as a tie), with a per-criterion rubric. They're useful, but each was the same model as one Arm, and their preferences pointed the way self-preference predicts. The options:
 - (a) **Not in this Spec.** The code Grader plus optional human grading is enough. Pairwise model grading becomes a follow-up issue.
 - (b) In this Spec, reported beside the Verdict.
 
 *Recommended:* (a). It keeps the Spec to what the next Experiment needs. The research also showed model Graders and the human valued different things, so the human page should come first.
+
+*Answer:* b
+
+## Round 4 (open)
+
+**Q4.1 - With a sample, what decides the pairs the human doesn't read?** Q3.6: in counted mode a Trial passes only if the code Grader passes and it's called ready to merge. The Bar can also limit the human to a sample, say 10 of 60 pairs, while model Graders read all 60 (Q3.8 (b)). For the 50 unread pairs, someone else has to make the merge call. The options:
+- (a) **The model Graders' merge call stands in for the human's** on unread pairs. The sample is drawn by pair with the Bar's seed, so both sides of a pair always have the same reader, and Baseline and Candidate are judged the same way. The Experiment reports how often the human and the models agreed on the sampled pairs. If agreement falls below a level the Bar fixes, the Verdict is inconclusive.
+- (b) **A sample is only allowed when human grading is reported beside the Verdict.** Counted mode means every pair is read.
+- (c) **The Verdict counts the sampled pairs alone**, with fewer pairs and a wider interval.
+
+*Recommended:* (a). It's what you described, and it's fair between Arms because each pair has one reader. The agreement check stops a model panel that disagrees with you from quietly deciding the Verdict. The sampled pairs double as the human-agreement measure the hand-run comparison reported.
+
+*Answer:* 
+
+**Q4.2 - What is the model Grader panel?** Q3.8 (b) puts pairwise model Graders in this Spec, and Q4.1 may let their calls count. Today there's one model Grader, a fresh session that reads a packet with shuffled neutral labels. In the hand-run comparison, each Grader was the same model as one Arm, and their preferences leaned the way self-preference predicts. The options:
+- (a) **A panel fixed in the Bar, with Models from at least two families.** Each Grader reads every pair in both orders, and a call that flips with the order counts as a tie. The panel's call is the majority. A Grader from the same family as either Arm's Model is reported, but doesn't vote when another family is available.
+- (b) One model Grader, read in both orders.
+- (c) A panel, but every family votes.
+
+*Recommended:* (a). Two families and both orders were what the hand-run comparison needed in order to trust model calls at all. Leaving same-family Graders out of the vote follows the rule the scaling note gives for injectors (§2.4 risk 3).
+
+*Answer:* 
+
+**Q4.3 - How is Difficulty measured on process Trials?** Admission needs at least 6 Trials per candidate in an A/A (#1477). With about 60 candidates, that's about 360 Ticket runs up to Delivery, each several sessions. The options:
+- (a) **In batches.** Screen candidates by reading them (Q1.3, and SWE-bench Verified's two questions), then measure about 20 at a time with the Built-in Ticket run on both Arms. Stop once 20 are discriminating.
+- (b) Measure all candidates at once.
+- (c) Measure with the implement session alone, as a cheaper stand-in.
+
+*Recommended:* (a). At #1434's rate of about one in three, reaching 20 discriminating tasks takes about three batches, and you can stop early. (c) measures a different thing, so its Difficulty wouldn't carry over to process Trials.
+
+*Answer:* 
+
+**Q4.4 - How are the issues laid out?** The design now covers several things:
+- the task format (provenance, environment, Process) and how tasks are built and screened;
+- process Trials, with the code Grader, leak check, cost, and outcome categories;
+- the blind human page and its three modes;
+- the pairwise model panel.
+
+#1468 asked how an Arm is defined, and Q2.1 answered it except for the external runner. The options:
+- (a) **#1484 becomes one Spec, with Tickets for each part.** #1468 is narrowed to the external-runner Arm and stays `needs-triage`. A host Ticket (`ready-for-human`) covers building, screening and measuring the first tasks on the Lima VM, then the new host.
+- (b) Two Specs: one for process Trials and the code-graded suite, one for human and model pairwise grading.
+
+*Recommended:* (b). The code-graded suite is enough on its own for #1526's Experiment and your first Ticket-run edit. Pairwise grading is a large Console feature that can follow without holding it up. The second Spec is blocked by the first. #1468 is narrowed as in (a).
 
 *Answer:* 
 
@@ -231,6 +274,15 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 - Human grading is in this suite's Spec. The Bar fixes one of three modes before the Experiment starts: none, reported beside the Verdict, or counted in it (Q2.3). The blind page randomises the sides for each pair and hides Arm identity and model Scores until the calls are recorded.
 - The task format names each task's environment, `host` or a container image. thirdshift's own tasks use `host` (bwrap) now, and the first task from another repository brings the image path (Q2.4).
 - After each Trial, its transcripts are searched for the real fix's identifiers. The Day shift dismisses false positives on an auditable list, and a confirmed leak voids the Trial (Q2.5).
+
+- A process Trial stops before the first publishing Step (`delivery` or anything after it), and the Issue branch's head at that point is graded. An Arm whose Process needs GitHub before then is refused (Q3.1).
+- A Trial is not a Command and not a Ticket run. It carries out a Process inside the Experiment, and keeps a Trial record of its Steps, sessions, outcome and usage under the Experiment. It never appears in the Console's run lists, Needs you or Scoring runs (Q3.2). The glossary's **Trial** entry now says a Trial may be many sessions.
+- An Arm names a Process (a Built-in name or a Custom process file) and its home skills. `prepare-arms` freezes them with content hashes, along with the Harness, Model and Effort per Step, and the hashes are checked before each Trial (Q3.3).
+- A Trial ends delivered, stopped-to-ask or failed. Stopped-to-ask counts as failed in the Verdict and is reported beside it. Outside failures stay Void (Q3.4).
+- Cost and time are priced per session and role from a frozen price table, with usage-limit stalls left out of the time. They're reported beside the Verdict as paired median ratios, and a Trial with incomplete accounting is Void. The Bar may set a cost or time ceiling, off by default (Q3.5). The glossary's **Bar** entry now lists it.
+- In counted mode, a Trial passes only if the code Grader passes and it's called ready to merge. Baseline Trial *k* is paired with Candidate Trial *k*. The pairwise preference (A, B, tie or both bad) is always recorded where anyone grades pairs. The Bar may limit the human to a sample of pairs, and model Graders read every pair (Q3.6).
+- Base-tests and cross-tests are run offline and given to the human page and every model Grader as evidence, never as Scores (Q3.7).
+- Pairwise model Graders are in this Spec (Q3.8). This reverses the recommendation, and follows from Q3.6's answer, since model Graders read every pair.
 
 ## Research results (2026-11-09)
 
