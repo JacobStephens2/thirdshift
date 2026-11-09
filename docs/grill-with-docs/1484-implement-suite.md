@@ -449,13 +449,13 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 
 *Answer:* agree
 
-## Round 10 (open)
+## Round 10 (answered)
 
 **Q10.1 - The second ADR, as now settled?** It would record that the Bar fixes two switches before an Experiment starts: the Grader panel and the people, each *off*, *beside* or *counted*, with the people's sample size and overlap. When both are counted, the panel stands in on unread pairs, guarded by agreement on the seeded sample and by the family rules. It would also record the options turned down: people on every pair always, and the panel alone with no human check.
 
 *Recommended:* write it.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q10.2 - Shared understanding?** Every branch is now settled. Is the design understood well enough to write the two ADRs and publish the following, following `docs/agents/triage-labels.md`'s publication procedure?
 - Spec 1: process Trials and the code-graded suite, with a `ready-for-human` host Ticket.
@@ -463,7 +463,7 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 - The Kimi CLI Harness issue.
 - Narrowing #1468 to the external-runner Arm.
 
-*Answer:* 
+*Answer:* we have shared understanding, let's use the to-spec and to-tickets skills to write the two specs and their tickets, as well as the kimi cli harness issue (or even the triage skill for that one)
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -522,6 +522,9 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 
 - The Bar has two separate switches, the Grader panel and the people, each *off*, *beside* or *counted*, and the people's switch takes a sample size. All four combinations are allowed. With people counted on a sample and the panel only beside, the Verdict rests on the sampled pairs alone, and a small sample usually comes out inconclusive rather than wrong. With both counted, Q4.1's stand-in applies (Q9.1).
 - Two or more people each get a seeded sample with an overlap the Bar sets. On a shared pair, it counts as ready only if every person calls it ready. People–people agreement on the overlap is reported beside people–panel agreement (Q9.2). The blind page therefore needs to know which person is reading.
+
+- Both ADRs are written: [0027](../adr/0027-a-trial-carries-out-a-process-but-is-not-a-command.md) and [0028](../adr/0028-who-decides-a-verdict-is-fixed-in-the-bar.md) (Q10.1).
+- Shared understanding is confirmed (Q10.2). Publication uses the `to-spec` and `to-tickets` skills, following `docs/agents/triage-labels.md`. The host Ticket needs a release of Spec 1's code, so under "Split a Spec at a release" it becomes a standalone `ready-for-human` release-and-measure issue blocked by Spec 1, not a Ticket inside it.
 
 ## Research results (2026-11-09)
 
