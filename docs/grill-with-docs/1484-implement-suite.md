@@ -82,7 +82,7 @@ That's its its primary purpose is outward, not inward. And so I I think that A, 
 
 *Answer:* agree
 
-## Round 2 (open)
+## Round 2 (answered)
 
 **Q2.1 - What is an Arm, and how far does a Trial run? (Q1.1, asked again)** Your Q1.1 answer sets the goal as process Experiments, and the next one you want to run is an edit to the Ticket run itself. The candidate edits from the hand-run comparison are a deterministic check that the new tests fail on the base, one bounded review pass by a different model family, and new rules in the review prompts. All of them live *outside* the implement session: in Steps, in review stages, in review prompts. So an implement-session-only suite (Q1.1's old option (a)) can't test them. The options:
 - (a) **The implement session alone**, as recommended in Round 1. It's the cheapest, but it can't test the edit you want next.
@@ -91,7 +91,7 @@ That's its its primary purpose is outward, not inward. And so I I think that A, 
 
 *Recommended:* (b) now, with (c) recorded as the later step. Comparing the Ticket run with an edited Ticket run needs only process Arms, and #1533's Built-in process files plus #1531 (which splits the code review out of the implement Step) give a Custom process room to change the reviews. An external runner matters only once the next Experiment pits thirdshift against an outside process, so it can wait for that need. Each Trial then costs several sessions instead of one, so the cost estimate shown before Trials (#1434 Q1.6) has to come per Arm.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.2 - Build the review and grading tooling into thirdshift, or adopt Langfuse or a similar tool?** The research note (§1) checked Langfuse, Braintrust, LangSmith, Phoenix, promptfoo, Inspect/Scout and Harbor against a process comparison:
 - Langfuse "expects exactly one trace per experiment item", while its Claude Code and Codex integrations write one trace per turn. A process Trial can run 4–72 sessions.
@@ -105,7 +105,7 @@ The options:
 
 *Recommended:* (a). Every outside tool would still need the blind page and the Verdict built. thirdshift already has a Day-shift Grader on `/scores`, a shuffle for its model Graders and a packet stripper to reuse. Harbor's interface is the shape to copy for Q2.1's external runner later, not a dependency to take.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.3 - Does the suite include the blind pairwise human review page?** This depends on Q2.2 being (a). If not, it moves to a later round. The hand-run comparison's page worked like this:
 - one page per task pair, showing the Ticket, a numbered acceptance checklist, the two diffs side by side (code before tests) and the execution evidence;
@@ -119,7 +119,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (c). The code-graded suite (Q1.5) is the minimum that works on its own, and it is what #1526's Experiment needs. The page is wanted, but it's a Console feature of its own. File it now as an issue blocked by this suite, with the hand-run page and the arena rules as its starting design. Once some Experiments have shown how the human calls compare with the code Graders, decide then whether the human call counts.
 
-*Answer:* 
+*Answer:* b, Except I want the option to be able to decide for various experiments whether they are going to include human grading or not, So for example, I want to be able to have experiments that include human gradient in the verdict, that report human gradient besides the verdict, or those which do not include human gradient at all. 
 
 **Q2.4 - Per-repository toolchains: bwrap on the host, or containers?** Q1.2 says the suite must serve other repositories, and in #1434, 4 of 6 cross-repository candidates were discriminating. Today a Trial runs in bwrap with the host's Rust, Cargo and nvm mounted read-only, and nothing else is provisioned. The new host has room for images (#1484's comment). The options:
 - (a) **bwrap on the host**, with each repository's toolchain installed on the host and declared in the suite. Containers come only when a repository needs services or a pinned system image (#698 Q6.7's trigger).
@@ -128,13 +128,82 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 
 *Recommended:* (c). thirdshift's own tasks run in bwrap today, so the first Experiment needn't wait for containers. But the outward goal means the task format should name its environment, `host` or an image, from day one, so another repository's tasks don't need a format change later.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q2.5 - Check Trial traces for the real fix?** Every real task's fix is public (Q1.2), and #1468's triage note says implement tasks need a leak check, since the hand-run comparison searched every Trial's traces for the shipped fix. The time-safe clone stops the repository from leaking it, but a session could still fetch the pull request or recall it from training data. The options:
 - (a) **Yes.** After each Trial, search its transcripts for the fix's identifiers: the pull-request and issue numbers, the merge commit, the branch and the title. Hits go to the Day shift, with an auditable list of dismissed false positives. A confirmed leak voids the Trial.
 - (b) **No.** Rely on the time-safe clone and the Trial sandbox's network allowlist.
 
 *Recommended:* (a). It's cheap and mechanical. Note that the Trial sandbox already reaches only the provider, so a leak would most likely come from the Model's memory, which a search for identifiers catches only partly. The free time-split probe (scaling note §3.3) covers the rest.
+
+*Answer:* agree
+
+## Round 3 (open)
+
+**Q3.1 - Where does a process Trial stop?** The Built-in Ticket run is four Steps: `implement` (which includes its self-review), `security-review`, `delivery` and `self-merge` (`processes/ticket-run.toml`). Delivery pushes to `origin`, opens the pull request, watches CI, and starts Repairs for conflicts and red checks. A Trial has no GitHub and no CI. The options:
+- (a) **Stop before the first publishing Step** (`delivery` or anything after it), and grade the Issue branch's head at that point. An Arm whose Process has no such boundary, or that needs GitHub earlier, is refused.
+- (b) **Run a local stand-in for Delivery**: run the repository's checks locally in place of CI, and start Repairs for failures, as the real Repair loop would.
+
+*Recommended:* (a). Every edit you want to test next sits before Delivery: a tests-on-base check would be a command Step, and a cross-family review and new review rules are review Steps. A local Delivery would mean writing a second Repair loop. If a later Experiment needs to test Repairs, it can add one then.
+
+*Answer:* 
+
+**Q3.2 - Is a process Trial a Ticket run?** The glossary says a Trial "is not a Ticket run, and writes no Command record of its own". A process Trial now carries out the Ticket run's Process, or a Custom process, Step by Step. The private lessons suggest keeping its Command record, which holds Step times, Repairs and usage. The options:
+- (a) **A Trial is still not a Command**, and no Ticket run. It *carries out* a Process inside the Experiment, and keeps a Trial record shaped like a Command record (Steps, sessions, outcome, usage) under the Experiment. It never appears in the Console's run lists, Needs you, or Scoring runs.
+- (b) **Each process Trial is a real Ticket run Command** with a flag marking it as part of an Experiment.
+
+*Recommended:* (a). A Trial has no Claim, no issue to label, no pull request and no factory side effects. Making it a Command would put fake runs into every place that counts real ones: the Console, Scoring runs and Run metrics. The Experiment can still show its Steps and usage.
+
+*Answer:* 
+
+**Q3.3 - What does an Arm pin, and how?** An Arm today is a thirdshift build plus its Harness, Model and Effort, and a Trial runs with a fresh home, so `~/.thirdshift/skills` never reaches it (#1468). A Custom process Arm may load home skills, and different Steps may use different Harnesses and Models. The options:
+- (a) **The Arm names a Process (a Built-in name, or a Custom process file) and a list of home skills.** `prepare-arms` copies them into the Arm's frozen folder and records each file's content hash, along with the Harness, Model and Effort per Step. Every Trial gets those copies in its fresh home, and the hashes are checked before each Trial starts.
+- (b) **Built-in processes only for now.** An edited Ticket run is a Candidate build with a changed `processes/ticket-run.toml` or prompts. Custom processes and home skills come later.
+
+*Recommended:* (a). Your next Experiment may well be a Custom copy of the Ticket run, and that needs home skills. Freezing by hash is what the hand-run comparison found it needed, since its skills moved dozens of commits in a few days.
+
+*Answer:* 
+
+**Q3.4 - What happens when a Trial stops to ask a question?** In the hand-run comparison, one Arm stopped twice to ask a fair planning question and delivered nothing. A Trial runs unattended. The options:
+- (a) **Each Trial ends as delivered, stopped-to-ask or failed.** Stopped-to-ask and failed both count as a failed Score in the Verdict, and the category is reported beside it. An outside failure, such as a sandbox or plan-limit stop, stays a Void Trial, under rules fixed with the Bar.
+- (b) As (a), but stopped-to-ask is a Void Trial.
+- (c) Answer questions automatically from a brief fixed with the Arm.
+
+*Recommended:* (a). Under an unattended factory, a Process that stops to ask has delivered nothing, which is just what the Verdict should see. Reporting the category keeps a fair question visible rather than hidden in "failed".
+
+*Answer:* 
+
+**Q3.5 - Do cost and time enter the Verdict?** A process Trial can run many sessions across providers. The hand-run comparison priced every session's tokens from a frozen price table, labelled each by role, took usage-limit stalls out of the time, and reported paired median cost and time ratios. One of its Arms cost several times more. The options:
+- (a) **Reported beside the Verdict**: per-Arm cost and time, paired median ratios and a per-role breakdown. A Trial with incomplete accounting is a Void Trial. The Verdict itself stays about quality.
+- (b) (a), plus an optional **cost or time ceiling in the Bar**, such as failing a Candidate that costs more than twice the Baseline whatever its quality.
+
+*Recommended:* (b), with the ceiling optional and off by default. The hand-run comparison pre-registered exactly that kind of rule, and the Bar is where a rule fixed before an Experiment belongs. With the ceiling off, it's the same as (a).
+
+*Answer:* 
+
+**Q3.6 - How does human grading work in each of its three modes?** Q2.3: the Bar chooses one of three modes: no human grading, human grading reported beside the Verdict, or human grading counted in it. On the blind page the human makes a merge call per side, and can also say which side is better (A, B, tie or both bad). With 20 tasks, 3 Trials and 2 Arms, that's 60 pairs to read. The options for the counted mode:
+- (a) **A Trial passes only if the code Grader passes *and* the human calls it ready to merge.** Baseline Trial *k* is paired with Candidate Trial *k*, and every pair is read.
+- (b) **The human's pairwise preferences make a second Verdict**, and the Experiment passes only if both Verdicts pass.
+- (c) As (a), but the human reads a random sample of pairs fixed by the Bar's seed, and Trials they don't read count on the code Grader alone.
+
+*Recommended:* (a), with the pairwise preference always recorded and reported, in any mode where the human grades. The per-side merge call fits the Verdict's per-Trial pass/fail as it stands. A second Verdict needs new statistics. Sampling makes some Trials easier to pass than others.
+
+*Answer:* 
+
+**Q3.7 - What evidence do Graders and the human page get?** The hand-run comparison found that the evidence that worked was the cross-test: running each Arm's new tests against the other Arm's code. It also ran each Arm's new tests on the unchanged base. The options:
+- (a) **Both, as evidence, not Scores**: base-tests and cross-tests, shown on the human page and given to any agent Grader. A cross-test failure is something to look into, not an automatic defect.
+- (b) Base-tests only.
+- (c) Neither for now.
+
+*Recommended:* (a). It's mechanical, it runs in the same offline sandbox the code Grader already uses, and it's what showed defects that the diffs and the fail-to-pass tests missed.
+
+*Answer:* 
+
+**Q3.8 - Pairwise model Graders in this Spec?** The hand-run comparison also used model Graders: a panel from several model families, each reading a pair in both presentation orders (a flip counts as a tie), with a per-criterion rubric. They're useful, but each was the same model as one Arm, and their preferences pointed the way self-preference predicts. The options:
+- (a) **Not in this Spec.** The code Grader plus optional human grading is enough. Pairwise model grading becomes a follow-up issue.
+- (b) In this Spec, reported beside the Verdict.
+
+*Recommended:* (a). It keeps the Spec to what the next Experiment needs. The research also showed model Graders and the human valued different things, so the human page should come first.
 
 *Answer:* 
 
@@ -145,7 +214,7 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 - Admission is #1477's rule, already implemented: Difficulty measured over at least 6 Trials, discriminating between 0.15 and 0.95, and Advisory below `min_discriminating_tasks` (20 by default).
 - Disk and Docker are no longer constraints (the 2026-10-27 comment on #1484).
 - #1434's code-review repair, the prerequisite for this grill, is closed.
-- **Q1.1 is still open.** The answer widens the goal beyond the implement session. The goal is to run process-comparison Experiments through thirdshift: the Built-in Ticket run against another process, and next an edit to the Ticket run, on thirdshift's own tooling rather than bespoke tooling outside it. It also asks whether a blind human pairwise review page belongs in thirdshift, or whether thirdshift should adopt a tool such as Langfuse instead. Round 2 asks it again with research in hand.
+- **Q1.1 is answered by Q2.1: a process Arm.** It was open after Round 1: The answer widens the goal beyond the implement session. The goal is to run process-comparison Experiments through thirdshift: the Built-in Ticket run against another process, and next an edit to the Ticket run, on thirdshift's own tooling rather than bespoke tooling outside it. It also asks whether a blind human pairwise review page belongs in thirdshift, or whether thirdshift should adopt a tool such as Langfuse instead. Round 2 asks it again with research in hand.
 - thirdshift's purpose is outward (Q1.2). The first tasks come from thirdshift itself, but nothing in the suite may assume thirdshift: the task format, the toolchain setup and the Arm's configuration must work for any repository the factory serves, and different repositories may run different processes. Per-repository toolchains (bwrap on the host or containers) therefore come up in Round 2.
 - Real tasks include features as well as bug fixes, with a screen that rejects a task whose tests depend on names the Ticket doesn't state (Q1.3).
 - Real tasks only for now. Every task records its provenance, `real` for now, so injected tasks can come later without a format change (Q1.4).
@@ -154,6 +223,15 @@ Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed on
 - Three Trials per task (Q1.7).
 - A new, bigger host runs the Experiments. The Lima VM builds and screens the first tasks until that host exists (Q1.8).
 - Supply is tight. #1434's candidates came out about a third discriminating (7 of 20, #1516), and about 60 usable real candidates at that rate gives roughly 20. That's just enough, so another repository's tasks would also help reach 20. In #1434, 4 of the 6 cross-repository candidates turned out discriminating.
+
+- An Arm is a thirdshift build plus the Process its Trials carry out, Built-in or Custom, with its skills and Process pinned by content hash (Q2.1). The glossary's **Arm** entry now says so. A Trial runs that Process end to end on the Ticket. So this is no longer only an *implement* suite: it tests the whole Ticket run up to the point Q3.1 settles.
+- Q1.6's dependencies grow to match. They add `processes/` and every Factory skill a Ticket run's Steps load before Delivery, such as `skills/thirdshift-security-audit/` for the Security review.
+- Each Trial now costs several sessions, so the cost estimate shown before an Experiment comes per Arm, from that Arm's own history (#1468's triage note).
+- An external-runner Arm, a black-box command shaped like Harbor's agent interface, is the later step, for when an Experiment pits thirdshift against an outside process. It's recorded on #1468 rather than built here (Q2.1).
+- thirdshift builds its own review and grading tooling. Outside viewers get Trial traces only through the existing OTLP export, and only after the human calls are recorded (Q2.2).
+- Human grading is in this suite's Spec. The Bar fixes one of three modes before the Experiment starts: none, reported beside the Verdict, or counted in it (Q2.3). The blind page randomises the sides for each pair and hides Arm identity and model Scores until the calls are recorded.
+- The task format names each task's environment, `host` or a container image. thirdshift's own tasks use `host` (bwrap) now, and the first task from another repository brings the image path (Q2.4).
+- After each Trial, its transcripts are searched for the real fix's identifiers. The Day shift dismisses false positives on an auditable list, and a confirmed leak voids the Trial (Q2.5).
 
 ## Research results (2026-11-09)
 

@@ -390,7 +390,7 @@ An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict**
 _Avoid_: non-gating suite, informational suite
 
 **Arm**:
-One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, the **Process** its **Trials** carry out where its **Eval suite** runs one, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
 **Trial**:
