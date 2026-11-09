@@ -7,10 +7,8 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
-#[cfg(target_os = "linux")]
 struct TraceOpens(fs::File);
 
-#[cfg(target_os = "linux")]
 impl TraceOpens {
     fn new(log: &std::path::Path) -> Self {
         use std::os::fd::FromRawFd;
@@ -35,7 +33,6 @@ impl TraceOpens {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn unchanged_malformed_session_signals_are_not_reparsed_and_repair_refreshes_them() {
     let scenario = Scenario::new();
@@ -64,7 +61,6 @@ fn unchanged_malformed_session_signals_are_not_reparsed_and_repair_refreshes_the
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn unchanged_session_signals_survive_between_cli_processes() {
     use std::io::Write;
@@ -564,7 +560,6 @@ fn session_usage_keeps_its_reported_model() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn non_regular_session_traces_are_missing_without_blocking() {
     use support::child_lifetime::FixtureChild;
     let scenario = Scenario::new();

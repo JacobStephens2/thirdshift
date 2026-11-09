@@ -4,6 +4,236 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn ready_rows_prefer_pull_request_subjects_and_keep_issue_and_command_fallbacks() {
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for number in 1..=4 {
+        let mut fixture = record(home.path(), number, Some("ready for review"), 0);
+        fixture["name"] = json!(format!("review-fixture-{number}"));
+        fixture["tickets"] = json!([]);
+        if number == 1 || number == 4 {
+            fixture["issue"] = Value::Null;
+        }
+        fixture["pull_request"] = if number <= 2 {
+            json!(format!(
+                "https://github.com/acme/widgets/pull/{}",
+                number + 10
+            ))
+        } else {
+            Value::Null
+        };
+        super::write_record(home.path(), number, &fixture);
+    }
+    fs::write(
+        home.path().join(".thirdshift/logs/github-inbox.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "subjects": {
+                "https://github.com/acme/widgets/pull/11": {"state": "Open", "title": "Review <script>unsafe()</script> & ship", "merged_at": null, "closed_at": null},
+                "https://github.com/acme/widgets/pull/12": {"state": "Open", "title": "A distinct pull request title", "merged_at": null, "closed_at": null}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let ready = section(&html, "ready for review");
+    let heads: Vec<_> = ready
+        .split("<div class=\"row-head\">")
+        .skip(1)
+        .map(|head| head.split("</div>").next().unwrap())
+        .collect();
+    assert_eq!(heads.len(), 2, "{ready}");
+    for (number, title) in [
+        (
+            11,
+            "Review &#60;script&#62;unsafe()&#60;/script&#62; &#38; ship",
+        ),
+        (12, "A distinct pull request title"),
+    ] {
+        let head = heads
+            .iter()
+            .find(|head| {
+                head.contains(&format!(
+                    "href=\"https://github.com/acme/widgets/pull/{number}\""
+                ))
+            })
+            .unwrap_or_else(|| panic!("primary PR link {number} missing: {ready}"));
+        assert!(head.contains(title), "{head}");
+        assert!(
+            !head.contains("Widgets"),
+            "PR must win over issue title: {head}"
+        );
+    }
+    let done = section(&html, "done");
+    assert!(
+        done.contains("href=\"https://github.com/acme/widgets/issues/3\"")
+            && done.contains("Widgets &#60;script&#62;"),
+        "{done}"
+    );
+    assert!(done.contains("review-fixture-4 on acme/widgets"), "{done}");
+    assert!(!ready.contains("<script>unsafe()"), "{ready}");
+}
+
+#[test]
+fn a_live_review_run_links_its_pull_request_in_working() {
+    let scenario = super::support::Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+    let url = scenario.github_has_pr("colleague", "main", "OPEN");
+    scenario.agent_waits_for_release("printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let _held = super::HeldFixture {
+        run: Some(scenario.run_until(&["review", &url, "--recommend-only"], &[], "started")),
+        release: scenario.path("release"),
+    };
+    let console = Console::start(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &scenario.path("home"),
+    );
+
+    let html = console.get("/").text().unwrap();
+    let working = section(&html, "working");
+
+    assert!(working.contains("data-live=\"true\""), "{working}");
+    assert!(working.contains("<p class=\"pr\">"), "{working}");
+    assert!(working.contains(&format!("href=\"{url}\"")), "{working}");
+}
+
+#[test]
+fn triage_and_review_commands_render_pages_and_cli_selectors() {
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let mut commands = Vec::new();
+    for (number, prefix, kind, subject, session_kind) in [
+        (1, "triage", "Triage run", "triage", "triage"),
+        (2, "review", "Review run", "process-step-1", "code-review"),
+    ] {
+        let mut fixture = record(home.path(), number, Some("failed"), 0);
+        let name = format!("{prefix}-20261019T110000-0400");
+        fixture["kind"] = json!(kind);
+        fixture["name"] = json!(name);
+        fixture["issue"] = Value::Null;
+        fixture["tickets"] = json!([]);
+        let folder = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands")
+            .join(prefix);
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("20261019T110000-0400~owner.command.json");
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        fs::remove_file(home.path().join(format!(
+            ".thirdshift/logs/acme/widgets/commands/issue/{number}-fixture.command.json"
+        )))
+        .unwrap();
+        fs::write(
+            folder.join("20261019T110000-0400~owner.log"),
+            "Command output\n",
+        )
+        .unwrap();
+        for suffix in ["", "-resume"] {
+            super::support::session_trace::write(
+                folder.join(format!(
+                    "{subject}-20261019T110000-0400~owner-{session_kind}{suffix}.logs.jsonl"
+                )),
+                "Session output\n",
+            );
+        }
+        commands.push((name, path));
+    }
+    let console = Console::start(binary, home.path());
+    for page in ["/?page=inbox", "/?page=history", "/?page=logs"] {
+        let response = console.get(page);
+        assert_eq!(response.status(), 200, "{page}");
+        let html = response.text().unwrap();
+        for (name, _) in &commands {
+            assert!(html.contains(name), "{page}: {html}");
+        }
+    }
+    let run = |args: &[&str]| {
+        let output = Command::new(binary)
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["logs", "--json"]);
+    for (name, path) in &commands {
+        run(&["show", name, "--json"]);
+        run(&["show", path.to_str().unwrap(), "--json"]);
+        run(&["logs", name]);
+        let session = if name.starts_with("triage-") {
+            "triage"
+        } else {
+            "code-review"
+        };
+        run(&["logs", name, "--session", session]);
+        let output = Command::new(binary)
+            .args(["stop", name, "--json"])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Command ended"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = Command::new(binary)
+            .args(["dismiss", name, "--json"])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn paused_command_rows_and_details_offer_the_resume_command_and_reset() {
+    use serde_json::json;
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("paused"), 0);
+    fixture["kind"] = json!("Scoring run");
+    fixture["cause"] = json!(
+        "Command paused at a plan-limit warning: Claude seven-day window at 86%, resets Fri Oct 30 22:00 UTC; run the Command again to resume"
+    );
+    fixture["resume_command"] = json!("thirdshift score");
+    fixture["limit"] = json!({"harness":"claude","window":"seven_day","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"});
+    super::write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let inbox = console.get("/").text().unwrap();
+    let needs = section(&inbox, "needs you");
+    assert!(needs.contains(">Paused</span>"), "{inbox}");
+    assert!(needs.contains("resets Fri Oct 30 22:00"), "{needs}");
+    assert!(
+        needs.contains("data-copy-cli=\"thirdshift score\""),
+        "{needs}"
+    );
+    let details = console.get("/peek?command=widgets%237").text().unwrap();
+    assert!(details.contains("Paused:"), "{details}");
+    assert!(!details.contains("Failed:"), "{details}");
+    assert!(details.contains("resets Fri Oct 30 22:00"), "{details}");
+    assert!(
+        details.contains("data-copy-cli=\"thirdshift score\""),
+        "{details}"
+    );
+}
+
+#[test]
 fn ended_rows_distinguish_finish_age_from_run_duration() {
     use super::write_record;
     use serde_json::json;
@@ -157,7 +387,6 @@ fn retained_activity_finishes_show_dates_and_missing_finishes_stay_unknown() {
     assert_eq!(html.matches("End time unknown").count(), 1, "{html}");
 }
 
-#[cfg(unix)]
 #[test]
 fn live_rows_keep_start_age_without_claiming_to_have_ended() {
     let home = tempfile::tempdir().unwrap();
@@ -228,6 +457,14 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
         .next()
         .unwrap();
     assert!(notice.contains("Last recorded skipped Passes"), "{notice}");
+    assert!(
+        notice.contains("<li>2026-01-01 12:00 · <span>Pickup run idle on acme/widgets:"),
+        "{notice}"
+    );
+    assert!(
+        notice.contains("<li>2026-01-01 12:01 · <span>Architect run idle on acme/widgets:"),
+        "{notice}"
+    );
     let status = Command::new(binary)
         .args(["status", "--json"])
         .env("HOME", home.path())
@@ -236,6 +473,15 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
     assert!(status.status.success());
     let status: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(status["idle_passes"].as_array().unwrap().len(), 2);
+    assert!(
+        status["idle_passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|pass| {
+                pass["kind"] == "Pickup run" && pass["recorded_at"] == "2026-01-01T12:00:00"
+            })
+    );
     assert!(notice.contains("Pickup run idle on acme/widgets: Claim limit reached &#60;script&#62;unsafe&#60;/script&#62;"), "{notice}");
     assert!(
         notice.contains("Architect run idle on acme/widgets: plan still open"),
@@ -339,7 +585,6 @@ fn live_commands_never_show_the_idle_notice_even_in_needs_you_or_hidden_sections
     assert!(!html.contains("No running Commands"), "{html}");
 }
 
-#[cfg(unix)]
 #[test]
 fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status() {
     use super::watching::{FixtureProcess, live_record};
@@ -390,9 +635,14 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         (4, "ready for review", "Ready", false, false),
         (5, "needs you", "Failed", false, false),
     ] {
+        let subject_link = if group == "ready for review" {
+            "href=\"https://github.com/acme/widgets/pull/10\"".into()
+        } else {
+            format!("href=\"https://github.com/acme/widgets/issues/{number}\"")
+        };
         let row = html
             .split("<li class=\"command\"")
-            .find(|row| row.contains(&format!(">acme/widgets#{number}<")))
+            .find(|row| row.contains(&subject_link))
             .expect(&html);
         assert!(row.contains(&format!("data-live=\"{live}\"")), "{row}");
         assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
@@ -401,10 +651,7 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
             "{row}"
         );
         let section = section(&html, group);
-        assert!(
-            section.contains(&format!(">acme/widgets#{number}<")),
-            "{section}"
-        );
+        assert!(section.contains(&subject_link), "{section}");
         let item = json["commands"]
             .as_array()
             .unwrap()
@@ -449,10 +696,11 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     let console = Console::start(binary, home.path());
     let html = console.get("/").text().unwrap();
     let resolved = section(&html, "resolved");
-    assert!(resolved.contains(">acme/widgets#40<"), "{resolved}");
+    let issue_link = "href=\"https://github.com/acme/widgets/issues/40\"";
+    assert!(resolved.contains(issue_link), "{resolved}");
     let row = resolved
         .split("<li class=\"command\"")
-        .find(|row| row.contains(">acme/widgets#40<"))
+        .find(|row| row.contains(issue_link))
         .expect(resolved);
     assert!(
         row.contains("<p class=\"left\">left needs you: taken up by a later Command started at"),
@@ -475,7 +723,6 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     assert_eq!(item["left_reason"], "taken up by a later Command", "{item}");
 }
 
-#[cfg(unix)]
 #[test]
 fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group() {
     use super::watching::{FixtureProcess, live_record};
@@ -593,14 +840,14 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
 }
 
 #[test]
-fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() {
+fn overview_shows_current_groups_and_section_urls_keep_their_filters() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     record(home.path(), 1, Some("failed"), 0);
     record(home.path(), 2, Some("merged"), 0);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let shown = |html: &str| -> Vec<String> {
-        html.split("<section id=\"group-")
+        html.split("<details id=\"group-")
             .skip(1)
             .filter(|section| !section.split('>').next().unwrap().contains(" hidden"))
             .map(|section| {
@@ -616,7 +863,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
             .collect()
     };
 
-    // With no choice, the first section with rows opens, and every section is a folder.
+    // With no choice, all four current groups open together, even empty ones.
     let html = console.get("/").text().unwrap();
     let folders = html
         .split("aria-label=\"Inbox sections\"")
@@ -626,6 +873,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         .next()
         .unwrap();
     for (group, slug) in [
+        ("overview", "overview"),
         ("needs you", "needs-you"),
         ("ready for review", "ready-for-review"),
         ("landing", "landing"),
@@ -639,12 +887,27 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         );
     }
     assert!(
-        folders.contains(
-            "href=\"/?section=needs-you\" data-group=\"needs you\" aria-current=\"page\""
-        ),
+        folders
+            .contains("href=\"/?section=overview\" data-group=\"overview\" aria-current=\"page\""),
         "{folders}"
     );
-    assert_eq!(shown(&html), ["needs you"], "{html}");
+    assert_eq!(
+        shown(&html),
+        ["needs you", "ready for review", "landing", "working"],
+        "{html}"
+    );
+    for (group, title) in [
+        ("needs you", "Needs you"),
+        ("ready for review", "Ready for review"),
+        ("landing", "Landing"),
+        ("working", "Working"),
+        ("done", "Done"),
+        ("resolved", "Resolved"),
+    ] {
+        let group = section(&html, group);
+        assert!(group.contains(&format!("<summary><h3>{title} ")), "{html}");
+        assert!(group.split('>').next().unwrap().ends_with(" open"));
+    }
     // Both sections are still on the page, so a switch needs no request.
     assert!(html.contains("data-group=\"done\""), "{html}");
 
@@ -658,7 +921,7 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
     // An unknown section falls back to the default.
     assert_eq!(
         shown(&console.get("/?section=nonsense").text().unwrap()),
-        ["needs you"]
+        ["needs you", "ready for review", "landing", "working"]
     );
 
     // A section hidden with Sections keeps a hidden folder, for Sections to
@@ -673,7 +936,11 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
         html.contains("href=\"/?section=needs-you\" data-group=\"needs you\" hidden>"),
         "{html}"
     );
-    assert_eq!(shown(&html), ["done"], "{html}");
+    assert_eq!(
+        shown(&html),
+        ["ready for review", "landing", "working"],
+        "{html}"
+    );
 }
 
 #[test]
@@ -682,11 +949,8 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
     configure(home.path());
     let root = home.path().join(".thirdshift/logs/acme/widgets");
     fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join("pickup.last-fired"),
-        chrono::Utc::now().to_rfc3339(),
-    )
-    .unwrap();
+    let fired = "2026-10-29T12:34:56-04:00";
+    fs::write(root.join("pickup.last-fired"), fired).unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
     let notice = html
@@ -705,6 +969,14 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
         .unwrap();
     assert!(starts.contains("Pickup last fired"), "{starts}");
     assert!(starts.contains("on acme/widgets"), "{starts}");
+    assert!(
+        starts.contains(&format!(
+            "<li><time datetime=\"{fired}\">{}",
+            super::support::local_minute(fired)
+        )),
+        "{starts}"
+    );
+    assert!(starts.contains("</time> · Pickup last fired"), "{starts}");
 }
 
 #[test]

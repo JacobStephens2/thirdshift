@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::harness::{Choice, interpretation::Interpretation};
-use crate::session::limits::{self, Reached};
+use crate::session::limits::{self, Limit, Reached};
 use crate::trial::{Outcome, Output, Reports, Timings, VoidCause};
 
 pub(super) struct Monitor {
@@ -57,9 +57,9 @@ impl Monitor {
             for raw in stream.limit_records() {
                 drop(stream.condense(&raw));
             }
-            if stream.plan_limit_reached() {
-                limits::notify(signal)?;
-                return Err(Reached.into());
+            if let Some(limit) = stream.plan_limit() {
+                limits::notify(signal, limit)?;
+                return Err(Reached(limit.clone()).into());
             }
         }
         Ok(())
@@ -90,7 +90,7 @@ impl Monitor {
                 session_ms: total_ms,
             },
             void_cause: Some(VoidCause::UsageLimit),
-            cause: Some(Reached.to_string()),
+            cause: Some(Reached(Limit::default()).to_string()),
             session_id,
             model_evidence: artifact("models.json"),
             reports: Reports {

@@ -1,4 +1,5 @@
-//! Custom processes: skill, command and catalogue Steps from
+//! Process commands: inspect Built-in and Custom process files, and run
+//! Custom processes as skill, command and catalogue Steps from
 //! `~/.thirdshift/processes/<name>.toml`.
 //!
 //! Steps run in order. Consecutive Steps that name the same `parallel` group
@@ -11,25 +12,30 @@
 //! leaves the pull request ready for review. A file can only tighten limits.
 //! The catalogue Step `run-published-issue` starts a Ticket run, or a Spec
 //! run, on the issue the session Step before it published.
+//! A Spec-branch worktree instead hosts `land-tickets`, the Spec run's Ticket
+//! loop, leaving its draft Spec PR for subsequent Steps. A file can declare
+//! one Issue-branch or one Spec-branch worktree, and either needs an issue.
 //!
-//! A Process started with no issue is a Pass, unless it declares an
-//! Issue-branch worktree, which needs an issue. A Pass takes the repository's
-//! Pass lock and is skipped, before any worktree, while another Pass holds
-//! it. It does not take an Architect run's Ready-issue or Architect-idea
-//! gates. A Process started with an issue is not a Pass and does not take the
-//! lock.
+//! A Process started on a pull request uses its head branch and own base;
+//! its review and comment delivery live in `review`.
+//! A Process started with no issue or pull request is a Pass, unless it declares an
+//! Issue-branch or Spec-branch worktree, which needs an issue. Such a Pass is
+//! skipped before any worktree while its repository is at its Command limit, and
+//! takes no lock of a kind: it runs beside any other Pass up to the limit.
+//! It does not take an Architect run's Ready-issue or Architect-idea gates.
+//! A Process started with an issue or pull request is not a Pass: it takes a slot toward
+//! the Command limit without counting.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
@@ -39,6 +45,7 @@ use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
 use crate::child_run::ChildAsks;
 use crate::claim::{self, Claim};
+use crate::command_limit;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::GitHub;
@@ -54,22 +61,29 @@ use crate::run_ending::{Account, Cause};
 use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
+pub(crate) mod architect;
+mod architecture;
+pub(crate) mod builtin;
+mod catalog;
+mod findings;
+pub(crate) mod fix;
+mod identity;
+pub(crate) mod review;
+pub(crate) mod security;
+mod security_audit;
+pub(crate) mod spec;
+mod spec_review;
+pub(crate) use identity::Identity;
+pub(crate) mod ticket;
+use catalog::Catalog;
+
 /// The issue URL when the Process has an issue; unset otherwise.
 const ISSUE_URL: &str = "THIRDSHIFT_ISSUE_URL";
+const PULL_REQUEST_URL: &str = "THIRDSHIFT_PULL_REQUEST_URL";
 /// The folder of Step result files, beside the Command log.
 const RESULTS_DIR: &str = "THIRDSHIFT_RESULTS_DIR";
 /// The path thirdshift writes this Step's combined output to when it finishes.
 const STEP_RESULT: &str = "THIRDSHIFT_STEP_RESULT";
-
-const RESERVED: &[&str] = &[
-    "check",
-    "list",
-    "ticket-run",
-    "spec-run",
-    "architect-run",
-    "pickup-run",
-    "security-run",
-];
 
 struct ProcessFile {
     description: String,
@@ -79,6 +93,10 @@ struct ProcessFile {
     /// Filled by `run` from the merge flag or `merge_always`. Parsing leaves
     /// this ready for review; `check` never merges.
     goal: Goal,
+    security_review: bool,
+    security_flags: Flags,
+    security_fix: bool,
+    plan_only: bool,
 }
 
 /// Limits a file may set. Each one is at least as tight as the built-in rule.
@@ -105,8 +123,22 @@ impl Limits {
 
 struct WorktreeDraft {
     name: String,
-    /// The `kind` line when this worktree is an Issue branch.
-    issue_branch_line: Option<usize>,
+    kind: WorktreeKind,
+    kind_line: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorktreeKind {
+    Throwaway,
+    IssueBranch,
+    SpecBranch,
+    PullRequest,
+}
+
+impl WorktreeDraft {
+    fn branch_line(&self) -> Option<usize> {
+        (self.kind != WorktreeKind::Throwaway).then_some(self.kind_line)
+    }
 }
 
 struct StepDraft {
@@ -115,6 +147,8 @@ struct StepDraft {
     optional: bool,
     worktree: Option<(String, usize)>,
     parallel: Option<(String, usize)>,
+    /// The child Ticket Process selected by a dispatching catalogue Step.
+    process: Option<(String, usize)>,
     kind: DraftKind,
     harness: Option<Harness>,
     /// The Step's `harness` line, or its name when it inherits the Harness.
@@ -123,17 +157,36 @@ struct StepDraft {
     effort: Option<String>,
 }
 
+impl StepDraft {
+    fn child_process(&self, catalogue_line: usize) -> (&str, usize) {
+        self.process
+            .as_ref()
+            .map(|(name, line)| (name.as_str(), *line))
+            .unwrap_or(("ticket-run", catalogue_line))
+    }
+}
+
 enum DraftKind {
+    ReviewAndAddress { line: usize },
     Skill { skill: String, line: usize },
     Command { command: String },
+    Implement { line: usize },
+    ArchitectureReview { line: usize },
+    SpecReview { line: usize },
+    SecurityReview { line: usize },
+    SecurityAudit { line: usize },
+    ReproduceFindings { line: usize },
     Delivery { line: usize },
     SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
+    LandTickets { line: usize },
+    FixFindings { line: usize },
+    CloseFindings { line: usize },
 }
 
 struct DeclaredWorktree {
     name: String,
-    issue_branch: bool,
+    kind: WorktreeKind,
 }
 
 struct ResolvedStep {
@@ -147,6 +200,8 @@ struct ResolvedStep {
     sources: Sources,
     /// Why this Step's Harness can't start, when preflight failed.
     start_failure: Option<String>,
+    /// Startup fallback for an implicitly chosen Security review only.
+    review_default: Option<Choice>,
 }
 
 impl ResolvedStep {
@@ -154,9 +209,19 @@ impl ResolvedStep {
         let kind = match self.kind {
             StepKind::Skill { .. } => "skill",
             StepKind::Command(_) => "command",
+            StepKind::Implement => "implement",
+            StepKind::ArchitectureReview => "architecture-review",
+            StepKind::SpecReview => "spec-review",
+            StepKind::SecurityReview => "security-review",
+            StepKind::SecurityAudit => "security-audit",
+            StepKind::ReproduceFindings => "reproduce-findings",
             StepKind::Delivery => "delivery",
             StepKind::SelfMerge => "self-merge",
-            StepKind::RunPublishedIssue => "run-published-issue",
+            StepKind::RunPublishedIssue { .. } => "run-published-issue",
+            StepKind::LandTickets { .. } => "land-tickets",
+            StepKind::FixFindings { .. } => "fix-findings",
+            StepKind::CloseFindings => "close-findings",
+            StepKind::ReviewAndAddress => "review-and-address",
         };
         format!(
             "{kind}; worktree {}; {}",
@@ -176,6 +241,37 @@ impl ResolvedStep {
 
     fn check(&mut self) {
         self.start_failure = self.choice.check().err().map(|error| one_line(&error));
+    }
+
+    fn check_security_review(&mut self, enabled: bool, config: &UserConfig) {
+        if matches!(self.sources.harness, Source::Step) {
+            self.check();
+            return;
+        }
+        if !enabled {
+            return;
+        }
+        if let Some(security) = Choice::of_security_review(config.security_harness, &config.harness)
+        {
+            self.choice.harness = security.harness;
+            self.choice.chosen_by = security.chosen_by;
+            self.sources.harness = Source::UserConfig;
+            if !matches!(self.sources.model, Source::Step) {
+                self.sources.model = Source::word(&None, &security.model);
+                self.choice.model = security.model;
+            }
+            if !matches!(self.sources.effort, Source::Step) {
+                self.sources.effort = Source::word(&None, &security.effort);
+                self.choice.effort = security.effort;
+            }
+        }
+        let mut default = Choice::of(&Asked::default(), &config.harness);
+        self.start_failure = self
+            .choice
+            .check_security_review(&mut default)
+            .err()
+            .map(|error| one_line(&error));
+        self.review_default = Some(default);
     }
 }
 
@@ -225,7 +321,9 @@ impl CommandChoice {
             if !matches!(step.sources.effort, Source::Step) {
                 step.choice.effort = self.choice.effort.clone();
             }
-            step.check();
+            if !matches!(step.kind, StepKind::SecurityReview) {
+                step.check();
+            }
         }
     }
 
@@ -291,11 +389,21 @@ fn source_from(chosen_by: ChosenBy) -> Source {
 }
 
 enum StepKind {
+    ReviewAndAddress,
     Skill { name: String, path: PathBuf },
     Command(String),
+    Implement,
+    ArchitectureReview,
+    SpecReview,
+    SecurityReview,
+    SecurityAudit,
+    ReproduceFindings,
     Delivery,
     SelfMerge,
-    RunPublishedIssue,
+    RunPublishedIssue { process: String },
+    LandTickets { process: String },
+    FixFindings { process: String },
+    CloseFindings,
 }
 
 struct OwnedWorktree {
@@ -309,11 +417,14 @@ struct Prepared {
     declared: Vec<DeclaredWorktree>,
     /// The Issue-branch worktree's name, when the file declares one.
     issue_worktree: Option<String>,
+    spec_branch: bool,
     _written: WrittenGuard,
     choice: Choice,
     description: String,
     steps: Vec<ResolvedStep>,
     issue: Option<IssueUrl>,
+    /// A dispatched Ticket shares its Command but keeps its own artifacts.
+    dispatched: Option<Identity>,
     /// When untrusted edits start counting, set when a run begins.
     started: DateTime<Utc>,
     /// The Base branch checked out in the Launch directory.
@@ -321,7 +432,15 @@ struct Prepared {
     limits: Limits,
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
+    security_review: bool,
+    security_flags: Flags,
+    security_fix: bool,
+    security_findings: Mutex<Option<crate::security::findings::Findings>>,
+    plan_only: bool,
     completed: Mutex<CompletedRuns>,
+    /// Killed work retained across session Steps, ordered by Step even when
+    /// a parallel group completes out of order.
+    killed_work: Mutex<BTreeMap<usize, Vec<String>>>,
 }
 
 /// Actual published outcomes, including dispatched Runs in parallel groups.
@@ -329,6 +448,14 @@ struct Prepared {
 struct CompletedRuns {
     resolutions: Vec<crate::run::Resolution>,
     failed: bool,
+    /// Direct branch Processes retain the same failure facts as dispatched Runs.
+    failed_run: Option<crate::failed_run::FailedRun>,
+    /// The implement Step's early successful end.
+    unreproduced_bug: Option<String>,
+    /// Why architecture-review ended successfully without a child run.
+    architecture_end: Option<String>,
+    /// Presence keeps private Security diagnostics out of Run notifications.
+    security_findings: Option<Vec<crate::security::RecordedFinding>>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -338,11 +465,19 @@ struct IssueRun<'a> {
     branch: &'a str,
     base: &'a str,
     on_origin: bool,
+    selection: &'a Selection,
     logs: &'a session::Logs,
     base_fix: &'a mut BaseFix,
     process: &'a str,
     /// Delivery left a pull request ready for review, or merged it.
     delivered: bool,
+    pull_request: PullRequest,
+    reviews: Vec<crate::security::review::Outcome>,
+    spec_tickets: Option<crate::spec_run::AccountedTickets>,
+    /// Dispatch's asks, retained for Base fixes started during Delivery.
+    child_asks: ChildAsks,
+    /// The Step result carries the error; dispatch also needs its other facts.
+    failure: Option<crate::failed_run::FailedRun>,
 }
 
 /// Ends the Claim on drop unless the run removed it or ended it already.
@@ -357,31 +492,38 @@ impl HeldClaim<'_> {
         }
     }
 
-    fn release(&mut self) {
+    fn end(&mut self, ending: claim::Ending) {
         if let Some(claim) = self.claim.take() {
-            claim.end(None);
+            claim.end(ending);
         }
     }
 }
 
 impl Drop for HeldClaim<'_> {
     fn drop(&mut self) {
-        self.release();
+        self.end(claim::Ending::Failed);
     }
 }
 
 /// What one Step needs from the Process, shared by a parallel group.
 struct StepRun<'a> {
     process: &'a str,
+    plan_only: bool,
+    security_flags: &'a Flags,
+    security_fix: bool,
     goal: Goal,
     limits: &'a Limits,
     completed: &'a Mutex<CompletedRuns>,
+    killed_work: &'a Mutex<BTreeMap<usize, Vec<String>>>,
     issue_branch: bool,
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
+    dispatched: Option<&'a Identity>,
     started: DateTime<Utc>,
     /// Branch and Base branch when this Step continues an Issue branch.
     continuation: Option<(String, String)>,
+    checkout: Option<&'a Worktree>,
+    selection: Option<&'a Selection>,
     /// The Base branch checked out in the Launch directory.
     base: &'a str,
     steps: &'a [ResolvedStep],
@@ -393,65 +535,40 @@ struct PriorSteps<'a> {
     began: &'a [(String, DateTime<Utc>)],
 }
 
-struct WrittenGuard;
+struct WrittenGuard {
+    remove_on_drop: bool,
+}
 
 impl Drop for WrittenGuard {
     fn drop(&mut self) {
-        skills::remove_written();
+        if self.remove_on_drop {
+            skills::remove_written();
+        }
     }
 }
 
 pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
-        ProcessAction::List => list(),
+        ProcessAction::List => Catalog::installed()?.list(),
+        ProcessAction::Show(name) => Catalog::installed()?.show(&name),
+        ProcessAction::Check(command) if command.pull_request.is_some() => {
+            review::custom(&command, true)
+        }
+        ProcessAction::Run(command) if command.pull_request.is_some() => {
+            review::custom(&command, false)
+        }
         ProcessAction::Check(command) => check(&command),
         ProcessAction::Run(command) => run(&command),
     }
-}
-
-fn list() -> Result<String> {
-    let dir = processes_dir()?;
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(String::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not list {}", dir.display()));
-        }
-    };
-    let mut lines = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("could not list {}", dir.display()))?;
-        let file_name = entry.file_name();
-        let Some(name) = file_name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".toml"))
-        else {
-            continue;
-        };
-        if !crate::args::one_path_component(name) || reserved(name) {
-            continue;
-        }
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(file) = parse(&path, &text) else {
-            continue;
-        };
-        lines.push(format!("{name}: {}", file.description));
-    }
-    lines.sort();
-    Ok(lines.join("\n"))
 }
 
 fn check(command: &ProcessRun) -> Result<String> {
     let name = &command.name;
     interrupt::install()?;
     let config = UserConfig::load()?;
-    let (path, file) = load(name)?;
+    let (path, text) = Catalog::installed()?.source(name)?;
+    let mut file = validated(&path, &text)?;
+    file.security_review = config.security_review;
     let issue = resolve_process_issue(command.issue.clone())?;
     require_issue(&path, &file, issue.as_ref())?;
     let base = launch::checked_out_base()?;
@@ -496,11 +613,36 @@ fn run(command: &ProcessRun) -> Result<String> {
         &config.email,
         About::Process { name },
     )?;
-    let (path, mut file) = match load(name) {
+    let (path, mut file, identity) = match load(name) {
         Ok(loaded) => loaded,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    logs::process_loaded(identity);
+    if command.plan_only
+        && !file
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, DraftKind::ArchitectureReview { .. }))
+    {
+        return Err(failed_before_steps(
+            notification,
+            anyhow!("--plan-only needs an architecture-review Step"),
+        ));
+    }
     file.goal = goal;
+    file.plan_only = command.plan_only;
+    file.security_review = Flags {
+        security_review: command.security_review,
+        ..Flags::default()
+    }
+    .security_review(&config);
+    file.security_flags = Flags {
+        security_fix: command.security_fix,
+        security_close: command.security_close,
+        security_review: command.security_review,
+        ..Flags::default()
+    };
+    file.security_fix = file.security_flags.security_fix_allowed(&config);
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way. An Issue-branch
     // worktree with no issue is refused before the Pass log. A failure here
@@ -513,9 +655,10 @@ fn run(command: &ProcessRun) -> Result<String> {
     if let Err(error) = require_issue(&path, &file, issue.as_ref()) {
         return Err(failed_before_steps(notification, error));
     }
-    // No issue: a Pass. The Base branch is checked before the lock, so a bad
-    // checkout fails instead of being skipped, and a skip creates no worktree.
-    // The lock is then held until this process exits, through every Step.
+    // No issue: a Pass. The Base branch is checked before the Command limit,
+    // so a bad checkout fails instead of being skipped, and a skip creates no
+    // worktree. Its slot is then held until this process exits, through
+    // every Step.
     // `pass` holds the first lines, so a quiet skip prints nothing. A skip
     // sends no Run notification.
     if issue.is_none() {
@@ -529,7 +672,11 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        match launch::hold_pass(&repo) {
+        match command_limit::hold_pass(
+            &repo,
+            config.command_limit,
+            command_limit::Sharing::UpToTheLimit,
+        ) {
             Ok(Some(running)) => {
                 let reason = running.to_string();
                 let choice = Choice::of(&command.asked, &config.harness);
@@ -565,8 +712,15 @@ fn run(command: &ProcessRun) -> Result<String> {
         return finish_run(name, &repo, prepared, notification);
     }
     let issue = issue.expect("an issue");
+    // Started with an issue, it counts toward the Command limit, but is
+    // never refused for it.
+    command_limit::hold_slot(&issue.repo());
     let started = Utc::now() - crate::run::STARTED_MARGIN;
-    if file_has_issue_branch(&file) {
+    if file
+        .worktrees
+        .iter()
+        .any(|worktree| worktree.branch_line().is_some())
+    {
         return run_issue_branch(command, &config, &path, file, issue, started, notification);
     }
     let base = match launch::checked_out_base() {
@@ -632,37 +786,61 @@ fn notify(
             .resolutions
             .iter()
             .all(|resolution| resolution.goal() == Some(Goal::Merged));
-    let account_outcome = if merged {
+    let not_reproduced = completed.unreproduced_bug.as_ref();
+    let account_outcome = if outcome == "succeeded" && not_reproduced.is_some() {
+        "bug not reproduced"
+    } else if merged {
         Goal::Merged.outcome()
     } else {
         outcome
     };
     let ended = if outcome == "succeeded" {
-        Ok(account_outcome.to_string())
+        Ok(match not_reproduced {
+            Some(url) => format!("bug not reproduced: {url}"),
+            None => completed
+                .architecture_end
+                .clone()
+                .unwrap_or_else(|| account_outcome.to_string()),
+        })
     } else {
         Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
     };
+    let failed = completed.failed_run.as_ref();
     let account = Account {
-        recovery: None,
+        recovery: failed.and_then(|failed| failed.recovery.as_deref()),
         outcome: account_outcome,
         ended,
         interrupted: outcome == "interrupted",
-        pr_url: completed
-            .resolutions
-            .iter()
-            .rev()
-            .find_map(|resolution| match resolution {
-                crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
-                _ => None,
+        pr_url: failed
+            .and_then(|failed| failed.pr_url.as_deref())
+            .or_else(|| {
+                completed
+                    .resolutions
+                    .iter()
+                    .rev()
+                    .find_map(|resolution| match resolution {
+                        crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
+                        crate::run::Resolution::NotReproduced { .. }
+                        | crate::run::Resolution::ArchitectureReview { .. } => None,
+                    })
             }),
         advice: &[],
         base_fix: None,
-        log: None,
-        ticket_lines: &[],
-        review: None,
+        log: failed.and_then(|failed| failed.log.as_deref()),
+        ticket_lines: failed.map_or(&[], |failed| failed.ticket_lines.as_slice()),
+        triage: None,
+        review: completed
+            .architecture_end
+            .as_ref()
+            .map(|line| crate::run_ending::Review {
+                title: None,
+                strength: None,
+                line: line.clone(),
+                dispatched: None,
+            }),
         failed_reproduction: None,
         pre_audit_failure: None,
-        security_findings: None,
+        security_findings: completed.security_findings.as_deref(),
         security_findings_waiting: false,
         security_fix: None,
         security_close: None,
@@ -691,7 +869,10 @@ fn finish_run(
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     drop(prepared);
     logs::ended(outcome);
-    logs::complete(outcome, cause.as_deref());
+    logs::complete(
+        outcome,
+        cause.as_deref().or(completed.architecture_end.as_deref()),
+    );
     notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
@@ -758,7 +939,7 @@ fn run_issue_branch(
             git: &launch_git,
             commit: &commit,
             issue_checkout: Some(checkout.path()),
-            base: base_branch.name(),
+            base: &base,
         },
     ) {
         Ok(prepared) => prepared,
@@ -789,33 +970,60 @@ fn run_issue_branch(
             branch: &branch,
             base: &base,
             on_origin,
+            selection: &selection,
             logs: &logs,
             base_fix: &mut base_fix,
             process: name,
             delivered: false,
+            pull_request: PullRequest::new(&issue, &branch, &base, GitHub::new()),
+            reviews: Vec::new(),
+            spec_tickets: None,
+            child_asks: ChildAsks::default(),
+            failure: None,
         };
-        let result = execute_steps(name, &prepared, Some(&mut issue_run));
-        let context = continuation(&issue_run);
-        let kept_on_origin = issue_run.on_origin;
-        if let Err(error) = &result
-            && let Some(checkout) = issue_run.checkout.as_mut()
-        {
-            preserve_step_failure(checkout, context, kept_on_origin, error);
-        }
+        let result = execute_issue_steps(name, &prepared, &mut issue_run);
         delivered = issue_run.delivered;
+        prepared
+            .completed
+            .lock()
+            .expect("completed Runs")
+            .failed_run = issue_run.failure.take();
         result
     };
-    if result.is_ok() || delivered {
+    let completed = prepared.completed.lock().expect("completed Runs");
+    let not_reproduced = completed.unreproduced_bug.is_some();
+    // An Architecture review that ends before Delivery did not publish the
+    // Issue branch. Release the Claim, as a run that published nothing does,
+    // instead of removing it the way a finished Delivery does.
+    let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
+    drop(completed);
+    if result.is_ok() && not_reproduced {
+        claim.end(claim::Ending::NotReproduced);
+    } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
+    } else if result.is_ok() {
+        claim.end(claim::Ending::BeforeDelivery);
     } else {
-        claim.release();
+        claim.end(claim::Ending::Failed);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     drop(prepared);
     drop(held);
     logs::ended(outcome);
-    logs::complete(outcome, cause.as_deref());
+    if let Ok(comment_url) = &result
+        && not_reproduced
+    {
+        logs::complete(
+            "bug not reproduced",
+            Some(&format!("bug not reproduced: {comment_url}")),
+        );
+    } else {
+        logs::complete(
+            outcome,
+            cause.as_deref().or(completed.architecture_end.as_deref()),
+        );
+    }
     notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
@@ -857,7 +1065,73 @@ fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
     ))
 }
 
+/// Preserve unfinished Issue-branch work consistently for direct and
+/// dispatched Custom processes.
+fn execute_issue_steps(
+    process: &str,
+    prepared: &Prepared,
+    issue_run: &mut IssueRun<'_>,
+) -> Result<String> {
+    if prepared.spec_branch
+        && let Some(checkout) = issue_run.checkout.as_mut()
+    {
+        checkout.keep_unpublished_on_cleanup();
+    }
+    let result = execute_steps(process, prepared, Some(&mut *issue_run));
+    if let Err(error) = &result {
+        let context = continuation(issue_run);
+        let on_origin = issue_run.on_origin;
+        if issue_run.failure.is_none()
+            && let Some(checkout) = issue_run.checkout.as_mut()
+        {
+            issue_run.failure = Some(preserve_step_failure(
+                checkout,
+                &mut issue_run.pull_request,
+                context,
+                on_origin,
+                error,
+                recovery::Stage::Implementation,
+            ));
+        }
+        if let Some(tickets) = &issue_run.spec_tickets {
+            let _ = issue_run.pull_request.show_checklist(&tickets.checklist);
+            if let Some(failed) = &mut issue_run.failure {
+                tickets.record_failure(failed);
+            }
+        }
+        if !issue_run.delivered {
+            let context = continuation(issue_run);
+            if let Some(failed) = &mut issue_run.failure
+                && let Some(recovery) = &mut failed.recovery
+            {
+                recovery.add_command_context(context, on_origin);
+                for line in recovery.lines() {
+                    progress::step(line);
+                }
+            }
+        }
+    }
+    result
+}
+
 fn execute_steps(
+    process: &str,
+    prepared: &Prepared,
+    issue_run: Option<&mut IssueRun<'_>>,
+) -> Result<String> {
+    let result = execute_groups(process, prepared, issue_run);
+    let endings: Vec<_> = prepared
+        .killed_work
+        .lock()
+        .expect("killed work")
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    session::with_killed_work(result, &endings)
+}
+
+fn execute_groups(
     process: &str,
     prepared: &Prepared,
     mut issue_run: Option<&mut IssueRun<'_>>,
@@ -868,11 +1142,12 @@ fn execute_steps(
     if let Some(checkout) = issue_run.as_ref().and_then(|run| run.checkout.as_ref()) {
         link_harnesses(checkout.path(), &prepared.steps)?;
     }
-    let results = logs::command_log_path()
-        .context("a Process has no Command log")?
-        .with_extension("steps");
-    fs::create_dir_all(&results)
-        .with_context(|| format!("could not create {}", results.display()))?;
+    let results = step_results_dir(prepared.dispatched.as_ref().map(|_| {
+        prepared
+            .issue
+            .as_ref()
+            .expect("a dispatched Ticket has an issue")
+    }))?;
     let mut earlier = Vec::new();
     let mut began = Vec::new();
     let mut last = String::new();
@@ -881,7 +1156,26 @@ fn execute_steps(
     while index < ranges.len() {
         let range = ranges[index].clone();
         let group = &prepared.steps[range.clone()];
-        if group.len() == 1 && matches!(group[0].kind, StepKind::Delivery) {
+        if let StepKind::LandTickets { process } = &group[0].kind {
+            let run = issue_run
+                .as_mut()
+                .context("land-tickets has no Spec-branch worktree")?;
+            let started = Instant::now();
+            let began_at = Utc::now();
+            let result = run_land_tickets(prepared, &group[0], run, process);
+            finish_step(
+                &group[0],
+                started.elapsed(),
+                (began_at, result),
+                &results,
+                &mut earlier,
+                &mut began,
+                &mut last,
+            )
+            .map_err(|error| skip_remaining(&prepared.steps[range.end..], &group[0].name, error))?;
+            index += 1;
+            continue;
+        } else if group.len() == 1 && matches!(group[0].kind, StepKind::Delivery) {
             let merge_at = ranges.get(index + 1).and_then(|next| {
                 (next.len() == 1 && matches!(prepared.steps[next.start].kind, StepKind::SelfMerge))
                     .then_some(next.start)
@@ -930,7 +1224,6 @@ fn execute_steps(
             index += 1;
             continue;
         }
-        let held = issue_run.as_deref();
         let prior = PriorSteps {
             results: &earlier,
             began: &began,
@@ -938,15 +1231,41 @@ fn execute_steps(
         let outcomes = if group.len() == 1 {
             let started = Instant::now();
             let began_at = Utc::now();
-            let outcome = run_step(
-                process,
-                prepared,
-                &group[0],
-                &prior,
-                &results,
-                range.start == 0,
-                held,
-            );
+            let outcome = if matches!(
+                group[0].kind,
+                StepKind::SecurityAudit | StepKind::ReproduceFindings
+            ) {
+                security_audit::run(prepared, &group[0], range.start)
+                    .map_err(findings::private_failure)
+            } else if matches!(group[0].kind, StepKind::SpecReview) {
+                spec_review::run(
+                    prepared,
+                    &group[0],
+                    range.start,
+                    issue_run
+                        .as_deref_mut()
+                        .context("spec-review has no Spec branch")?,
+                )
+            } else if matches!(group[0].kind, StepKind::SecurityReview) {
+                run_security_review(
+                    prepared,
+                    &group[0],
+                    range.start,
+                    issue_run
+                        .as_deref_mut()
+                        .context("security-review has no Issue branch")?,
+                )
+            } else {
+                run_step(
+                    process,
+                    prepared,
+                    &group[0],
+                    &prior,
+                    &results,
+                    range.start == 0,
+                    issue_run.as_deref(),
+                )
+            };
             vec![(started.elapsed(), began_at, outcome)]
         } else {
             run_parallel(
@@ -956,7 +1275,7 @@ fn execute_steps(
                 &prior,
                 &results,
                 range.start,
-                held,
+                issue_run.as_deref(),
             )
         };
         let mut group_error = None;
@@ -977,6 +1296,28 @@ fn execute_steps(
         }
         if let Some((name, error)) = group_error {
             return Err(skip_remaining(&prepared.steps[range.end..], name, error));
+        }
+        let completed = prepared.completed.lock().expect("completed Runs");
+        let early_end = completed
+            .architecture_end
+            .as_ref()
+            .map(|message| (message.clone(), last.as_str()))
+            .or_else(|| {
+                completed
+                    .unreproduced_bug
+                    .as_ref()
+                    .map(|url| (format!("bug not reproduced: {url}"), url.as_str()))
+            });
+        if let Some((message, result)) = early_end {
+            progress::step(&message);
+            for step in &prepared.steps[range.end..] {
+                progress::step(format_args!(
+                    "step {}: 0s skipped: {message} ({})",
+                    step.log_name(),
+                    step.log_context()
+                ));
+            }
+            return Ok(result.to_string());
         }
         index += 1;
     }
@@ -1037,6 +1378,8 @@ fn run_parallel(
     let goal = prepared.goal;
     let limits = &prepared.limits;
     let completed = &prepared.completed;
+    let killed_work = &prepared.killed_work;
+    let selection = issue_run.map(|run| run.selection);
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
@@ -1048,6 +1391,7 @@ fn run_parallel(
             let results = results.to_path_buf();
             let first = group_start + offset == 0;
             let issue = prepared.issue.clone();
+            let dispatched = prepared.dispatched.as_ref();
             let started_at = prepared.started;
             let continuation = step_continuation(prepared, step, continuing.as_ref());
             let issue_branch =
@@ -1061,14 +1405,21 @@ fn run_parallel(
                 };
                 let run = StepRun {
                     process: &process,
+                    plan_only: prepared.plan_only,
+                    security_flags: &prepared.security_flags,
+                    security_fix: prepared.security_fix,
                     goal,
                     limits,
                     completed,
+                    killed_work,
                     issue_branch,
                     choice: &choice,
                     issue: issue.as_ref(),
+                    dispatched,
                     started: started_at,
                     continuation,
+                    checkout,
+                    selection,
                     base,
                     steps,
                 };
@@ -1081,6 +1432,21 @@ fn run_parallel(
             .map(|handle| handle.join().expect("a step thread panicked"))
             .collect()
     })
+}
+
+/// All Process executors retain Step results under the owning Command log.
+fn step_results_dir(dispatched_issue: Option<&IssueUrl>) -> Result<PathBuf> {
+    let owner = logs::captured_owner().map_err(anyhow::Error::msg)?;
+    let mut results = owner
+        .log_path()
+        .context("a Process has no Command log")?
+        .with_extension("steps");
+    if let Some(issue) = dispatched_issue {
+        results = results.join(format!("issue-{}", issue.number));
+    }
+    fs::create_dir_all(&results)
+        .with_context(|| format!("could not create {}", results.display()))?;
+    Ok(results)
 }
 
 fn finish_step(
@@ -1117,7 +1483,12 @@ fn finish_step(
                 one_line(&error),
                 step.log_context()
             ));
-            if step.optional && !interrupt::requested() {
+            // A file cannot loosen a catalogue review's trust gate. Review
+            // failures are retained as holds; an untrusted edit stops here.
+            if step.optional
+                && !matches!(step.kind, StepKind::SecurityReview)
+                && !interrupt::requested()
+            {
                 let path = results.join(format!("{}.txt", step.name));
                 if path.is_file() {
                     *last = fs::read_to_string(&path)
@@ -1145,17 +1516,24 @@ fn run_step(
     let (checkout, continuing) = held_issue_branch(issue_run);
     let run = StepRun {
         process,
+        plan_only: prepared.plan_only,
+        security_flags: &prepared.security_flags,
+        security_fix: prepared.security_fix,
         goal: prepared.goal,
         limits: &prepared.limits,
         completed: &prepared.completed,
+        killed_work: &prepared.killed_work,
         issue_branch: names_issue_worktree(
             step.worktree.as_deref(),
             prepared.issue_worktree.as_deref(),
         ),
         choice: &step.choice,
         issue: prepared.issue.as_ref(),
+        dispatched: prepared.dispatched.as_ref(),
         started: prepared.started,
         continuation: step_continuation(prepared, step, continuing.as_ref()),
+        checkout,
+        selection: issue_run.map(|run| run.selection),
         base: &prepared.base,
         steps: &prepared.steps,
     };
@@ -1211,12 +1589,126 @@ fn names_issue_worktree(step: Option<&str>, issue: Option<&str>) -> bool {
     matches!((step, issue), (Some(step), Some(issue)) if step == issue)
 }
 
+fn run_security_review(
+    prepared: &Prepared,
+    step: &ResolvedStep,
+    index: usize,
+    issue_run: &mut IssueRun<'_>,
+) -> Result<String> {
+    if !prepared.security_review {
+        let skipped = "Security review skipped: not requested";
+        progress::step(skipped);
+        return Ok(skipped.to_string());
+    }
+    let checkout = issue_run
+        .checkout
+        .as_ref()
+        .context("the Issue-branch worktree is gone")?;
+    let before_each = || prepare_for_session(issue_run.issue, prepared.started, checkout.path());
+    let text = prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch);
+    let mut logs = session::Logs::of_process_review(&issue_run.issue.repo(), index + 1);
+    if let Some(identity) = &prepared.dispatched {
+        logs = logs.for_child(issue_run.issue, identity.clone());
+    }
+    let (review, log) = session::Sessions::checked_within(
+        &logs,
+        checkout.path(),
+        &step.choice,
+        None,
+        step.review_default.as_ref(),
+        &before_each,
+        |sessions| {
+            let review = crate::security::review::step::Step {
+                sessions,
+                worktree: checkout,
+                issue: issue_run.issue,
+                base: issue_run.base,
+            }
+            .run(&mut issue_run.pull_request, &text);
+            retain_killed_work(&prepared.killed_work, index + 1, sessions);
+            review
+        },
+    );
+    let review = match review {
+        Ok(review) => review,
+        Err(error) if error.is::<delivery::UntrustedEdit>() => return Err(error),
+        Err(error) => crate::security::review::Outcome::of(Err(error), log),
+    };
+    let entry = review.entry();
+    issue_run.reviews.push(review);
+    issue_run.pull_request.security_reviewed(
+        issue_run
+            .reviews
+            .iter()
+            .map(crate::security::review::Outcome::unaddressed_count)
+            .sum(),
+    );
+    Ok(entry)
+}
+
+/// Gather a Spec's Tickets using the Step's choices and tightened limits.
+fn run_land_tickets(
+    prepared: &Prepared,
+    step: &ResolvedStep,
+    run: &mut IssueRun<'_>,
+    process: &str,
+) -> Result<String> {
+    crate::resources::wait()?;
+    let config = UserConfig::load()?;
+    let flags = Flags {
+        security_review: Some(if prepared.security_review {
+            crate::security::review::Ask::Allow
+        } else {
+            crate::security::review::Ask::Forbid
+        }),
+        security_fix: Some(if prepared.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
+        }),
+        security_close: prepared.security_flags.security_close,
+        ..Flags::default()
+    };
+    let mut asks = Asks::of_run(run.issue, &flags, &config);
+    asks.harness = step.choice.clone();
+    asks.security_review_harness = flags.security_review_harness(&config, &asks.harness);
+    asks.delivery_limits = delivery::Limits {
+        repair_cap: prepared.limits.repair_cap,
+        protected_paths: prepared.limits.protected_paths.clone(),
+    };
+    asks.harness.check_with_security_review(
+        &mut asks.security_review_harness,
+        asks.security_review_default.as_mut(),
+    )?;
+    let child_asks = ChildAsks::of(&asks);
+    progress::step(format_args!(
+        "running step {} with {}",
+        step.name, step.choice
+    ));
+    match crate::spec_run::land(
+        run.issue,
+        run.checkout,
+        &mut run.pull_request,
+        &child_asks,
+        config.spec_parallel,
+        process,
+    ) {
+        Ok(tickets) => {
+            let url = tickets.pr_url.clone();
+            run.spec_tickets = Some(tickets);
+            Ok(url)
+        }
+        Err(failed) => {
+            let error = anyhow!("{:#}", failed.error);
+            run.failure = Some(failed);
+            Err(error)
+        }
+    }
+}
+
 /// Publish the Issue branch, and when `merge_follows` run the Self-merge in
-/// that same Delivery. The Self-merge is the existing one: one Repair loop,
-/// then the merge when the run's goal asks for it and the file does not forbid it.
-/// A protected path, `self_merge = false`, or a policy refusal leaves the
-/// pull request ready and fails the self-merge Step. The pair's results are
-/// the delivery Step's and, when a self-merge Step follows, that Step's.
+/// that same Delivery. A protected path, `self_merge = false`, or a policy
+/// refusal leaves the PR ready and fails the self-merge Step.
 fn run_delivery(
     prepared: &Prepared,
     step: &ResolvedStep,
@@ -1244,15 +1736,14 @@ fn run_delivery(
             progress::step(format_args!("running step {}", merge_step.name));
         }
     }
-    let mut pull_request = PullRequest::new(
-        issue_run.issue,
-        issue_run.branch,
-        issue_run.base,
-        GitHub::new(),
-    );
     let child_asks = ChildAsks {
         harness: step.choice.clone(),
-        ..ChildAsks::default()
+        security_fix: prepared.security_fix,
+        delivery_limits: delivery::Limits {
+            repair_cap: prepared.limits.repair_cap,
+            protected_paths: prepared.limits.protected_paths.clone(),
+        },
+        ..issue_run.child_asks.clone()
     };
     let started = prepared.started;
     let protected = if merge {
@@ -1276,7 +1767,15 @@ fn run_delivery(
         repair_cap: prepared.limits.repair_cap,
         protected_paths: protected,
     })
-    .publish(checkout, &mut pull_request);
+    .publish(
+        checkout,
+        &mut issue_run.pull_request,
+        &issue_run.reviews,
+        issue_run
+            .spec_tickets
+            .as_ref()
+            .map(|tickets| tickets.checklist.as_str()),
+    );
     match published {
         Ok(url) => {
             issue_run.delivered = true;
@@ -1306,19 +1805,26 @@ fn run_delivery(
         }
         Err(mut failed) => {
             let held = failed.error.is::<crate::failed_run::MergeHold>()
-                || failed.error.is::<crate::failed_run::PolicyRefusal>();
+                || failed.error.is::<crate::failed_run::PolicyRefusal>()
+                || failed.error.is::<crate::security::review::Hold>();
             if held {
                 issue_run.delivered = true;
-                let url = failed.pr_url.clone().unwrap_or_default();
-                return (Ok(url), Some(Err(failed.error)));
-            }
-            if let Some(recovery) = &mut failed.recovery {
+            } else if let Some(recovery) = &mut failed.recovery {
                 recovery.add_command_context(continuation(issue_run), issue_run.on_origin);
-                for line in recovery.lines() {
-                    progress::step(line);
-                }
             }
-            (Err(failed.error), None)
+            let url = failed.pr_url.clone().unwrap_or_default();
+            // Keep the typed cause in the Step result, including any context
+            // execute_steps adds. run_custom rejoins it with these facts.
+            let error = std::mem::replace(
+                &mut failed.error,
+                anyhow!("the Step result carries the failure cause"),
+            );
+            issue_run.failure = Some(failed);
+            if held {
+                (Ok(url), Some(Err(error)))
+            } else {
+                (Err(error), None)
+            }
         }
     }
 }
@@ -1337,19 +1843,29 @@ fn continuation(issue_run: &IssueRun<'_>) -> recovery::Continuation {
 
 fn preserve_step_failure(
     checkout: &mut Worktree,
+    pull_request: &mut PullRequest,
     context: recovery::Continuation,
     on_origin: bool,
     error: &anyhow::Error,
-) {
+    stage: recovery::Stage,
+) -> crate::failed_run::FailedRun {
     let reason = Cause::of(error).first_line().to_string();
-    let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || Ok(()));
+    let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || {
+        pull_request.ensure_preservable()
+    });
     let preservation = recovery::preservation_of(preserved, progress::step);
-    let mut recovery = Recovery::new(recovery::Stage::Implementation, preservation);
+    let mut recovery = Recovery::new(stage, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
     recovery.add_command_context(context, on_origin);
-    for line in recovery.lines() {
-        progress::step(line);
+    let mut failed: crate::failed_run::FailedRun = anyhow!("{error:#}").into();
+    failed.recovery = Some(Box::new(recovery));
+    match pull_request.finish_failed_run(false) {
+        Ok(url) => failed.pr_url = url,
+        Err(error) => progress::step(format_args!(
+            "warning: could not finish the failed PR: {error:#}"
+        )),
     }
+    failed
 }
 
 fn run_step_in(
@@ -1362,7 +1878,19 @@ fn run_step_in(
 ) -> Result<String> {
     crate::resources::wait()?;
     match &step.kind {
-        StepKind::RunPublishedIssue => run_published(run, step, prior),
+        StepKind::ReviewAndAddress => bail!("review-and-address needs a pull-request worktree"),
+        StepKind::Implement => run_implement(run, cwd, step),
+        StepKind::ArchitectureReview => architecture::run(run, step),
+        StepKind::SecurityAudit | StepKind::ReproduceFindings => {
+            bail!("Security audit Steps cannot be in a parallel group")
+        }
+        StepKind::SpecReview => bail!("spec-review cannot be in a parallel group"),
+        StepKind::RunPublishedIssue { process } => run_published(run, step, prior, process),
+        StepKind::LandTickets { .. } => bail!("land-tickets cannot be in a parallel group"),
+        StepKind::FixFindings { process } => {
+            findings::fix(run, process).map_err(findings::private_failure)
+        }
+        StepKind::CloseFindings => findings::close(run).map_err(findings::private_failure),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
                 "running step {} with {choice}",
@@ -1392,6 +1920,7 @@ fn run_step_in(
             run_skill(run, cwd, step, &prompt)
         }
         StepKind::Delivery => bail!("delivery cannot be in a parallel group"),
+        StepKind::SecurityReview => bail!("security-review cannot be in a parallel group"),
         StepKind::SelfMerge => bail!("self-merge must be directly after delivery"),
         StepKind::Command(command) => {
             progress::step(format_args!("running step {}", step.name));
@@ -1401,7 +1930,7 @@ fn run_step_in(
                 command,
                 results,
                 &result_file,
-                run.issue.map(|issue| issue.url.as_str()),
+                run.issue.map(|issue| CommandInput::Issue(&issue.url)),
             )
         }
     }
@@ -1410,13 +1939,8 @@ fn run_step_in(
 /// Check the issue, then write it into the worktree for the session about
 /// to start. An untrusted edit fails the Step instead of starting it.
 fn prepare_for_session(issue: &IssueUrl, started: DateTime<Utc>, worktree: &Path) -> Result<()> {
-    match trust::untrusted_edit(&crate::github::GitHub::new(), issue, Some(started))? {
-        Some(text) => bail!(
-            "#{number} {text} edited since the Process started by an account that is not a Trusted account; starting no further session",
-            number = issue.number,
-        ),
-        None => delivery::hand_over_issue(issue, worktree),
-    }
+    delivery::no_untrusted_edit_since(issue, started, "Process")?;
+    delivery::hand_over_issue(issue, worktree)
 }
 
 /// Record a Step through the shared session lifecycle, including resource
@@ -1427,13 +1951,79 @@ fn run_skill(
     step: &ResolvedStep,
     prompt: &str,
 ) -> Result<String> {
+    run_session_step(run, worktree, step, |sessions, index| {
+        sessions
+            .run_to_final_message(
+                session::Purpose::Ordinary,
+                session::Kind::ProcessStep(index),
+                prompt,
+            )?
+            .filter(|message| !message.trim().is_empty())
+            .with_context(|| format!("Step {} ended without a final message", step.name))
+    })
+}
+
+fn run_implement(run: &StepRun<'_>, worktree: &Path, step: &ResolvedStep) -> Result<String> {
+    let issue = run.issue.context("implement needs an issue")?;
+    let checkout = run
+        .checkout
+        .filter(|_| run.issue_branch)
+        .context("implement needs an Issue-branch worktree")?;
+    let selection = run.selection.context("implement needs an Issue branch")?;
+    let labels = GitHub::new().issue_labels(issue)?;
+    let opening = crate::implement::prepare(
+        issue,
+        run.base,
+        checkout,
+        delivery::Opening {
+            session: delivery::OpeningSession::Implementation,
+            prompt: crate::implement::prompt(issue, run.base, selection),
+        },
+        Some(&labels),
+    )?;
+    let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());
+    run_session_step(run, worktree, step, |sessions, index| {
+        let completed = crate::implement::run(issue, &opening, |prompt| {
+            let message = sessions.run(session::Kind::ProcessStep(index), prompt)?;
+            pr.ensure_actionable(false)?;
+            Ok(message)
+        })?;
+        match completed {
+            crate::implement::Completed::Implemented(message) => Ok(message.unwrap_or_default()),
+            crate::implement::Completed::NotReproduced(comment_url) => {
+                crate::implement::confirm_needs_info(&GitHub::new().issue_labels(issue)?)?;
+                let mut completed = run.completed.lock().expect("completed Runs");
+                completed.unreproduced_bug = Some(comment_url.clone());
+                completed
+                    .resolutions
+                    .push(crate::run::Resolution::NotReproduced {
+                        comment_url: comment_url.clone(),
+                    });
+                Ok(comment_url)
+            }
+        }
+    })
+}
+
+fn run_session_step(
+    run: &StepRun<'_>,
+    worktree: &Path,
+    step: &ResolvedStep,
+    action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<String>,
+) -> Result<String> {
     let index = run
         .steps
         .iter()
         .position(|other| other.name == step.name)
         .expect("the Step belongs to this Process")
         + 1;
-    let logs = session::Logs::of_process(&launch::repo()?);
+    let mut logs = session::Logs::of_process(&launch::repo()?);
+    if let Some(identity) = run.dispatched {
+        logs = logs.for_child(
+            run.issue.expect("a dispatched Ticket has an issue"),
+            identity.clone(),
+        );
+    }
     let before_each = || match run.issue {
         Some(issue) => prepare_for_session(issue, run.started, worktree),
         None => Ok(()),
@@ -1446,23 +2036,37 @@ fn run_skill(
         None,
         &before_each,
         |sessions| {
-            sessions
-                .run_to_final_message(
-                    session::Purpose::Ordinary,
-                    session::Kind::ProcessStep(index),
-                    prompt,
-                )?
-                .filter(|message| !message.trim().is_empty())
-                .with_context(|| format!("Step {} ended without a final message", step.name))
+            let result = action(sessions, index);
+            retain_killed_work(run.killed_work, index, sessions);
+            result
         },
     )
     .0
 }
 
+fn retain_killed_work(
+    killed_work: &Mutex<BTreeMap<usize, Vec<String>>>,
+    step_index: usize,
+    sessions: &session::Sessions<'_>,
+) {
+    let endings = sessions.take_killed_work();
+    if !endings.is_empty() {
+        killed_work
+            .lock()
+            .expect("killed work")
+            .insert(step_index, endings);
+    }
+}
+
 /// Start a Ticket run, or a Spec run, on the issue the session Step before
 /// this one published. The child run is part of this Command. Its outcome
 /// is this Step's outcome.
-fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>) -> Result<String> {
+fn run_published(
+    run: &StepRun<'_>,
+    step: &ResolvedStep,
+    prior: &PriorSteps<'_>,
+    process: &str,
+) -> Result<String> {
     let index = run
         .steps
         .iter()
@@ -1514,6 +2118,12 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
         } else {
             run.goal
         }),
+        security_fix: Some(if run.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
+        }),
+        security_close: run.security_flags.security_close,
         ..Flags::default()
     };
     let mut asks = Asks::of_run(&issue, &flags, &config);
@@ -1526,10 +2136,11 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
     // `of_run` resolved the review against the default choice. Resolve it
     // again against this Step, so `security.harness` still wins (ADR-0021).
     asks.security_review_harness = Flags::default().security_review_harness(&config, &asks.harness);
-    let ended = crate::run::run_to_end(
+    let ended = crate::run::run_process_to_end(
         &issue,
         &mut asks,
         crate::run::StartedBy::Dispatch { base: run.base },
+        process,
     );
     logs::dispatch_ended(&ended);
     match ended.outcome {
@@ -1580,12 +2191,17 @@ fn resolve_process_issue(issue: Option<IssueInput>) -> Result<Option<IssueUrl>> 
     Ok(Some(issue))
 }
 
+enum CommandInput<'a> {
+    Issue(&'a str),
+    PullRequest(&'a str),
+}
+
 fn run_command(
     worktree: &Path,
     command: &str,
     results: &Path,
     result_file: &Path,
-    issue_url: Option<&str>,
+    input: Option<CommandInput<'_>>,
 ) -> Result<String> {
     let mut child = Command::new("sh");
     child
@@ -1594,13 +2210,15 @@ fn run_command(
         .current_dir(worktree)
         .env(RESULTS_DIR, results)
         .env(STEP_RESULT, result_file);
-    match issue_url {
-        Some(url) => {
+    child.env_remove(ISSUE_URL).env_remove(PULL_REQUEST_URL);
+    match input {
+        Some(CommandInput::Issue(url)) => {
             child.env(ISSUE_URL, url);
         }
-        None => {
-            child.env_remove(ISSUE_URL);
+        Some(CommandInput::PullRequest(url)) => {
+            child.env(PULL_REQUEST_URL, url);
         }
+        None => {}
     }
     let output = process::output(
         &mut child,
@@ -1684,7 +2302,9 @@ fn plan(name: &str, prepared: &Prepared) -> String {
         chosen = prepared.choice.chosen_by,
     );
     for worktree in &prepared.declared {
-        if worktree.issue_branch {
+        if worktree.kind == WorktreeKind::SpecBranch {
+            let _ = writeln!(text, "worktree {}: Spec branch", worktree.name);
+        } else if worktree.kind == WorktreeKind::IssueBranch {
             let _ = writeln!(text, "worktree {}: Issue branch", worktree.name);
         } else {
             let _ = writeln!(
@@ -1761,8 +2381,25 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
             format!("{}: command {shown}", step.name)
         }
         StepKind::Delivery => format!("{}: delivery", step.name),
+        StepKind::Implement => format!("{}: implement", step.name),
+        StepKind::ArchitectureReview => format!("{}: architecture-review", step.name),
+        StepKind::SpecReview => format!("{}: spec-review", step.name),
+        StepKind::SecurityReview => format!("{}: security-review", step.name),
+        StepKind::SecurityAudit => format!("{}: security-audit", step.name),
+        StepKind::ReproduceFindings => format!("{}: reproduce-findings", step.name),
         StepKind::SelfMerge => format!("{}: self-merge", step.name),
-        StepKind::RunPublishedIssue => format!("{}: run-published-issue", step.name),
+        StepKind::RunPublishedIssue { process } if process != "ticket-run" => {
+            format!("{}: run-published-issue (process {process})", step.name)
+        }
+        StepKind::RunPublishedIssue { .. } => format!("{}: run-published-issue", step.name),
+        StepKind::LandTickets { process } => {
+            format!("{}: land-tickets (process {process})", step.name)
+        }
+        StepKind::FixFindings { process } => {
+            format!("{}: fix-findings (process {process})", step.name)
+        }
+        StepKind::CloseFindings => format!("{}: close-findings", step.name),
+        StepKind::ReviewAndAddress => format!("{}: review-and-address", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
         let _ = write!(line, " (worktree {worktree})");
@@ -1773,16 +2410,62 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
     line
 }
 
-fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
-    let path = process_path(name)?;
-    refuse_reserved(&path, name)?;
-    let text = read_process(&path)?;
-    let file = parse(&path, &text)?;
-    refuse_worktrees(&path, &file)?;
-    refuse_self_merge(&path, &file)?;
-    refuse_issue_branch(&path, &file)?;
-    refuse_published(&path, &file.steps)?;
-    Ok((path, file))
+fn load(name: &str) -> Result<(PathBuf, ProcessFile, Identity)> {
+    let (path, text) = Catalog::installed()?.custom(name)?;
+    let file = validated(&path, &text)?;
+    Ok((path, file, Identity::custom(name, Some(&text))))
+}
+
+fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
+    let file = parse(path, text)?;
+    review::validate(path, &file)?;
+    if review::has_pull_request(&file) {
+        return Ok(file);
+    }
+    refuse_spec_branch(path, &file)?;
+    spec_review::validate(path, &file)?;
+    refuse_security_review(path, &file)?;
+    refuse_worktrees(path, &file)?;
+    refuse_implement(path, &file)?;
+    architecture::validate(path, &file)?;
+    findings::validate(path, &file)?;
+    security_audit::validate(path, &file)?;
+    refuse_self_merge(path, &file)?;
+    refuse_issue_branch(path, &file)?;
+    refuse_published(path, &file.steps)?;
+    Ok(file)
+}
+
+/// Load a compiled adapter's Process, refusing settings it cannot inherit
+/// from the already checked Command. Each adapter checks its own Step kinds
+/// and worktree rules after these shared choices and limits.
+fn load_inherited_builtin(name: &str) -> Result<ProcessFile> {
+    let (path, text) = Catalog::installed()?.source(name)?;
+    let file = if name == "fix-run" {
+        // This compiled adapter starts at Delivery without a review Step.
+        // Custom pull-request Processes retain their review requirement.
+        parse(&path, &text)?
+    } else {
+        validated(&path, &text)?
+    };
+    ensure!(
+        file.limits.repair_cap == delivery::MAX_REPAIRS
+            && !file.limits.forbid_self_merge
+            && file.limits.protected_paths.is_empty(),
+        "{name} inherits the Command's limits"
+    );
+    for step in &file.steps {
+        ensure!(
+            step.harness.is_none()
+                && step.model.is_none()
+                && step.effort.is_none()
+                && !step.optional
+                && step.parallel.is_none(),
+            "{name} Step {} must inherit the Command's choices and run in sequence",
+            step.name
+        );
+    }
+    Ok(file)
 }
 
 /// The launch checkout a Process's worktrees are created from, and the
@@ -1808,13 +2491,17 @@ fn prepare_from(
     let issue_worktree = file
         .worktrees
         .iter()
-        .find_map(|worktree| worktree.issue_branch_line.map(|_| worktree.name.clone()));
+        .find_map(|worktree| worktree.branch_line().map(|_| worktree.name.clone()));
+    let spec_branch = file
+        .worktrees
+        .iter()
+        .any(|worktree| worktree.kind == WorktreeKind::SpecBranch);
     let declared = file
         .worktrees
         .iter()
         .map(|worktree| DeclaredWorktree {
             name: worktree.name.clone(),
-            issue_branch: worktree.issue_branch_line.is_some(),
+            kind: worktree.kind,
         })
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
@@ -1831,21 +2518,36 @@ fn prepare_from(
         steps.push(resolve(path, step, checkout, &command)?);
     }
     command.check_steps(&mut steps);
+    for step in &mut steps {
+        if matches!(step.kind, StepKind::SecurityReview) {
+            step.check_security_review(file.security_review, config);
+        }
+    }
     Ok(Prepared {
         path: path.to_path_buf(),
         worktrees,
         declared,
         issue_worktree,
-        _written: WrittenGuard,
+        spec_branch,
+        _written: WrittenGuard {
+            remove_on_drop: true,
+        },
         choice: command.choice,
         description: file.description,
         steps,
         issue,
+        dispatched: None,
         started,
         base: source.base.to_string(),
         limits: file.limits,
         goal: file.goal,
+        security_review: file.security_review,
+        security_flags: file.security_flags,
+        security_fix: file.security_fix,
+        security_findings: Mutex::default(),
+        plan_only: file.plan_only,
         completed: Mutex::new(CompletedRuns::default()),
+        killed_work: Mutex::default(),
     })
 }
 
@@ -1970,25 +2672,72 @@ fn refuse_worktrees(path: &Path, file: &ProcessFile) -> Result<()> {
 fn file_has_issue_branch(file: &ProcessFile) -> bool {
     file.worktrees
         .iter()
-        .any(|worktree| worktree.issue_branch_line.is_some())
+        .any(|worktree| worktree.kind == WorktreeKind::IssueBranch)
+}
+
+fn refuse_implement(path: &Path, file: &ProcessFile) -> Result<()> {
+    let issue = file
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.kind == WorktreeKind::IssueBranch);
+    for step in &file.steps {
+        if let DraftKind::Implement { line } = step.kind
+            && !issue.is_some_and(|issue| {
+                step.worktree
+                    .as_ref()
+                    .is_some_and(|(name, _)| name == &issue.name)
+            })
+        {
+            return Err(rule(
+                path,
+                line,
+                "implement",
+                "implement needs an Issue-branch worktree",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn require_issue(path: &Path, file: &ProcessFile, issue: Option<&IssueUrl>) -> Result<()> {
-    if issue.is_some() {
-        return Ok(());
-    }
+    ensure!(
+        !review::has_pull_request(file),
+        "{} needs a pull-request <PR URL> input",
+        path.display()
+    );
     let Some(worktree) = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some())
+        .find(|worktree| worktree.branch_line().is_some())
     else {
         return Ok(());
     };
+    let spec = worktree.kind == WorktreeKind::SpecBranch;
+    let kind = if spec { "Spec" } else { "Issue" };
+    if let Some(issue) = issue {
+        let tickets = GitHub::new().tickets(issue)?;
+        if spec == tickets.is_empty() {
+            return Err(rule(
+                path,
+                worktree.branch_line().expect("branch line"),
+                "issue",
+                if tickets.is_empty() {
+                    "a Spec-branch worktree needs an issue with sub-issues"
+                } else {
+                    "an Issue-branch worktree refuses an issue with sub-issues"
+                },
+            ));
+        }
+        return Ok(());
+    }
     Err(rule(
         path,
-        worktree.issue_branch_line.expect("issue-branch line"),
+        worktree.branch_line().expect("branch line"),
         "issue",
-        "an Issue-branch worktree needs an issue",
+        format!(
+            "a{article} {kind}-branch worktree needs an issue",
+            article = if kind == "Issue" { "n" } else { "" }
+        ),
     ))
 }
 
@@ -1996,7 +2745,7 @@ fn refuse_self_merge(path: &Path, file: &ProcessFile) -> Result<()> {
     let issue_branch = file
         .worktrees
         .iter()
-        .find(|worktree| worktree.issue_branch_line.is_some());
+        .find(|worktree| worktree.branch_line().is_some());
     let mut seen = false;
     for (index, step) in file.steps.iter().enumerate() {
         let DraftKind::SelfMerge { line } = step.kind else {
@@ -2059,11 +2808,94 @@ fn refuse_self_merge(path: &Path, file: &ProcessFile) -> Result<()> {
     Ok(())
 }
 
+fn refuse_security_review(path: &Path, file: &ProcessFile) -> Result<()> {
+    let issue_branch = file
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.branch_line().is_some());
+    let delivery_at = file
+        .steps
+        .iter()
+        .position(|step| matches!(step.kind, DraftKind::Delivery { .. }));
+    for (index, step) in file.steps.iter().enumerate() {
+        let DraftKind::SecurityReview { line } = step.kind else {
+            continue;
+        };
+        let Some(issue_branch) = issue_branch else {
+            return Err(rule(
+                path,
+                line,
+                "security-review",
+                "security-review needs an Issue-branch worktree",
+            ));
+        };
+        if let Some((_, parallel_line)) = &step.parallel {
+            return Err(rule(
+                path,
+                *parallel_line,
+                "security-review",
+                "security-review cannot be in a parallel group",
+            ));
+        }
+        if delivery_at.is_some_and(|at| index > at) {
+            return Err(rule(
+                path,
+                line,
+                "security-review",
+                "security-review must precede delivery",
+            ));
+        }
+        if !step
+            .worktree
+            .as_ref()
+            .is_some_and(|(name, _)| name == &issue_branch.name)
+        {
+            return Err(rule(
+                path,
+                line,
+                "security-review",
+                "security-review must use the Issue-branch worktree",
+            ));
+        }
+        if file.steps[index + 1..].iter().any(|later| {
+            !matches!(
+                later.kind,
+                DraftKind::SecurityReview { .. }
+                    | DraftKind::Delivery { .. }
+                    | DraftKind::SelfMerge { .. }
+            ) && later
+                .worktree
+                .as_ref()
+                .is_some_and(|(name, _)| name == &issue_branch.name)
+        }) {
+            return Err(rule(
+                path,
+                line,
+                "security-review",
+                "security-review must follow the editing Steps",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
+    // Gathering Tickets alone intentionally leaves a draft Spec PR.
+    if file
+        .worktrees
+        .iter()
+        .any(|worktree| worktree.kind == WorktreeKind::SpecBranch)
+        && !file
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, DraftKind::Delivery { .. }))
+    {
+        return Ok(());
+    }
     let mut issue_branches = file
         .worktrees
         .iter()
-        .filter(|worktree| worktree.issue_branch_line.is_some());
+        .filter(|worktree| worktree.branch_line().is_some());
     let Some(issue_branch) = issue_branches.next() else {
         for step in &file.steps {
             if let DraftKind::Delivery { line } = &step.kind {
@@ -2080,7 +2912,7 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
     if let Some(second) = issue_branches.next() {
         return Err(rule(
             path,
-            second.issue_branch_line.expect("issue-branch line"),
+            second.kind_line,
             "issue-branch",
             "a Process has at most one Issue-branch worktree",
         ));
@@ -2158,28 +2990,116 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
         None if delivery_at.is_some() => Ok(()),
         None => Err(rule(
             path,
-            issue_branch.issue_branch_line.expect("issue-branch line"),
+            issue_branch.kind_line,
             "delivery",
             "an Issue-branch worktree needs a delivery Step after the last Step that uses it",
         )),
     }
 }
 
-fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
-    for (index, step) in steps.iter().enumerate() {
-        let DraftKind::RunPublishedIssue { line } = step.kind else {
+fn refuse_spec_branch(path: &Path, file: &ProcessFile) -> Result<()> {
+    let mut branches = file
+        .worktrees
+        .iter()
+        .filter(|worktree| worktree.branch_line().is_some());
+    let branch = branches.next();
+    if let Some(second) = branches.next()
+        && file
+            .worktrees
+            .iter()
+            .any(|worktree| worktree.kind == WorktreeKind::SpecBranch)
+    {
+        return Err(rule(
+            path,
+            second.branch_line().expect("branch line"),
+            "worktree kind",
+            "a Process can declare one Issue-branch or one Spec-branch worktree, not both",
+        ));
+    }
+    for step in &file.steps {
+        let DraftKind::LandTickets { line } = step.kind else {
             continue;
         };
+        if !branch.is_some_and(|branch| {
+            branch.kind == WorktreeKind::SpecBranch
+                && step
+                    .worktree
+                    .as_ref()
+                    .is_some_and(|(name, _)| name == &branch.name)
+        }) {
+            return Err(rule(
+                path,
+                line,
+                "land-tickets",
+                "land-tickets needs a Spec-branch worktree",
+            ));
+        }
+        if step.optional || step.parallel.is_some() {
+            return Err(rule(
+                path,
+                line,
+                "land-tickets",
+                "land-tickets must be required and outside a parallel group",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
+    for (index, step) in steps.iter().enumerate() {
+        let (line, published) = match step.kind {
+            DraftKind::RunPublishedIssue { line } => (line, true),
+            DraftKind::LandTickets { line } => (line, false),
+            DraftKind::FixFindings { line } => (line, false),
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Skill { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::CloseFindings { .. } => {
+                if let Some((_, line)) = &step.process {
+                    return Err(rule(
+                        path,
+                        *line,
+                        "process",
+                        "process is only for run-published-issue, land-tickets or fix-findings",
+                    ));
+                }
+                continue;
+            }
+        };
         let follows = index.checked_sub(1).is_some_and(|previous| {
-            matches!(steps[previous].kind, DraftKind::Skill { .. })
-                && !same_group(&steps[previous], step)
+            matches!(
+                steps[previous].kind,
+                DraftKind::Skill { .. } | DraftKind::ArchitectureReview { .. }
+            ) && !same_group(&steps[previous], step)
         });
-        if !follows {
+        if published && !follows {
             return Err(rule(
                 path,
                 line,
                 "run-published-issue",
                 "run-published-issue must directly follow a session Step",
+            ));
+        }
+        let (name, line) = step.child_process(line);
+        let (child_path, text) = Catalog::installed()?
+            .source(name)
+            .map_err(|error| rule(path, line, "process", format!("{error:#}")))?;
+        let child = parse(&child_path, &text)?;
+        if !file_has_issue_branch(&child) {
+            return Err(rule(
+                path,
+                line,
+                "process",
+                format!("the child Ticket Process {name} needs an Issue-branch worktree"),
             ));
         }
     }
@@ -2210,9 +3130,25 @@ fn resolve(
             }
         },
         DraftKind::Command { command } => StepKind::Command(command.clone()),
+        DraftKind::Implement { .. } => StepKind::Implement,
+        DraftKind::ArchitectureReview { .. } => StepKind::ArchitectureReview,
+        DraftKind::SpecReview { .. } => StepKind::SpecReview,
+        DraftKind::SecurityReview { .. } => StepKind::SecurityReview,
+        DraftKind::SecurityAudit { .. } => StepKind::SecurityAudit,
+        DraftKind::ReproduceFindings { .. } => StepKind::ReproduceFindings,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
-        DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue,
+        DraftKind::RunPublishedIssue { line } => StepKind::RunPublishedIssue {
+            process: step.child_process(*line).0.to_string(),
+        },
+        DraftKind::LandTickets { line } => StepKind::LandTickets {
+            process: step.child_process(*line).0.to_string(),
+        },
+        DraftKind::FixFindings { line } => StepKind::FixFindings {
+            process: step.child_process(*line).0.to_string(),
+        },
+        DraftKind::CloseFindings { .. } => StepKind::CloseFindings,
+        DraftKind::ReviewAndAddress { .. } => StepKind::ReviewAndAddress,
     };
     let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
@@ -2225,38 +3161,8 @@ fn resolve(
         choice,
         sources,
         start_failure: None,
+        review_default: None,
     })
-}
-
-fn read_process(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == ErrorKind::NotFound => Err(rule(
-            path,
-            1,
-            "missing file",
-            "the process file does not exist",
-        )),
-        Err(error) => Err(rule(
-            path,
-            1,
-            "file",
-            format!("could not read the file: {error}"),
-        )),
-    }
-}
-
-fn refuse_reserved(path: &Path, name: &str) -> Result<()> {
-    if reserved(name) {
-        Err(rule(
-            path,
-            1,
-            "reserved name",
-            format!("{name} is reserved"),
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
@@ -2317,6 +3223,10 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         steps,
         limits,
         goal: Goal::ReadyForReview,
+        security_review: false,
+        security_fix: false,
+        plan_only: false,
+        security_flags: Flags::default(),
     })
 }
 
@@ -2460,13 +3370,12 @@ fn parse_worktrees(
                 "a worktree must be a table",
             ));
         };
-        let mut saw_kind = false;
-        let mut issue_branch_line = None;
+        let mut kind = None;
         for (field, value) in body.iter() {
             let field_line = key_line(text, body.key(field));
             match field {
                 "kind" => {
-                    let Some(kind) = value.as_str() else {
+                    let Some(word) = value.as_str() else {
                         return Err(rule(
                             path,
                             field_line,
@@ -2474,26 +3383,31 @@ fn parse_worktrees(
                             "kind must be a string",
                         ));
                     };
-                    if kind != "throwaway" && kind != "issue-branch" {
-                        return Err(rule(
-                            path,
-                            field_line,
-                            "worktree kind",
-                            "kind must be throwaway or issue-branch",
-                        ));
-                    }
-                    saw_kind = true;
-                    issue_branch_line = (kind == "issue-branch").then_some(field_line);
+                    let parsed = match word {
+                        "throwaway" => WorktreeKind::Throwaway,
+                        "issue-branch" => WorktreeKind::IssueBranch,
+                        "spec-branch" => WorktreeKind::SpecBranch,
+                        "pull-request" => WorktreeKind::PullRequest,
+                        _ => {
+                            return Err(rule(
+                                path,
+                                field_line,
+                                "worktree kind",
+                                "kind must be throwaway, issue-branch, spec-branch or pull-request",
+                            ));
+                        }
+                    };
+                    kind = Some((parsed, field_line));
                 }
                 other => return Err(rule(path, field_line, "unknown key", other)),
             }
         }
-        if !saw_kind {
-            return Err(rule(path, name_line, "worktree kind", "kind is required"));
-        }
+        let (kind, kind_line) =
+            kind.ok_or_else(|| rule(path, name_line, "worktree kind", "kind is required"))?;
         worktrees.push(WorktreeDraft {
             name: key.to_string(),
-            issue_branch_line,
+            kind,
+            kind_line,
         });
     }
     Ok(worktrees)
@@ -2565,6 +3479,7 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
     let mut kinds = Vec::new();
     let mut worktree = None;
     let mut parallel = None;
+    let mut process = None;
     let mut optional = false;
     let mut harness = None;
     let mut model = None;
@@ -2584,6 +3499,18 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
             "catalogue" => kinds.push(step_catalogue(path, line, item)?),
             "worktree" => worktree = Some(step_worktree(path, line, item)?),
             "parallel" => parallel = Some(step_parallel(path, line, item)?),
+            "process" => {
+                let name = step_word(path, line, item, "process")?;
+                if !crate::args::one_path_component(&name) {
+                    return Err(rule(
+                        path,
+                        line,
+                        "process",
+                        "process must be a single path component",
+                    ));
+                }
+                process = Some((name, line));
+            }
             "optional" => optional = step_optional(path, line, item)?,
             "harness" => harness = Some(step_harness(path, line, item)?),
             "model" => model = Some(step_word(path, line, item, "model")?),
@@ -2620,6 +3547,7 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
         optional,
         worktree,
         parallel,
+        process,
         kind,
         harness,
         report_line,
@@ -2733,15 +3661,25 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         ));
     };
     let kind = match value {
+        "review-and-address" => DraftKind::ReviewAndAddress { line },
+        "implement" => DraftKind::Implement { line },
+        "architecture-review" => DraftKind::ArchitectureReview { line },
+        "spec-review" => DraftKind::SpecReview { line },
         "delivery" => DraftKind::Delivery { line },
+        "security-review" => DraftKind::SecurityReview { line },
+        "security-audit" => DraftKind::SecurityAudit { line },
+        "reproduce-findings" => DraftKind::ReproduceFindings { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
+        "land-tickets" => DraftKind::LandTickets { line },
+        "fix-findings" => DraftKind::FixFindings { line },
+        "close-findings" => DraftKind::CloseFindings { line },
         "self-merge" => DraftKind::SelfMerge { line },
         _ => {
             return Err(rule(
                 path,
                 line,
                 "catalogue",
-                "catalogue must be delivery, run-published-issue or self-merge",
+                "catalogue must be implement, delivery, run-published-issue, security-review, architecture-review, spec-review, self-merge, land-tickets, security-audit, reproduce-findings, fix-findings or close-findings",
             ));
         }
     };
@@ -2793,18 +3731,6 @@ fn refuse_controls(
         ));
     }
     Ok(())
-}
-
-fn processes_dir() -> Result<PathBuf> {
-    Ok(crate::config::home()?.join(".thirdshift/processes"))
-}
-
-fn process_path(name: &str) -> Result<PathBuf> {
-    Ok(processes_dir()?.join(format!("{name}.toml")))
-}
-
-fn reserved(name: &str) -> bool {
-    RESERVED.contains(&name)
 }
 
 fn line_of(text: &str, offset: usize) -> usize {

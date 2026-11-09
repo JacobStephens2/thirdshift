@@ -166,9 +166,10 @@ The result version is independently identified by `version: 1`.
   137 rather than as a signal. `host_killed` also requires the outer
   launcher's evidence. Version-1 results can already report their distinct
   causes. The Experiment's Bar decides which Void causes to retry or exclude.
-  A live Claude plan-limit warning or rejection, or a Codex quota report at
-  85% in either window, stops the session and makes the Trial void with
-  `usage_limit`. Ordinary Runs keep running. Codex's retained token-count
+  A live Claude or Codex quota window at 85%, or a Claude rejection, stops
+  the session and makes the Trial void with `usage_limit`. A Claude warning
+  with no readable utilization also stops; warnings whose readable windows
+  are all below 85% continue. Ordinary Runs keep running. Codex's retained token-count
   reports are checked while the session runs when exec does not stream them.
   The Experiment's code Grader also marks a changed repository as void with
   `repository_changed`, before running any Eval task checks, unless the Trial

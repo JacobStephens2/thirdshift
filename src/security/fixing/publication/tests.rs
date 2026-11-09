@@ -128,6 +128,7 @@ impl InMemory {
                 started: started(),
             },
         )
+        .map(|(issue, ())| issue)
     }
 
     fn has(&self, number: u64, label: Label) -> bool {
@@ -136,6 +137,8 @@ impl InMemory {
 }
 
 impl Outside for InMemory {
+    type Reservation = ();
+
     fn issue(&mut self, url: &IssueUrl) -> Result<Issue> {
         self.observe(format!("issue {}", url.number))?;
         if let Some(view) = self
@@ -247,6 +250,9 @@ impl Outside for InMemory {
         self.get_mut(edit.issue()).view.labels = edit.labels_after();
         Ok(())
     }
+    fn reserve(&mut self, url: &IssueUrl) -> Result<()> {
+        self.observe(format!("reserve {}", url.number))
+    }
     fn interrupted(&mut self) -> bool {
         self.events.push("interrupted".into());
         self.interrupted
@@ -282,6 +288,7 @@ fn public_single_stages_checks_and_readies_the_created_ticket() {
             "tickets 8",
             "text 8",
             "interrupted",
+            "reserve 8",
             "edit 8"
         ]
     );
@@ -357,8 +364,33 @@ fn public_spec_creates_links_and_deduplicates_blockers_before_validation_and_rea
             "labels 10",
             "edit 10",
             "interrupted",
+            "reserve 8",
             "edit 8",
         ]
+    );
+}
+
+#[test]
+fn a_fix_another_run_holds_reserved_on_origin_is_never_marked_ready() {
+    let mut github = InMemory::new();
+    github.insert(issue(8), &["needs-triage", "bug"], SECRET);
+    github.fail = Some("reserve 8".into());
+    let record = record(true, FixSize::Single);
+
+    let result = publish(
+        &mut github,
+        &issue(8).repo(),
+        &record,
+        &issue(8).url,
+        FixSize::Single,
+        Source::ExistingFinding,
+    );
+
+    assert_eq!(result.unwrap_err().to_string(), "failed reserve 8");
+    assert!(!github.has(8, READY_FOR_AGENT));
+    assert_eq!(
+        github.events,
+        ["issue 8", "tickets 8", "interrupted", "reserve 8"]
     );
 }
 
@@ -378,7 +410,8 @@ fn private_single_reuses_the_matching_old_finding_without_public_text_or_freshne
             record.fix_size().unwrap(),
             Source::ExistingFinding,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         assert_eq!(result.url, url);
         assert!(github.has(8, READY_FOR_AGENT));
         assert!(github.has(8, SECURITY_FIX));
@@ -394,7 +427,7 @@ fn private_single_reuses_the_matching_old_finding_without_public_text_or_freshne
         assert_eq!(github.get(&issue(8)).text, SECRET);
         assert_eq!(
             github.events,
-            ["issue 8", "tickets 8", "interrupted", "edit 8"]
+            ["issue 8", "tickets 8", "interrupted", "reserve 8", "edit 8"]
         );
     }
 }
@@ -443,6 +476,7 @@ fn private_spec_reuses_the_old_parent_and_checks_new_children_before_tagging_the
             "labels 10",
             "edit 10",
             "interrupted",
+            "reserve 8",
             "edit 8"
         ]
     );

@@ -3,18 +3,18 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use std::path::Path;
 
-use super::{age, stage_text, ticket_text};
+use super::{age, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
 use crate::logs::dismiss::Action as DismissAction;
 use crate::logs::pass_starts::PassStart;
-use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
+use crate::logs::reading::{Command, Entry, Group, Health, IdlePass, Observation, Snapshot};
 
 pub(crate) struct Inbox {
     /// Outer Command trees with live work, independent of sections and rows.
     pub active_runs: usize,
     pub sections: Vec<Section>,
-    pub idle_passes: Vec<String>,
+    pub idle_passes: Vec<IdlePass>,
     pub pass_starts: Vec<PassStart>,
     pub warning: Option<&'static str>,
     pub github_warning: Option<String>,
@@ -28,6 +28,11 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    order: crate::logs::reading::RowOrder,
+    pub machine: String,
+    pub console: String,
+    pub stale: bool,
+    pub account: Option<String>,
     pub id: String,
     pub started_ms: i64,
     pub occurred_ms: i64,
@@ -36,9 +41,11 @@ pub(crate) struct Row {
     pub log_growth: String,
     pub selector: String,
     pub can_dismiss: bool,
+    pub remote_stop: bool,
+    pub remote_undo: bool,
     pub logs_url: String,
     pub subject: String,
-    /// The issue's `https://` address, which the subject links to.
+    /// The pull request or issue's `https://` address, which the subject links to.
     pub subject_url: Option<String>,
     pub title: String,
     pub state: String,
@@ -46,11 +53,15 @@ pub(crate) struct Row {
     pub timing: Timing,
     pub count: usize,
     pub cause: String,
+    pub resume_command: Option<String>,
+    pub fix_command: Option<String>,
     /// Why and when the row left Needs you or Ready for review, empty
     /// while it still waits or never waited.
     pub left: String,
     pub harness: String,
     pub pull_request: String,
+    pub ci: Option<crate::github::InboxCi>,
+    pub merge_conflict: bool,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
@@ -90,6 +101,28 @@ impl Timing {
 }
 
 impl Row {
+    fn present_ready(
+        &mut self,
+        title: Option<&str>,
+        ci: Option<crate::github::InboxCi>,
+        mergeable: Option<crate::github::InboxMergeable>,
+    ) {
+        if self.pull_request.is_empty() {
+            return;
+        }
+        self.subject = crate::review::PullRequestUrl::parse(&self.pull_request)
+            .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
+            .unwrap_or_else(|_| self.pull_request.clone());
+        self.subject_url =
+            Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
+        self.title = title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("(title unavailable)")
+            .into();
+        self.ci = Some(ci.unwrap_or_default());
+        self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
+    }
+
     /// The one-line row's summary: where the Command stands and, for a
     /// Command without an issue title, the first thing it did or hit.
     pub fn gist(&self) -> String {
@@ -111,14 +144,339 @@ impl Row {
         }
     }
     pub fn peek_url(&self) -> String {
-        super::inspect::url("/peek", &self.selector, None)
+        self.details_url("/peek", None)
     }
     pub fn log_url(&self) -> String {
-        super::inspect::url("/log", &self.selector, None)
+        self.details_url("/log", None)
     }
     pub fn session_url(&self, session: &std::path::Path) -> String {
-        super::inspect::url("/log", &self.selector, Some(session))
+        self.details_url("/log", Some(session))
     }
+
+    fn details_url(&self, route: &str, session: Option<&std::path::Path>) -> String {
+        let url = super::inspect::url(route, &self.selector, session);
+        if self.console.is_empty() {
+            url
+        } else {
+            super::inspect::machine_url(&url, &self.machine)
+        }
+    }
+
+    pub fn tag_machine(&mut self, name: &str, console: &str, stale: bool) {
+        self.machine = name.into();
+        self.console = console.trim_end_matches('/').into();
+        self.stale = stale;
+        self.id = identity(&format!("{name}\0{}", self.id));
+        if !console.is_empty() {
+            self.logs_url = format!("{}/logs", self.console);
+        }
+        for child in &mut self.children {
+            child.tag_machine(name, console, stale);
+        }
+    }
+}
+
+impl Inbox {
+    pub fn remote_actions(&mut self, machine: &str, allowed: bool) {
+        fn apply(row: &mut Row, allowed: bool) {
+            row.can_dismiss &= allowed;
+            row.remote_stop &= allowed;
+            row.remote_undo &= allowed;
+            for child in &mut row.children {
+                apply(child, allowed);
+            }
+        }
+        for row in self
+            .sections
+            .iter_mut()
+            .flat_map(|section| &mut section.rows)
+        {
+            if row.machine == machine && !row.console.is_empty() {
+                apply(row, allowed);
+            }
+        }
+    }
+
+    /// Received rows keep the owning machine's grouping and presentation facts;
+    /// this path never opens their paths or evaluates them against local GitHub.
+    pub fn merge_remote(
+        &mut self,
+        document: &super::fleet::Document,
+        entry: &crate::config::console::fleet::Entry,
+        stale: bool,
+    ) -> Result<()> {
+        let rows = document
+            .commands
+            .iter()
+            .map(|value| present(value, chrono::Local::now()))
+            .collect::<Result<Vec<_>>>()?;
+        let listed = rows
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (value, mut row) in document.commands.iter().zip(rows) {
+            let checked = super::text::Row::read(value)?;
+            let Some(section) = self
+                .sections
+                .iter_mut()
+                .find(|section| section.group == value["group"].as_str().unwrap_or_default())
+            else {
+                continue;
+            };
+            row.children.retain(|child| !listed.contains(&child.id));
+            // `row.html` shows repository and issue number as the link text.
+            // A received document chooses `issue.url` independently, so keep
+            // the href only when it names that same GitHub issue or pull request.
+            bind_subject_link(&mut row);
+            row.tag_machine(&entry.name, &entry.address, stale);
+            let subject = row.subject.clone();
+            section.rows.push(row);
+            // Local rows were already ordered; merge with the same Needs you
+            // priorities and newest occurrence ordering, without cross-host collapse.
+            section.rows.sort_by_key(|row| row.order);
+            if checked.landing && value["group"] == "needs you" {
+                // The secondary Landing reference belongs beside all machines' rows.
+                let reference = format!(
+                    "[{}] {} · {} · see Needs you",
+                    entry.name,
+                    subject,
+                    value["needs_you_kind"].as_str().unwrap_or("Needs you")
+                );
+                if let Some(landing) = self
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.group == "landing")
+                {
+                    landing.references.push(reference);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Drop a subject href that is not the GitHub issue or pull request named
+/// by the row's visible repository and number. The text stays either way.
+fn bind_subject_link(row: &mut Row) {
+    if !subject_link_matches(&row.subject, row.subject_url.as_deref()) {
+        row.subject_url = None;
+    }
+    for child in &mut row.children {
+        bind_subject_link(child);
+    }
+}
+
+pub(crate) fn subject_link_matches(subject: &str, url: Option<&str>) -> bool {
+    let Some(url) = url else {
+        return true;
+    };
+    let label = subject
+        .rsplit_once(" · ")
+        .map(|(_, rest)| rest)
+        .unwrap_or(subject);
+    let Some((repository, number)) = label.rsplit_once('#') else {
+        return false;
+    };
+    let Ok(number) = number.parse::<u64>() else {
+        return false;
+    };
+    if let Ok(issue) = crate::issue::IssueUrl::parse(url) {
+        return issue.repo_slug().eq_ignore_ascii_case(repository) && issue.number == number;
+    }
+    crate::review::PullRequestUrl::parse(url).is_ok_and(|pull| {
+        pull.issue.repo_slug().eq_ignore_ascii_case(repository) && pull.issue.number == number
+    })
+}
+
+pub(crate) fn validate_remote(document: &super::fleet::Document) -> Result<()> {
+    for value in &document.commands {
+        present(value, chrono::Local::now())?;
+    }
+    Ok(())
+}
+
+/// Pure presentation shared by local observations and received Commands.
+/// Only the local caller attaches captured paths, activity and Session inventory.
+fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Facts {
+        account: Option<String>,
+        repository: String,
+        kind: String,
+        issue: Option<Issue>,
+        #[serde(default)]
+        name: String,
+        state: String,
+        started_at: String,
+        ended_at: Option<String>,
+        outcome: Option<String>,
+        command_log: Option<std::path::PathBuf>,
+        cause: Option<String>,
+        pull_request: Option<String>,
+        harness: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        stage: Option<crate::logs::reading::CurrentStage>,
+        health: Option<Health>,
+        resume_command: Option<String>,
+        process_name: Option<String>,
+        github_ci: Option<crate::github::InboxCi>,
+        github_mergeable: Option<crate::github::InboxMergeable>,
+        #[serde(default)]
+        children: Vec<serde_json::Value>,
+        #[serde(default)]
+        dispatched: Vec<serde_json::Value>,
+        #[serde(default)]
+        tickets: Vec<crate::logs::command_record::TicketRecord>,
+        #[serde(default)]
+        security_findings: Vec<crate::security::RecordedFinding>,
+        #[serde(flatten)]
+        departure: Option<crate::logs::reading::Departure>,
+        dismissal: Option<crate::logs::dismiss::DismissalView>,
+    }
+    let facts: Facts = serde_json::from_value(value.clone())?;
+    let live = facts.state == "live";
+    // A child Ticket shares its outer Command log, but owns a different
+    // record. Use the owning observation's path rather than the log stem.
+    let selector = value["record_path"]
+        .as_str()
+        .map(|path| {
+            if facts.name.is_empty() {
+                path.to_owned()
+            } else {
+                format!("{path}::{}", facts.name)
+            }
+        })
+        .or_else(|| {
+            facts.command_log.as_ref().map(|path| {
+                let path = if value["source"] == "command_record" {
+                    path.with_extension("command.json")
+                } else {
+                    path.clone()
+                };
+                if facts.name.is_empty() {
+                    path.to_string_lossy().into_owned()
+                } else {
+                    format!("{}::{}", path.display(), facts.name)
+                }
+            })
+        })
+        .unwrap_or_default();
+    let process =
+        (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
+    let name = if value["source"] == "command_record" {
+        &facts.name
+    } else {
+        &facts.kind
+    };
+    let (subject, title) = subject(&facts.repository, name, facts.issue.as_ref(), process);
+    let subject_url = issue_url(facts.issue.as_ref());
+    let ready = value["group"] == "ready for review";
+    let ready_title = value["github"]["subjects"]
+        [facts.pull_request.as_deref().unwrap_or_default()]["facts"]["title"]
+        .as_str();
+    let group: Option<Group> = value
+        .get("group")
+        .map(|group| serde_json::from_value(group.clone()))
+        .transpose()?;
+    let kind = value
+        .get("needs_you_kind")
+        .and_then(|kind| serde_json::from_value(kind.clone()).ok());
+    let state = group
+        .map_or(facts.state.as_str(), |group| {
+            group.state_word(kind, value["stopping"] == true, &facts.state)
+        })
+        .to_owned();
+    let mut row = Row {
+        order: group
+            .unwrap_or(Group::History)
+            .row_order(kind, facts.ended_at.as_deref().or(Some(&facts.started_at))),
+        machine: String::new(),
+        console: String::new(),
+        stale: false,
+        id: identity(&format!("{selector}\0{}\0{}", facts.kind, facts.started_at)),
+        account: facts.account.clone(),
+        started_ms: timestamp(&facts.started_at),
+        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
+        live,
+        logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
+        log_growth: String::new(),
+        selector,
+        can_dismiss: facts.account.is_none()
+            && value["source"] == "command_record"
+            && matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            )
+            && value["collapsed"].as_array().is_none_or(|rows| {
+                rows.iter()
+                    .all(|row| row["account"].is_null() && row["source"] == "command_record")
+            }),
+        remote_stop: facts.account.is_none()
+            && live
+            && value["source"] == "command_record"
+            && value["parent_record"].is_null()
+            && value["stopping"] != true,
+        remote_undo: facts.account.is_none()
+            && facts.dismissal.is_some()
+            && !matches!(
+                value["group"].as_str(),
+                Some("needs you" | "ready for review")
+            ),
+        logs_url: String::new(),
+        subject,
+        subject_url,
+        title,
+        state,
+        now_line: super::stage_details(
+            facts.outcome.as_deref(),
+            &facts.state,
+            facts.stage.as_ref(),
+            facts.health.as_ref(),
+        ),
+        timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
+        count: value["count"].as_u64().unwrap_or(1) as usize,
+        cause: facts.cause.unwrap_or_default(),
+        resume_command: facts
+            .resume_command
+            .filter(|_| facts.outcome.as_deref() == Some("paused")),
+        fix_command: None,
+        left: facts
+            .dismissal
+            .as_ref()
+            .map(|dismissal| dismissal.line())
+            .into_iter()
+            .chain(facts.departure.as_ref().map(|departure| departure.line()))
+            .collect::<Vec<_>>()
+            .join("; "),
+        harness: format!(
+            "{} · {} · {}",
+            facts.harness.as_deref().unwrap_or("unknown Harness"),
+            facts.model.as_deref().unwrap_or("default Model"),
+            facts.effort.as_deref().unwrap_or("default Effort")
+        ),
+        pull_request: facts.pull_request.unwrap_or_default(),
+        ci: None,
+        merge_conflict: false,
+        tickets: facts
+            .tickets
+            .iter()
+            .map(|ticket| ticket_text(ticket, &facts.repository))
+            .collect(),
+        children: facts
+            .dispatched
+            .iter()
+            .chain(&facts.children)
+            .map(|child| present(child, now))
+            .collect::<Result<_>>()?,
+        findings: facts.security_findings,
+        sessions: Vec::new(),
+    };
+    if ready {
+        row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
+    }
+    Ok(row)
 }
 
 pub(crate) struct Archive {
@@ -133,14 +491,14 @@ pub(crate) enum ArchivePage {
     Security,
 }
 
-pub(crate) fn archive(
+pub(super) fn archive_from_read(
     config: &UserConfig,
     page: ArchivePage,
     outcome: &str,
     repository: &str,
+    snapshot: &Snapshot,
+    now: DateTime<Local>,
 ) -> Result<Archive> {
-    let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     let mut entries: Vec<_> = snapshot
         .entries()
         .iter()
@@ -221,10 +579,24 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 None,
             );
             Ok(Row {
-                id: identity(&format!(
-                    "history:{}:{}:{}",
-                    command.repository, command.kind, command.started_at
-                )),
+                order: Group::History.row_order(
+                    None,
+                    command.ended_at.as_deref().or(Some(&command.started_at)),
+                ),
+                machine: String::new(),
+                console: String::new(),
+                stale: false,
+                account: command.account.clone(),
+                id: identity(&match &command.account {
+                    Some(account) => format!(
+                        "history:{account}:{}:{}:{}",
+                        command.repository, command.kind, command.started_at
+                    ),
+                    None => format!(
+                        "history:{}:{}:{}",
+                        command.repository, command.kind, command.started_at
+                    ),
+                }),
                 started_ms: timestamp(&command.started_at),
                 occurred_ms: timestamp(command.ended_at.as_deref().unwrap_or(&command.started_at)),
                 live: false,
@@ -232,10 +604,12 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 can_dismiss: false,
+                remote_stop: false,
+                remote_undo: false,
                 logs_url: command
                     .command_log
                     .as_ref()
-                    .map(|path| logs_url(path, root))
+                    .map(|path| logs_url(path, root, command.account.as_deref()))
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 subject_url: issue_url(command.issue.as_ref()),
@@ -248,9 +622,13 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 timing: Timing::new(false, &command.started_at, command.ended_at.as_deref(), now),
                 count: 1,
                 cause: String::new(),
+                resume_command: None,
+                fix_command: None,
                 left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
+                ci: None,
+                merge_conflict: false,
                 tickets: Vec::new(),
                 children: Vec::new(),
                 findings: Vec::new(),
@@ -260,15 +638,14 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
     }
 }
 
-pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
-    let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
-    // The Console shows the same groups as `status` by reading the same
-    // kept answer. The Console's background reader refreshes it independently
-    // of requests; status reads GitHub only when that answer is too old.
-    let kept = crate::logs::github::load(&config.logs_dir);
+pub(super) fn from_read(
+    config: &UserConfig,
+    snapshot: &Snapshot,
+    kept: &crate::logs::github::Kept,
+    now: DateTime<Local>,
+) -> Result<Inbox> {
     let items = snapshot
-        .evaluate_inbox(config.inbox_days, &kept)
+        .evaluate_inbox(config.inbox_days, kept)
         .into_rows(false);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
@@ -283,12 +660,20 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = entry_row(item.command, now, &config.logs_dir)?;
+                    row.order = item.order();
                     // Ready dispatched Runs have their own Inbox row, in
                     // whichever group they reached. Preserve the full tree in
                     // history/show without duplicating DOM IDs.
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
+                    row.fix_command = item.fix_command();
+                    if group == Group::ReadyForReview && !row.pull_request.is_empty() {
+                        let title = kept
+                            .pull_request(&row.selector, &row.pull_request)
+                            .and_then(|pr| pr.title.as_deref());
+                        row.present_ready(title, item.github.ci, item.github.mergeable);
+                    }
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);
@@ -313,6 +698,10 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                         return None;
                     };
                     let (subject, _) = row_subject(&command.record);
+                    let subject = match &command.account {
+                        Some(account) => format!("[{account}] {subject}"),
+                        None => subject,
+                    };
                     Some(format!(
                         "{subject} · {} · see Needs you",
                         item.needs_you_kind.expect("Needs you has a kind").title()
@@ -339,8 +728,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         active_runs: snapshot.active_runs(),
         sections,
         github_warning: kept.warning(),
-        idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
-        pass_starts: snapshot.pass_starts,
+        idle_passes: snapshot.idle_passes.clone(),
+        pass_starts: snapshot.pass_starts.clone(),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
     })
@@ -389,71 +778,58 @@ pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
 }
 
 fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
-    let facts = &command.record;
-    let (log_length, session_length) = command.activity_lengths();
-    let live = command.state == "live";
-    let (subject, title) = row_subject(facts);
-    Ok(Row {
+    fn attach_local(
+        row: &mut Row,
+        command: &Command,
+        now: DateTime<Local>,
+        root: &Path,
+    ) -> Result<()> {
+        let facts = &command.record;
+        let (log_length, session_length) = command.activity_lengths();
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.
-        id: identity(&format!(
+        row.id = identity(&format!(
             "{}\0{}\0{}\0{}\0{}",
             command.record_path.to_string_lossy(),
             facts.kind,
             facts.name,
             facts.issue.as_ref().map_or("", |issue| issue.url.as_str()),
             facts.started_at
-        )),
-        started_ms: timestamp(&facts.started_at),
-        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
-        live,
-        logging: live && !matches!(command.health, Some(Health::Silent { .. })),
-        log_growth: format!("{log_length}:{session_length}"),
-        selector: Observation::Record(command).selector().unwrap_or_default(),
-        can_dismiss: false,
-        logs_url: logs_url(&command.record_path, root),
-        subject,
-        subject_url: issue_url(facts.issue.as_ref()),
-        title,
-        state: command.state.into(),
-        now_line: stage_text(command),
-        timing: Timing::new(
-            live,
+        ));
+        row.log_growth = format!("{log_length}:{session_length}");
+        row.selector = Observation::Record(command).selector().unwrap_or_default();
+        row.logs_url = logs_url(&command.record_path, root, command.account.as_deref());
+        row.timing = Timing::new(
+            row.live,
             &facts.started_at,
             facts
                 .ended_at
                 .as_deref()
                 .filter(|_| !facts.end_time_estimated),
             now,
-        ),
-        count: 1,
-        cause: facts.cause.clone().unwrap_or_default(),
-        left: String::new(),
-        harness: format!(
-            "{} · {} · {}",
-            facts.harness,
-            facts.model.as_deref().unwrap_or("default Model"),
-            facts.effort.as_deref().unwrap_or("default Effort")
-        ),
-        pull_request: facts.pull_request.clone().unwrap_or_default(),
-        tickets: facts
-            .tickets
-            .iter()
-            .map(|ticket| ticket_text(ticket, &facts.repository))
-            .collect(),
-        children: command
-            .dispatched
-            .iter()
-            .chain(&command.children)
-            .map(|child| row(child, now, root))
-            .collect::<Result<_>>()?,
-        findings: facts.security_findings.clone(),
-        sessions: command.sessions()?,
-    })
+        );
+        row.sessions = command.sessions()?;
+        for (child, command) in row
+            .children
+            .iter_mut()
+            .zip(command.dispatched.iter().chain(&command.children))
+        {
+            attach_local(child, command, now, root)?;
+        }
+        Ok(())
+    }
+    let mut row = present(&serde_json::to_value(command)?, now)?;
+    attach_local(&mut row, command, now, root)?;
+    Ok(row)
 }
 
-fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
-    path.strip_prefix(root)
+fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {
+    let relative = if account.is_some() {
+        Ok(path)
+    } else {
+        path.strip_prefix(root)
+    };
+    relative
         .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
         .unwrap_or_else(|_| "/?page=logs".into())
 }
@@ -536,5 +912,181 @@ mod tests {
         ] {
             assert_eq!(outcome_kind(text), kind, "{text}");
         }
+    }
+
+    /// `row.html` puts `subject_url` in the subject link while the visible
+    /// text is the row's repository and issue number. A Fleet document chooses
+    /// those independently, so a mismatched URL must not become that href.
+    #[test]
+    fn a_fleet_issue_link_stays_on_the_repository_the_row_names() {
+        use crate::config::console::fleet::Entry;
+
+        let command = |title: &str, url: &str, child: &str| {
+            serde_json::json!({
+                "machine_name": "remote",
+                "group": "needs you",
+                "landing": false,
+                "stopping": false,
+                "count": 1,
+                "repository": "acme/widgets",
+                "kind": "Run",
+                "name": "fixture",
+                "state": "failed",
+                "started_at": "2026-01-01T00:00:00Z",
+                "issue": { "number": 1, "url": url, "title": title },
+                "children": [{
+                    "repository": "acme/widgets",
+                    "kind": "Run",
+                    "name": "child",
+                    "state": "failed",
+                    "started_at": "2026-01-02T00:00:00Z",
+                    "issue": { "number": 2, "url": child, "title": "Child" }
+                }]
+            })
+        };
+        let document: crate::logs::status::fleet::Document = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "hostname": "remote-host",
+            "active_runs": 0,
+            "commands": [
+                command("Off GitHub", "https://evil.example/phish", "https://github.com/attacker/phish/issues/2"),
+                command("Wrong number", "https://github.com/acme/widgets/issues/99", "https://github.com/acme/widgets/issues/2"),
+                command("Matching", "https://github.com/acme/widgets/issues/1", "https://github.com/acme/widgets/issues/2"),
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "notacme/widgets",
+                    "kind": "Run",
+                    "name": "suffix",
+                    "state": "failed",
+                    "started_at": "2026-01-03T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Suffix"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "needs you",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "acme/widgets",
+                    "kind": "Process",
+                    "name": "build",
+                    "process_name": "build",
+                    "state": "failed",
+                    "started_at": "2026-01-04T00:00:00Z",
+                    "issue": {
+                        "number": 1,
+                        "url": "https://github.com/acme/widgets/issues/1",
+                        "title": "Process"
+                    }
+                },
+                {
+                    "machine_name": "remote",
+                    "group": "ready for review",
+                    "landing": false,
+                    "stopping": false,
+                    "count": 1,
+                    "repository": "ignored/repo",
+                    "kind": "Run",
+                    "name": "review",
+                    "state": "done",
+                    "started_at": "2026-01-05T00:00:00Z",
+                    "pull_request": "https://github.com/acme/widgets/pull/7"
+                }
+            ],
+            "machines": []
+        }))
+        .unwrap();
+        let mut inbox = super::Inbox {
+            active_runs: 0,
+            sections: vec![
+                super::Section {
+                    group: "needs you",
+                    title: "Needs you",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+                super::Section {
+                    group: "ready for review",
+                    title: "Ready for review",
+                    rows: Vec::new(),
+                    references: Vec::new(),
+                },
+            ],
+            idle_passes: Vec::new(),
+            pass_starts: Vec::new(),
+            warning: None,
+            github_warning: None,
+        };
+        inbox
+            .merge_remote(
+                &document,
+                &Entry {
+                    name: "remote".into(),
+                    address: "https://fleet.example".into(),
+                    hostname: None,
+                    thirdshift_version: None,
+                    scopes: Vec::new(),
+                    last_contact: None,
+                },
+                false,
+            )
+            .unwrap();
+        let rows = &inbox.sections[0].rows;
+        assert_eq!(rows.len(), 5);
+        let row = |title: &str| {
+            rows.iter()
+                .find(|row| row.title == title)
+                .unwrap_or_else(|| panic!("missing {title}"))
+        };
+        let off_github = row("Off GitHub");
+        assert_eq!(off_github.subject, "acme/widgets#1");
+        assert_eq!(off_github.subject_url, None, "off-GitHub URL");
+        assert_eq!(off_github.children[0].subject, "acme/widgets#2");
+        assert_eq!(off_github.children[0].subject_url, None, "other repository");
+        let wrong_number = row("Wrong number");
+        assert_eq!(wrong_number.subject, "acme/widgets#1");
+        assert_eq!(
+            wrong_number.subject_url, None,
+            "same repository, different issue"
+        );
+        assert_eq!(
+            wrong_number.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        let matching = row("Matching");
+        assert_eq!(
+            matching.subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        assert_eq!(
+            matching.children[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/2")
+        );
+        assert_eq!(row("Suffix").subject, "notacme/widgets#1");
+        assert_eq!(
+            row("Suffix").subject_url,
+            None,
+            "repository is not a suffix of another"
+        );
+        assert_eq!(row("Process").subject, "Process build · acme/widgets#1");
+        assert_eq!(
+            row("Process").subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/issues/1")
+        );
+        let ready = &inbox.sections[1].rows;
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].subject, "acme/widgets#7");
+        assert_eq!(
+            ready[0].subject_url.as_deref(),
+            Some("https://github.com/acme/widgets/pull/7")
+        );
     }
 }

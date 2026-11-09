@@ -278,6 +278,10 @@ impl<B: BufRead, R: Request> Iterator for Reader<B, R> {
                 (|| {
                     use serde::de::Error;
                     let mut value = serde_json::from_str(&self.line)?;
+                    #[expect(
+                        clippy::wildcard_enum_match_arm,
+                        reason = "an OTLP export request is a JSON object; any other JSON value is an error"
+                    )]
                     let fields = match &value {
                         serde_json::Value::Object(fields) => fields,
                         _ => {
@@ -310,6 +314,10 @@ impl<B: BufRead, R: Request> Iterator for Reader<B, R> {
 }
 
 fn remove_null_fields(value: &mut serde_json::Value) {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only objects and arrays hold fields; JSON scalars have none to remove"
+    )]
     match value {
         serde_json::Value::Object(fields) => {
             fields.retain(|_, value| !value.is_null());

@@ -33,7 +33,11 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
+    /// The User config's warnings, until the Activity log of the command's
+    /// repository has them.
+    config_warnings: Vec<String>,
     command_record: Option<(PathBuf, CommandTree)>,
+    custom_process: Option<crate::processes::Identity>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
@@ -45,6 +49,9 @@ enum Log<W> {
     Held {
         lines: Vec<(Stream, String)>,
         shown: bool,
+        /// The indexes of `lines` already on the terminal while the rest
+        /// were held, which showing them leaves out.
+        shown_early: Vec<usize>,
     },
     Kept {
         path: PathBuf,
@@ -89,7 +96,9 @@ impl<O: Outside> Record<O> {
             command_log: Log::NotKept,
             activity_started: None,
             activity_warned: false,
+            config_warnings: Vec::new(),
             command_record: None,
+            custom_process: None,
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
@@ -105,6 +114,9 @@ impl<O: Outside> Record<O> {
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
             Begin::ScoringRun => CommandKind::Scoring,
+            Begin::ReviewRun { .. } => CommandKind::Review,
+            Begin::FixRun { .. } => CommandKind::Fix,
+            Begin::TriageRun => CommandKind::Triage,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
         };
@@ -119,6 +131,9 @@ impl<O: Outside> Record<O> {
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
             Begin::ScoringRun => ("Scoring run starting".into(), false),
+            Begin::ReviewRun { pass } => ("Review run starting".into(), pass),
+            Begin::FixRun { pass } => ("Fix run starting".into(), pass),
+            Begin::TriageRun => ("Triage run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
@@ -128,6 +143,7 @@ impl<O: Outside> Record<O> {
         self.command_log = Log::Held {
             lines: Vec::new(),
             shown: !quiet,
+            shown_early: Vec::new(),
         };
         self.step(format_args!("{starting}, {}", now.format("%Y-%m-%d %z")));
     }
@@ -138,6 +154,45 @@ impl<O: Outside> Record<O> {
         if !config.quiet_skips {
             self.show_held();
         }
+        if !self.child {
+            for warning in &config.warnings {
+                self.step_shown(format_args!("warning: {warning}"));
+            }
+            self.config_warnings = config.warnings.clone();
+        }
+    }
+
+    /// Hand on the progress line `message`, to the terminal even while a
+    /// quiet pass holds its other lines, and to the Command log as any
+    /// other.
+    fn step_shown(&mut self, message: impl Display) {
+        let line = self.progress_line(message);
+        if let Log::Held {
+            lines,
+            shown: false,
+            shown_early,
+        } = &mut self.command_log
+        {
+            let _ = self.outside.emit(Stream::Stderr, &line);
+            shown_early.push(lines.len());
+            lines.push((Stream::Stderr, line));
+        } else {
+            self.output(Stream::Stderr, line);
+        }
+    }
+
+    /// Record each of the User config's warnings in the Activity log under
+    /// `root`, once: each is written unless it is already the log's last
+    /// User config line, so it is recorded once per change, not once per
+    /// command.
+    fn record_config_warnings(&mut self, root: &Path) {
+        for warning in std::mem::take(&mut self.config_warnings) {
+            self.activity_write(
+                root,
+                &format!("{} warning: {warning}", Kind::UserConfig),
+                Some(Kind::UserConfig),
+            );
+        }
     }
 
     pub(super) fn pass_fired(&mut self, repo: &Repo) {
@@ -145,8 +200,15 @@ impl<O: Outside> Record<O> {
             CommandKind::Architect => Pass::Architect,
             CommandKind::Pickup => Pass::Pickup,
             CommandKind::Secure => Pass::Security,
-            _ => return,
+            CommandKind::Review => Pass::Review,
+            CommandKind::Fix => Pass::Fix,
+            CommandKind::Issue
+            | CommandKind::Triage
+            | CommandKind::Scoring
+            | CommandKind::Experiment
+            | CommandKind::Process => return,
         };
+        self.record_config_warnings(&self.root(repo));
         let path = super::pass_starts::path(&self.root(repo), pass);
         let time = self.outside.now().to_rfc3339();
         // One atomic replacement per kind also keeps competing launches from
@@ -173,11 +235,12 @@ impl<O: Outside> Record<O> {
                 && self.command != CommandKind::Issue
                 && matches!(work, Work::Run(_) | Work::SpecRun(_))
                 && let Some((_, tree)) = &mut self.command_record
-                && let Some(dispatched) = tree.dispatched.last_mut()
+                && let Some(dispatched) = tree.active_dispatch()
             {
                 // The launch checks have now established whether the issue is
                 // a Spec. The dispatch itself was kept before those checks.
                 dispatched.kind = work.kind().to_string();
+                dispatched.process = work.process();
                 if let Some(stage) = tree.command.stages.last_mut()
                     && StageName::is_dispatch(&stage.name)
                 {
@@ -188,6 +251,7 @@ impl<O: Outside> Record<O> {
             return;
         }
         let root = self.root(&work.repo());
+        self.record_config_warnings(&root);
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(&root, work, &stamp);
@@ -209,10 +273,29 @@ impl<O: Outside> Record<O> {
             issue: work.issue(),
             process: match work {
                 Work::Process { name, .. } => Some((*name).to_string()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::ReviewRun(_)
+                | Work::FixRun(_)
+                | Work::TriageRun(_)
+                | Work::Experiment(_) => None,
             },
         };
-        let line = format!("{} started: {command_log}, on {harness}", started.subject());
+        let actor = self
+            .command_record
+            .as_ref()
+            .and_then(|(_, tree)| tree.command.started_by.as_ref())
+            .map(|actor| format!(", {actor}"))
+            .unwrap_or_default();
+        let line = format!(
+            "{} started: {command_log}, on {harness}{actor}",
+            started.subject()
+        );
         if self.activity_started.is_none() {
             self.activity_started = Some(started);
             self.activity_write(&root, &line, None);
@@ -231,9 +314,7 @@ impl<O: Outside> Record<O> {
         self.command_record
             .as_ref()?
             .1
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())?
+            .active_dispatch_ref()?
             .issue
             .as_ref()
             .map(|issue| issue.url.clone())
@@ -254,6 +335,11 @@ impl<O: Outside> Record<O> {
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if matches!(work, Work::Process { .. })
+            && let Some(identity) = &self.custom_process
+        {
+            facts.process = identity.clone();
+        }
         facts.hostname = self.outside.hostname();
         facts.process_start = self
             .outside
@@ -317,6 +403,7 @@ impl<O: Outside> Record<O> {
         reason: &str,
     ) {
         let root = self.root(repo);
+        self.record_config_warnings(&root);
         self.activity_write(
             &root,
             &format!("Process {name} skipped: {reason}"),
@@ -343,15 +430,7 @@ impl<O: Outside> Record<O> {
             let root = started.root.clone();
             let subject = started.subject();
             if let Some(request) = self.stop_request() {
-                self.activity_write(
-                    &root,
-                    &format!(
-                        "{subject} stopped from the {} by {}",
-                        request.source(),
-                        request.who
-                    ),
-                    None,
-                );
+                self.activity_write(&root, &format!("{subject} stopped {}", request.actor), None);
             }
             let line = format!("{subject} ended: {outcome}");
             self.activity_write(&root, &line, None);
@@ -370,6 +449,13 @@ impl<O: Outside> Record<O> {
     pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.active().issue_branch = branch.map(String::from);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn pull_request(&mut self, url: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().pull_request = Some(url.into());
             self.write_record();
         }
     }
@@ -422,6 +508,20 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn resumable(&mut self, command: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.resume_command = Some(command.into());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn paused(&mut self, limit: &crate::session::limits::Limit) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.limit = Some(limit.clone());
+            self.write_record();
+        }
+    }
+
     /// How a Command ended when it has no Run account: an Experiment or a Process.
     pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
@@ -435,7 +535,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
-            && let Some(dispatched) = tree.dispatched.last_mut()
+            && let Some(dispatched) = tree.active_dispatch()
         {
             dispatched.finish(
                 account,
@@ -512,11 +612,17 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn show_held(&mut self) {
-        if let Log::Held { lines, shown } = &mut self.command_log
+        if let Log::Held {
+            lines,
+            shown,
+            shown_early,
+        } = &mut self.command_log
             && !*shown
         {
-            for (stream, line) in lines.iter() {
-                let _ = self.outside.emit(*stream, line);
+            for (index, (stream, line)) in lines.iter().enumerate() {
+                if !shown_early.contains(&index) {
+                    let _ = self.outside.emit(*stream, line);
+                }
             }
             *shown = true;
         }
@@ -564,15 +670,25 @@ impl<O: Outside> Record<O> {
         })
     }
 
+    pub(super) fn process_loaded(&mut self, identity: crate::processes::Identity) {
+        self.custom_process = Some(identity);
+    }
+
+    pub(super) fn process_running(&mut self, identity: crate::processes::Identity) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().process = identity;
+            self.write_record();
+        }
+    }
+
+    pub(super) fn custom_process(&self) -> Option<crate::processes::Identity> {
+        self.custom_process.clone()
+    }
+
     pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
         let owner = self.owner.as_ref()?;
         let (_, tree) = self.command_record.as_ref()?;
-        let active = tree
-            .dispatched
-            .last()
-            .filter(|record| record.outcome.is_none())
-            .unwrap_or(&tree.command);
-        Some(super::trace::Context::from_record(owner, active))
+        Some(super::trace::Context::from_record(owner, tree.active_ref()))
     }
 
     /// Child Runs carry the owning CommandKind, so private Security and
@@ -717,7 +833,7 @@ impl<O: Outside> Record<O> {
             } else {
                 &text
             };
-            if activity::last_of(whole, kind) == Some(line) {
+            if activity::last_of(whole, kind).map(|(_, text)| text) == Some(line) {
                 return Ok(());
             }
         }

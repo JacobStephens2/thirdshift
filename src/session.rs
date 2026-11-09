@@ -6,6 +6,7 @@ use std::fs::{self, File};
 #[cfg(test)]
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 
 #[cfg(test)]
@@ -71,8 +72,15 @@ impl Logs {
         Logs {
             name: "process".to_string(),
             dir: logs::session_dir(repo),
-            recording: OnceCell::new(),
+            recording: recording::Recording::for_process().into(),
         }
+    }
+
+    /// A child Ticket's Steps must not overwrite its parent's Session traces.
+    pub fn for_child(mut self, issue: &IssueUrl, process: crate::processes::Identity) -> Self {
+        self.name = format!("{}-{}", issue.number, self.name);
+        self.recording = recording::Recording::capture().with_process(process).into();
+        self
     }
 
     /// An isolated Trial's artifacts, with no Command owner or factory logs.
@@ -93,6 +101,22 @@ impl Logs {
         }
     }
 
+    pub(crate) fn of_fix_run(repo: &Repo) -> Self {
+        Logs {
+            name: "fix".into(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
+    /// A Custom process's review keeps the Security review session kind for
+    /// fallback and Resume, with a distinct trace for each one-based Step.
+    pub fn of_process_review(repo: &Repo, step_index: usize) -> Self {
+        let mut logs = Self::of_process(repo);
+        logs.name = format!("process-step-{step_index}");
+        logs
+    }
+
     /// The logs of the Architect run on `repo`.
     pub fn of_architect_run(repo: &Repo) -> Self {
         Logs {
@@ -106,6 +130,14 @@ impl Logs {
     pub fn of_security_run(repo: &Repo) -> Self {
         Logs {
             name: "secure".to_string(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
+    pub fn of_triage_run(repo: &Repo) -> Self {
+        Logs {
+            name: "triage".to_string(),
             dir: logs::session_dir(repo),
             recording: OnceCell::new(),
         }
@@ -165,13 +197,13 @@ impl<'a> Sessions<'a> {
     }
 
     /// [`Sessions::within`], with every session run in `sandbox`: the
-    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// caller's prepared bwrap sandbox.
     /// The Factory skills are linked as usual; the sandbox binds them in.
     pub fn within_sandboxed<T>(
         logs: &'a Logs,
         worktree: &'a Path,
         harness: &'a Choice,
-        sandbox: &crate::sandbox::Prepared,
+        sandbox: &crate::sandbox::Launch,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
@@ -187,7 +219,7 @@ impl<'a> Sessions<'a> {
             security_review: None,
             security_review_default: None,
             recording: logs.recording().clone(),
-            sandbox: Some(sandbox.launch()),
+            sandbox: Some(sandbox.clone()),
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -267,13 +299,14 @@ impl<'a> Sessions<'a> {
         let taken = steps(&sessions);
         let log = sessions.last_log.into_inner().map(|(_, log)| log);
         let endings = sessions.endings_with_killed_work.into_inner();
-        if endings.is_empty() {
-            return (taken, log);
-        }
-        let taken = taken.map_err(|error| {
-            error.context(format!("{}, and a later step failed", endings.join("; ")))
-        });
-        (taken, log)
+        (with_killed_work(taken, &endings), log)
+    }
+
+    /// Transfer killed-work context to a caller whose Steps outlive this
+    /// session scope. That caller must apply [`with_killed_work`] to its
+    /// final outcome; taking it prevents annotating the same failure twice.
+    pub fn take_killed_work(&self) -> Vec<String> {
+        std::mem::take(&mut *self.endings_with_killed_work.borrow_mut())
     }
 
     /// Run a session of `kind` given `prompt`, logged and labelled by its
@@ -550,23 +583,24 @@ impl Outside for OnMachine {
                 recording::Policy::Ordinary,
             ),
         };
-        // A sandboxed session is always a Trial's: it runs with the Harness's
-        // web search switched off, behind the sandbox's allowlisting proxy.
-        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+        // Trial reviews run behind the allowlisting proxy, with web search off.
+        if self.recording.is_trial() && matches!(purpose, Purpose::CodeReview) {
             invocation = adapter.trial_session(harness, resume, prompt);
         }
-        let mut command = match &self.sandbox {
-            Some(launch) => {
-                let mut command = launch.command(&invocation.args)?;
-                command.current_dir(&self.worktree);
-                command
-            }
+        let mut launched = match &self.sandbox {
+            Some(launch) => launch.session_command(&invocation.args, self.recording.is_trial())?,
             None => {
-                let mut command = Command::new(adapter.name());
-                command.args(&invocation.args).current_dir(&self.worktree);
-                command
+                let mut launched = if self.recording.is_trial() {
+                    crate::scope::trial_session_command(adapter.name())
+                } else {
+                    crate::scope::session_command(adapter.name())
+                };
+                launched.command().args(&invocation.args);
+                launched
             }
         };
+        let command = launched.command();
+        command.current_dir(&self.worktree);
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
@@ -592,7 +626,7 @@ impl Outside for OnMachine {
         let ended = self.recording.run(
             label,
             harness,
-            &mut command,
+            launched.as_mut(),
             recording::Input {
                 prompt,
                 policy,
@@ -608,6 +642,14 @@ impl Outside for OnMachine {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
+}
+
+/// Name earlier killed work ahead of a later failure, leaving success alone.
+pub fn with_killed_work<T>(taken: Result<T>, endings: &[String]) -> Result<T> {
+    if endings.is_empty() {
+        return taken;
+    }
+    taken.map_err(|error| error.context(format!("{}, and a later step failed", endings.join("; "))))
 }
 
 /// How a session ended whose `killed` background work, by description, was

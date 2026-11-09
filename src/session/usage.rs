@@ -77,6 +77,10 @@ pub(crate) fn from_events(events: &[Event], input_excludes_cache: bool) -> Summa
     let mut session_attributes = Vec::new();
     for event in events {
         calls.apply(event, None);
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only usage events measure a Model or the Session; calls.apply has already taken every event"
+        )]
         match event {
             Event::Usage {
                 scope: UsageScope::Model,
@@ -189,7 +193,13 @@ impl Evidence {
                     .include(measurement);
             }
             SpanKind::Turn => self.turns.include(measurement),
-            _ => {}
+            SpanKind::Cmd
+            | SpanKind::Run
+            | SpanKind::Stage
+            | SpanKind::Sess
+            | SpanKind::Model
+            | SpanKind::Tool
+            | SpanKind::Agent => {}
         }
     }
 
@@ -332,6 +342,10 @@ fn value<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a AnyValue> {
 }
 
 fn text<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a str> {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "an OTLP attribute that isn't a string has no text"
+    )]
     match value(attrs, key)? {
         AnyValue::String(s) => Some(s),
         _ => None,
@@ -339,6 +353,10 @@ fn text<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a str> {
 }
 
 fn count(attrs: &[KeyValue], key: &str) -> Option<u64> {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "an OTLP attribute that is neither an integer nor a string has no count"
+    )]
     match value(attrs, key)? {
         AnyValue::Int(n) => (*n).try_into().ok(),
         AnyValue::String(s) => s.parse().ok(),

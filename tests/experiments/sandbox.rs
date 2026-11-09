@@ -235,7 +235,7 @@ fn sandboxed_code_graders_keep_their_memory_caps_and_startup_evidence() {
             );
         }
         let run = fixture.scenario.run_with_env(
-            &["experiment", "candidate", "--json"],
+            &Fixture::experiment_args(&[]),
             &[
                 ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
                 ("THIRDSHIFT_TRIAL_MEMORY_MAX", "300M"),

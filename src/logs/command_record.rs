@@ -28,11 +28,32 @@ fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRe
 }
 
 impl CommandTree {
+    fn active_dispatch_index(&self) -> Option<usize> {
+        self.dispatched
+            .iter()
+            .rposition(|dispatched| dispatched.outcome.is_none())
+    }
+
+    /// Completing a nested dispatch restores the unfinished outer run.
     pub fn active(&mut self) -> &mut CommandRecord {
-        match self.dispatched.last_mut() {
-            Some(dispatched) if dispatched.outcome.is_none() => dispatched,
-            _ => &mut self.command,
+        match self.active_dispatch_index() {
+            Some(index) => &mut self.dispatched[index],
+            None => &mut self.command,
         }
+    }
+
+    pub fn active_ref(&self) -> &CommandRecord {
+        self.active_dispatch_ref().unwrap_or(&self.command)
+    }
+
+    pub fn active_dispatch_ref(&self) -> Option<&CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&self.dispatched[index])
+    }
+
+    pub fn active_dispatch(&mut self) -> Option<&mut CommandRecord> {
+        let index = self.active_dispatch_index()?;
+        Some(&mut self.dispatched[index])
     }
 }
 
@@ -70,6 +91,8 @@ pub(super) struct CommandRecord {
     pub issue: Option<Issue>,
     pub hostname: String,
     pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<super::Actor>,
     pub process_start: String,
     pub harness: String,
     pub model: Option<String>,
@@ -86,6 +109,10 @@ pub(super) struct CommandRecord {
     #[serde(default)]
     pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<crate::session::limits::Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
     #[serde(default)]
@@ -104,9 +131,9 @@ pub(super) struct CommandRecord {
     pub security_fix_findings: Vec<crate::security::RecordedFinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<crate::evals::experiment::Description>,
-    /// The Custom process name. The selector in `name` stays `process-<name>-<stamp>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_name: Option<String>,
+    /// Process provenance is independent of the run type and Command selector.
+    #[serde(flatten)]
+    pub process: crate::processes::Identity,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -218,6 +245,7 @@ stage_names! {
     Trials => "Trials",
     Sampling => "sampling",
     Grading => "grading",
+    Triage => "Triage",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -235,6 +263,9 @@ impl StageName {
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
+            | Work::ReviewRun(_)
+            | Work::FixRun(_)
+            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => Self::DispatchedRun,
         }
@@ -258,6 +289,7 @@ impl StageName {
             Self::SpecReview,
             Self::SecurityReview,
             Self::ArchitectureReview,
+            Self::Triage,
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
@@ -275,7 +307,7 @@ impl CommandRecord {
     /// The Custom process's own name. An older record with no `process_name`
     /// falls back to the selector in `name`.
     pub(super) fn process_label(&self) -> Option<&str> {
-        (self.kind == "Process").then(|| self.process_name.as_deref().unwrap_or(self.name.as_str()))
+        (self.kind == "Process").then(|| self.process.name.as_deref().unwrap_or(self.name.as_str()))
     }
 
     /// `Process <name> on <repo>`, or `Process <name> · <repo>#<n>` when the
@@ -361,13 +393,26 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                _ => None,
+                Work::Run(_)
+                | Work::BaseFix(_)
+                | Work::SpecRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::ReviewRun(_)
+                | Work::FixRun(_)
+                | Work::TriageRun(_)
+                | Work::Experiment(_)
+                | Work::Process { .. } => None,
             },
         });
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
+            Work::ReviewRun(_) => format!("review-{stamp}"),
+            Work::FixRun(_) => format!("fix-{stamp}"),
+            Work::TriageRun(_) => format!("triage-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Process { name, .. } => format!("process-{name}-{stamp}"),
@@ -387,6 +432,7 @@ impl CommandRecord {
             issue,
             hostname: String::new(),
             process_id: std::process::id(),
+            started_by: super::Actor::starting(),
             process_start: String::new(),
             harness: harness.harness.name().into(),
             model: harness.model.clone(),
@@ -399,6 +445,8 @@ impl CommandRecord {
             outcome: None,
             run_metrics: None,
             cause: None,
+            limit: None,
+            resume_command: None,
             issue_branch: None,
             pull_request: None,
             parent_record: None,
@@ -408,10 +456,7 @@ impl CommandRecord {
             security_findings: Vec::new(),
             security_fix_findings: Vec::new(),
             experiment: None,
-            process_name: match work {
-                Work::Process { name, .. } => Some(name.to_string()),
-                _ => None,
-            },
+            process: work.process(),
         }
     }
 

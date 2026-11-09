@@ -60,14 +60,17 @@ pub const READY_FOR_AGENT: Label = Label::new("ready-for-agent", "Ready for an a
 
 pub const NEEDS_INFO: Label = Label::new("needs-info", "Waiting on reporter for more information");
 
+pub const READY_FOR_HUMAN: Label = Label::new("ready-for-human", "Requires human implementation");
+
+pub const WONTFIX: Label = Label::new("wontfix", "Will not be actioned");
+
+/// A recorded CI failure that passed on re-run, implemented without demanding
+/// an on-demand reproduction of timing or scheduling dependence.
+pub const FLAKY_TEST: Label = Label::new("flaky-test", "Recorded CI failure that passed on re-run");
+
 /// The triage labels that make an open Ticket an Unready Ticket, in the
 /// order they are looked for.
-pub const UNREADY: [Label; 4] = [
-    Label::new("ready-for-human", "Requires human implementation"),
-    NEEDS_INFO,
-    Label::new("wontfix", "Will not be actioned"),
-    NEEDS_TRIAGE,
-];
+pub const UNREADY: [Label; 4] = [READY_FOR_HUMAN, NEEDS_INFO, WONTFIX, NEEDS_TRIAGE];
 
 /// An issue's labels, or a repository's, each spelled as GitHub spells it.
 /// It has no `==`, which would compare names with case. Every question it
@@ -251,6 +254,15 @@ pub fn by_hand(issue: &IssueUrl, off: &[Label], on: &[Label]) -> String {
         .iter()
         .map(|label| github::add_label_command(issue, *label));
     removes.chain(adds).collect::<Vec<_>>().join(" && ")
+}
+
+/// `labels`' names, joined by "and", as a step line names them.
+pub fn joined(labels: impl IntoIterator<Item = Label>) -> String {
+    labels
+        .into_iter()
+        .map(Label::name)
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 #[cfg(test)]

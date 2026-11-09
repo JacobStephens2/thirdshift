@@ -1,4 +1,4 @@
-//! Behavior through the same two operations used by sessions and checks.
+//! Behavior through process supervision and signalling interfaces.
 
 use super::*;
 use crate::test_support::with_recorded_signal;
@@ -13,6 +13,56 @@ fn shell(script: &str) -> Command {
     let mut command = Command::new("bash");
     command.args(["-c", script]);
     command
+}
+
+#[test]
+fn is_alive_distinguishes_a_running_child_from_a_reaped_child() {
+    let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+    let pid = child.id() as libc::pid_t;
+    let alive = is_alive(pid);
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    assert!(alive, "a running child must be alive");
+    assert!(!is_alive(pid), "a reaped child must be gone");
+}
+
+#[test]
+fn is_alive_reports_a_nonexistent_pid_as_gone() {
+    assert!(!is_alive(libc::pid_t::MAX));
+}
+
+#[test]
+fn signal_delivers_to_one_child() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+    let sent = signal(child.id() as libc::pid_t, libc::SIGTERM);
+    if sent.is_err() {
+        child.kill().unwrap();
+    }
+    let status = child.wait().unwrap();
+
+    sent.unwrap();
+    assert_eq!(status.signal(), Some(libc::SIGTERM));
+}
+
+#[test]
+fn signal_rejects_process_group_selectors() {
+    for pid in [0, -1, -(std::process::id() as libc::pid_t)] {
+        assert_eq!(
+            signal(pid, 0).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
+fn signal_preserves_the_os_error_for_a_nonexistent_pid() {
+    assert_eq!(
+        signal(libc::pid_t::MAX, 0).unwrap_err().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
 
 #[test]
@@ -194,23 +244,17 @@ impl RecordedProcess {
     }
 
     fn assert_stopped(&self) {
-        assert!(!exists(self.pid()), "the owned child survived cleanup");
+        assert!(!is_alive(self.pid()), "the owned child survived cleanup");
     }
-}
-
-fn exists(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 probes only the exact PID recorded by this test.
-    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 impl Drop for RecordedProcess {
     fn drop(&mut self) {
         if let Ok(pid) = fs::read_to_string(self.0.path().join("pid"))
             && let Ok(pid) = pid.trim().parse()
-            && exists(pid)
+            && is_alive(pid)
         {
-            // SAFETY: this exact PID belongs to the test's finite command.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = signal(pid, libc::SIGKILL);
         }
     }
 }
@@ -502,7 +546,7 @@ fn normal_completion_leaves_background_work_without_owned_io_running() {
 
         assert!(status.success());
         assert!(
-            exists(work.pid()),
+            is_alive(work.pid()),
             "normal completion killed background work"
         );
     }
@@ -600,11 +644,7 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
         panic!("the isolated test never started: {result:?}");
     }
     let interrupted_at = Instant::now();
-    // SAFETY: this is the exact PID of our isolated test process.
-    assert_eq!(
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
-        0
-    );
+    signal(child.id() as libc::pid_t, libc::SIGINT).unwrap();
     let result = child.wait_with_output().unwrap();
     assert!(result.status.success(), "{result:?}");
     assert!(

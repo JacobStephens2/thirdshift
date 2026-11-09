@@ -133,7 +133,7 @@ impl<'a> Watch<'a> {
                 Ci::Failed(failed) if !failed.own.is_empty() => {
                     unchanged = Some((head.to_string(), failed));
                 }
-                ci => return Ok(ci),
+                ci @ (Ci::Absent | Ci::Passed | Ci::Superseded | Ci::Failed(_)) => return Ok(ci),
             }
         }
         let ci = match unchanged {
@@ -563,7 +563,8 @@ fn watch_to_end(
     }
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
-        Some(base_commit) => read_checks(outside, base_commit)?,
+        Some(base_commit) => read_checks(outside, base_commit)
+            .with_context(|| format!("CI red on {sha}:\n{}", check_list(&failed)))?,
         None => Vec::new(),
     };
     let mut failed = split(failed, on_base);
@@ -688,6 +689,146 @@ pub fn check_list(checks: &[Check]) -> String {
         .collect()
 }
 
+/// `checks` as a pull request description list. GitHub closes an issue when a
+/// pull request merged into the default branch says `fixes #1` or
+/// `fixes owner/repo#1` in its description or in a commit message (any case,
+/// optional colon). A check name or URL is chosen by whoever can post a status,
+/// which is not permission to close issues. Session prompts keep [`check_list`]:
+/// the repair still has to find the check.
+pub fn description_check_list(checks: &[Check]) -> String {
+    checks
+        .iter()
+        .map(|check| {
+            let shown = break_closing_references(&flatten_published(&check_with_url(check)));
+            format!("- {shown}\n")
+        })
+        .collect()
+}
+
+/// `checks` as the check-name portion of a pull request title. Every documented
+/// merge-commit message includes the title, and [`GitHub::merge`] supplies no
+/// subject of its own, so a closing reference here reaches the default branch
+/// in the merge commit. Same break as [`description_check_list`].
+pub fn title_check_names(checks: &[Check]) -> String {
+    break_closing_references(&flatten_published(&check_names(checks)))
+}
+
+/// Drop line breaks and other controls so a check cannot escape its list item.
+fn flatten_published(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control()
+                || character == '\u{00a0}'
+                || character == '\u{2028}'
+                || character == '\u{2029}'
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+const CLOSING_KEYWORDS: &[&str] = &[
+    "resolves", "resolved", "resolve", "closes", "closed", "close", "fixes", "fixed", "fix",
+];
+
+/// Put `\` before a `#` that would complete a GitHub closing reference.
+fn break_closing_references(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        if let Some(hash) = closing_hash_at(text, index) {
+            out.push_str(&text[index..hash]);
+            out.push('\\');
+            out.push('#');
+            index = hash + 1;
+            continue;
+        }
+        let character = text[index..].chars().next().unwrap();
+        out.push(character);
+        index += character.len_utf8();
+    }
+    out
+}
+
+fn closing_hash_at(text: &str, index: usize) -> Option<usize> {
+    if index > 0
+        && text[..index]
+            .chars()
+            .next_back()
+            .unwrap()
+            .is_ascii_alphanumeric()
+    {
+        return None;
+    }
+    let tail = &text[index..];
+    let keyword_len = CLOSING_KEYWORDS.iter().find_map(|keyword| {
+        let slice = tail.get(..keyword.len())?;
+        let matched = slice.eq_ignore_ascii_case(keyword)
+            && tail[keyword.len()..]
+                .chars()
+                .next()
+                .is_none_or(|character| !character.is_ascii_alphanumeric());
+        matched.then_some(keyword.len())
+    })?;
+    let mut cursor = index + keyword_len;
+    let mut saw_space = false;
+    while cursor < text.len() {
+        let character = text[cursor..].chars().next().unwrap();
+        if character.is_whitespace() || character == '\u{00a0}' {
+            saw_space = true;
+            cursor += character.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let mut saw_colon = false;
+    if text[cursor..].starts_with(':') {
+        saw_colon = true;
+        cursor += 1;
+        while cursor < text.len() {
+            let character = text[cursor..].chars().next().unwrap();
+            if character.is_whitespace() || character == '\u{00a0}' {
+                cursor += character.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+    if !saw_colon && !saw_space {
+        return None;
+    }
+    reference_hash_at(text, cursor)
+}
+
+fn reference_hash_at(text: &str, cursor: usize) -> Option<usize> {
+    let rest = &text[cursor..];
+    if rest.starts_with('#') && rest[1..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return Some(cursor);
+    }
+    let owner =
+        rest.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))?;
+    if owner == 0 || !rest[owner..].starts_with('/') {
+        return None;
+    }
+    let repo_src = &rest[owner + 1..];
+    let repo = repo_src
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))
+        .unwrap_or(repo_src.len());
+    if repo == 0
+        || !repo_src[repo..].starts_with('#')
+        || !repo_src[repo + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(cursor + owner + 1 + repo)
+}
+
 /// The name of `check`, and its URL if it has one, as in `test: <url>`.
 pub fn check_with_url(check: &Check) -> String {
     match &check.url {
@@ -709,7 +850,23 @@ enum Reading {
     Failed,
 }
 
-/// The reading of `check`: CI watch is the one place a conclusion is read.
+/// A settled red head is eligible for an unattended Fix run.
+pub(crate) fn needs_repair(checks: &[Check]) -> bool {
+    !has_pending(checks) && checks.iter().any(|check| reading(check) == Reading::Failed)
+}
+
+pub(crate) fn has_pending(checks: &[Check]) -> bool {
+    checks
+        .iter()
+        .any(|check| reading(check) == Reading::Pending)
+}
+
+/// Base branch maintenance owns every failed check, with no inheritance split.
+pub(crate) fn base_failures(checks: Vec<Check>) -> Vec<Check> {
+    checks.into_iter().filter(is_failed).collect()
+}
+
+/// Interpret a check consistently for selection and CI watch.
 fn reading(check: &Check) -> Reading {
     match &check.conclusion {
         Conclusion::Unfinished | Conclusion::Pending => Reading::Pending,
@@ -2742,5 +2899,54 @@ mod tests {
             .expect("the watch to fail");
 
         assert_eq!(error.to_string(), "interrupted");
+    }
+}
+
+#[cfg(test)]
+mod description_checks {
+    use super::*;
+
+    fn failed(name: &str, url: Option<&str>) -> Check {
+        Check {
+            name: name.to_string(),
+            conclusion: Conclusion::Failure,
+            url: url.map(str::to_string),
+            job: None,
+            workflow_run: None,
+        }
+    }
+
+    #[test]
+    fn a_description_list_breaks_closing_references_without_hiding_the_check() {
+        let list = description_check_list(&[
+            failed(
+                "Fixes: #15\nresolves acme/widgets#8",
+                Some("https://ci.example/failed"),
+            ),
+            failed("gate", Some("https://ci.example/run closes #4")),
+            failed("hotfixes #1", Some("https://ci.example/hot")),
+            failed("fixes\u{00a0}#9", None),
+            failed("café · fixes #3", None),
+            failed("test", None),
+        ]);
+        assert!(list.contains("Fixes: \\#15"), "{list}");
+        assert!(list.contains("resolves acme/widgets\\#8"), "{list}");
+        assert!(list.contains("closes \\#4"), "{list}");
+        assert!(list.contains("fixes \\#9"), "{list}");
+        assert!(list.contains("café · fixes \\#3"), "{list}");
+        assert!(!list.contains("fixes #3"), "{list}");
+        assert!(
+            list.contains("hotfixes #1: https://ci.example/hot"),
+            "{list}"
+        );
+        assert!(list.contains("- test\n"), "{list}");
+        assert!(list.contains("https://ci.example/failed"), "{list}");
+        assert!(!list.contains("Fixes: #15"), "{list}");
+        assert!(!list.contains("resolves acme/widgets#8"), "{list}");
+        assert!(!list.contains("closes #4"), "{list}");
+        assert!(
+            !list.contains('\n') || list.lines().all(|line| !line.starts_with("resolves")),
+            "{list}"
+        );
     }
 }

@@ -163,7 +163,7 @@ fn an_old_review_owner_retains_a_recreated_detached_checkout() {
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
-    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     let path = owner.path().to_path_buf();
     let git = Git::new(&path);
     let head = git.run(&["rev-parse", "HEAD"]).unwrap();
@@ -194,7 +194,7 @@ fn an_old_review_owner_retains_a_recreated_detached_checkout() {
         launch.run(&["worktree", "list", "--porcelain"]).unwrap(),
         registrations
     );
-    let retry = ReviewWorktree::create(&launch, "work", "main")
+    let retry = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -317,7 +317,7 @@ fn advanced_run_commits_and_detached_review_scratch_are_still_disposable() {
     drop(owner);
     assert!(!path.exists());
     assert!(local_head(&launch, BRANCH).unwrap().is_none());
-    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     let path = owner.path().to_path_buf();
     let git = Git::new(&path);
     git.run(&["commit", "-q", "--allow-empty", "-m", "Review experiment"])
@@ -454,7 +454,8 @@ fn locked_or_changed_checkout_identity_is_retained() {
     for change in ["lock", "detach", "branch", "attach-review"] {
         let (_temp, launch) = super::tests::launch_directory();
         let (path, run, review) = if change == "attach-review" {
-            let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+            let owner =
+                ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
             (owner.path().to_path_buf(), None, Some(owner))
         } else {
             let owner = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
@@ -995,7 +996,9 @@ fi
             });
             let result = match kind {
                 "fresh" => Worktree::create_fresh(&launch, "work", BRANCH, "main").map(drop),
-                "review" => ReviewWorktree::create(&launch, "work", "main").map(drop),
+                "review" => {
+                    ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).map(drop)
+                }
                 _ => Worktree::continue_existing(&launch, "work", BRANCH, "main").map(drop),
             };
             let error = result.unwrap_err().to_string();
@@ -1036,7 +1039,8 @@ fn recorded_interruption_allows_both_lifetimes_to_finish_cleanup() {
         |signal| {
             let (_temp, launch) = super::tests::launch_directory();
             let run = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
-            let review = ReviewWorktree::create(&launch, "work", "main").unwrap();
+            let review =
+                ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
             let run_path = run.path().to_path_buf();
             let review_path = review.path().to_path_buf();
             signal_hook::low_level::raise(signal).unwrap();
@@ -1096,7 +1100,8 @@ fn interrupted_cleanup_still_retains_replacements_for_both_lifetimes() {
         |signal| {
             let (_temp, launch) = super::tests::launch_directory();
             let run = Worktree::create_fresh(&launch, "work", BRANCH, "main").unwrap();
-            let review = ReviewWorktree::create(&launch, "work", "main").unwrap();
+            let review =
+                ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
             let run_path = run.path().to_path_buf();
             let review_path = review.path().to_path_buf();
             let head = run.head().unwrap();
@@ -1385,7 +1390,7 @@ fi
         let _ = fs::remove_file(marker);
         let (temp, launch) = super::tests::launch_directory();
         let path = temp.path().join("work-architect");
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1402,7 +1407,7 @@ fi
             );
             assert!(!admin.join("thirdshift-review.json").exists());
             assert!(!path.join(".thirdshift-review-token").exists());
-            let retry = ReviewWorktree::create(&launch, "work", "main")
+            let retry = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
                 .err()
                 .unwrap()
                 .to_string();
@@ -1413,7 +1418,8 @@ fi
             );
         } else {
             assert!(!path.exists(), "{error}");
-            let next = ReviewWorktree::create(&launch, "work", "main").unwrap();
+            let next =
+                ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
             drop(next);
             assert!(!path.exists());
         }
@@ -1449,7 +1455,7 @@ fi
         ));
         let (temp, launch) = super::tests::launch_directory();
         let path = temp.path().join("work-architect");
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1483,7 +1489,7 @@ fi
             link
         );
         assert!(!path.join(".thirdshift-review-token").exists());
-        let retry = ReviewWorktree::create(&launch, "work", "main")
+        let retry = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1529,7 +1535,7 @@ fi
         ));
         let (temp, launch) = super::tests::launch_directory();
         let path = temp.path().join("work-architect");
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1545,7 +1551,7 @@ fi
         let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
         assert!(error.contains(&head), "{error}");
         let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-        let retry = ReviewWorktree::create(&launch, "work", "main")
+        let retry = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1575,14 +1581,14 @@ fi
         return;
     }
     let (temp, launch) = super::tests::launch_directory();
-    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     let path = owner.path().to_path_buf();
     let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
     fs::write(path.join("scratch.txt"), "retained scratch\n").unwrap();
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
     let refs = launch.run(&["show-ref"]).unwrap();
     std::mem::forget(owner);
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -1621,7 +1627,7 @@ fi
     }
     let (temp, launch) = super::tests::launch_directory();
     let path = temp.path().join("work-architect");
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -1640,7 +1646,7 @@ fi
     );
     assert!(!admin.join("thirdshift-review.json").exists());
     fs::remove_dir(launch.dir().join(".git/info/exclude")).unwrap();
-    let retry = ReviewWorktree::create(&launch, "work", "main")
+    let retry = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -1676,7 +1682,7 @@ fi
         }
         let (temp, launch) = super::tests::launch_directory();
         let path = temp.path().join("work-architect");
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -1721,7 +1727,7 @@ fi
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
-    let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+    let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
     let path = owner.path().to_path_buf();
     let admin = PathBuf::from(
         Git::new(&path)
@@ -1733,7 +1739,7 @@ fi
     std::mem::forget(owner);
     fs::remove_file(admin.join("gitdir")).unwrap();
 
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();

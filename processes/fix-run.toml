@@ -1,0 +1,15 @@
+version = 1
+description = "Repair an open pull request and optionally Self-merge it"
+
+[worktrees.fix]
+kind = "pull-request"
+
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "fix"
+
+[[steps]]
+name = "self-merge"
+catalogue = "self-merge"
+worktree = "fix"

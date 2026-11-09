@@ -21,9 +21,14 @@ pub(super) enum Kind {
     Run,
     SpecRun,
     ScoringRun,
+    ReviewRun,
+    FixRun,
+    TriageRun,
     Experiment,
     Process,
     Pass(Pass),
+    /// A warning about the User config.
+    UserConfig,
 }
 
 impl Display for Kind {
@@ -32,9 +37,13 @@ impl Display for Kind {
             Kind::Run => f.write_str("Run"),
             Kind::SpecRun => f.write_str("Spec run"),
             Kind::ScoringRun => f.write_str("Scoring run"),
+            Kind::ReviewRun => f.write_str("Review run"),
+            Kind::FixRun => f.write_str("Fix run"),
+            Kind::TriageRun => f.write_str("Triage run"),
             Kind::Experiment => f.write_str("Experiment"),
             Kind::Process => f.write_str("Process"),
             Kind::Pass(pass) => pass.fmt(f),
+            Kind::UserConfig => f.write_str("User config"),
         }
     }
 }
@@ -64,12 +73,13 @@ pub(super) fn tail(path: &Path, limit: u64) -> Result<Tail> {
     read().with_context(|| format!("could not read {}", path.display()))
 }
 
-/// The last line of `kind` in whole lines from the tail, without its time.
-pub(super) fn last_of(tail: &str, kind: Kind) -> Option<&str> {
+/// The time and unstamped text of the last line of `kind` in the tail.
+pub(super) fn last_of(tail: &str, kind: Kind) -> Option<(&str, &str)> {
     let kind = kind.to_string();
     tail.lines().rev().find_map(|line| {
         let unstamped = line.get(TIME_FORMAT_LENGTH + 1..)?;
         let rest = unstamped.strip_prefix(&kind)?;
-        (rest.starts_with(' ') || rest.starts_with(':')).then_some(unstamped)
+        (rest.starts_with(' ') || rest.starts_with(':'))
+            .then_some((line.get(..TIME_FORMAT_LENGTH)?, unstamped))
     })
 }

@@ -137,12 +137,21 @@ impl<'a> Description<'a> {
     }
 
     pub(super) fn failed_fix(&self) -> Result<Option<IssueUrl>> {
-        // The Pass lock rules out an active dispatch here. Pending also means
+        // A Security run reads this holding the lock of its kind, so no other
+        // Security run on the machine, the only Command that writes pending,
+        // is still dispatching this fix. Pending also means
         // failed/incomplete until a successful ending is recorded.
         if matches!(
             self.fix_status(),
             Some(FixStatus::Pending | FixStatus::Failed)
         ) {
+            return Ok(Some(IssueUrl::parse(self.fix_link().unwrap_or_default())?));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn succeeded_fix(&self) -> Result<Option<IssueUrl>> {
+        if matches!(self.fix_status(), Some(FixStatus::Succeeded)) {
             return Ok(Some(IssueUrl::parse(self.fix_link().unwrap_or_default())?));
         }
         Ok(None)

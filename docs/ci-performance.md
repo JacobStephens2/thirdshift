@@ -27,9 +27,76 @@ accepts success/neutral/skipped; `scripts/release.sh` waits for existing workflo
 runs and does not require Release on PRs. Thus there is no current required
 Release check stranded by the path filter. If protection/rulesets later require
 a Release check on every PR, replace the trigger filter with an always-created
-gate before enabling that requirement. CI's stable `test-macos` aggregate stays
-unfiltered: it runs with `always()` on every run and passes only on the macOS
-work its event requires, as below.
+gate before enabling that requirement.
+
+CI and native Release builds use only Linux runners (#1666). CI keeps `ubuntu-24.04`
+for x86_64 and `ubuntu-24.04-arm` for aarch64; Release builds only the two
+static Linux musl targets. Native macOS has no CI jobs or release artifact.
+
+### Job execution bounds
+
+Every CI job and every PR-reachable Release job has a job-level
+`timeout-minutes` (#1496). This bounds a hung job while CI watch waits for
+its result; it does not add a deadline to CI watch or include runner queue
+time. GitHub's [default job timeout is 360 minutes](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idtimeout-minutes).
+
+The limits below were sized on 2026-10-28 UTC using `gh run list --workflow
+<workflow> --status success` (separately filtering PR, push and schedule events),
+then `gh run view <id> --json jobs`. Durations are `completedAt - startedAt`
+for successful jobs, including setup and cleanup, excluding skipped jobs.
+
+CI samples: PR runs [40613734239](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734239),
+[40609348854](https://github.com/JacobStephens2/thirdshift/actions/runs/40609348854),
+[40608541526](https://github.com/JacobStephens2/thirdshift/actions/runs/40608541526);
+main pushes [40609570774](https://github.com/JacobStephens2/thirdshift/actions/runs/40609570774),
+[40606663194](https://github.com/JacobStephens2/thirdshift/actions/runs/40606663194),
+[40600192827](https://github.com/JacobStephens2/thirdshift/actions/runs/40600192827);
+and nightly [40503051764](https://github.com/JacobStephens2/thirdshift/actions/runs/40503051764).
+
+| CI job | Observed execution (seconds) | Limit (minutes) |
+| --- | --- | --- |
+| `console-test` | 98–182 | 15 |
+| `site-test` | 59–102 | 10 |
+| `test` (nextest and nightly cargo test) | 725–983 | 60 |
+| `test-linux-arm` | Not yet measured on hosted CI | 60 |
+
+The ARM Linux job retains the x86_64 suite's 60-minute budget pending its own
+hosted measurements. Removed macOS jobs are excluded from these active bounds.
+
+Release samples: PR runs [40614474450](https://github.com/JacobStephens2/thirdshift/actions/runs/40614474450),
+[40613734215](https://github.com/JacobStephens2/thirdshift/actions/runs/40613734215),
+[40609348838](https://github.com/JacobStephens2/thirdshift/actions/runs/40609348838),
+[40608541663](https://github.com/JacobStephens2/thirdshift/actions/runs/40608541663);
+tag runs [40592949213](https://github.com/JacobStephens2/thirdshift/actions/runs/40592949213),
+[40547557482](https://github.com/JacobStephens2/thirdshift/actions/runs/40547557482),
+[40542265662](https://github.com/JacobStephens2/thirdshift/actions/runs/40542265662).
+The sampled PRs skipped Rocky and WSL, so their execution figures come from
+the tag runs of the same reusable workflow.
+
+| PR-reachable Release job | Observed execution (seconds) | Limit (minutes) |
+| --- | --- | --- |
+| `plan` | 19–26 | 5 |
+| `build-local-artifacts` (x86_64 Linux musl) | 180–319 (historical mixed-platform sample) | 20 |
+| `build-local-artifacts` (aarch64 Linux musl) | Not yet measured on hosted CI | 20 |
+| `build-global-artifacts` | 20–30 | 5 |
+| `custom-release-smoke / gate` | 3–6 | 5 |
+| `custom-release-smoke / rocky` | 11–16 | 5 |
+| `custom-release-smoke / wsl` | 62–66 | 10 |
+| `custom-release-smoke / arm-linux` | Not yet measured on hosted CI | 5 |
+
+Full Rust suites get at least 3.6 times the slowest observed execution;
+the browser jobs get at least 4.5 times. Sampled Release builds get
+at least 3.7 times. Small orchestration jobs have a five-minute floor to
+allow slow runner setup and artifact transfers; WSL has ten minutes for
+distribution provisioning. These are operating budgets with headroom,
+not guarantees against every possible healthy slowdown. Re-measure when
+the work in a job grows.
+
+GitHub does not accept `timeout-minutes` on a reusable-workflow call, so the
+smoke limits live on its concrete jobs in `release-smoke.yml`. `host`,
+`announce`, `custom-publish-crates` and `custom-release-notes` only execute
+on tag publication; their jobs cannot hold a PR's CI watch and are outside
+this change. Generated Release limits belong to `scripts/generate-release.py`.
 
 ### Linux test runner
 
@@ -45,8 +112,8 @@ there is no library target or doctest coverage to lose. No filter, shard, retry
 or timeout is added. Nextest can schedule tests from different binaries at the
 same time, while `cargo test` runs each binary in turn
 ([nextest's execution model](https://nexte.st/docs/design/how-it-works/)). The
-existing default profile reports slow tests without terminating them. macOS
-keeps its existing gate, opt-in full suite and four hash partitions.
+existing default profile reports slow tests without terminating them. Both
+Linux architectures run the full suite without partitions.
 
 The successful [PR CI run 40191701060](https://github.com/JacobStephens2/thirdshift/actions/runs/40191701060)
 on 2026-10-25 spent **692 seconds** in `cargo test`, out of **744 seconds**
@@ -62,83 +129,51 @@ about **10% less** for both the test step and the job than the baseline above.
 These are separate CI runs, not a controlled benchmark; runner load and build
 cache can vary, so this comparison does not establish the typical saving.
 
-### Which runs test on macOS
+### Which runs test on ARM Linux
 
-Issue [#893](https://github.com/JacobStephens2/thirdshift/issues/893) moved the
-full macOS suite off pull requests. A `macos-plan` job in CI decides, per event:
+Issue [#1663](https://github.com/JacobStephens2/thirdshift/issues/1663) adds the
+stable `test-linux-arm` check on `ubuntu-24.04-arm`. It runs the full suite on
+pushes to `main`, nightly and manual runs. An ordinary PR skips it; a PR into
+`main` labelled `test:linux-arm` opts in through the `labeled` activity type.
+Any label starts a whole new CI run, x86_64 included, and cancels an older run
+on the same PR. Label a PR after its CI run has finished: unfinished jobs from
+the cancelled run stay on the same head as cancelled check runs, which the
+factory's CI watch reads as failed (#925). The label stays on the PR, so later
+pushes also run the full ARM suite.
 
-| Event | macOS work | `test-macos` passes when |
-| --- | --- | --- |
-| Push to `main` | Full 4-shard suite | every shard passed |
-| Nightly `schedule`, on `main` | Full 4-shard suite | every shard passed |
-| `workflow_dispatch` | Full 4-shard suite on the chosen ref | every shard passed |
-| PR into `main` | One gate job | the gate passed |
-| PR into `main` labelled `test:macos` | Full 4-shard suite, no gate | every shard passed |
-| PR into any other base (a Spec branch, including a Base fix into one, or anything else) | None | both were skipped |
+The job runs the same clippy command and test runner as x86_64 Linux:
+`cargo clippy --all-targets -- -D warnings`, then `cargo nextest run`, or
+`cargo test` on the nightly schedule. It has the same 60-minute bound and a
+separate architecture-specific Rust cache. It starts as one job on the same
+4-vCPU runner class as x86_64 Linux; shard it if hosted measurements show it
+extends the existing longest job noticeably.
 
-A failed or cancelled job, or a skipped one the event requires, fails
-`test-macos`. The Linux checks `test`, `site-test` and `console-test` run on
-every pull request as before.
+Releases also build `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm` and
+run its static-link/version smoke check before publication. That five-minute
+smoke job shares the existing tag/PR gate with Rocky and WSL; it does not run
+the full suite. Rocky and WSL coverage remains x86_64 only.
 
-On pushes to `main`, each macOS shard adds `--no-fail-fast` to its nextest
-command, so one red run reports every failing test in every shard (#1325).
-PR runs (including the gate and `test:macos` shards), nightly runs and manual
-runs keep nextest's default fail-fast behavior.
+### When the nightly run is red
 
-The gate is one `macos-26` job: `cargo clippy --all-targets -- -D warnings`,
-then `cargo nextest run --profile macos-gate`. That profile's `default-filter`
-in `.config/nextest.toml` selects the tests of the macOS-specific code: the
-`#[cfg(target_os = "macos")]` process identity, the non-Linux skills directory
-handle, and the platform branches in child Ticket run handling. New macOS-specific
-code adds its tests there.
-
-Adding `test:macos` to an open PR into `main` starts the full suite on its
-current head: CI also runs on the `labeled` activity type. Any label starts a
-whole new run, Linux included, and the concurrency group cancels an older run
-still in progress. A label stays on a PR, so its later pushes run the full
-suite too.
-
-Label a PR after its CI run has finished. The cancelled run's unfinished jobs
-stay on the same head as `cancelled` check runs, beside the new run's, and the
-factory's CI watch reads a cancelled check as failed. On #925, labelling during
-a run left its cancelled `test` there.
-
-**Why.** The research in [macos-ci-speed.md](research/macos-ci-speed.md) found
-the macOS queue comes from this repository's own load on GitHub's 5-job macOS
-cap for personal accounts: 3.8 of 5 slots busy on average, and a median 33
-minutes from job creation to the last shard, against 11 minutes for Linux. PRs
-into `main` used 47% of macOS runner time, PRs into Spec branches 29% and pushes
-to `main` 23%. Every Ticket PR in a Spec run waited about an hour on macOS
-before it could Self-merge into its Spec branch, and the same code met macOS
-again on the Spec PR. The gate takes one slot for a few minutes where the full
-suite takes four for about 18. This is uv's pattern: macOS tests only on main
-without a label to opt in.
-
-**Trade-offs.**
-
-- A macOS-only regression from a Spec's Ticket shows up at the Spec PR. The
-  gate on the Spec PR catches it if it is in the gate's filterset; otherwise the
-  push to `main` after the Spec PR merges, or the nightly run, does.
-- A macOS-only regression outside the gate's filterset shows up on `main` or
-  overnight, not on its PR. A PR that touches platform-sensitive code can ask
-  for the full suite with `test:macos`.
-
-**When the nightly run is red.** GitHub sends a scheduled workflow's failure
+GitHub sends a scheduled workflow's failure
 notification to the user who last changed its `schedule` cron
 ([GitHub: notifications for workflow runs](https://docs.github.com/en/actions/concepts/workflows-and-actions/notifications-for-workflow-runs)),
 so the Day shift hears of it there, and sees it as the red run in the CI
 workflow's history on `main`. Fix forward on `main`: open the fixing PR and label
-it `test:macos`, so its own run shows the full suite green before it merges.
+it `test:linux-arm` when ARM coverage is needed, so its own run shows that suite
+green before it merges.
 
 ## Generated Release ownership
 
 Run `python3 scripts/generate-release.py` from the repository root; CI runs
 it with `--check`. Install the pinned cargo-dist from `dist-workspace.toml`.
 The generator checks that version, runs the real cargo-dist generator and adds
-only PR paths, concurrency copied from CI, and its regeneration header. It restores the exact
+PR paths, concurrency copied from CI, PR-job permissions and execution bounds,
+and its regeneration header. It restores the exact
 original config and workflow on generation failure; `--check` also restores the
 workflow before comparing. Build, smoke, host and publication jobs still come
-entirely from cargo-dist and its configured reusable-workflow hooks.
+from cargo-dist and its configured reusable-workflow hooks, with the PR-job
+policy applied by our generator.
 
 Cargo-dist 0.33 has no concurrency/path-filter configuration or template override.
 Its documented [`allow-dirty = ["ci"]`](https://github.com/axodotdev/cargo-dist/blob/v0.33.0/book/src/reference/config.md#allow-dirty)
@@ -155,8 +190,7 @@ boundary, so a growing test appears before joining that tail. The
 [nextest slow-test contract](https://nexte.st/docs/features/slow-tests/) treats
 this as reporting only: no termination is configured, failures remain failures,
 and no retries are added. Slow tests remain visible in the final summary.
-Linux now uses the runner policy above; macOS retains the same four hash
-partitions.
+Both Linux architectures use the runner policy above.
 
 The final-message matrix now crosses `Review::from_final_message` and `Outcome`
 in process, preserving all 11 original malformed cases and missing `None`.
@@ -166,7 +200,10 @@ The separate end-to-end private-report validation and deliberate-incomplete
 cases remain. The unauthenticated publisher test remains end to end: its
 per-Harness credential isolation is a process behavior, not a parser table.
 
-## Measurements
+## Historical measurements
+
+The macOS measurements below describe the workflow before #1666 removed native
+macOS CI. They are retained as performance history; none describes active jobs.
 
 The successful [main CI run 38990121846](https://github.com/JacobStephens2/thirdshift/actions/runs/38990121846)
 created 2026-10-17 01:16:05 UTC was queried through the jobs API. Start delay is
@@ -333,7 +370,7 @@ What did:
   `mds` took 18-35% of all CPU samples in the first three tests after the
   build, against git's 18-21%. They index the repositories the tests create.
 
-**The changes.** Both macOS jobs in CI now turn Spotlight indexing off
+**The changes at the time.** Both macOS jobs in CI turned Spotlight indexing off
 (`sudo mdutil -a -i off`) and put Xcode's git (`xcrun -f git`, 2.50.1 on
 this image) first on `PATH`, with the `git-*` programs beside it. Summed
 nextest time of the four shards, build excluded:
@@ -352,8 +389,7 @@ tests failed under Xcode's git: they run thirdshift with only a link to git on
 `PATH`, and Xcode's git finds `git-upload-pack` only beside itself, not in
 its exec path as Homebrew's and Linux's do. They now link it too.
 
-**What remains.** 83% of the git processes in the 26 tests are Worktree
+**Follow-up at the time.** 83% of the git processes in the 26 tests were Worktree
 ownership inspection and the launch-side recheck. Both are
 read-only here; the macOS numbers above are on #858, which decides whether
-inspection may recheck less often. Linux CI keeps Ubuntu's git, and a
-macOS contributor's local run uses whichever git is first on their `PATH`.
+inspection may recheck less often. Linux CI keeps Ubuntu's git.

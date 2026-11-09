@@ -11,11 +11,23 @@ const PASSWORD: &str = "correct horse battery staple";
 #[path = "password_codes.rs"]
 mod password_codes;
 
+#[path = "rate_limit.rs"]
+mod rate_limit;
+
 #[path = "stop.rs"]
 mod stop;
 
 #[path = "dismiss.rs"]
 mod dismiss;
+
+#[path = "address_scopes.rs"]
+mod address_scopes;
+
+#[path = "fleet_actions.rs"]
+mod fleet_actions;
+
+#[path = "fleet_control.rs"]
+mod fleet_control;
 
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
@@ -97,6 +109,86 @@ fn sign_in(console: &Console, email: &str, password: &str) -> reqwest::blocking:
 }
 
 #[test]
+fn api_requires_a_current_sign_in_and_returns_json_instead_of_redirecting() {
+    let home = configured();
+    record(home.path(), 7, Some("merged"), 0);
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    api::freeze_clock(home.path());
+    let console = Console::start_command({
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .args(["console"])
+            .env("HOME", home.path())
+            .env_remove("RESEND_API_KEY")
+            .env("LD_PRELOAD", home.path().join("api-clock.so"));
+        command
+    });
+    let response = get(&console, "/api/v1/status", "");
+    assert_eq!(response.status(), 401);
+    assert!(!response.headers().contains_key("location"));
+    assert!(response.json::<Value>().unwrap()["error"].is_string());
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let expected = api::cli(home.path(), &["status", "--json"]);
+    assert_eq!(
+        api::json(get(&console, "/api/v1/status", &session)),
+        expected
+    );
+    let identity = api::json(get(&console, "/api/v1/whoami", &session));
+    assert_eq!(
+        identity["identity"],
+        json!({"kind": "session", "address": EMAIL})
+    );
+    assert_eq!(
+        identity["scopes"],
+        json!(["read", "security", "act", "run", "admin"])
+    );
+    assert!(cli(home.path(), &["console", "sign-out"]).status.success());
+    assert_eq!(get(&console, "/api/v1/status", &session).status(), 401);
+    assert_eq!(get(&console, "/", &session).status(), 303);
+}
+
+#[test]
+fn api_session_actions_require_csrf_and_audit_the_address() {
+    let home = configured();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let look: Value = get(&console, "/look", &session).json().unwrap();
+    let post = |csrf: &str| {
+        client()
+            .post(format!("{}/api/v1/theme", console.address))
+            .header("cookie", &session)
+            .header("x-csrf-token", csrf)
+            .form(&[("theme", "press-dark")])
+            .send()
+            .unwrap()
+    };
+    assert_eq!(post("wrong").status(), 403);
+    let saved = api::json(post(look["csrf"].as_str().unwrap()));
+    assert_eq!(
+        saved,
+        api::cli(home.path(), &["console", "theme", "press-dark", "--json"])
+    );
+    let events = api::cli(home.path(), &["console", "log", "--json"]);
+    let calls: Vec<_> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["event"] == "api-call")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["email"], EMAIL);
+    assert_eq!(calls[0]["outcome"], 403);
+    assert_eq!(calls[1]["email"], EMAIL);
+    assert_eq!(calls[1]["endpoint"], "/api/v1/theme");
+    assert_eq!(calls[1]["outcome"], 200);
+}
+
+#[test]
 fn account_pages_and_sign_in_follow_the_configured_theme() {
     let home = configured();
     assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
@@ -164,6 +256,7 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
     for path in [
         "/",
         "/resources",
+        "/resources/status",
         "/?page=lanes",
         "/?page=stages",
         "/?page=waterfall",
@@ -491,7 +584,6 @@ fn revoke_session(home: &Path, how: &str) {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn an_open_log_stream_closes_when_its_session_is_revoked() {
     for revoke in REVOCATIONS {

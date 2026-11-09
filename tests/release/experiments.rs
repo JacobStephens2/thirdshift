@@ -47,8 +47,9 @@ fn calls(release: &Release) -> Vec<Value> {
 }
 
 #[test]
-fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
+fn a_resumed_release_tags_its_candidate_when_main_gains_other_content() {
     let release = Release::new();
+    let candidate = release.origin(&["rev-parse", "main"]);
     cargo_reports(&release, &[json!(1)]);
     let interrupted = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
     assert!(!interrupted.status.success());
@@ -61,18 +62,18 @@ fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
     release.ci_reports(GREEN);
     cargo_reports(&release, &[verdict("pass")]);
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed).contains("main contains content absent from the measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_eq!(
+        release.origin(&["rev-parse", &format!("{head}^")]),
+        candidate
     );
-    assert!(!release.origin_branch("release-0.2.0"));
-    assert!(release.origin_tag("v0.2.0").is_none());
+    assert_eq!(calls(&release)[1]["args"][2], candidate);
 }
 
 #[test]
-fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
+fn a_merged_release_tags_only_its_bump_even_when_the_merge_has_other_content() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -82,14 +83,75 @@ fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
 
     let resumed = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
 
-    assert!(!resumed.status.success());
-    assert!(
-        stderr(&resumed)
-            .contains("release merge contains content absent from its measured Candidate"),
-        "{}",
-        stderr(&resumed)
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_ne!(
+        release.origin(&["rev-parse", "main^{tree}"]),
+        release.origin(&["rev-parse", &format!("{head}^{{tree}}")])
     );
-    assert!(release.origin_tag("v0.2.0").is_none());
+}
+
+#[test]
+fn a_recut_checks_the_new_experiment_and_honors_summary_review_before_pushing() {
+    for answer in ["n\n", "y\n"] {
+        let release = Release::failed_unpublished();
+        release.merge_pr("newer", "New recovery content", "");
+        release.main_ci("completed", "success");
+        let candidate = release.origin(&["rev-parse", "main"]);
+        let refs = release.origin_refs();
+        let body = release.pr_body("release-0.2.0");
+        release.release_workflow(json!({}));
+        release.ci_reports(GREEN);
+        cargo_reports(&release, &[verdict("pass")]);
+        release.agent_runs("printf 'Updated recovery summary' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let output =
+            release.run_script_with(&["--with-experiment", "--review", "0.2.0"], answer, &[]);
+
+        assert_eq!(calls(&release)[0]["args"][2], candidate);
+        if answer == "n\n" {
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert_eq!(release.origin_refs(), refs);
+            assert_eq!(release.pr_body("release-0.2.0"), body);
+        } else {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(
+                release
+                    .pr_body("release-0.2.0")
+                    .contains("Updated recovery summary")
+            );
+            assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+        }
+    }
+}
+
+#[test]
+fn an_old_merged_recut_keeps_the_prior_release_as_the_experiment_baseline() {
+    let release = Release::failed_unpublished();
+    let old = release.pr_head("release-0.2.0");
+    release.merge_bump_pr("0.2.0", &old);
+    release.merge_pr("newer", "New content after the old bump was merged", "");
+    release.main_ci("completed", "success");
+    let candidate = release.origin(&["rev-parse", "main"]);
+    release.release_workflow(json!({}));
+    release.ci_reports(GREEN);
+    cargo_reports(&release, &[verdict("pass")]);
+
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        calls(&release)[0]["args"],
+        json!([
+            "experiment",
+            "--release",
+            candidate,
+            "--baseline",
+            "v0.1.0",
+            "--json",
+            "--yes"
+        ])
+    );
 }
 
 #[test]
@@ -110,7 +172,7 @@ fn a_passing_experiment_is_checked_before_any_push() {
         assert_eq!(calls.len(), 1);
         assert_eq!(
             calls[0]["args"],
-            json!(["experiment", "--release", candidate, "--json"])
+            json!(["experiment", "--release", candidate, "--json", "--yes"])
         );
         assert_eq!(calls[0]["branch"], "");
         assert!(release.origin_tag("v0.2.0").is_some());
@@ -145,6 +207,84 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
             "resume must use the same content commit"
         );
     }
+}
+
+#[test]
+fn advisory_suites_are_listed_and_all_advisory_requires_the_release_question() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(true);
+    view["verdict"]["suites"]["code-review"]["verdict"] = json!("pass");
+    let mut spec = view["verdict"]["suites"]["code-review"].clone();
+    spec["verdict"] = json!("fail");
+    view["verdict"]["suites"]["spec-review"] = spec;
+    let before = release.origin_refs();
+    for answer in ["n\n", "yes\n"] {
+        cargo_reports(&release, &[view.clone()]);
+        let output = release.run_script_with(&["--with-experiment", "0.2.0"], answer, &[]);
+        let err = unstamped(&output);
+        assert!(err.contains("code-review: Advisory suite (pass)"), "{err}");
+        assert!(err.contains("spec-review: Advisory suite (fail)"), "{err}");
+        assert!(err.contains("release anyway?"), "{err}");
+        if answer == "yes\n" {
+            assert!(output.status.success(), "{err}");
+            assert!(release.origin_tag("v0.2.0").is_some());
+        } else {
+            assert!(!output.status.success(), "{err}");
+            assert_eq!(release.origin_refs(), before);
+        }
+    }
+}
+
+#[test]
+fn an_advisory_fail_is_listed_without_prompting_when_the_experiment_passes() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("pass");
+    view["verdict"]["suites"]["code-review"]["advisory"] = json!(false);
+    let mut small = view["verdict"]["suites"]["code-review"].clone();
+    small["advisory"] = json!(true);
+    small["verdict"] = json!("fail");
+    view["verdict"]["suites"]["small"] = small;
+    cargo_reports(&release, &[view]);
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+    let err = unstamped(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("small: Advisory suite (fail)"), "{err}");
+    assert!(!err.contains("release anyway?"), "{err}");
+}
+
+#[test]
+fn two_level_experiments_show_both_intervals_before_the_release_prompt() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    let suite = &mut view["verdict"]["suites"]["code-review"];
+    suite["bar"] = json!({"pass_level": 0.8, "fail_level": 0.95});
+    for metric in ["accuracy", "wrong_findings"] {
+        let assessment = suite[metric].as_object_mut().unwrap();
+        let interval = assessment.remove("interval").unwrap();
+        assessment.insert("pass_interval".into(), interval);
+        assessment.insert("fail_interval".into(), json!({"lower": -0.3, "upper": 0.2}));
+    }
+    cargo_reports(&release, &[view]);
+    let before = release.origin_refs();
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "n\n", &[]);
+    let err = unstamped(&output);
+    assert!(!output.status.success());
+    assert!(err.contains("accuracy pass (80%) [-0.25, 0.12]"), "{err}");
+    assert!(err.contains("accuracy fail (95%) [-0.3, 0.2]"), "{err}");
+    assert!(
+        err.contains("wrong findings pass (80%) [-0.02, 0.18]"),
+        "{err}"
+    );
+    assert!(
+        err.contains("wrong findings fail (95%) [-0.3, 0.2]"),
+        "{err}"
+    );
+    assert!(err.contains("release anyway?"), "{err}");
+    assert_eq!(release.origin_refs(), before);
 }
 
 #[test]
@@ -194,7 +334,7 @@ fn resume_reuses_the_content_commit_and_checks_a_pushed_branch_before_opening_it
     for call in &checked {
         assert_eq!(
             call["args"],
-            json!(["experiment", "--release", candidate, "--json"])
+            json!(["experiment", "--release", candidate, "--json", "--yes"])
         );
     }
     assert_ne!(checked[1]["branch"], "");
@@ -309,7 +449,7 @@ fn interrupted_release_before_push_keeps_its_experiment_when_main_moves() {
     assert_eq!(checked.len(), 2);
     assert_eq!(
         checked[0]["args"],
-        json!(["experiment", "--release", candidate, "--json"])
+        json!(["experiment", "--release", candidate, "--json", "--yes"])
     );
     assert_eq!(
         checked[1]["args"], checked[0]["args"],

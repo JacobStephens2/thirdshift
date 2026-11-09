@@ -1,88 +1,178 @@
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "thirdshift supports Linux only. On macOS, run it inside an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."
+);
+
+#[cfg(not(target_os = "linux"))]
+fn main() {}
+
+#[cfg(target_os = "linux")]
 mod architect;
+#[cfg(target_os = "linux")]
 mod args;
+#[cfg(target_os = "linux")]
 mod asks;
+#[cfg(target_os = "linux")]
 mod base_fix;
+#[cfg(target_os = "linux")]
 mod branch;
+#[cfg(target_os = "linux")]
 mod child_run;
+#[cfg(target_os = "linux")]
 mod ci;
+#[cfg(target_os = "linux")]
 mod claim;
+#[cfg(target_os = "linux")]
 mod command;
+#[cfg(target_os = "linux")]
+mod command_limit;
+#[cfg(target_os = "linux")]
 mod config;
+#[cfg(target_os = "linux")]
 mod console;
+#[cfg(target_os = "linux")]
 mod cronjobs;
+#[cfg(target_os = "linux")]
 mod delivery;
+#[cfg(target_os = "linux")]
 mod email;
+#[cfg(target_os = "linux")]
 mod evals;
+#[cfg(target_os = "linux")]
 mod failed_run;
+#[cfg(target_os = "linux")]
+mod fix;
+#[cfg(target_os = "linux")]
 mod git;
+#[cfg(target_os = "linux")]
 mod github;
+#[cfg(target_os = "linux")]
 mod harness;
+#[cfg(target_os = "linux")]
 mod host;
+#[cfg(target_os = "linux")]
+mod implement;
+#[cfg(target_os = "linux")]
 mod interrupt;
+#[cfg(target_os = "linux")]
 mod issue;
+#[cfg(target_os = "linux")]
 mod labels;
+#[cfg(target_os = "linux")]
 mod launch;
+#[cfg(target_os = "linux")]
+mod launch_directories;
+#[cfg(target_os = "linux")]
 mod local_time;
+#[cfg(target_os = "linux")]
 mod logs;
+#[cfg(target_os = "linux")]
 mod notification;
+#[cfg(target_os = "linux")]
 mod otlp_jsonl;
+#[cfg(target_os = "linux")]
 mod pass;
+#[cfg(target_os = "linux")]
 mod pickup;
+#[cfg(target_os = "linux")]
 mod poll;
+#[cfg(target_os = "linux")]
 mod process;
+#[cfg(target_os = "linux")]
 mod processes;
+#[cfg(target_os = "linux")]
 mod progress;
+#[cfg(target_os = "linux")]
 mod prompt;
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod prompts_page;
+#[cfg(target_os = "linux")]
 mod proxy;
+#[cfg(target_os = "linux")]
 mod pull_request;
+#[cfg(target_os = "linux")]
 mod ready;
+#[cfg(target_os = "linux")]
 mod recovery;
+#[cfg(target_os = "linux")]
 mod resend_key;
+#[cfg(target_os = "linux")]
+mod reservation;
+#[cfg(target_os = "linux")]
 mod resources;
+#[cfg(target_os = "linux")]
+mod review;
+#[cfg(target_os = "linux")]
 mod run;
+#[cfg(target_os = "linux")]
 mod run_ending;
+#[cfg(target_os = "linux")]
 mod sandbox;
+#[cfg(target_os = "linux")]
 mod scope;
+#[cfg(target_os = "linux")]
 mod scoring;
+#[cfg(target_os = "linux")]
 mod security;
+#[cfg(target_os = "linux")]
 mod session;
+#[cfg(target_os = "linux")]
 mod setup;
+#[cfg(target_os = "linux")]
 mod skill;
+#[cfg(target_os = "linux")]
 mod skills;
+#[cfg(target_os = "linux")]
 mod spec_run;
+#[cfg(target_os = "linux")]
 mod terminal;
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod test_support;
+#[cfg(target_os = "linux")]
+mod triage;
+#[cfg(target_os = "linux")]
 mod trial;
+#[cfg(target_os = "linux")]
 mod trust;
+#[cfg(target_os = "linux")]
 mod update;
 // The Experiment runner will consume this independently tested module.
 #[allow(dead_code)]
+#[cfg(target_os = "linux")]
 mod verdict;
+#[cfg(target_os = "linux")]
 mod worktree;
 
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
 
+#[cfg(target_os = "linux")]
 use architect::Outcome;
+#[cfg(target_os = "linux")]
 use args::{ArchitectArgs, Command, PassArgs, RunArgs};
+#[cfg(target_os = "linux")]
 use asks::Asks;
+#[cfg(target_os = "linux")]
 use command::{Ending, failure};
+#[cfg(target_os = "linux")]
 use config::UserConfig;
+#[cfg(target_os = "linux")]
 use logs::Begin;
+#[cfg(target_os = "linux")]
 use notification::About;
+#[cfg(target_os = "linux")]
 use pickup::Took;
+#[cfg(target_os = "linux")]
 use run::StartedBy;
 
+#[cfg(target_os = "linux")]
 const HELP: &str = "\
-thirdshift turns a GitHub issue into a ready-for-review pull request, unattended.
-
 usage: thirdshift <Issue URL>                         Run the factory on the issue
        thirdshift <number>                            Resolve the issue from origin and run
        thirdshift merge <number>                      Run it, then merge the pull request
        thirdshift merge <Issue URL>                   Run, then merge the pull request
-       thirdshift --no-merge <Issue URL>              Run, leaving the pull request for review
        thirdshift --email <Issue URL>                 Run, then email the outcome
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
@@ -91,10 +181,14 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
+       thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
+       thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
-       thirdshift process                          List Custom processes (experimental)
-       thirdshift process <name> [issue <issue>]   Run a Custom process; Steps may name harness, model and effort; email, merge and no-merge match a Ticket run (experimental)
-       thirdshift process check <name> [issue <issue>]  Print each Step's Harness, Model, Effort, origins and startup result (experimental)
+       thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
+       thirdshift process show <name>              Print a Process file exactly (experimental)
+       thirdshift process <name> [issue <issue>]   Run a Custom process; pull-request <PR URL> selects a pull request (experimental)
+       thirdshift process check <name> [issue <issue>]  Print Step choices and startup results; also accepts pull-request <PR URL> (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
@@ -102,50 +196,50 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
-       thirdshift experiments [<id>] [--json]        List Experiments or show one
-       thirdshift recheck <id> <trial> <pass|fail> --reason <text>  Recheck a Trial's Score
-       thirdshift status [--all] [--json]             List this machine's Commands
-       thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
+       thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
+       thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
+       thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
+       thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
+       thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
-       thirdshift console theme import <file>        Import a Theme JSON document
-       thirdshift console theme export <name>        Export a Theme as JSON
+       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | scopes ...  Manage tokens, Fleet or address scopes; CLI-only
+       thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
+       thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
-       thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
+       thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
        thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
-       thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
-       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
+       thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log
-       thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
-       thirdshift update                              Update to the latest release
+       thirdshift logs --file <id> [--follow | --json]  Read a log
+       thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] [--machine <name>]  Read a log; --tail reads its last 4 KiB; remote reads return JSON; --export <dir> writes its whole Trace
+       thirdshift update [--check] [--json] [--machine <name>]  Update, or check the latest version
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
 Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
-An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
-merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
-Shared options (before or after the Issue URL or number, or after a Pass command):
+An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch; merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
+Shared options (before or after the Issue URL or number, or after a Pass command; -- prefixes accepted, once each, without opposites):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
-  harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>, effort <level>       Choose the Harness's Model and Effort
-  security-review / no-security-review  Enable / disable a Ticket run's Security review
+  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode), Model and Effort
+  security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Options accept -- prefixes, once each, without opposites; commands override User config defaults.
-Pass commands: architect, pickup, secure (no Issue URL).
-  base <branch>                      Use an origin branch, whatever is checked out
-  --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
-Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
+Pass commands: architect, pickup, secure, review --author <login>, fix. For architect, pickup, secure and fix, base <branch> selects an origin branch; fix also accepts author <login>.
+  --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
+Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
 ";
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     child_run::name_this_process();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -165,7 +259,14 @@ fn main() -> ExitCode {
             println!("thirdshift {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Update) => return outcome(update::update()),
+        Ok(Command::FleetControl(command)) => return printed(command.run()),
+        Ok(Command::Update { check, json }) => {
+            return if check || json {
+                printed(update::command(check, json))
+            } else {
+                outcome(update::update())
+            };
+        }
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::Score) => return score(),
         Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
@@ -186,7 +287,11 @@ fn main() -> ExitCode {
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
+        Ok(Command::Config { key, value, json }) => {
+            return printed(console::config(key.as_deref(), value.as_deref(), json));
+        }
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
@@ -204,6 +309,9 @@ fn main() -> ExitCode {
             return printed(console::theme(name.as_deref(), json));
         }
         Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleOtherAccounts { value, json }) => {
+            return printed(config::console::other_accounts(value.as_deref(), json));
+        }
         Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
         Ok(Command::ConsoleSections { hide, show, json }) => {
             return printed(console::sections(&hide, &show, json));
@@ -220,6 +328,16 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::ConsoleToken(action)) => {
+            return match console::tokens::run(action) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
+        Ok(Command::ConsoleFleet(action)) => return printed(action.run()),
+        Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
+        Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
             return match console::serve(no_sign_in) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -228,9 +346,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Stop {
             command,
+            machine,
             requeue,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Stop { requeue },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::stop::stop(&command, requeue, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
@@ -238,9 +368,21 @@ fn main() -> ExitCode {
         }
         Ok(Command::Dismiss {
             command,
+            machine,
             undo,
             json,
         }) => {
+            if let Some(machine) = machine {
+                return match console::fleet_actions::cli(
+                    &machine,
+                    &command,
+                    console::fleet_actions::Action::Dismiss { undo },
+                    json,
+                ) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => failure(&error),
+                };
+            }
             return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
@@ -262,6 +404,9 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
+        Ok(Command::RemoteDetails { machine, route }) => {
+            return printed(console::fleet::read::Remote::cli(&machine, &route));
+        }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -272,8 +417,16 @@ fn main() -> ExitCode {
             command,
             session,
             follow,
+            json,
+            tail,
         }) => {
-            return match logs::status::inspect::logs(&command, session.as_deref(), follow) {
+            return match logs::status::inspect::logs(
+                &command,
+                session.as_deref(),
+                follow,
+                json,
+                tail,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -290,22 +443,34 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogFile { id, follow }) => {
-            return match logs::catalog::print_file(&id, follow) {
+        Ok(Command::LogFile { id, follow, json }) => {
+            return match logs::catalog::print_file(&id, follow, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::Status { json, all }) => {
-            return match logs::status::show(json, all) {
+        Ok(Command::Status {
+            json,
+            all,
+            machine,
+            local,
+        }) => {
+            return match logs::status::show(json, all, machine.as_deref(), local) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
+        Ok(Command::Review(command)) => return printed(processes::review::run(command)),
+        Ok(Command::Fix(command)) => return fix(command),
         Ok(Command::Process(action)) => {
+            let verbatim = matches!(action, args::ProcessAction::Show(_));
             return match processes::execute(action) {
+                Ok(text) if verbatim => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
                 Ok(text) if text.is_empty() => ExitCode::SUCCESS,
                 other => printed(other),
             };
@@ -322,11 +487,18 @@ fn main() -> ExitCode {
             );
         }
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
+        Ok(Command::Triage(args)) => return triage(args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
         Ok(Command::Secure(args)) => return secure(args),
         Ok(Command::Run(run_args)) => *run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
+    // A finding Step's child Ticket run carries this so its sessions stay
+    // local even though the owning command is a Process, not a Security run.
+    let _suppress_otlp = given
+        .as_ref()
+        .filter(|given| given.suppress_otlp)
+        .map(|_| logs::SuppressOtlp::new());
     let issue = match launch::resolve_issue(issue) {
         Ok(issue) => issue,
         Err(error) => return failure(&error),
@@ -348,9 +520,31 @@ fn main() -> ExitCode {
     let started_by = given
         .as_ref()
         .map_or(StartedBy::Command, |given| StartedBy::Child(&given.kind));
-    let ended = run::run_to_end(&issue, &mut asks, started_by);
+    let process = given
+        .as_ref()
+        .and_then(|given| given.process.as_deref())
+        .unwrap_or("ticket-run");
+    let ended = run::run_process_to_end(&issue, &mut asks, started_by, process);
     started.built_with(&asks.harness);
     started.finish(Ending::Run(ended))
+}
+
+#[cfg(target_os = "linux")]
+fn fix(args: args::FixArgs) -> ExitCode {
+    let (config, mut started) = match command::start(
+        Begin::FixRun {
+            pass: matches!(args.target, fix::Target::Pass { .. }),
+        },
+        |config| args.flags.notification(config),
+        About::FixRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = args.flags.harness(&config);
+    let ended = fix::run(&args, &config, &mut harness);
+    started.built_with(&harness);
+    started.finish(ended)
 }
 
 /// An Architect run: the Architecture review and its plan marked ready, then,
@@ -363,8 +557,8 @@ fn main() -> ExitCode {
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
 /// plan fails puts the cause and the session trace on stderr. One that is
-/// skipped says why on stderr, and is no failure: as another Pass on its
-/// repository is still running, it puts nothing on stdout,
+/// skipped says why on stderr, and is no failure: at the Command limit, or
+/// as another Architect run is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
 /// triage there, the URL of each, or as it has a Ready issue, that issue's
 /// URL. If asked, by the command or the User config, it sends one Run
@@ -375,6 +569,7 @@ fn main() -> ExitCode {
 /// that run too. The repository's Activity log records the skip, if it
 /// differs from the last, or the start and end of its work. With
 /// `activity.quiet_skips` set, a skipped run prints nothing at all.
+#[cfg(target_os = "linux")]
 fn architect(args: ArchitectArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::ArchitectRun, ask, About::ArchitectRun)
@@ -398,13 +593,44 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     })
 }
 
+#[cfg(target_os = "linux")]
+fn triage(args: args::TriageArgs) -> ExitCode {
+    let report = match triage::Report::read(args.file.as_deref()) {
+        Ok(report) => report,
+        Err(error) => return failure(&error),
+    };
+    let flags = asks::Flags {
+        email: args.email,
+        harness: args.harness,
+        ..Default::default()
+    };
+    let (config, mut started) = match command::start(
+        Begin::TriageRun,
+        |config| flags.notification(config),
+        About::TriageRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    let mut harness = flags.harness(&config);
+    started.built_with(&harness);
+    let options = triage::Options {
+        recommend_only: args.recommend_only,
+        allow_ready_for_agent: args.allow_ready_for_agent || config.triage_allow_ready_for_agent,
+        // Without an origin the run fails at once, before any session.
+        read_machine: args.read_machine
+            || launch::repo().is_ok_and(|repo| config.triage_reads_machine(&repo)),
+    };
+    started.finish(Ending::Triage(triage::run(&report, options, &mut harness)))
+}
+
 /// A Pickup run: the search for the Ready issue at its order's end of the
 /// issue numbers in the Launch directory's repository, then that issue
 /// dispatched as `thirdshift <Issue URL>` with the same flags would be, but
 /// on the Pickup run's Base branch, whatever the Launch directory has
 /// checked out. The dispatched run's ending
 /// is the Pickup run's. One that is skipped, as when the repository is at the
-/// User config's Claim limit, says why on stderr, puts nothing on stdout, and
+/// User config's Failure limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
 /// an issue sends one Run notification, naming the Pickup run and the kind
 /// of run it dispatched, and that run sends none of its own; one that is skipped
@@ -414,6 +640,7 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// The repository's Activity log records the skip, if it differs from the
 /// last, or the start and end of its work. With `activity.quiet_skips` set, a
 /// skipped pass prints nothing at all.
+#[cfg(target_os = "linux")]
 fn pickup(args: PassArgs) -> ExitCode {
     let ask = |config: &UserConfig| args.flags.notification(config);
     let (config, mut started) = match command::start(Begin::PickupRun, ask, About::PickupRun) {
@@ -446,6 +673,7 @@ fn pickup(args: PassArgs) -> ExitCode {
 }
 
 /// A Security run, with one notification when asked, unless skipped.
+#[cfg(target_os = "linux")]
 fn secure(args: PassArgs) -> ExitCode {
     let (config, mut started) = match command::start(
         Begin::SecurityRun,
@@ -478,10 +706,12 @@ fn secure(args: PassArgs) -> ExitCode {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn score() -> ExitCode {
     let _lock = match scoring::lock() {
         Ok(Some(lock)) => lock,
         Ok(None) => {
+            logs::start_notice::skipped("another Scoring run is running on this machine");
             progress::step("Scoring run skipped: another Scoring run is running on this machine");
             return ExitCode::SUCCESS;
         }
@@ -503,6 +733,7 @@ fn score() -> ExitCode {
 
 /// The release script's internal interface: the prompt on stdin, only the
 /// summary on stdout, and failures on stderr for its generated-notes fallback.
+#[cfg(target_os = "linux")]
 fn release_summary() -> ExitCode {
     use std::io::Read;
     let summary = (|| -> anyhow::Result<String> {
@@ -523,10 +754,13 @@ fn release_summary() -> ExitCode {
 }
 
 /// A Console settings view or action, with machine-readable output on stdout.
+#[cfg(target_os = "linux")]
 fn printed(result: anyhow::Result<String>) -> ExitCode {
     match result {
         Ok(text) => {
-            println!("{text}");
+            if !text.is_empty() {
+                println!("{text}");
+            }
             ExitCode::SUCCESS
         }
         Err(error) => failure(&error),
@@ -535,6 +769,7 @@ fn printed(result: anyhow::Result<String>) -> ExitCode {
 
 /// The end of a command other than a Run: the line that says how it went,
 /// or its error, on stderr.
+#[cfg(target_os = "linux")]
 fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
     match result {
         Ok(outcome) => {
@@ -546,6 +781,7 @@ fn outcome(result: anyhow::Result<impl std::fmt::Display>) -> ExitCode {
 }
 
 /// An argument thirdshift can't use: the error, then the help, on stderr.
+#[cfg(target_os = "linux")]
 fn argument_error(error: std::fmt::Arguments) -> ExitCode {
     progress::step(error);
     eprint!("\n{HELP}");

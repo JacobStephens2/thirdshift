@@ -15,6 +15,26 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+## Documentation screenshots
+
+The README and public site's Console section share the PNGs in
+[`site/screenshots/`](../site/screenshots/). After the build and browser setup
+above, refresh both from the repository root:
+
+```sh
+node console/screenshots.cjs
+```
+
+The capture needs Python 3 for its fake `gh`. It opens the real Console in
+Chromium at 1440 × 1200, using the Focus light Theme, and captures the full page
+below the machine header. It creates sample Commands and Session spans in a temporary home,
+answers GitHub reads with a local fake `gh`, and closes its browser and server
+before removing that home. It reads no personal logs or GitHub data. Inspect
+both images before committing them; the Console layout can change. The images
+show Inbox with Command details and Waterfall with every call expanded.
+
+## Development and behavior
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
@@ -40,6 +60,12 @@ The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
 session admission decision, also available with `thirdshift resources --json`.
 Reload to refresh it. Set `[resources] min_available_memory_mb` and
 `max_load_per_cpu_percent` in User config; zero disables each limit.
+Below the notification control on every reader page, a host indicator shows
+whether another session can start under those limits. It refreshes every ten
+seconds while the page is visible and links to Resources for measurements and
+blocking reasons. With both limits disabled it says **Host limits off**; a
+failed read says **Host resources unavailable**. Without JavaScript, reload
+the page to refresh the indicator. This is a snapshot, not reserved capacity.
 
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
@@ -97,12 +123,19 @@ stdout. To require sign-in, set the allowlist in `~/.thirdshift/config.toml`:
 address = "https://console.example.com" # used by console install
 port = 8711
 allowed_emails = ["you@example.com"]
-other_consoles = ["https://console.example.test"]
+fleet = [{ name = "other", address = "https://console.example.test" }]
+other_accounts = "none" # or "readable", or ["conductor", "operator"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 
 For a persistent service behind Caddy, Apache or nginx, see the manual's
 [server installation instructions](../docs/guide.md#console-on-a-server).
+
+Fleet entries without a saved token are header links. Pair a machine with
+`thirdshift console fleet add <name> <address>`, supplying its token on stdin;
+`console fleet list --json` shows saved identity, scopes and last contact.
+`console fleet remove <name>` deletes the entry and its Credentials token.
+See [Fleet](../docs/guide.md#fleet) for pairing and legacy link migration.
 
 Each allowed address must contain exactly one `@`, a nonempty local part,
 and a domain containing a dot, with no leading or trailing dot. Whitespace
@@ -159,31 +192,61 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-The Inbox reads like a mailbox. Its sections, Needs you through Resolved, are
-folders on the left with their counts, and one section's rows show at a time,
-on one line each: state, subject, title, gist and age. The gist is where the
+The Inbox opens on Overview: Needs you, Ready for review, Landing and Working
+show together, each under its heading and count, including empty groups.
+Every group starts open. Click its heading, or focus it and press Enter or Space,
+to fold its rows. The heading and count stay visible; counts and active runs
+still include folded rows. Each browser keeps its group choices through live
+updates, folder changes and reloads when storage is available. Without storage,
+folding still works through live updates. Keyboard row navigation skips folded
+rows, and the same controls work in every Theme and on phones. Without
+JavaScript, groups start open and their native disclosures still work.
+The folders on the left can filter to one section, including Done and Resolved.
+Rows show on one line each: state, subject, title, gist and age. Ready for review
+subjects link to the recorded pull request and show its title from the batched
+GitHub refresh, including Review runs without an issue. Until a title is known,
+the PR link stays usable with “(title unavailable)”. Without a PR, rows keep
+the issue subject and title, or the Command subject when neither exists.
+Clicking the subject link opens GitHub directly; clicking elsewhere opens Details.
+On a desktop, issue and pull request
+numbers stay visible as long repository or Process subjects shrink; hover
+the subject for its full text. The gist is where the
 Command stands, such as `review failed`; a Pass without an issue adds the
 issue it dispatched, its first security finding or its cause. Hover an ended
 row's age for its finish time. The list never scrolls inside itself; the page does. The
 folder is in the URL, such as `/?section=done`, so it survives a reload and
-works without JavaScript; with none named, the first section with rows opens.
+works without JavaScript; with none named, Overview opens. Hidden sections stay
+hidden in Overview too.
 The page opens with nothing selected and Command details closed. Click a row,
 or select it and press `Space`, to open its details beside the list; they stay
 open for the selected row as you move with `j` / `k` or switch folders. On a
 phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
-Command details open with the Inbox subject and the full issue title, before
+Command details open with the Command's issue subject and full issue title, before
 Stop and Dismiss. The subject links to the issue, and long titles wrap. A
-Command without an issue shows its Inbox subject alone; an unknown issue title
+Command without an issue shows its Command subject alone; an unknown issue title
 says “(title unavailable)”. The same recorded title is in
-`thirdshift show <command> --json`. Below the heading is one line per recorded fact,
-label then value. A long value, or a fact with its own facts, such as stages,
+`thirdshift show <command> --json`. An ended, unsuccessful Command shows its full
+failure reason immediately below the heading, before Stop and Dismiss, with URLs
+as links. When its own cause is absent, it uses the first cause from failed
+dispatched work. Successful or live Commands, and those with no cause, show no reason.
+The cause also stays in the facts list below, one line per recorded fact, label
+then value. A long value, or a fact with its own facts, such as stages,
 the dispatched Run or run metrics, starts folded behind a one-line preview (a
 title, a name or a count); open it to drill down, as deep as the record goes.
 Session traces fold into one count. Folds stay as you left them while live
 updates refresh the same Command. A file path shows on one line with its end
 kept and a copy icon that copies the whole path.
+
+Above **Full Command log**, Command details shows the last five lines of recent
+Command output, reading at most 4 KiB. It updates with the page's existing live
+connection, including while a Slow run keeps logging. Empty or unavailable logs
+say so without hiding the details; the full-log link stays available.
+Remote previews request that bounded tail from the owning machine through
+`/api/v1/log?tail=true`, the twin of `logs <command> --tail --json`, and keep
+only the current request's answer. The full Command log is fetched only when
+its reader opens.
 
 Each Needs you row has a **Copy** button at the end of its line for sharing its
 problem with an agent. It copies the machine, Command selector, state, cause,
@@ -227,6 +290,9 @@ sections. It points to pull requests in Ready for review, and offers the last re
 under **Last recorded skipped Passes**, and when each Pass last fired under
 **Last fired Passes**, both folded closed on each page load. Open either to
 read it; live updates keep it open while you read.
+Each bullet starts with its recorded date and time: the Activity log time for a
+skipped reason, or the saved Pass start for a last-fired entry. Repeated skips
+keep the reason's original recorded time while updating the last-fired time.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. A live Command in
 Needs you, or in a hidden section, still counts as running.
@@ -235,10 +301,11 @@ Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
 the same button turns it off across its open tabs. Keep a Console tab open
 (a pinned tab works): a rise in Needs you shows one browser notification with
-the count, machine and newest arriving item. Clicking it focuses the tab and
-opens the Inbox. Opening or reloading a tab never notifies for existing items,
-and several tabs share one notification per rise. Notifications work from the
-other Console pages too.
+the count, machine and newest arriving item. The item's state comes first, then
+what it is about and its title, so a toast cut short still says what happened.
+Clicking it focuses the tab and opens the Inbox. Opening or reloading a tab
+never notifies for existing items, and several tabs share one notification per
+rise. Notifications work from the other Console pages too.
 
 Notifications require HTTPS (or localhost), browser notification support,
 permission, browser storage and Web Locks for coordination between tabs. The
@@ -278,6 +345,9 @@ names are not inspected or evaluated. Comments and environment assignments
 are omitted, and input after cron's first unescaped `%` is not searched.
 Other users, system crontabs and other schedulers are outside this view.
 Schedules retain cron's expressions and time zone; reload to see changes.
+The page reads like a terminal crontab: one monospace line per entry, schedule
+then command, with schedules highlighted in the current Theme. Long lines scroll
+horizontally within the listing; focus it to scroll with the arrow keys.
 No matching entries or no crontab shows an empty view; an unavailable `crontab`
 command or a read failure reports an error. This view never changes the crontab
 or starts a Command.
@@ -463,6 +533,8 @@ and `show`. Run `python3 console/reproductions/ready-dispatch.py` after a build
 to check both Inbox views.
 
 A live Command's Details offers Stop beside its equivalent CLI command.
+Like Dismiss and Show, the CLI stays on one line, with long commands cut off
+and a Copy CLI button that copies the full command. Hover for the full text.
 The confirmation page explains `needs-triage`, offers Requeue instead
 (`thirdshift stop --requeue`), and requires the current account's CSRF token.
 Both actions use the CLI's Stop, including its process identity checks and

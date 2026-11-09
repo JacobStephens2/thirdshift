@@ -1,0 +1,30 @@
+version = 1
+description = "Land a Spec's Tickets, review and deliver its pull request"
+
+[worktrees.spec]
+kind = "spec-branch"
+
+[[steps]]
+name = "land-tickets"
+catalogue = "land-tickets"
+worktree = "spec"
+
+[[steps]]
+name = "spec-review"
+catalogue = "spec-review"
+worktree = "spec"
+
+[[steps]]
+name = "security-review"
+catalogue = "security-review"
+worktree = "spec"
+
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "spec"
+
+[[steps]]
+name = "self-merge"
+catalogue = "self-merge"
+worktree = "spec"

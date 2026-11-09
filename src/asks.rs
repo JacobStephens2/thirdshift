@@ -53,6 +53,8 @@ pub struct Asks {
     pub base_fix: BaseFixAsk,
     /// Whether a Security run may fix reproduced findings, passed to child Runs.
     pub security_fix: bool,
+    /// Whether a merged Security fix may close its finding, passed to child Runs.
+    pub security_close: bool,
     /// Whether Delivery runs the optional guidance Security review.
     pub security_review: bool,
     /// Whether it first brings the Launch directory's checkout of the Base
@@ -92,6 +94,7 @@ impl Asks {
             parallel_asked: flags.parallel.is_some(),
             base_fix,
             security_fix: flags.security_fix_allowed(config),
+            security_close: flags.security_close_allowed(config),
             security_review: flags.security_review(config),
             launch_pull: config.launch_pull,
             security_review_harness: flags.security_review_harness(config, &harness),
@@ -118,6 +121,7 @@ impl Asks {
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
             security_fix: given.asks.security_fix,
+            security_close: given.asks.security_close,
             security_review: given.asks.security_review,
             launch_pull: false,
             harness: given.asks.harness.clone(),
@@ -295,6 +299,8 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            launch_directories: Vec::new(),
+            review: crate::config::review::Settings::default(),
             scoring: crate::config::scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
@@ -309,7 +315,8 @@ mod tests {
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: n(3),
-            pickup_limit: n(3),
+            pickup_failure_limit: n(3),
+            command_limit: n(1),
             pickup_wait: chrono::TimeDelta::minutes(30),
             pickup_order: crate::ready::PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
@@ -317,7 +324,10 @@ mod tests {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
+            triage_read_machine: Default::default(),
             trial_caps: crate::scope::Caps::default(),
+            warnings: Vec::new(),
         }
     }
 
@@ -332,6 +342,7 @@ mod tests {
                 unless_merged: false,
                 to: Some("config@example.com".to_string()),
                 from: None,
+                ..EmailSettings::default()
             },
             spec_parallel: n(5),
             harness: harness::Settings {
@@ -402,6 +413,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
@@ -425,6 +437,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Send(None),
@@ -457,6 +470,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
                 notification: NotificationAsk::Skip,
@@ -487,6 +501,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 notification: to("flag@example.com"),
@@ -503,7 +518,9 @@ mod tests {
     /// fix, its sessions on Claude's `sonnet`.
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
+            process: None,
             command: crate::logs::CommandKind::Issue,
+            suppress_otlp: false,
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
@@ -517,12 +534,14 @@ mod tests {
     fn ticket() -> Kind {
         Kind::Ticket {
             spec_branch: "issue-20".to_string(),
+            spec_pr: None,
         }
     }
 
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
         }
     }
 
@@ -659,6 +678,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
@@ -680,6 +700,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Architect run sends it.
@@ -703,6 +724,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 notification: NotificationAsk::Skip,
@@ -724,6 +746,7 @@ mod tests {
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 goal: Goal::Merged,
                 // Whatever `email.always` says: the Pickup run sends it.

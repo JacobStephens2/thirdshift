@@ -5,7 +5,7 @@ use rand::RngExt;
 use rand_distr::{Distribution, Exp1};
 use rand_pcg::Pcg64;
 
-use super::{Bar, Decision, Draw, MoreTasks, Posterior, decide, interval};
+use super::{Bar, Decision, Draw, Intervals, MoreTasks, Posterior};
 
 struct Path {
     probabilities: Vec<f64>,
@@ -71,7 +71,8 @@ pub(super) fn more_tasks(posterior: &Posterior, bar: &Bar, rng: &mut Pcg64) -> R
                 draw.weighted += increment * value;
                 means.push(draw.mean());
             }
-            if decide(interval(&mut means, bar.credible_level), bar.margin)
+            if Intervals::from_draws(&mut means, bar.levels)
+                .decide(bar.margin, bar.levels.pass_rule())
                 != Decision::Inconclusive
             {
                 clear += 1;

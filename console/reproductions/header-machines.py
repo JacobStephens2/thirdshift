@@ -4,7 +4,7 @@ other = 'https://other.example.test'
 with tempfile.TemporaryDirectory(prefix='console-header-review-') as home:
     root = pathlib.Path(home) / '.thirdshift'
     root.mkdir()
-    (root / 'config.toml').write_text('[console]\nport = 0\nother_consoles = ["' + other + '"]\n')
+    (root / 'config.toml').write_text('[console]\nport = 0\nfleet = [{name = "other", address = "' + other + '"}]\n')
     env = dict(os.environ, HOME=home)
     hostname = json.loads(subprocess.check_output([binary, 'status', '--json'], env=env))['hostname']
     server = subprocess.Popen([binary, 'console', '--no-sign-in'], env=env, stdout=subprocess.PIPE, text=True)

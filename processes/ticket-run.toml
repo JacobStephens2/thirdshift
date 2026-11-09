@@ -1,0 +1,25 @@
+version = 1
+description = "Take a Ticket to a ready or merged pull request"
+
+[worktrees.ticket]
+kind = "issue-branch"
+
+[[steps]]
+name = "implement"
+catalogue = "implement"
+worktree = "ticket"
+
+[[steps]]
+name = "security-review"
+catalogue = "security-review"
+worktree = "ticket"
+
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "ticket"
+
+[[steps]]
+name = "self-merge"
+catalogue = "self-merge"
+worktree = "ticket"

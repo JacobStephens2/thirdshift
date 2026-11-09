@@ -1,0 +1,10 @@
+version = 1
+description = "Review architecture, then run the Strong plan"
+
+[[steps]]
+name = "architecture-review"
+catalogue = "architecture-review"
+
+[[steps]]
+name = "run-published-issue"
+catalogue = "run-published-issue"

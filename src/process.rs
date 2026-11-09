@@ -13,11 +13,14 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::interrupt;
 
+pub(crate) mod session;
 mod tree;
-pub(crate) use tree::stop;
+pub(crate) use tree::{is_alive, signal, stop};
 
 #[cfg(test)]
 mod faults;
+#[cfg(test)]
+pub(crate) mod testing;
 #[cfg(test)]
 mod tests;
 
@@ -265,6 +268,7 @@ fn execute<'a, T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
+            session: session::Session::of(command),
             observer,
             check,
             deadline,
@@ -368,6 +372,7 @@ fn execute<'a, T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
+    session: Option<session::Session>,
     observer: Option<&'a crate::scope::Scope>,
     check: &'a dyn Fn() -> Result<()>,
     deadline: Option<Instant>,
@@ -400,6 +405,9 @@ impl<T> Execution<'_, T> {
                     .child
                     .try_wait()
                     .with_context(|| format!("could not wait for {}", self.control.name))?;
+            }
+            if status.is_some() {
+                self.sweep_session();
             }
             let stdin_done = self
                 .stdin
@@ -448,6 +456,7 @@ impl<T> Execution<'_, T> {
             return;
         }
         (self.control.stop)(&mut self.child);
+        self.sweep_session_after_stop();
         let _ = self.child.wait();
         // Pipes may still be attached if worker startup failed.
         drop(self.child.stdin.take());
@@ -463,6 +472,21 @@ impl<T> Execution<'_, T> {
             worker.join();
         }
         self.completed = true;
+    }
+
+    fn sweep_session(&mut self) {
+        if self.session.is_some() {
+            // Keep the tree snapshot first, even on normal completion. The
+            // final sweep then catches descendants already reparented away.
+            (self.control.stop)(&mut self.child);
+            self.sweep_session_after_stop();
+        }
+    }
+
+    fn sweep_session_after_stop(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.sweep(self.observer);
+        }
     }
 }
 

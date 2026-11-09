@@ -960,7 +960,6 @@ fn dismissal_retention_survives_the_original_wait_cutoff() {
     assert_eq!(original["dismissal"]["kind"], "Failed");
 }
 
-#[cfg(unix)]
 #[test]
 fn undo_reports_sidecar_removal_failure() {
     use std::os::unix::fs::PermissionsExt;

@@ -10,7 +10,6 @@ const NETWORK: u8 = 21;
 const HOME: u8 = 22;
 const SCRATCH: u8 = 23;
 
-#[cfg(target_os = "linux")]
 const REMEDIES: &str = "\
 On Debian/Ubuntu, install bubblewrap:
   sudo apt install bubblewrap
@@ -28,24 +27,12 @@ The profile grants user namespaces to /usr/bin/bwrap; use the installed binary's
 Then rerun thirdshift setup. These commands are printed only; Setup never runs them.";
 
 pub(super) fn report(config_path: &Path) -> String {
-    #[cfg(target_os = "linux")]
-    {
-        match probe(config_path) {
-            Ok(()) => "Security sandbox probe: PASS (sandbox start, network connection blocked, host home read-only, scratch writable); sessions must still enforce every audit skill control".into(),
-            Err(error) => format!("Security sandbox probe: FAIL ({error:#})\n{REMEDIES}"),
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = config_path;
-        format!(
-            "Security sandbox probe: unavailable on {}; validate equivalent platform isolation before executing target code",
-            std::env::consts::OS
-        )
+    match probe(config_path) {
+        Ok(()) => "Security sandbox probe: PASS (sandbox start, network connection blocked, host home read-only, scratch writable); sessions must still enforce every audit skill control".into(),
+        Err(error) => format!("Security sandbox probe: FAIL ({error:#})\n{REMEDIES}"),
     }
 }
 
-#[cfg(target_os = "linux")]
 fn probe(config_path: &Path) -> anyhow::Result<()> {
     use anyhow::{Context, bail};
     use std::net::{TcpListener, TcpStream};

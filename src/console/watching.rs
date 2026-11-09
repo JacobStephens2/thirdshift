@@ -1,8 +1,6 @@
 //! Native process exits, referenced logs outside logs.dir, and health deadlines.
 //! All viewers share this observer; the last viewer dropping stops it.
 use std::collections::BTreeSet;
-#[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::time::Duration;
 
@@ -165,7 +163,6 @@ async fn exited(mut process: Process) {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn exit_descriptor(pid: u32) -> std::io::Result<OwnedFd> {
     // SAFETY: pidfd_open returns a new close-on-exec descriptor owned here.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
@@ -173,41 +170,4 @@ fn exit_descriptor(pid: u32) -> std::io::Result<OwnedFd> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
-}
-
-#[cfg(target_os = "macos")]
-fn exit_descriptor(pid: u32) -> std::io::Result<OwnedFd> {
-    // SAFETY: kqueue returns a new descriptor owned here.
-    let fd = unsafe { libc::kqueue() };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    let event = libc::kevent {
-        ident: pid as libc::uintptr_t,
-        filter: libc::EVFILT_PROC,
-        flags: libc::EV_ADD | libc::EV_ONESHOT,
-        fflags: libc::NOTE_EXIT,
-        data: 0,
-        udata: std::ptr::null_mut(),
-    };
-    // SAFETY: fd is owned here; close-on-exec keeps it out of CLI children.
-    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: the event is initialized, and no output buffer is requested.
-    let registered = unsafe {
-        libc::kevent(
-            fd.as_raw_fd(),
-            &event,
-            1,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null(),
-        )
-    };
-    if registered < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(fd)
 }

@@ -1,6 +1,7 @@
 //! Interpret a Harness session once, including optional retained records.
 
 use std::fmt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{ExitStatus, Output};
 
@@ -30,7 +31,7 @@ pub struct Interpretation {
     models: models::Models,
     events: Option<Vec<event::Event>>,
     work_started: bool,
-    plan_limit_reached: bool,
+    plan_limit: Option<limits::Limit>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -155,7 +156,7 @@ pub struct Decoded {
 }
 
 pub(super) enum Evidence {
-    PlanLimit,
+    PlanLimit(limits::Limit),
     WorkStarted,
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
@@ -195,6 +196,8 @@ pub struct SessionFailure {
     pub before_first_turn: bool,
     /// Retained on failure too, so a Trial can identify the session it ran.
     pub session_id: Option<String>,
+    /// Kernel or manager evidence supplied by the Session's execution owner.
+    pub oom_killed: bool,
     status: ExitStatus,
 }
 
@@ -203,14 +206,29 @@ impl fmt::Display for SessionFailure {
         f.write_str(self.harness)?;
         if self.status.success() {
             f.write_str("'s turn failed")?;
+        } else if let Some(code) = self.status.code() {
+            write!(f, " exited {code}")?;
         } else {
-            write!(
-                f,
-                " exited {}",
-                self.status
-                    .code()
-                    .map_or("by signal".to_string(), |code| code.to_string())
-            )?;
+            f.write_str(" exited by signal")?;
+            if let Some(signal) = self.status.signal() {
+                write!(f, " {signal}")?;
+                let name = match signal {
+                    libc::SIGKILL => Some("SIGKILL"),
+                    libc::SIGTERM => Some("SIGTERM"),
+                    libc::SIGABRT => Some("SIGABRT"),
+                    libc::SIGSEGV => Some("SIGSEGV"),
+                    libc::SIGINT => Some("SIGINT"),
+                    libc::SIGHUP => Some("SIGHUP"),
+                    libc::SIGPIPE => Some("SIGPIPE"),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    write!(f, " ({name})")?;
+                }
+            }
+        }
+        if !self.status.success() && self.oom_killed {
+            f.write_str(" (scope OOM-killed)")?;
         }
         if let Some(diagnostic) = &self.diagnostic {
             write!(f, ": {diagnostic}")?;
@@ -248,6 +266,7 @@ impl Failure {
                     status,
                     before_first_turn,
                     session_id,
+                    oom_killed: false,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -268,7 +287,7 @@ impl Interpretation {
             models: models::Models::default(),
             events: None,
             work_started: false,
-            plan_limit_reached: false,
+            plan_limit: None,
         }
     }
 
@@ -307,7 +326,11 @@ impl Interpretation {
 
     /// Live quota evidence is sticky and independent of ordinary Run outcomes.
     pub fn plan_limit_reached(&self) -> bool {
-        self.plan_limit_reached
+        self.plan_limit.is_some()
+    }
+
+    pub(crate) fn plan_limit(&self) -> Option<&limits::Limit> {
+        self.plan_limit.as_ref()
     }
 
     /// Supplied raw records go through the same decoding and trace recording
@@ -346,8 +369,8 @@ impl Interpretation {
         } = self.decoder.condense(raw);
         self.work_started |= events.iter().any(work_started);
         for fact in evidence {
-            if matches!(fact, Evidence::PlanLimit) {
-                self.plan_limit_reached = true;
+            if let Evidence::PlanLimit(limit) = &fact {
+                self.plan_limit.get_or_insert_with(|| limit.clone());
             }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;
@@ -446,6 +469,11 @@ fn work_started(event: &event::Event) -> bool {
         Event::Message { role, text, .. } => role == "assistant" && !text.trim().is_empty(),
         Event::TurnEnded { usage, outcome, .. } => *outcome == Outcome::Succeeded || tokens(usage),
         Event::ModelCallEnded { usage, .. } | Event::Usage { usage, .. } => tokens(usage),
-        _ => false,
+        Event::ModelCallStarted { .. }
+        | Event::TurnStarted { .. }
+        | Event::Error { .. }
+        | Event::WorkEnded { .. }
+        | Event::SubagentStarted { .. }
+        | Event::SubagentEnded { .. } => false,
     }
 }

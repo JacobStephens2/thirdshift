@@ -17,7 +17,6 @@ use crate::logs::session_signals::SessionSignals;
 struct Identity {
     len: u64,
     modified: Option<SystemTime>,
-    #[cfg(unix)]
     inode: (u64, u64, i64, i64),
 }
 
@@ -27,7 +26,6 @@ impl Identity {
         Ok(Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
-            #[cfg(unix)]
             inode: {
                 use std::os::unix::fs::MetadataExt;
                 (
@@ -154,6 +152,14 @@ pub(super) fn text(path: &Path) -> Result<Arc<str>> {
 /// Retain only the derived signals, keyed by the resolved Session trace's
 /// identity. Large source traces must not consume the summary cache's budget.
 pub(super) fn session_signals(log: &Path) -> Option<SessionSignals> {
+    signals(log, true)
+}
+
+pub(super) fn readonly_session_signals(log: &Path) -> Option<SessionSignals> {
+    signals(log, false)
+}
+
+fn signals(log: &Path, writable: bool) -> Option<SessionSignals> {
     struct Signals {
         cache: Cache<Option<SessionSignals>>,
         readers: BTreeMap<PathBuf, Weak<Mutex<()>>>,
@@ -196,7 +202,9 @@ pub(super) fn session_signals(log: &Path) -> Option<SessionSignals> {
     }
     // The file lock also coordinates cold readers in separate CLI processes.
     // An unwritable cache is only a missed optimization, never missing evidence.
-    let retained = retained_signals::RetainedSignals::lock(&path).ok();
+    let retained = writable
+        .then(|| retained_signals::RetainedSignals::lock(&path).ok())
+        .flatten();
     let identity = Identity::read(&path).ok()?;
     let cached = retained.as_ref().and_then(|cache| cache.read(&identity));
     let persist = cached.is_none();

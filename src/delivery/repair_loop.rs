@@ -827,10 +827,16 @@ mod tests {
     /// The progress lines among `did`.
     fn lines(did: &[Did]) -> Vec<&str> {
         did.iter()
-            .filter_map(|did| match did {
-                Did::Line(line) => Some(line.as_str()),
-                _ => None,
-            })
+            .filter_map(
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "keeps only progress lines; a new kind of step must be listed to count"
+                )]
+                |did| match did {
+                    Did::Line(line) => Some(line.as_str()),
+                    _ => None,
+                },
+            )
             .collect()
     }
 
@@ -1712,6 +1718,10 @@ mod tests {
             cause(delivered),
             "origin/issue-7 kept moving: merged it again 5 times"
         );
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test asserts on merges only; the loop's other steps are not under test"
+        )]
         let merged: Vec<_> = did
             .iter()
             .filter_map(|did| match did {

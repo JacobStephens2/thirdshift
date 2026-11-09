@@ -102,7 +102,9 @@ function connect() {
   });
   source.onerror = () => { if (source === stream) startPolling(); };
 }
-if (typeof EventSource === 'function') connect();
-else startPolling();
+if (content.dataset.stream) {
+  if (typeof EventSource === 'function') connect();
+  else startPolling();
+}
 window.addEventListener('pagehide', stop);
 scroll();

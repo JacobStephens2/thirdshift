@@ -44,6 +44,7 @@ pub mod guidance;
 mod executable;
 pub use executable::write_executable;
 
+pub mod concurrency;
 pub mod fakes;
 pub mod resend;
 pub mod scoring;
@@ -93,7 +94,9 @@ pub const OWNER: &str = "acme";
 pub const REPO: &str = "widgets";
 
 /// Every Factory skill, by the name a session finds it under.
-pub const FACTORY_SKILLS: [&str; 10] = [
+pub const FACTORY_SKILLS: [&str; 12] = [
+    "thirdshift-triage",
+    "thirdshift-to-questionnaire",
     "thirdshift-implement",
     "thirdshift-code-review",
     "thirdshift-pr",
@@ -121,7 +124,6 @@ const COPY_IN_USE: &str = "copy-in-use";
 const COPY_REPLACED: &str = "copy-replaced";
 
 pub mod check;
-#[cfg(target_os = "linux")]
 pub mod child_lifetime;
 
 pub struct Scenario {
@@ -500,6 +502,17 @@ impl Scenario {
         fs::write(self.path("claude-script.sh"), script).unwrap();
     }
 
+    /// Script an agent that touches `started`, waits up to [`WAIT_BOUND`]
+    /// for `release` in the scenario root, then runs `script`.
+    pub fn agent_waits_for_release(&self, script: &str) {
+        let looks = WAIT_BOUND.as_millis() / 50;
+        self.agent_does(&format!(
+            "touch '{started}'\nfor _ in $(seq {looks}); do test -f '{release}' && break; sleep 0.05; done\ntest -f '{release}'\n{script}",
+            started = self.path("started").display(),
+            release = self.path("release").display(),
+        ));
+    }
+
     /// Script the fake agent's `session`-th session (1-based) differently
     /// from the rest.
     pub fn agent_does_in_session(&self, session: usize, script: &str) {
@@ -528,6 +541,26 @@ impl Scenario {
 
     pub fn run(&self, args: &[&str]) -> RunResult {
         self.command(args).output().unwrap().into()
+    }
+
+    /// Supply a Report or other piped input, closing stdin before waiting.
+    pub fn run_with_input(&self, args: &[&str], input: &str) -> RunResult {
+        use std::io::Write;
+
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap().into()
     }
 
     /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.
@@ -741,7 +774,6 @@ test -f {root}/{COPY_REPLACED}
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave))
             .stdout(Stdio::piped());
-        #[cfg(target_os = "linux")]
         child_lifetime::kill_with_parent(&mut command);
         // The terminal becomes the child's controlling terminal, so Ctrl-C
         // on it sends SIGINT, as in a shell.
@@ -871,7 +903,7 @@ test -f {root}/{COPY_REPLACED}
         }
     }
 
-    fn command(&self, args: &[&str]) -> Command {
+    pub(crate) fn command(&self, args: &[&str]) -> Command {
         self.command_running(Path::new(env!("CARGO_BIN_EXE_thirdshift")), args)
     }
 

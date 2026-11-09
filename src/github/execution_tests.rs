@@ -1,4 +1,5 @@
 use super::*;
+use crate::process::is_alive;
 #[test]
 fn first_bug_backfill_keeps_closures_in_the_cutoffs_second() {
     with_recorded_signal(
@@ -104,18 +105,12 @@ impl Fixture {
     }
 }
 
-fn exists(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 only probes the fixture's recorded PID.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Some(pid) = self.pid()
-            && exists(pid)
+            && is_alive(pid)
         {
-            // SAFETY: this PID belongs to the fixture executable.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = crate::process::signal(pid, libc::SIGKILL);
         }
     }
 }
@@ -665,7 +660,7 @@ fn parent_only_interruption_stops_active_github() {
                 "GitHub waited for natural expiry"
             );
             assert!(
-                !exists(fixture.pid().expect("the executable never started")),
+                !is_alive(fixture.pid().expect("the executable never started")),
                 "GitHub left its executable alive"
             );
         },
@@ -781,7 +776,7 @@ fn an_optional_pr_probe_propagates_active_cancellation_instead_of_absence() {
                 .pr_snapshot(&issue(), "issue-7")
                 .expect_err("cancellation became absence");
             assert_eq!(error.to_string(), "interrupted");
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }
@@ -824,7 +819,7 @@ esac
             assert!(interrupt::requested());
             assert!(github.pr_snapshot(&issue(), "12").is_err());
             assert!(github.mark_ready(&issue(), "12").is_err());
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }
@@ -894,6 +889,113 @@ esac
                     ("external", Conclusion::Pending)
                 ]
             );
+        },
+    );
+}
+
+#[test]
+fn checks_on_falls_back_to_actions_jobs_when_checks_are_forbidden() {
+    with_recorded_signal(
+        "github::execution_tests::checks_on_falls_back_to_actions_jobs_when_checks_are_forbidden",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) echo 'gh: Resource not accessible by personal access token (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z"}' '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"completed","conclusion":"success"}' ;;
+  */actions/runs/901/jobs\?*) printf '%s\n' '{"id":42,"name":"test","status":"completed","conclusion":"success","html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}' ;;
+  */status*) printf '%s\n' '{"context":"deploy","state":"pending"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new()
+                .checks_on(&issue(), "abc")
+                .unwrap_or_else(|error| {
+                    panic!("Actions-readable CI must survive a check-runs 403: {error:#}")
+                });
+            assert_eq!(checks.len(), 2);
+            assert_eq!(checks[0].name, "test");
+            assert_eq!(checks[0].conclusion, Conclusion::Success);
+            assert_eq!(
+                checks[0].url.as_deref(),
+                Some("https://github.com/acme/widgets/actions/runs/901/job/42")
+            );
+            assert_eq!(
+                checks[0].job,
+                Some(ActionsJob {
+                    check_run: 42,
+                    workflow_run: 901,
+                    abandoned: false,
+                })
+            );
+            assert_eq!(checks[1].conclusion, Conclusion::Pending);
+        },
+    );
+}
+
+#[test]
+fn actions_fallback_keeps_unfinished_workflows_and_jobs_pending() {
+    with_recorded_signal(
+        "github::execution_tests::actions_fallback_keeps_unfinished_workflows_and_jobs_pending",
+        |_| {
+            let fixture = Fixture::new("");
+            for job in [
+                "",
+                r#"{"id":42,"name":"setup","status":"completed","conclusion":"success","html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}"#,
+                r#"{"id":42,"name":"test","status":"queued","conclusion":null,"html_url":"https://github.com/acme/widgets/actions/runs/901/job/42"}"#,
+            ] {
+                fixture.script(&format!(r#"
+case "$5" in
+  */check-runs*) echo 'gh: Forbidden (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"in_progress","name":"CI"}}' ;;
+  */jobs\?*) printf '%s' '{job}' ;;
+  */status*) ;;
+  *) exit 1 ;;
+esac
+"#));
+                let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+                assert!(
+                    checks
+                        .iter()
+                        .any(|check| check.conclusion == Conclusion::Unfinished)
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn actions_fallback_preserves_errors_other_than_checks_403() {
+    with_recorded_signal(
+        "github::execution_tests::actions_fallback_preserves_errors_other_than_checks_403",
+        |_| {
+            let fixture = Fixture::new("");
+            for (endpoint, code) in [
+                ("check-runs", 401),
+                ("check-runs", 404),
+                ("check-runs", 500),
+                ("actions/runs?", 403),
+                ("actions/runs/901/jobs?", 403),
+                ("status", 403),
+            ] {
+                fixture.script(&format!(r#"
+case "$5" in
+  *'{endpoint}'*) echo 'gh: endpoint failed (HTTP {code})' >&2; exit 1 ;;
+  */check-runs*) echo 'gh: Forbidden (HTTP 403)' >&2; exit 1 ;;
+  */actions/runs\?*) printf '%s\n' '{{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z"}}' ;;
+  */jobs\?*|*/status*) ;;
+  *) exit 1 ;;
+esac
+"#));
+                let error = GitHub::new().checks_on(&issue(), "abc").err().unwrap();
+                let message = format!("{error:#}");
+                assert!(message.contains(endpoint), "{message}");
+                assert!(
+                    message.contains(&format!("gh: endpoint failed (HTTP {code})")),
+                    "{message}"
+                );
+            }
         },
     );
 }
@@ -1364,7 +1466,7 @@ fn cancellation_during_a_ci_check_read_starts_no_further_request() {
             assert_eq!(error.to_string(), "interrupted");
             assert_eq!(fs::read_to_string(fixture.path("reads")).unwrap(), "read\n");
             assert!(started.elapsed() < Duration::from_secs(2));
-            assert!(!exists(fixture.pid().unwrap()));
+            assert!(!is_alive(fixture.pid().unwrap()));
         },
     );
 }

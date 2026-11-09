@@ -143,6 +143,9 @@ pub(super) fn allocate<F: Files>(
         Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
         Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
+        Work::ReviewRun(_) => (CommandKind::Review, String::new()),
+        Work::FixRun(_) => (CommandKind::Fix, String::new()),
+        Work::TriageRun(_) => (CommandKind::Triage, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
         Work::Process { .. } => (CommandKind::Process, String::new()),
     };
@@ -216,7 +219,8 @@ impl Decoded<'_> {
 
     pub fn command_log(&self, path: &Path) -> PathBuf {
         let subject = match self.subject {
-            "" | "architect" | "secure" => String::new(),
+            "" | "architect" | "secure" | "triage" => String::new(),
+            subject if subject.starts_with("process-step-") => String::new(),
             subject => format!("{subject}-"),
         };
         path.with_file_name(format!("{subject}{}.log", self.identity))
@@ -284,6 +288,14 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
         identity: Identity { stamp, token },
         session_kind,
     })
+}
+
+/// Whether `path` is a Security session trace. Command logs have no session
+/// kind, so a read-scoped caller can still open those.
+pub(crate) fn security_session(path: &Path) -> bool {
+    decode(path)
+        .and_then(|decoded| decoded.session_kind)
+        .is_some_and(crate::session::kind::is_security)
 }
 
 /// Only the log-records file represents a Session trace in the inventory.

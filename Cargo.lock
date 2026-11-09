@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "thirdshift"
-version = "0.16.5"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2204,14 +2204,17 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sha2",
+ "shlex",
  "signal-hook",
  "stateright",
  "subtle",
+ "syn 2.0.119",
  "sysinfo",
  "tempfile",
  "tokio",
  "toml",
  "toml_edit",
+ "tower",
  "tower-layer",
 ]
 

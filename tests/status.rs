@@ -195,7 +195,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
     let ended = held.finish();
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
-    assert_eq!(status["version"], 1);
+    assert_eq!(status["version"], 2);
     assert_eq!(status["commands"].as_array().unwrap().len(), 2);
     assert_eq!(status["commands"][1]["state"], "ended");
     assert!(!status["hostname"].as_str().unwrap().is_empty());
@@ -745,6 +745,73 @@ fn resolved_counts_superseded_rows_from_the_later_command_start() {
         "{}",
         text.stdout
     );
+}
+
+#[test]
+fn later_commands_take_up_waiting_rows_on_the_same_pull_request() {
+    let scenario = Scenario::new();
+    let stamp = |hours| {
+        (chrono::Local::now() - chrono::Duration::hours(hours))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    };
+    let old = stamp(72);
+    let later = stamp(12);
+    for (number, outcome, pr, started) in [
+        (20, "ready for review", 40, &old),
+        (21, "failed", 41, &old),
+        (22, "ready for review", 42, &old),
+        (30, "merged", 40, &later),
+        (31, "merged", 41, &later),
+    ] {
+        write_record(&scenario, number, started, Some(started));
+        change_record(&scenario, number, |record| {
+            if pr == 40 || pr == 42 {
+                record["issue"] = Value::Null;
+            }
+            record["kind"] = if number == 30 {
+                "Fix run"
+            } else {
+                "Review run"
+            }
+            .into();
+            record["outcome"] = outcome.into();
+            record["pull_request"] = github_pr_url(pr).into();
+            record["cause"] = format!("fixture {number}").into();
+        });
+    }
+    for pr in [40, 41, 42] {
+        github_pr_is(&scenario, pr, "OPEN", None, None);
+    }
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    for (pr, from) in [(40, "ready for review"), (41, "needs you")] {
+        let row = commands
+            .iter()
+            .find(|row| row["pull_request"] == github_pr_url(pr) && row["started_at"] == old)
+            .unwrap();
+        assert_eq!(row["group"], "resolved", "{row}");
+        assert_eq!(row["left_from"], from, "{row}");
+        assert_eq!(row["left_reason"], "taken up by a later Command", "{row}");
+        assert_eq!(row["left_at"], later, "{row}");
+    }
+    let unrelated = commands
+        .iter()
+        .find(|row| row["pull_request"] == github_pr_url(42))
+        .unwrap();
+    assert_eq!(unrelated["group"], "ready for review", "{unrelated}");
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    for from in ["needs you", "ready for review"] {
+        assert!(
+            text.stdout.contains(&format!(
+                "left {from}: taken up by a later Command started at"
+            )),
+            "{}",
+            text.stdout
+        );
+    }
 }
 
 #[test]
@@ -1731,8 +1798,134 @@ fn status_keeps_children_under_their_own_security_dispatch() {
 const GITHUB_CACHE: &str = "home/.thirdshift/logs/github-inbox.json";
 
 #[test]
+fn show_reads_cached_github_facts_without_refreshing() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    let mut gh = scenario.gh_state();
+    gh["prs"][0]["mergeable"] = "CONFLICTING".into();
+    gh["prs"][0]["commits"] =
+        serde_json::json!({"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]});
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["github_mergeable"], "conflicting");
+    age_cache_file(&scenario, 360);
+    // A live refresh would replace the cached conflict. show must never ask.
+    github_pr_is(&scenario, 7, "MERGED", Some(&hours_ago(1)), None);
+    let before = scenario.gh_calls();
+    let output = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let shown: Value = serde_json::from_str(&output.stdout).unwrap();
+    for field in ["github_state", "github_ci", "github_mergeable", "github"] {
+        assert_eq!(
+            shown["command"][field], status["commands"][0][field],
+            "{field}: {shown}"
+        );
+    }
+    assert_eq!(
+        scenario.gh_calls(),
+        before,
+        "show must only read local facts"
+    );
+}
+
+#[test]
+fn old_cached_github_answers_default_mergeability_and_missing_answers_stay_absent() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    let cache = scenario.path(GITHUB_CACHE);
+    let url = github_pr_url(7);
+    fs::write(
+        &cache,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "pull_requests": {&url: {"state": "Open", "merged_at": null, "closed_at": null}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let before = scenario.gh_calls();
+    for args in [
+        vec!["status", "--json"],
+        vec!["show", "widgets#7", "--json"],
+    ] {
+        let output = scenario.run(&args);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let value: Value = serde_json::from_str(&output.stdout).unwrap();
+        let command = if args[0] == "status" {
+            &value["commands"][0]
+        } else {
+            &value["command"]
+        };
+        assert_eq!(command["github_state"], "open", "{value}");
+        assert_eq!(command["github_ci"], "unknown", "{value}");
+        assert_eq!(command["github_mergeable"], "unknown", "{value}");
+        assert!(
+            command["github"]["subjects"][&url]["answered_at"].is_null(),
+            "{value}"
+        );
+    }
+    fs::remove_file(cache).unwrap();
+    let output = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let shown: Value = serde_json::from_str(&output.stdout).unwrap();
+    for field in ["github_state", "github_ci", "github_mergeable", "github"] {
+        assert!(shown["command"].get(field).is_none(), "{shown}");
+    }
+    assert_eq!(scenario.gh_calls(), before);
+}
+
+#[test]
+fn show_reads_issue_and_frozen_cached_github_observations() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(240);
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    failed_record(&scenario, 8, &ended);
+    let url = github_pr_url(7);
+    let issue = scenario.issue_url(8);
+    let frozen = format!(
+        "{}::{url}",
+        scenario.path(LOGS).join("7-fixture.command.json").display()
+    );
+    fs::write(scenario.path(GITHUB_CACHE), serde_json::to_vec(&serde_json::json!({
+        "version": 2,
+        "subjects": {
+            &url: {"state": "Open", "merged_at": null, "closed_at": null, "ci": "red", "mergeable": "conflicting"},
+            &issue: {"closed": true, "closed_at": &ended, "needs_triage": false, "triaged_at": null}
+        },
+        "history": {&frozen: {"state": "Merged", "merged_at": &ended, "closed_at": null, "ci": "green", "mergeable": "mergeable"}},
+        "answered_at": {&frozen: &ended, &issue: &ended, &url: hours_ago(1)}
+    })).unwrap()).unwrap();
+    let before = scenario.gh_calls();
+    let output = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let shown: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(shown["command"]["github_state"], "merged", "{shown}");
+    assert_eq!(shown["command"]["github_ci"], "green", "{shown}");
+    assert_eq!(shown["command"]["github_mergeable"], "mergeable", "{shown}");
+    assert_eq!(shown["command"]["github_at"], ended, "{shown}");
+    assert_eq!(
+        shown["command"]["github"]["subjects"][&url]["answered_at"], ended,
+        "{shown}"
+    );
+    let output = scenario.run(&["show", "widgets#8", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let shown: Value = serde_json::from_str(&output.stdout).unwrap();
+    let observation = &shown["command"]["github"]["subjects"][&issue];
+    assert_eq!(observation["facts"]["closed"], true, "{shown}");
+    assert_eq!(observation["answered_at"], ended, "{shown}");
+    assert_eq!(scenario.gh_calls(), before);
+}
+
+#[test]
 fn review_open_pr_row_exposes_when_github_observed_it() {
     fn has_time(value: &Value) -> bool {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only strings hold a time; arrays and objects are searched, and other values hold none"
+        )]
         match value {
             Value::String(text) => chrono::DateTime::parse_from_rfc3339(text).is_ok(),
             Value::Array(values) => values.iter().any(has_time),

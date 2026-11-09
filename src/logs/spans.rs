@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context as _, Result, bail};
 use chrono::{DateTime, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::reading::{Command, Entry, Observation, Snapshot};
@@ -15,7 +15,7 @@ use super::trace::SpanKind;
 use super::trace::ancestry::{self, Fact, Node};
 use crate::config::UserConfig;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Span {
     pub id: String,
     pub parent_id: Option<String>,
@@ -45,12 +45,16 @@ impl Span {
                 |(kind, subject)| format!("{} · {subject}", super::display_name(kind)),
             ),
             SpanKind::Stage => super::display_name(&self.name).to_owned(),
-            _ => self.name.clone(),
+            SpanKind::Sess
+            | SpanKind::Model
+            | SpanKind::Turn
+            | SpanKind::Tool
+            | SpanKind::Agent => self.name.clone(),
         }
     }
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub(crate) struct Tree {
     pub command: String,
     pub spans: Vec<Span>,
@@ -198,8 +202,19 @@ fn metric(
 }
 
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
+    load_with(config, input, false)
+}
+
+/// A Console caller without the `security` scope still sees the Command's
+/// stages. Security session traces are refused on the log routes; this read
+/// skips those files so their prompts and tool output never enter the tree.
+pub(crate) fn load_without_security_sessions(config: &UserConfig, input: &str) -> Result<View> {
+    load_with(config, input, true)
+}
+
+fn load_with(config: &UserConfig, input: &str, hide_security_sessions: bool) -> Result<View> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut commands: Vec<_> = snapshot
         .entries()
         .iter()
@@ -256,7 +271,7 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     };
     if let (Some(command), Some(owner)) = (selected, owner) {
         for node in ancestry::of(command, owner)? {
-            tree.spans.extend(spans(&node)?);
+            tree.spans.extend(spans(&node, hide_security_sessions)?);
         }
     }
     tree.roll_up();
@@ -264,7 +279,7 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
 }
 
 /// Project one ancestry node, reading an attached Session's own spans.
-fn spans(node: &Node) -> Result<Vec<Span>> {
+fn spans(node: &Node, hide_security_sessions: bool) -> Result<Vec<Span>> {
     let command = node.command;
     let selector = Observation::Record(command).selector().unwrap_or_default();
     let id = node.id().map(hex).unwrap_or_default();
@@ -299,17 +314,28 @@ fn spans(node: &Node) -> Result<Vec<Span>> {
             vec![span]
         }
         Fact::Session(attachment) => {
-            let mut template = record_span(command, id, parent, SpanKind::Sess, &selector);
-            template.start = attachment
-                .stage
-                .as_ref()
-                .and_then(|timing| timing.began)
-                .map(|time| time.timestamp_millis() as f64)
-                .or(template.start);
-            template.input = None;
-            template.conversation_url =
-                Some(inspect::url("/log", &selector, Some(&attachment.path)));
-            session::read(&attachment.path, &node.context, &template)?.unwrap_or_default()
+            // The log routes refuse these filenames. Skip the read so the
+            // trace's prompt and tool output stay out of the span tree.
+            if hide_security_sessions && crate::logs::owner::security_session(&attachment.path) {
+                Vec::new()
+            } else {
+                let mut template = record_span(command, id, parent, SpanKind::Sess, &selector);
+                template.start = attachment
+                    .stage
+                    .as_ref()
+                    .and_then(|timing| timing.began)
+                    .map(|time| time.timestamp_millis() as f64)
+                    .or(template.start);
+                template.input = None;
+                template.conversation_url =
+                    Some(inspect::url("/log", &selector, Some(&attachment.path)));
+                let spans = session::read(&attachment.path, &node.context, &template);
+                if command.account.is_some() {
+                    spans.ok().flatten().unwrap_or_default()
+                } else {
+                    spans?.unwrap_or_default()
+                }
+            }
         }
     })
 }
@@ -359,18 +385,29 @@ fn span_name(command: &Command) -> String {
         .map(|title| format!(" · {title}"))
         .unwrap_or_default();
     if let Some(heading) = command.record.process_heading() {
-        return format!("{heading}{title}");
+        return format!(
+            "{}{title}",
+            account_subject(heading, command.account.as_deref())
+        );
     }
     format!("{} · {}{title}", command.record.kind, subject(command))
 }
 
 fn subject(command: &Command) -> String {
-    command
+    let subject = command
         .record
         .issue
         .as_ref()
         .map(|issue| format!("{}#{}", command.record.repository, issue.number))
-        .unwrap_or_else(|| command.record.name.clone())
+        .unwrap_or_else(|| command.record.name.clone());
+    account_subject(subject, command.account.as_deref())
+}
+
+fn account_subject(subject: String, account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("{subject} · [{account}]"),
+        None => subject,
+    }
 }
 
 fn state(command: &Command) -> String {

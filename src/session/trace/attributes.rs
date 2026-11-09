@@ -55,12 +55,20 @@ pub(crate) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec
         }
         attrs.push(attribute(
             &format!("thirdshift.{key}"),
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "JSON values other than strings keep their JSON text"
+            )]
             match value {
                 Value::String(text) => text.clone(),
                 _ => value.to_string(),
             },
         ));
     }
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only model and tool calls carry GenAI call attributes; other events keep their thirdshift ones"
+    )]
     match event {
         ModelCallStarted { model, .. } | ModelCallEnded { model, .. } => {
             attrs.push(attribute("gen_ai.operation.name", "chat"));
@@ -84,6 +92,10 @@ pub(crate) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec
         }
         _ => {}
     }
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only events that report usage carry usage attributes; other events have none"
+    )]
     match event {
         ModelCallEnded {
             usage, cost_usd, ..

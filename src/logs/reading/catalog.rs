@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::{Command, Entry, Observation, Reader, Snapshot};
 use crate::config::UserConfig;
+use crate::logs::accounts::Source;
 use crate::logs::owner;
 
 #[derive(Clone, Copy, Serialize)]
@@ -30,6 +31,8 @@ impl std::fmt::Display for Kind {
 
 #[derive(Serialize)]
 pub(crate) struct Log {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub id: String,
     pub name: String,
     pub repository: String,
@@ -42,12 +45,15 @@ pub(crate) struct Log {
     #[serde(skip)]
     pub selector: String,
     #[serde(skip)]
+    pub security_details: bool,
+    #[serde(skip)]
     pub reader: Reader,
 }
 
 #[derive(Default)]
 struct Observed {
     live: bool,
+    security_details: bool,
     command: String,
     owners: Vec<String>,
     selector: String,
@@ -75,8 +81,10 @@ pub(super) const UNLISTED: &str = "log is not in the current inventory";
 
 /// Check only the selected entries, as `load` sees them: the root and
 /// literal `commands` path may be aliases, but owner, repository, kind and
-/// file must be real entries rather than symlinks.
-pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
+/// file must be real entries rather than symlinks. Another account's file
+/// must also stay, once resolved, under the accepted directory. That path is
+/// the canonical directory discovery stored, so it is not resolved again.
+pub(super) fn still_listed(root: &Path, path: &Path, other_account: bool) -> bool {
     fn directory(path: &Path) -> bool {
         std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_dir())
     }
@@ -101,30 +109,48 @@ pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
         && directory(&repository.join(commands).join(kind))
         && std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file())
         && listed_name(path)
+        && (!other_account || super::inventory::stays_under(root, path))
 }
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
-    let root = &config.logs_dir;
-    list(&Snapshot::load(root, Local::now())?, root, selected_owner)
+    let mut logs = Vec::new();
+    for source in crate::logs::accounts::discover(config).logs {
+        let loaded = Snapshot::load_using(super::files_for(&source), &source.root, Local::now())
+            .and_then(|snapshot| list(&snapshot, &source, None));
+        let listed = match loaded {
+            Ok(logs) => logs,
+            Err(_) if source.account.is_some() => continue,
+            Err(error) => return Err(error),
+        };
+        logs.extend(listed);
+    }
+    if let Some(owner) = selected_owner {
+        logs.retain(|log| log.owners.iter().any(|id| id == owner));
+    }
+    logs.sort_by(|a, b| (&a.account, &a.name).cmp(&(&b.account, &b.name)));
+    Ok(logs)
 }
 
 /// List the physically discovered files of the Snapshot's own capture.
 /// Session membership supplies ownership, never listing eligibility.
 pub(super) fn list(
     snapshot: &Snapshot,
-    root: &Path,
+    source: &Source,
     selected_owner: Option<&str>,
 ) -> Result<Vec<Log>> {
+    let root = &source.root;
     // A child Run keeps its own Sessions, while sharing its Command's log.
     let mut observed = BTreeMap::new();
     fn collect(
         command: &Command,
-        root: &Path,
+        source: &Source,
         ancestors: &[String],
+        security_details: bool,
         observed: &mut BTreeMap<PathBuf, Observed>,
     ) -> Result<()> {
+        let security_details = security_details || command.record.kind == "Security run";
         let mut owners = ancestors.to_vec();
-        owners.push(id(command.record_path.strip_prefix(root)?));
+        owners.push(source.id(&command.record_path)?);
         let subject = command
             .record
             .issue
@@ -135,8 +161,10 @@ pub(super) fn list(
         let selector = observation.selector().context("Command has no selector")?;
         observed
             .entry(command.command_log.clone())
+            .and_modify(|entry| entry.security_details |= security_details)
             .or_insert(Observed {
                 live: command.state == "live",
+                security_details,
                 command: subject.clone(),
                 owners: owners.clone(),
                 selector: selector.clone(),
@@ -158,6 +186,7 @@ pub(super) fn list(
                 session.clone(),
                 Observed {
                     live,
+                    security_details,
                     command: subject.clone(),
                     owners: owners.clone(),
                     selector: selector.clone(),
@@ -166,13 +195,19 @@ pub(super) fn list(
             );
         }
         for child in command.dispatched.iter().chain(&command.children) {
-            collect(child, root, &owners, observed)?;
+            collect(child, source, &owners, security_details, observed)?;
         }
         Ok(())
     }
     for entry in &snapshot.commands {
-        if let Entry::Record(command) = entry {
-            collect(command, root, &[], &mut observed)?;
+        match entry {
+            Entry::Record(command) => collect(command, source, &[], false, &mut observed)?,
+            Entry::History(command) if command.kind == "Security run" => {
+                for path in command.command_log.iter().chain(&command.session_logs) {
+                    observed.entry(path.clone()).or_default().security_details = true;
+                }
+            }
+            Entry::History(_) => {}
         }
     }
     let mut logs = Vec::new();
@@ -188,22 +223,33 @@ pub(super) fn list(
                 } else {
                     path.clone()
                 };
+                if source.account.is_some() && std::fs::File::open(&path).is_err() {
+                    continue;
+                }
                 let relative = path.strip_prefix(root)?;
                 let Observed {
                     live,
+                    security_details,
                     command,
                     mut owners,
                     selector,
                     reader,
                 } = observed.remove(&path).unwrap_or_default();
                 if let Some(decoded) = owner::decode(&path) {
-                    owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
+                    owners.push(source.id(&decoded.command_log(&path))?);
                 }
                 logs.push(Log {
+                    security_details: security_details
+                        || folder
+                            .path
+                            .file_name()
+                            .is_some_and(|name| name == crate::logs::CommandKind::Secure.folder())
+                        || owner::security_session(&path),
+                    account: source.account.clone(),
                     reader: reader
                         .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
-                        .within(root),
-                    id: id(relative),
+                        .within(root, source.account.is_some()),
+                    id: source.id(&path)?,
                     name: relative.to_string_lossy().into_owned(),
                     repository: repository.clone(),
                     kind: if path.extension().is_some_and(|ext| ext == "jsonl") {
@@ -247,6 +293,9 @@ pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
         );
     } else {
         for log in logs {
+            if let Some(account) = &log.account {
+                print!("[{account}] ");
+            }
             println!(
                 "{} · {}{} · {} · {}",
                 log.id,
@@ -260,8 +309,17 @@ pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn print_file(selected: &str, follow: bool) -> Result<()> {
+pub(crate) fn contents(reader: &Reader) -> Result<serde_json::Value> {
+    let bytes = reader.read(0, super::Framing::Raw, usize::MAX)?;
+    Ok(serde_json::json!({"version": 1, "contents": String::from_utf8_lossy(&bytes.bytes)}))
+}
+
+pub(crate) fn print_file(selected: &str, follow: bool, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let log = find(&config, selected)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&contents(&log.reader)?)?);
+        return Ok(());
+    }
     crate::logs::status::inspect::stream_log(&log.reader, follow)
 }

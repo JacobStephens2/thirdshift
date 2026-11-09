@@ -1,4 +1,4 @@
-//! The crates.io package: it carries the sources and the Factory skills the
+//! The crates.io package: it carries sources, Factory skills and Built-in processes the
 //! binary embeds, and none of the repository's own agent tooling, docs, site
 //! or tests. And the binary's dependencies, as the lockfile names them: HTTPS
 //! through rustls, never OpenSSL (ADR 0003).
@@ -50,6 +50,23 @@ fn openssl_packages(lockfile: &str) -> Vec<String> {
 }
 
 #[test]
+fn package_carries_the_built_in_process_folder() {
+    let list = package_list();
+    for expected in [
+        "processes/README.md",
+        "processes/ticket-run.toml",
+        "processes/spec-run.toml",
+        "processes/architect-run.toml",
+        "processes/security-run.toml",
+    ] {
+        assert!(
+            list.iter().any(|path| path == expected),
+            "{expected} is missing"
+        );
+    }
+}
+
+#[test]
 fn package_leaves_out_the_repository_tooling() {
     for path in package_list() {
         for excluded in [".agents/", ".grok/", ".claude/", "docs/", "site/", "tests/"] {
@@ -68,6 +85,60 @@ fn package_leaves_out_the_toolchain_pin() {
         !list.iter().any(|path| path == "rust-toolchain.toml"),
         "rust-toolchain.toml is in {list:?}"
     );
+}
+
+#[test]
+fn non_linux_compilation_reports_only_the_platform_error() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let temp = tempfile::TempDir::new().unwrap();
+    for entry in fs::read_dir(&source).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name() != "main.rs" {
+            std::os::unix::fs::symlink(entry.path(), temp.path().join(entry.file_name())).unwrap();
+        }
+    }
+    // Make only the crate root see a non-Linux configuration. Keeping the
+    // host's std avoids a cross toolchain; withholding external dependencies
+    // makes any module that escapes the platform gate produce extra errors.
+    let main = fs::read_to_string(source.join("main.rs")).unwrap();
+    let root = temp.path().join("main.rs");
+    fs::write(
+        &root,
+        main.replace("target_os = \"linux\"", "thirdshift_linux"),
+    )
+    .unwrap();
+    for test in [false, true] {
+        let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or("rustc".into()));
+        command.args(["--edition=2024", "--emit=metadata", "--error-format=json"]);
+        if test {
+            command.arg("--test");
+        }
+        let output = command
+            .arg(&root)
+            .arg("-o")
+            .arg(temp.path().join("main.rmeta"))
+            .output()
+            .expect("could not compile the crate root");
+        assert!(!output.status.success(), "unsupported build succeeded");
+        let diagnostics: Vec<serde_json::Value> = String::from_utf8(output.stderr)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let messages: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| matches!(diagnostic["level"].as_str(), Some("error" | "warning")))
+            .map(|diagnostic| diagnostic["message"].as_str().unwrap())
+            .filter(|message| !message.starts_with("aborting due to"))
+            .collect();
+        assert!(messages.contains(&"thirdshift supports Linux only. On macOS, run it inside an Ubuntu 24.04 Linux VM (such as Lima). On Windows, use WSL2."), "missing platform error: {messages:?}");
+        assert_eq!(
+            messages.len(),
+            1,
+            "test={test}: extra diagnostics: {:?}",
+            &messages[..messages.len().min(5)]
+        );
+    }
 }
 
 #[test]

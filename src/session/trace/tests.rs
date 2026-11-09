@@ -23,6 +23,69 @@ fn tool_ended(id: &str, outcome: Outcome) -> Event {
 }
 
 #[test]
+fn sandbox_login_values_are_redacted_inside_scope_launchers() {
+    for prefix in [
+        vec![],
+        vec!["systemd-run", "--user", "--scope", "--", "bwrap"],
+        vec![
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--",
+            "thirdshift",
+            "--oom-exec",
+            "bwrap",
+        ],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("session.jsonl");
+        let mut command = std::process::Command::new(prefix.first().copied().unwrap_or("bwrap"));
+        command.args(prefix.iter().skip(1)).args([
+            "--setenv",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "fixture-secret-must-stay-private",
+            "--",
+            "claude",
+            "--setenv",
+            "ordinary-tool-argument",
+            "keep-this-argument",
+        ]);
+        let mut trace = Trace::create(
+            &log,
+            "implement",
+            &Choice::default(),
+            "prompt",
+            Context::of_session(&log),
+            &command,
+            None,
+        )
+        .unwrap();
+        // Supply stream version evidence so this recording test starts no CLI.
+        trace
+            .record_at(
+                br#"{"type":"system","subtype":"init","claude_code_version":"fixture"}"#,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        trace.finish_at(None, 2_000).unwrap();
+        let text = std::fs::read_to_string(log.with_extension("spans.jsonl")).unwrap();
+        assert!(
+            !text.contains("fixture-secret-must-stay-private"),
+            "sandbox login was recorded for launcher {prefix:?}"
+        );
+        assert!(
+            text.contains("[redacted]"),
+            "sandbox redaction was omitted for launcher {prefix:?}"
+        );
+        assert!(
+            text.contains("keep-this-argument"),
+            "redaction changed tool arguments after bwrap's separator"
+        );
+    }
+}
+
+#[test]
 fn recording_clamps_backwards_ends_projects_the_latest_outcome_and_closes_open_calls() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("7-20261003T120000-0400-implement.jsonl");

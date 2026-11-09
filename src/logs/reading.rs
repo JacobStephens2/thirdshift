@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime};
 use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
@@ -30,12 +30,13 @@ use super::{Pass, activity};
 pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
-pub(super) use inbox::{Group, InboxItem};
+pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::Observation;
 
 pub(super) struct Snapshot {
+    pub(super) unavailable_accounts: BTreeSet<String>,
     commands: Vec<Entry>,
     pub(super) idle_passes: Vec<IdlePass>,
     pub(super) pass_starts: Vec<PassStart>,
@@ -45,12 +46,94 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    /// Merge opted-in accounts, isolating another account's read failures.
+    pub(super) fn for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, None)
+    }
+
+    pub(super) fn details_for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: &str,
+    ) -> Result<Self> {
+        Self::user_capture(config, now, Some(input))
+    }
+
+    fn user_capture(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+        input: Option<&str>,
+    ) -> Result<Self> {
+        let mut snapshot = Self::capture_records(
+            Arc::new(inventory::Native),
+            &config.logs_dir,
+            now,
+            config.silent_interval,
+            input.is_some(),
+        )?;
+        let sources = super::accounts::discover(config);
+        snapshot.unavailable_accounts = sources.unavailable;
+        for source in sources.logs.into_iter().skip(1) {
+            let Ok(mut other) = Self::capture_records(
+                files_for(&source),
+                &source.root,
+                now,
+                config.silent_interval,
+                input.is_some(),
+            ) else {
+                if matches!(
+                    config.console.other_accounts,
+                    crate::config::console::OtherAccounts::Named(_)
+                ) {
+                    snapshot.unavailable_accounts.extend(source.account);
+                }
+                continue;
+            };
+            fn mark(command: &mut Command, account: &Option<String>) {
+                command.account = account.clone();
+                confine_other_account_sessions(command);
+                for child in command.children.iter_mut().chain(&mut command.dispatched) {
+                    mark(child, account);
+                }
+            }
+            for entry in &mut other.commands {
+                match entry {
+                    Entry::Record(command) => mark(command, &source.account),
+                    Entry::History(command) => command.account = source.account.clone(),
+                }
+            }
+            snapshot.commands.extend(other.commands);
+        }
+        if let Some(input) = input
+            && let Observation::Record(selected) = snapshot.resolve(input)?.observation
+        {
+            let identity = CommandIdentity::of(selected);
+            for entry in &mut snapshot.commands {
+                if let Entry::Record(command) = entry {
+                    command.add_session_signals(Some(&identity));
+                }
+            }
+        }
+        Ok(snapshot)
+    }
+
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
 
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
         Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
+    }
+
+    fn load_using(
+        files: Arc<dyn inventory::Files>,
+        root: &Path,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        Self::capture(files, root, now, std::time::Duration::from_secs(10 * 60))
     }
 
     pub(super) fn load_with_silence(
@@ -72,25 +155,6 @@ impl Snapshot {
         for entry in &mut snapshot.commands {
             if let Entry::Record(command) = entry {
                 command.add_session_signals(None);
-            }
-        }
-        Ok(snapshot)
-    }
-
-    pub(super) fn load_details(
-        root: &Path,
-        now: DateTime<Local>,
-        silent: std::time::Duration,
-        input: &str,
-    ) -> Result<Self> {
-        let mut snapshot =
-            Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)?;
-        if let Observation::Record(selected) = snapshot.resolve(input)?.observation {
-            let identity = CommandIdentity::of(selected);
-            for entry in &mut snapshot.commands {
-                if let Entry::Record(command) = entry {
-                    command.add_session_signals(Some(&identity));
-                }
             }
         }
         Ok(snapshot)
@@ -161,6 +225,7 @@ impl Snapshot {
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
+            unavailable_accounts: BTreeSet::new(),
             commands,
             idle_passes,
             pass_starts,
@@ -183,6 +248,27 @@ impl Snapshot {
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
+    }
+}
+
+/// The Command log `show` and the Console may read for a Process's Steps.
+/// An Other-account log is read only when its canonical path stays under the
+/// accepted log directory, and that canonical path is what is opened. The
+/// serving account passes no directory and reads `path` as given.
+pub(super) fn steps_command_log(path: &Path, accepted: Option<&Path>) -> Option<PathBuf> {
+    let Some(root) = accepted else {
+        return Some(path.to_path_buf());
+    };
+    let canonical = path.canonicalize().ok()?;
+    inventory::stays_under(root, &canonical).then_some(canonical)
+}
+
+/// Other accounts stay inside the canonical directory discovery accepted.
+fn files_for(source: &super::accounts::Source) -> Arc<dyn inventory::Files> {
+    if source.account.is_some() {
+        Arc::new(inventory::Confined::new(source.root.clone()))
+    } else {
+        Arc::new(inventory::Native)
     }
 }
 
@@ -236,11 +322,25 @@ pub(super) struct RetainedWork {
     pub(super) pull_requests: BTreeSet<String>,
 }
 
-#[derive(Serialize)]
-pub(super) struct IdlePass {
+#[derive(Clone, Serialize)]
+pub(crate) struct IdlePass {
     pub(super) repository: String,
     pub(super) kind: String,
     pub(super) reason: String,
+    pub(super) recorded_at: Option<NaiveDateTime>,
+}
+
+impl IdlePass {
+    pub fn timestamp(&self) -> String {
+        self.recorded_at.map_or_else(
+            || "Time unknown".into(),
+            |time| time.format("%Y-%m-%d %H:%M").to_string(),
+        )
+    }
+
+    pub fn line(&self) -> String {
+        format!("{} idle on {}: {}", self.kind, self.repository, self.reason)
+    }
 }
 
 #[derive(Serialize)]
@@ -252,7 +352,8 @@ pub(super) enum Entry {
 
 #[derive(Serialize)]
 pub(super) struct Command {
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) account: Option<String>,
     pub(super) record_path: PathBuf,
     #[serde(flatten)]
     pub(super) record: CommandRecord,
@@ -272,7 +373,7 @@ pub(super) struct Command {
     activity: captured_activity::Activity,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 pub(super) struct CurrentStage {
     pub(super) name: String,
     pub(super) began_at: String,
@@ -287,7 +388,14 @@ impl Command {
     fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
         let enrich = selected.is_none_or(|identity| identity.matches(self));
         if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
-            metrics.add_session_signals(&self.record, cache::session_signals);
+            metrics.add_session_signals(
+                &self.record,
+                if self.account.is_some() {
+                    cache::readonly_session_signals
+                } else {
+                    cache::session_signals
+                },
+            );
             self.record.run_metrics = Some(metrics);
         }
         let nested = if enrich { None } else { selected };
@@ -318,6 +426,7 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            account: None,
             activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
             command_log: command_log(&record_path),
             record_path,
@@ -332,6 +441,12 @@ impl Command {
             usual_ranges: BTreeMap::new(),
             inventory: inventory.clone(),
         }
+    }
+
+    /// The canonical log directory discovery accepted for another account.
+    /// Absent for the serving account. It is not resolved again.
+    pub(in crate::logs) fn accepted_log_directory(&self) -> Option<&Path> {
+        self.inventory.accepted_directory()
     }
 }
 
@@ -382,6 +497,80 @@ fn read_records(
         records.insert(path.clone(), tree);
     }
     Ok(records)
+}
+
+/// Another account's record names its Session path. Keep a trace only when
+/// every file it is read from is a regular file whose canonical path stays
+/// inside that record's own directory. A lexical prefix is not enough: `..`
+/// and a symlink can leave.
+fn confine_other_account_sessions(command: &mut Command) {
+    let root = command.record_path.parent();
+    let keep = |path: &Path| {
+        let Some(root) = root else {
+            return false;
+        };
+        contained_session(root, path)
+    };
+    if command
+        .record
+        .session_log
+        .as_deref()
+        .is_some_and(|path| !keep(path))
+    {
+        command.record.session_log = None;
+    }
+    for stage in &mut command.record.stages {
+        if stage.session_log.as_deref().is_some_and(|path| !keep(path)) {
+            stage.session_log = None;
+        }
+    }
+    command.activity.drop_session_unless(keep);
+}
+
+/// The logs and spans files opened for one Session trace. A missing sidecar is
+/// not an escape; a symlink or a resolved path outside `root` is.
+fn contained_session(root: &Path, path: &Path) -> bool {
+    if !contained_trace(root, path) {
+        return false;
+    }
+    let original = super::session::original(path);
+    [
+        original.with_extension("logs.jsonl"),
+        original.with_extension("spans.jsonl"),
+    ]
+    .into_iter()
+    .all(|sidecar| sidecar == path || absent_or_contained(root, &sidecar))
+}
+
+fn absent_or_contained(root: &Path, path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => contained_trace(root, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+fn contained_trace(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    // `symlink_metadata` follows every component except the last, so a
+    // directory symlink still looks like a regular file. Resolve it.
+    if !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        return false;
+    }
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    path.canonicalize()
+        .is_ok_and(|canonical| canonical.starts_with(&root))
 }
 
 fn command_log(path: &Path) -> PathBuf {
@@ -451,15 +640,16 @@ fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let activity = cache::text(&path)?;
     let repository = inventory::name(repo);
     let mut idle = Vec::new();
-    for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
+    for pass in Pass::ALL {
         let kind = activity::Kind::Pass(pass);
-        if let Some(line) = activity::last_of(&activity, kind)
+        if let Some((time, line)) = activity::last_of(&activity, kind)
             && let Some(reason) = line.strip_prefix(&format!("{kind} skipped: "))
         {
             idle.push(IdlePass {
                 repository: repository.clone(),
                 kind: kind.to_string(),
                 reason: reason.into(),
+                recorded_at: NaiveDateTime::parse_from_str(time, activity::TIME_FORMAT).ok(),
             });
         }
     }

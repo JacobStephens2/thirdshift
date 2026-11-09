@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
   {% if title == "Inbox" %}
-  <title>{{ self.needs_you() }} need you · thirdshift Console</title>
+  <title>{{ self.needs_you() }} need you · {{ page.hostname }} · thirdshift Console</title>
   <link rel="icon" href="/assets/favicon{% if self.urgent() %}-urgent{% endif %}.svg">
   {% else %}
   <title>{{ title }} · {{ page.hostname }} · thirdshift</title>
@@ -20,6 +20,8 @@
 <body{% if title == "Inbox" %} class="mailbox"{% else if archive.is_some() %} class="archive-page"{% endif %}>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
+  {% if !page.consoles.is_empty() %}{% include "console/machine_controls.html" %}{% endif %}
+  {% if let Some(start) = start %}{% include "console/start_form.html" %}{% include "console/start_confirm.html" %}{% endif %}
   <main {% if title == "Inbox" %}id="inbox" class="one-line"{% else if archive.is_some() %}class="one-line"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
@@ -36,38 +38,41 @@
       <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
-    <nav class="folders" aria-label="Inbox sections">{% for section in inbox.sections %}<a href="/?section={{ self.slug(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
+    <form method="get" class="machine-filter"><label>Machine <select name="machine"><option value="">Whole Fleet</option><option value="{{ page.hostname }}"{% if machine == page.hostname %} selected{% endif %}>{{ page.hostname }}</option>{% for item in page.consoles %}<option value="{{ item.name }}"{% if machine == item.name %} selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label><input type="hidden" name="section" value="{{ self.slug(self.folder()) }}"><button>Filter</button></form>
+    <ul class="fleet-machines" aria-label="Fleet machines">{% for item in machines %}<li data-reachability="{{ item.reachability }}"><a href="{{ item.address }}">{{ item.name }}</a> · {{ item.reachability }} · {{ item.age }} · {{ item.active_runs }} active{% if !item.error.is_empty() %} · {{ item.error }}{% endif %}</li>{% endfor %}</ul>
+    <nav class="folders" aria-label="Inbox sections"><a href="{{ self.folder_url("overview") }}" data-group="overview"{% if self.folder() == "overview" %} aria-current="page"{% endif %}><span>Overview</span></a>{% for section in inbox.sections %}<a href="{{ self.folder_url(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     <p class="active-runs" role="status"><strong>{{ self.active_runs() }}</strong> <span>Each outer Command counts once, in any section: a Spec run's Tickets, and the run a Pass dispatched, are part of its run.</span></p>
     {% if self.idle() %}
     <section class="idle-notice" aria-label="No running Commands">
-      <h3>No Commands are running on this machine.</h3>
-      {% if self.ready_for_review() > 0 %}<p>Pull requests are waiting in {% if self.hidden("ready for review") %}Ready for review (hidden; show it with Sections or <code>thirdshift console sections --show ready-for-review</code>){% else %}<a href="/?section=ready-for-review">Ready for review</a>{% endif %}.</p>{% endif %}
+      <h3>{% if machines.len() > 1 %}No Commands are running in this Fleet.{% else %}No Commands are running on this machine.{% endif %}</h3>
+      {% if self.ready_for_review() > 0 %}<p>Pull requests are waiting in {% if self.hidden("ready for review") %}Ready for review (hidden; show it with Sections or <code>thirdshift console sections --show ready-for-review</code>){% else %}<a href="{{ self.folder_url("ready for review") }}">Ready for review</a>{% endif %}.</p>{% endif %}
       {% if inbox.idle_passes.is_empty() %}
       <p>No Pass is currently recorded as skipped.</p>
       {% else %}
       <details id="idle-passes">
         <summary>Last recorded skipped Passes:</summary>
-        <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
+        <ul>{% for pass in inbox.idle_passes %}<li>{{ pass.timestamp() }} · <span>{{ pass.line()|linkify }}</span></li>{% endfor %}</ul>
       </details>
       {% endif %}
       {% if !inbox.pass_starts.is_empty() %}
       <details id="pass-starts"><summary>Last fired Passes:</summary>
-        <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
+        <ul>{% for pass in inbox.pass_starts %}<li><time datetime="{{ pass.datetime() }}">{{ pass.datetime()|readable }}</time> · {% include "console/pass_start.html" %}</li>{% endfor %}</ul>
       </details>
       {% endif %}
     </section>
     {% endif %}
     {% for section in inbox.sections %}
-    <section id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.hidden(section.group) || self.folder() != section.group %} hidden{% endif %}>
+    <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.in_overview(section.group) %} data-overview{% endif %}{% if !self.shown(section.group) %} hidden{% endif %} open>
+      <summary><h3>{{ section.title }} <span class="count">{{ section.rows.len() }}</span></h3></summary>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
-    </section>
+    </details>
     {% endfor %}
-    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass.line()|linkify }}</p>{% endfor %}</aside>{% endif %}
     {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>

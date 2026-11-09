@@ -10,7 +10,7 @@ use crate::recovery;
 
 /// A stage of a Delivery, as its steps and the Repair loop enter it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Stage {
+pub(crate) enum Stage {
     Implementation,
     SpecReview,
     SecurityReview,

@@ -1,0 +1,6 @@
+version = 1
+description = "Inspect a compiled Process"
+
+[[steps]]
+name = "inspect"
+command = "printf inspected"

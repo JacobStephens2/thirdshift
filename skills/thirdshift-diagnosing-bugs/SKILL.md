@@ -23,6 +23,8 @@ When it names a merge base, this is a Continuation whose Issue branch already ha
 
 A fresh bug Ticket run, or a Continuation whose Session prompt names no merge base, reproduces against the checkout you are in.
 
+When the task touches rendered UI, HTML, CSS, templates or visual layout and a headless browser is available, create each Before capture with `mktemp` (`/tmp/before-desktop.XXXXXX.png`, `/tmp/before-mobile.XXXXXX.png`, or `.gif`) and write the unpatched baseline into that file on the reproduction checkout before editing code, at `1440×900` desktop plus `390×844` mobile when responsive layout is affected. When verifying the change, create matching After files the same way at the same viewports and states, and keep those exact paths for the PR.
+
 ## 1. Build a tight feedback loop
 
 Spend most of the diagnosis effort here. Read enough code to find a seam that reaches the reported symptom, then run an unattended pass/fail command against the checkout named under Where to reproduce. Prefer a focused test; a CLI fixture, HTTP replay, headless browser script or throwaway harness can help establish reproduction. Assert the exact reported symptom, rather than simply checking that execution succeeds. A setup or compilation failure is not reproduction.

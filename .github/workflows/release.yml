@@ -66,6 +66,7 @@ jobs:
     permissions:
       "actions": "write"
       "contents": "read"
+    timeout-minutes: 5
     runs-on: "ubuntu-24.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
@@ -111,6 +112,7 @@ jobs:
     permissions:
       "actions": "write"
       "contents": "read"
+    timeout-minutes: 20
     name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
     # Let the initial task tell us to not run (currently very blunt)
     needs:
@@ -196,6 +198,7 @@ jobs:
     permissions:
       "actions": "write"
       "contents": "read"
+    timeout-minutes: 5
     needs:
       - plan
       - build-local-artifacts

@@ -1,6 +1,7 @@
 //! The machine's Console. Async execution is confined to this module.
 mod account_commands;
 mod accounts;
+mod api;
 mod assets;
 mod auth;
 mod bug_origins;
@@ -8,23 +9,42 @@ pub(crate) mod conversation;
 mod cronjobs;
 mod experiments;
 mod filters;
+pub(crate) mod fleet;
+pub(crate) mod fleet_actions;
+pub(crate) mod fleet_control;
+mod fleet_inbox;
 mod github;
+pub(crate) use account_commands::Scopes;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
+mod identity;
+pub use identity::whoami;
 mod live;
 mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
+mod openapi;
+pub use openapi::print as openapi;
 mod changes;
+mod commands;
 mod dismiss;
+mod evals;
+#[cfg(test)]
+mod parity;
 mod peek;
 mod resources;
 mod restart;
 mod scoring;
+mod start;
+mod start_controls;
 mod stop;
 mod subscription;
 mod time;
+mod update;
+mod user_config;
+pub use user_config::command as config;
+pub(crate) mod tokens;
 mod watching;
 mod waterfall;
 
@@ -46,33 +66,127 @@ use crate::logs::status::{self, Inbox, Row};
 
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 
+fn hostname() -> String {
+    crate::host::name().unwrap_or_else(|| "unknown".into())
+}
+
 /// The machine identity and look shared by the Console's reader pages.
 struct PageContext {
+    scopes: Vec<Scope>,
     hostname: String,
-    consoles: Vec<String>,
+    consoles: Vec<crate::config::console::fleet::Entry>,
     theme: String,
+    resources: resources::Status,
 }
 
 impl PageContext {
-    fn new(config: &UserConfig) -> Self {
+    fn new(config: &UserConfig, scopes: &[Scope]) -> Self {
         Self {
-            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-            consoles: config.console.other_consoles.clone(),
+            scopes: scopes.to_vec(),
+            hostname: hostname(),
+            consoles: config.console.fleet.clone(),
             theme: config.console.theme.clone(),
+            resources: resources::Status::new(config),
         }
+    }
+
+    fn can_act(&self) -> bool {
+        self.scopes.contains(&Scope::Act)
+    }
+    fn can_read(&self) -> bool {
+        self.scopes.contains(&Scope::Read)
+    }
+    fn can_admin(&self) -> bool {
+        self.scopes.contains(&Scope::Admin)
+    }
+    fn can_security(&self) -> bool {
+        self.scopes.contains(&Scope::Security)
     }
 }
 
 // All page/action routes are registered here, beside their CLI equivalent.
 // Static resources carry no view or action and have their own fallback route.
+#[derive(Clone)]
 struct PageRoute {
     path: &'static str,
+    api: &'static str,
+    scope: Option<Scope>,
     cli: &'static [&'static str],
     method: Method,
     view: View,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Scope {
+    Read,
+    Security,
+    Act,
+    Run,
+    Admin,
+}
+
+impl Scope {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Read,
+        Self::Security,
+        Self::Act,
+        Self::Run,
+        Self::Admin,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Security => "security",
+            Self::Act => "act",
+            Self::Run => "run",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Vec<Self>> {
+        let mut scopes = Vec::new();
+        for name in value.split(',').filter(|_| !value.is_empty()) {
+            let scope = Self::ALL
+                .into_iter()
+                .find(|scope| scope.name() == name)
+                .with_context(|| {
+                    format!("unknown scope {name:?}; expected read,security,act,run,admin")
+                })?;
+            if !scopes.contains(&scope) {
+                scopes.push(scope);
+            }
+        }
+        Ok(scopes)
+    }
+}
+
+#[derive(Clone, Copy)]
 enum View {
+    Help,
+    Version,
+    Processes,
+    Process,
+    CheckProcess,
+    Evals,
+    TouchedEvals,
+    VerifyEval,
+    OtherAccounts,
+    SetOtherAccounts,
+    EmailTest,
+    RenameExperiment,
+    RecordDifficulty,
+    PendingRechecks,
+    Recheck,
+    Update,
+    RunUpdate,
+    ImportReplays,
+    Config,
+    ConfigSetting,
+    SetConfig,
+    Whoami,
+    OpenApi,
     BugOrigins,
     SettleBugOrigin,
     Scores,
@@ -82,7 +196,13 @@ enum View {
     ExperimentSession,
     ApproveEvalTask,
     CronJobs,
+    LaunchDirectories,
+    StartRun,
+    StartOptions,
+    FleetRun,
     Resources,
+    ResourceStatus,
+    Metrics,
     Inbox,
     Inspect,
     Spans,
@@ -98,6 +218,7 @@ enum View {
     SignInPage,
     SignIn,
     Look,
+    Themes,
     Theme,
     ThemeImport,
     ThemeExport,
@@ -111,15 +232,322 @@ enum View {
     SetPassword,
 }
 
+impl PageRoute {
+    // Account setup stays CLI/page-only; streaming is not part of v1.
+    fn serves_api(&self) -> bool {
+        matches!(
+            self.view,
+            View::Help
+                | View::Version
+                | View::Processes
+                | View::Process
+                | View::CheckProcess
+                | View::Evals
+                | View::TouchedEvals
+                | View::VerifyEval
+                | View::OtherAccounts
+                | View::SetOtherAccounts
+                | View::EmailTest
+                | View::RenameExperiment
+                | View::RecordDifficulty
+                | View::PendingRechecks
+                | View::Recheck
+                | View::Whoami
+                | View::Update
+                | View::RunUpdate
+                | View::ImportReplays
+                | View::Config
+                | View::ConfigSetting
+                | View::SetConfig
+                | View::BugOrigins
+                | View::OpenApi
+                | View::Scores
+                | View::Experiments
+                | View::Experiment
+                | View::ExperimentSession
+                | View::CronJobs
+                | View::LaunchDirectories
+                | View::StartRun
+                | View::StartOptions
+                | View::Resources
+                | View::ResourceStatus
+                | View::Metrics
+                | View::Inbox
+                | View::Inspect
+                | View::Spans
+                | View::Log
+                | View::Logs
+                | View::CommandLogs
+                | View::Reader
+                | View::ConsoleLog
+                | View::Look
+                | View::Themes
+                | View::ThemeImport
+                | View::ThemeExport
+                | View::Stop
+                | View::Dismiss
+                | View::UndoDismissal
+                | View::HumanScores
+                | View::SettleBugOrigin
+                | View::ApproveEvalTask
+                | View::Theme
+                | View::Sections
+        )
+    }
+}
+
 const PAGES: &[PageRoute] = &[
     PageRoute {
+        path: "/api/v1/help",
+        api: "/api/v1/help",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift help"],
+        method: Method::GET,
+        view: View::Help,
+    },
+    PageRoute {
+        path: "/api/v1/version",
+        api: "/api/v1/version",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift version"],
+        method: Method::GET,
+        view: View::Version,
+    },
+    PageRoute {
+        path: "/api/v1/processes",
+        api: "/api/v1/processes",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift process list"],
+        method: Method::GET,
+        view: View::Processes,
+    },
+    PageRoute {
+        path: "/api/v1/processes/{name}",
+        api: "/api/v1/processes/{name}",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift process show inspect"],
+        method: Method::GET,
+        view: View::Process,
+    },
+    PageRoute {
+        path: "/api/v1/processes/check",
+        api: "/api/v1/processes/check",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift process check inspect"],
+        method: Method::POST,
+        view: View::CheckProcess,
+    },
+    PageRoute {
+        path: "/api/v1/evals",
+        api: "/api/v1/evals",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals list --json"],
+        method: Method::GET,
+        view: View::Evals,
+    },
+    PageRoute {
+        path: "/api/v1/evals/touched",
+        api: "/api/v1/evals/touched",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals touched src/main.rs"],
+        method: Method::POST,
+        view: View::TouchedEvals,
+    },
+    PageRoute {
+        path: "/api/v1/evals/verify",
+        api: "/api/v1/evals/verify",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift evals verify repository 0123456789012345678901234567890123456789"],
+        method: Method::POST,
+        view: View::VerifyEval,
+    },
+    PageRoute {
+        path: "/api/v1/other-accounts",
+        api: "/api/v1/other-accounts",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console other-accounts --json"],
+        method: Method::GET,
+        view: View::OtherAccounts,
+    },
+    PageRoute {
+        path: "/api/v1/other-accounts",
+        api: "/api/v1/other-accounts",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift console other-accounts readable --json"],
+        method: Method::POST,
+        view: View::SetOtherAccounts,
+    },
+    PageRoute {
+        path: "/api/v1/email-test",
+        api: "/api/v1/email-test",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift email-test"],
+        method: Method::POST,
+        view: View::EmailTest,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/name",
+        api: "/api/v1/experiments/{id}/name",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift experiments id --name name --json"],
+        method: Method::POST,
+        view: View::RenameExperiment,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/difficulty",
+        api: "/api/v1/experiments/{id}/difficulty",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift experiments id --record-difficulty --json"],
+        method: Method::POST,
+        view: View::RecordDifficulty,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/rechecks",
+        api: "/api/v1/experiments/{id}/rechecks",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift recheck id --pending --json"],
+        method: Method::GET,
+        view: View::PendingRechecks,
+    },
+    PageRoute {
+        path: "/api/v1/experiments/{id}/rechecks",
+        api: "/api/v1/experiments/{id}/rechecks",
+        scope: Some(Scope::Act),
+        cli: &[
+            "thirdshift recheck id trial pass --reason reviewed --json",
+            "thirdshift recheck id --batch fingerprint fail --reason reviewed --json",
+        ],
+        method: Method::POST,
+        view: View::Recheck,
+    },
+    PageRoute {
+        path: "/api/v1/runs",
+        api: "/api/v1/runs",
+        scope: Some(Scope::Run),
+        cli: &[
+            "thirdshift https://github.com/acme/widgets/issues/7",
+            "thirdshift architect",
+            "thirdshift pickup",
+            "thirdshift secure",
+            "thirdshift review https://github.com/acme/widgets/pull/1",
+            "thirdshift fix https://github.com/acme/widgets/pull/1",
+            "thirdshift process inspect issue 7",
+            "thirdshift skill to-spec",
+            "thirdshift score",
+            "thirdshift triage",
+            "thirdshift experiment HEAD",
+        ],
+        method: Method::POST,
+        view: View::StartRun,
+    },
+    PageRoute {
+        path: "/api/v1/launch-directories",
+        api: "/api/v1/launch-directories",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift launch-directories --json"],
+        method: Method::GET,
+        view: View::LaunchDirectories,
+    },
+    PageRoute {
+        path: "/api/v1/start-options",
+        api: "/api/v1/start-options",
+        scope: Some(Scope::Run),
+        cli: &["thirdshift start --options --json"],
+        method: Method::GET,
+        view: View::StartOptions,
+    },
+    PageRoute {
+        path: "/fleet/runs",
+        api: "",
+        scope: None,
+        cli: &["thirdshift start acme/widgets 7 --machine server"],
+        method: Method::POST,
+        view: View::FleetRun,
+    },
+    PageRoute {
+        path: "/update",
+        api: "/api/v1/update",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift update --check --json"],
+        method: Method::GET,
+        view: View::Update,
+    },
+    PageRoute {
+        path: "/update",
+        api: "/api/v1/update",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift update --json"],
+        method: Method::POST,
+        view: View::RunUpdate,
+    },
+    PageRoute {
+        path: "/evals/import-replays",
+        api: "/api/v1/evals/import-replays",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift evals import-replays"],
+        method: Method::POST,
+        view: View::ImportReplays,
+    },
+    PageRoute {
+        path: "/config",
+        api: "/api/v1/config",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config --json"],
+        method: Method::GET,
+        view: View::Config,
+    },
+    PageRoute {
+        path: "/config/{key}",
+        api: "/api/v1/config/{key}",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config spec.parallel --json"],
+        method: Method::GET,
+        view: View::ConfigSetting,
+    },
+    PageRoute {
+        path: "/config/{key}",
+        api: "/api/v1/config/{key}",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift config spec.parallel 3 --json"],
+        method: Method::POST,
+        view: View::SetConfig,
+    },
+    PageRoute {
+        path: "/whoami",
+        api: "/api/v1/whoami",
+        scope: None,
+        cli: &["thirdshift console whoami --json"],
+        method: Method::GET,
+        view: View::Whoami,
+    },
+    PageRoute {
+        path: "/api/v1/openapi.json",
+        api: "/api/v1/openapi.json",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console openapi"],
+        method: Method::GET,
+        view: View::OpenApi,
+    },
+    PageRoute {
+        path: "/metrics",
+        api: "/api/v1/metrics",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift metrics --json"],
+        method: Method::GET,
+        view: View::Metrics,
+    },
+    PageRoute {
         path: "/bug-origins",
+        api: "/api/v1/bug-origins",
+        scope: Some(Scope::Read),
         cli: &["thirdshift bug-origins --json"],
         method: Method::GET,
         view: View::BugOrigins,
     },
     PageRoute {
         path: "/bug-origins/settle",
+        api: "/api/v1/bug-origins/settle",
+        scope: Some(Scope::Act),
         cli: &[
             "thirdshift bug-origins 8 --confirm --json",
             "thirdshift bug-origins 8 --correct 24 --json",
@@ -130,42 +558,56 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/scores",
+        api: "/api/v1/scores",
+        scope: Some(Scope::Read),
         cli: &["thirdshift scores --json", "thirdshift scores 23 --json"],
         method: Method::GET,
         view: View::Scores,
     },
     PageRoute {
         path: "/scores/mine",
+        api: "/api/v1/scores/mine",
+        scope: Some(Scope::Act),
         cli: &["thirdshift scores 23 --mine --json"],
         method: Method::POST,
         view: View::HumanScores,
     },
     PageRoute {
         path: "/experiments/proposals/{suite}/{task}/approve",
+        api: "/api/v1/experiments/proposals/{suite}/{task}/approve",
+        scope: Some(Scope::Act),
         cli: &["thirdshift evals approve suite task --json"],
         method: Method::POST,
         view: View::ApproveEvalTask,
     },
     PageRoute {
         path: "/experiments/{id}/sessions/{session}",
+        api: "/api/v1/experiments/{id}/sessions/{session}",
+        scope: Some(Scope::Read),
         cli: &["thirdshift experiments id --session session --json"],
         method: Method::GET,
         view: View::ExperimentSession,
     },
     PageRoute {
         path: "/experiments",
+        api: "/api/v1/experiments",
+        scope: Some(Scope::Read),
         cli: &["thirdshift experiments --json"],
         method: Method::GET,
         view: View::Experiments,
     },
     PageRoute {
         path: "/experiments/{id}",
+        api: "/api/v1/experiments/{id}",
+        scope: Some(Scope::Read),
         cli: &["thirdshift experiments id --json"],
         method: Method::GET,
         view: View::Experiment,
     },
     PageRoute {
         path: "/dismiss",
+        api: "/api/v1/dismiss",
+        scope: Some(Scope::Act),
         cli: &[
             "thirdshift dismiss widgets#7",
             "thirdshift dismiss widgets#7 --json",
@@ -175,6 +617,8 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/dismiss/undo",
+        api: "/api/v1/dismiss/undo",
+        scope: Some(Scope::Act),
         cli: &[
             "thirdshift dismiss widgets#7 --undo",
             "thirdshift dismiss widgets#7 --undo --json",
@@ -184,51 +628,80 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/resources",
+        api: "/api/v1/resources",
+        scope: Some(Scope::Read),
         cli: &["thirdshift resources --json"],
         method: Method::GET,
         view: View::Resources,
     },
     PageRoute {
+        path: "/resources/status",
+        api: "/api/v1/resources/status",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift resources --json"],
+        method: Method::GET,
+        view: View::ResourceStatus,
+    },
+    PageRoute {
         path: "/cronjobs",
+        api: "/api/v1/cronjobs",
+        scope: Some(Scope::Read),
         cli: &["thirdshift cronjobs --json"],
         method: Method::GET,
         view: View::CronJobs,
     },
     PageRoute {
         path: "/themes",
+        api: "/api/v1/themes",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console theme list --json"],
+        method: Method::GET,
+        view: View::Themes,
+    },
+    PageRoute {
+        path: "/themes",
+        api: "/api/v1/themes",
+        scope: Some(Scope::Admin),
         cli: &["thirdshift console theme import theme.json"],
         method: Method::POST,
         view: View::ThemeImport,
     },
     PageRoute {
         path: "/themes/{name}",
+        api: "/api/v1/themes/{name}",
+        scope: Some(Scope::Read),
         cli: &["thirdshift console theme export focus-auto"],
         method: Method::GET,
         view: View::ThemeExport,
     },
     PageRoute {
         path: "/look",
-        cli: &[
-            "thirdshift console theme list --json",
-            "thirdshift console sections --json",
-        ],
+        api: "/api/v1/look",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console sections --json"],
         method: Method::GET,
         view: View::Look,
     },
     PageRoute {
         path: "/theme",
+        api: "/api/v1/theme",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console theme focus-auto --json"],
         method: Method::POST,
         view: View::Theme,
     },
     PageRoute {
         path: "/sections",
+        api: "/api/v1/sections",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console sections --hide done --json"],
         method: Method::POST,
         view: View::Sections,
     },
     PageRoute {
         path: "/stop",
+        api: "/api/v1/stop",
+        scope: Some(Scope::Act),
         cli: &[
             "thirdshift stop widgets#7",
             "thirdshift stop widgets#7 --requeue",
@@ -240,6 +713,8 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/stop",
+        api: "/api/v1/stop",
+        scope: Some(Scope::Act),
         cli: &[
             "thirdshift stop widgets#7",
             "thirdshift stop widgets#7 --requeue",
@@ -251,24 +726,32 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/set-password",
+        api: "/api/v1/set-password",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console password"],
         method: Method::GET,
         view: View::SetPasswordPage,
     },
     PageRoute {
         path: "/set-password/code",
+        api: "/api/v1/set-password/code",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console password"],
         method: Method::POST,
         view: View::SendCode,
     },
     PageRoute {
         path: "/set-password",
+        api: "/api/v1/set-password",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console password"],
         method: Method::POST,
         view: View::SetPassword,
     },
     PageRoute {
         path: "/waterfall",
+        api: "/api/v1/waterfall",
+        scope: Some(Scope::Read),
         cli: &[
             "thirdshift show widgets#7 --spans --json",
             "thirdshift show widgets#7 --json",
@@ -279,6 +762,8 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/spans",
+        api: "/api/v1/spans",
+        scope: Some(Scope::Read),
         cli: &[
             "thirdshift show widgets#7 --spans --json",
             "thirdshift show widgets#7 --span id --json",
@@ -288,90 +773,127 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/lanes",
-        cli: &["thirdshift status --all --json"],
+        api: "/api/v1/lanes",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/stages",
-        cli: &["thirdshift status --all --json"],
+        api: "/api/v1/stages",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/",
-        cli: &["thirdshift status"],
+        api: "/api/v1/status",
+        scope: Some(Scope::Read),
+        cli: &[
+            "thirdshift status --local",
+            "thirdshift status --local --json",
+        ],
         method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/events",
-        cli: &["thirdshift status"],
+        api: "/api/v1/events",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift status --local"],
         method: Method::GET,
         view: View::Changes,
     },
     PageRoute {
         path: "/history",
-        cli: &["thirdshift status --all --json"],
+        api: "/api/v1/history",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/security",
-        cli: &["thirdshift status --all --json"],
+        api: "/api/v1/security",
+        scope: Some(Scope::Security),
+        cli: &["thirdshift status --local --all --json"],
         method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/peek",
+        api: "/api/v1/peek",
+        scope: Some(Scope::Read),
         cli: &["thirdshift show widgets#7 --json"],
         method: Method::GET,
         view: View::Inspect,
     },
     PageRoute {
         path: "/log",
-        cli: &["thirdshift logs widgets#7"],
+        api: "/api/v1/log",
+        scope: Some(Scope::Read),
+        cli: &[
+            "thirdshift logs widgets#7 --json",
+            "thirdshift logs widgets#7 --session implement --json",
+            "thirdshift logs widgets#7 --tail --json",
+        ],
         method: Method::GET,
         view: View::Log,
     },
     PageRoute {
         path: "/logs",
+        api: "/api/v1/logs",
+        scope: Some(Scope::Read),
         cli: &["thirdshift logs --json"],
         method: Method::GET,
         view: View::Logs,
     },
     PageRoute {
         path: "/logs/command/{id}",
+        api: "/api/v1/logs/command/{id}",
+        scope: Some(Scope::Read),
         cli: &["thirdshift logs --command id --json"],
         method: Method::GET,
         view: View::CommandLogs,
     },
     PageRoute {
         path: "/logs/{id}",
-        cli: &["thirdshift logs --file id"],
+        api: "/api/v1/logs/{id}",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift logs --file id --json"],
         method: Method::GET,
         view: View::Reader,
     },
     PageRoute {
         path: "/logs/{id}/stream/{offset}",
+        api: "/api/v1/logs/{id}/stream/{offset}",
+        scope: Some(Scope::Read),
         cli: &["thirdshift logs --file id --follow"],
         method: Method::GET,
         view: View::LogStream,
     },
     PageRoute {
         path: "/console-log",
-        cli: &["thirdshift console log"],
+        api: "/api/v1/console-log",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift console log --json"],
         method: Method::GET,
         view: View::ConsoleLog,
     },
     PageRoute {
         path: "/account",
+        api: "/api/v1/account",
+        scope: None,
         cli: &["thirdshift console sign-out"],
         method: Method::GET,
         view: View::Account,
     },
     PageRoute {
         path: "/sign-out",
+        api: "/api/v1/sign-out",
+        scope: None,
         cli: &["thirdshift console sign-out"],
         method: Method::POST,
         view: View::SignOut,
@@ -380,12 +902,16 @@ const PAGES: &[PageRoute] = &[
     // establishes that access with the password set by this paired command.
     PageRoute {
         path: "/sign-in",
+        api: "/api/v1/sign-in",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console password"],
         method: Method::GET,
         view: View::SignInPage,
     },
     PageRoute {
         path: "/sign-in",
+        api: "/api/v1/sign-in",
+        scope: Some(Scope::Act),
         cli: &["thirdshift console password"],
         method: Method::POST,
         view: View::SignIn,
@@ -413,6 +939,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
+        let fleet = fleet_inbox::Fleet::new();
+        let fleet_poller = fleet.follow(notifier.clone());
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
@@ -420,7 +948,9 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             listener,
             router(no_sign_in, changes)
                 .layer(axum::Extension(notifier))
-                .layer(axum::Extension(assets)),
+                .layer(axum::Extension(assets))
+                .layer(axum::Extension(fleet))
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         )
         .with_graceful_shutdown(async move {
             let mut accounts_revision = 0;
@@ -452,6 +982,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             let _ = observer.await;
             github.abort();
             let _ = github.await;
+            fleet_poller.abort();
+            let _ = fleet_poller.await;
         })
         .await
         .context("Console server failed")?;
@@ -465,20 +997,50 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
 fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
     let mut router = Router::new();
     for page in PAGES {
-        let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Help, Method::GET) => get(commands::help),
+            (View::Version, Method::GET) => get(commands::version),
+            (View::Processes, Method::GET) => get(commands::processes),
+            (View::Process, Method::GET) => get(commands::process),
+            (View::CheckProcess, Method::POST) => post(start::check_process),
+            (View::Evals, Method::GET) => get(commands::evals),
+            (View::TouchedEvals, Method::POST) => post(commands::touched),
+            (View::VerifyEval, Method::POST) => post(commands::verify),
+            (View::OtherAccounts, Method::GET) => get(commands::other_accounts),
+            (View::SetOtherAccounts, Method::POST) => post(commands::set_other_accounts),
+            (View::EmailTest, Method::POST) => post(commands::email_test),
+            (View::RenameExperiment, Method::POST) => post(commands::rename),
+            (View::RecordDifficulty, Method::POST) => post(commands::difficulty),
+            (View::PendingRechecks, Method::GET) => get(commands::pending),
+            (View::Recheck, Method::POST) => post(commands::recheck),
+            (View::Update, Method::GET) => get(update::show),
+            (View::RunUpdate, Method::POST) => post(update::run),
+            (View::ImportReplays, Method::POST) => post(evals::import_replays),
+            (View::Config, Method::GET) => get(user_config::show),
+            (View::ConfigSetting, Method::GET) => get(user_config::one),
+            (View::SetConfig, Method::POST) => post(user_config::set),
+            (View::Whoami, Method::GET) => get(identity::show),
+            (View::OpenApi, Method::GET) => get(openapi::serve),
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::LaunchDirectories, Method::GET) => get(known_launch_directories),
+            (View::StartRun, Method::POST) => post(start::submit),
+            (View::StartOptions, Method::GET) => get(start_controls::options),
+            (View::FleetRun, Method::POST) => post(fleet_control::submit),
             (View::Scores, Method::GET) => get(scoring::show),
             (View::HumanScores, Method::POST) => post(scoring::submit),
             (View::BugOrigins, Method::GET) => get(bug_origins::show),
             (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
-            (View::Inbox, Method::GET) => get(move |viewer, query| inbox(cli, path, viewer, query)),
+            (View::ResourceStatus, Method::GET) => get(resources::status),
+            (View::Metrics, Method::GET) => get(metrics),
+            (View::Inbox, Method::GET) => {
+                get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
+            }
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
@@ -493,6 +1055,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SignInPage, Method::GET) => get(auth::sign_in_page),
             (View::SignIn, Method::POST) => post(auth::sign_in),
             (View::Look, Method::GET) => get(look::get),
+            (View::Themes, Method::GET) => get(look::list_themes),
             (View::Theme, Method::POST) => post(look::set_theme),
             (View::ThemeImport, Method::POST) => post(look::import_document),
             (View::ThemeExport, Method::GET) => get(look::export_document),
@@ -505,12 +1068,61 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
+        }
+        .route_layer(middleware::from_fn(auth::csrf_guard));
+        if page.serves_api() {
+            assert!(
+                page.scope.is_some() || matches!(page.view, View::Whoami),
+                "API route needs a scope"
+            );
+            let api_handler = handler.clone().layer(axum::Extension(api::Format::Json));
+            let api_handler = if let Some(scope) = page.scope {
+                api_handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
+            } else {
+                api_handler
+            };
+            router = router.route(page.api, api_handler);
+            if page.api == page.path {
+                continue;
+            }
+        }
+        let handler = if matches!(
+            page.view,
+            View::Config | View::SetConfig | View::Update | View::RunUpdate
+        ) {
+            // The API is admin-only; a person with read may see the page.
+            handler.layer(middleware::from_fn(auth::require_config_view))
+        } else if matches!(page.view, View::Look | View::Themes | View::ThemeExport) {
+            handler.layer(middleware::from_fn(auth::require_look_view))
+        } else if let Some(scope) = page.scope {
+            handler.layer(middleware::from_fn_with_state(scope, auth::require_scope))
+        } else {
+            handler
         };
         router = router.route(page.path, handler);
     }
     router = router.route("/assets/{*path}", get(asset));
+    router = router
+        .fallback(|request: axum::extract::Request| async move {
+            if api::is_path(request.uri().path()) {
+                api::error(StatusCode::NOT_FOUND, "Unknown Console API endpoint.")
+            } else {
+                StatusCode::NOT_FOUND.into_response()
+            }
+        })
+        .method_not_allowed_fallback(|request: axum::extract::Request| async move {
+            if api::is_path(request.uri().path()) {
+                api::error(
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "Method not allowed for this API endpoint.",
+                )
+            } else {
+                StatusCode::METHOD_NOT_ALLOWED.into_response()
+            }
+        });
     let access = auth::Access::new(no_sign_in);
     router
+        .layer(axum::Extension(api::Format::Html))
         .layer(axum::Extension(changes.clone()))
         .with_state(changes)
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -523,6 +1135,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[template(path = "console/inbox.html")]
 struct InboxPage {
     page: PageContext,
+    targets: Vec<fleet_control::Target>,
+    start: Option<start_controls::Form>,
     csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
@@ -533,6 +1147,8 @@ struct InboxPage {
     repository: String,
     /// The `section` the URL asked for, as its slug.
     section: String,
+    machine: String,
+    machines: Vec<fleet_inbox::Machine>,
 }
 
 impl InboxPage {
@@ -542,24 +1158,42 @@ impl InboxPage {
             .any(|section| section == &slug(group))
     }
 
-    /// The one section the Inbox shows, like a mail folder: the one the URL
-    /// names if it is visible, otherwise the first visible one with rows.
+    /// An explicit visible section filters the Inbox; otherwise show Overview.
     fn folder(&self) -> &'static str {
-        let visible = || {
-            self.inbox
-                .sections
-                .iter()
-                .filter(|section| !self.hidden(section.group))
-        };
-        visible()
-            .find(|section| slug(section.group) == self.section)
-            .or_else(|| visible().find(|section| !section.rows.is_empty()))
-            .or_else(|| visible().next())
-            .map_or("", |section| section.group)
+        self.inbox
+            .sections
+            .iter()
+            .find(|section| !self.hidden(section.group) && slug(section.group) == self.section)
+            .map_or("overview", |section| section.group)
+    }
+
+    fn in_overview(&self, group: &str) -> bool {
+        matches!(
+            group,
+            "needs you" | "ready for review" | "landing" | "working"
+        )
+    }
+
+    fn shown(&self, group: &str) -> bool {
+        !self.hidden(group)
+            && (self.folder() == group || (self.folder() == "overview" && self.in_overview(group)))
     }
 
     fn slug(&self, group: &str) -> String {
         slug(group)
+    }
+    fn folder_url(&self, group: &str) -> String {
+        let mut url = reqwest::Url::parse("http://localhost/").expect("fixed URL");
+        url.query_pairs_mut().append_pair("section", &slug(group));
+        if !self.machine.is_empty() {
+            url.query_pairs_mut().append_pair("machine", &self.machine);
+        }
+        format!(
+            "/{}",
+            url.query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default()
+        )
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
@@ -588,7 +1222,9 @@ impl InboxPage {
         RowTemplate {
             row,
             csrf: &self.csrf,
-            can_copy,
+            can_copy: can_copy && row.console.is_empty(),
+            can_act: self.page.can_act(),
+            can_security: self.page.can_security(),
         }
     }
 }
@@ -599,14 +1235,26 @@ struct RowTemplate<'a> {
     row: &'a Row,
     csrf: &'a str,
     can_copy: bool,
+    can_act: bool,
+    can_security: bool,
 }
 
 impl RowTemplate<'_> {
+    fn gist(&self) -> String {
+        if !self.can_security && !self.row.findings.is_empty() {
+            self.row.now_line.clone()
+        } else {
+            self.row.gist()
+        }
+    }
+
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
             csrf: self.csrf,
             can_copy: false,
+            can_act: self.can_act,
+            can_security: self.can_security,
         }
     }
 }
@@ -628,24 +1276,42 @@ fn query_value(query: &Option<String>, key: &str) -> String {
         .unwrap_or_default()
 }
 
+async fn known_launch_directories() -> Response {
+    api::read(api::Format::Json, || {
+        Ok(axum::Json(crate::launch_directories::load()?).into_response())
+    })
+    .await
+}
+
 async fn inbox(
-    cli: &'static str,
     path: &'static str,
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    axum::Extension(format): axum::Extension<api::Format>,
+    axum::Extension(fleet): axum::Extension<fleet_inbox::Fleet>,
     RawQuery(query): RawQuery,
 ) -> Response {
-    let mut requested_page = query_value(&query, "page");
+    let mut requested_page = if format == api::Format::Html {
+        query_value(&query, "page")
+    } else {
+        String::new()
+    };
     if requested_page.is_empty() {
         requested_page = path.trim_start_matches('/').into();
     }
     if matches!(requested_page.as_str(), "logs" | "6") {
-        return logs::index().await;
+        return logs::index(axum::Extension(viewer), axum::Extension(format)).await;
     }
     if matches!(requested_page.as_str(), "waterfall" | "4") {
-        return waterfall::show(query).await;
+        return waterfall::show(viewer, format, query).await;
     }
     if matches!(requested_page.as_str(), "lanes" | "2" | "stages" | "3") {
-        return time::show(matches!(requested_page.as_str(), "stages" | "3"), query).await;
+        return time::show(
+            viewer,
+            format,
+            matches!(requested_page.as_str(), "stages" | "3"),
+            query,
+        )
+        .await;
     }
     let archive_page = match requested_page.as_str() {
         "history" | "5" => Some(status::ArchivePage::History),
@@ -653,67 +1319,233 @@ async fn inbox(
         "" | "inbox" | "1" => None,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    page(Ok(render_page(cli, archive_page, query, viewer.csrf).await))
+    if matches!(archive_page, Some(status::ArchivePage::Security))
+        && !viewer.scopes.contains(&Scope::Security)
+    {
+        return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+    }
+    render_page(format, archive_page, query, viewer, fleet).await
 }
 
 async fn render_page(
-    cli: &'static str,
+    format: api::Format,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
-    csrf: String,
-) -> Result<String> {
+    viewer: auth::Viewer,
+    fleet: fleet_inbox::Fleet,
+) -> Response {
     // The shared observations and templates stay blocking, off the async executor.
-    tokio::task::spawn_blocking(move || -> Result<String> {
+    api::read(format, move || {
         let config = UserConfig::load()?;
+        let read = status::Read::capture(&config, false)?;
+        let all = archive_page.is_some() || query_value(&query, "all") == "true";
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
         let (title, cli) = match archive_page {
-            Some(status::ArchivePage::History) => ("History", "thirdshift status --all --json"),
+            Some(status::ArchivePage::History) => {
+                ("History", "thirdshift status --local --all --json")
+            }
             Some(status::ArchivePage::Security) => (
                 "Security",
-                "thirdshift status --all --json · thirdshift show <command> --json",
+                "thirdshift status --local --all --json · thirdshift show <command> --json",
             ),
-            None => ("Inbox", cli),
+            None => ("Inbox", "thirdshift status"),
         };
-        Ok(InboxPage {
-            page: PageContext::new(&config),
-            csrf,
-            hidden_sections: config.console.hidden_sections.clone(),
-            cli,
-            inbox: status::inbox(&config)?,
-            title,
-            archive: archive_page
-                .map(|page| status::archive(&config, page, &outcome, &repository))
-                .transpose()?,
-            outcome,
-            repository,
-            section: query_value(&query, "section"),
-        }
-        .render()?)
+        format.render(read.json(&config, all)?, |_| {
+            let mut inbox = read.inbox(&config)?;
+            let machine = query_value(&query, "machine");
+            let machines = if archive_page.is_none() {
+                fleet.merge(&config, &mut inbox, &machine, viewer.fleet_person())?
+            } else {
+                Vec::new()
+            };
+            let targets = fleet_control::controls(&config, &viewer);
+            Ok(InboxPage {
+                page: PageContext::new(&config, &viewer.scopes),
+                start: if archive_page.is_none() {
+                    start_controls::Form::fleet(&config, &viewer, &targets)
+                } else {
+                    None
+                },
+                csrf: viewer.csrf,
+                targets,
+                hidden_sections: config.console.hidden_sections.clone(),
+                cli,
+                inbox,
+                title,
+                archive: archive_page
+                    .map(|page| read.archive(&config, page, &outcome, &repository))
+                    .transpose()?,
+                outcome,
+                repository,
+                section: query_value(&query, "section"),
+                machine,
+                machines,
+            }
+            .render()?)
+        })
     })
-    .await?
+    .await
+}
+
+async fn metrics(
+    axum::Extension(format): axum::Extension<api::Format>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    api::read(format, move || {
+        let mut arguments = vec!["metrics".to_owned(), "--json".to_owned()];
+        if let Some(query) = &query {
+            for (key, value) in
+                reqwest::Url::parse(&format!("http://localhost/?{query}"))?.query_pairs()
+            {
+                match key.as_ref() {
+                    "command" => arguments.push(value.into_owned()),
+                    "from" | "through" | "repo" => {
+                        arguments.push(format!("--{key}"));
+                        arguments.push(value.into_owned());
+                    }
+                    _ => anyhow::bail!("unknown metrics argument: {key}"),
+                }
+            }
+        }
+        let crate::args::Command::Metrics(asked) = crate::args::parse(&arguments)? else {
+            unreachable!("fixed metrics command")
+        };
+        format.render(
+            crate::logs::metrics::read(&UserConfig::load()?, &asked)?,
+            |value| {
+                Ok(format!(
+                    "<pre>{}</pre>",
+                    filters::escaped(&serde_json::to_string_pretty(&value)?)
+                ))
+            },
+        )
+    })
+    .await
 }
 
 async fn inspect(
     axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    axum::Extension(format): axum::Extension<api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
-    match tokio::task::spawn_blocking(move || -> Result<String> {
+    let machine = format.fleet_machine(&query);
+    let response = api::read(format, move || {
         let config = UserConfig::load()?;
-        let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
+        if let Some(remote) = fleet::read::Remote::select(
+            &config,
+            &machine,
+            viewer.fleet_person().map(str::to_owned),
+        )? {
+            let document = remote.get(&status::inspect::url("/peek", &command, None))?;
+            return format.render(document, |document| {
+                let output = remote.preview(&command).ok();
+                Ok(
+                    peek::Peek::remote(command, document["command"].clone(), output, &remote)
+                        .render()?,
+                )
+            });
+        }
+        let mut details = crate::logs::stop::inspect(&config, &command)?;
+        if details.security_details && !viewer.scopes.contains(&Scope::Security) {
+            return Ok(api::error(StatusCode::FORBIDDEN, "Missing scope: security"));
+        }
+        let document = status::inspect::envelope(details.details.clone());
+        if !viewer.scopes.contains(&Scope::Act) {
+            details.can_stop = false;
+            details.dismissal = None;
+        }
+        format.render(document, |_| {
+            Ok(peek::Peek::new(command, details, viewer.csrf, &config).render()?)
+        })
     })
-    .await
+    .await;
+    if format == api::Format::Html
+        && !response.status().is_success()
+        && response.status() != StatusCode::FORBIDDEN
+        && format.fleet_machine(&query).is_empty()
     {
-        Ok(Ok(html)) => Html(html).into_response(),
-        _ => (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response(),
+        (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response()
+    } else {
+        response
     }
 }
 
-async fn log(RawQuery(query): RawQuery) -> Response {
+fn machine_is_local(query: &Option<String>) -> bool {
+    let machine = query_value(query, "machine");
+    machine.is_empty() || machine == hostname()
+}
+
+async fn log(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    axum::Extension(format): axum::Extension<api::Format>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    if let Some(response) = format.owning_machine(&query) {
+        return response;
+    }
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
+    let tail = query_value(&query, "tail") == "true";
+    let machine = format.fleet_machine(&query);
+    if !machine.is_empty() {
+        return api::read(format, move || {
+            let config = UserConfig::load()?;
+            let remote = fleet::read::Remote::select(
+                &config,
+                &machine,
+                viewer.fleet_person().map(str::to_owned),
+            )?
+            .expect("remote machine");
+            logs::remote(&remote, &config, &viewer, format, &command, &session)
+        })
+        .await;
+    }
+    if format == api::Format::Json {
+        if !viewer.scopes.contains(&Scope::Security) {
+            let command_for_check = command.clone();
+            let session_for_check = session.clone();
+            match tokio::task::spawn_blocking(move || -> Result<bool> {
+                let config = UserConfig::load()?;
+                let path = status::inspect::log_path(
+                    &config,
+                    &command_for_check,
+                    (!session_for_check.is_empty()).then_some(session_for_check.as_str()),
+                )?;
+                Ok(crate::logs::owner::security_session(&path)
+                    || api::security_command(&config, &command_for_check)?)
+            })
+            .await
+            {
+                Ok(Ok(true)) => {
+                    return api::error(StatusCode::FORBIDDEN, "Missing scope: security");
+                }
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => return api::error(StatusCode::UNPROCESSABLE_ENTITY, error),
+                Err(_) => {
+                    return api::error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Can't read this view; check the Console's stderr.",
+                    );
+                }
+            }
+        }
+        return api::read(format, move || {
+            let config = UserConfig::load()?;
+            Ok(axum::Json(status::inspect::read_log(
+                &config,
+                &command,
+                (!session.is_empty()).then_some(session.as_str()),
+                tail,
+            )?)
+            .into_response())
+        })
+        .await;
+    }
     match tokio::task::spawn_blocking(move || {
         let config = UserConfig::load()?;
         let path = status::inspect::log_path(
@@ -729,7 +1561,9 @@ async fn log(RawQuery(query): RawQuery) -> Response {
     })
     .await
     {
-        Ok(Ok(id)) => logs::reader(Path(id)).await,
+        Ok(Ok(id)) => {
+            logs::reader(Path(id), axum::Extension(viewer), axum::Extension(format)).await
+        }
         _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
     }
 }
@@ -830,6 +1664,7 @@ mod tests {
         routing::{Route, get, post},
     };
     use std::sync::{Arc, Mutex};
+    use tower::ServiceExt;
     use tower_layer::Layer;
 
     fn router() -> Router {
@@ -857,6 +1692,78 @@ mod tests {
     }
 
     fn assert_cli_parity(router: Router) {
+        assert_parity(router, super::openapi::document());
+    }
+
+    fn assert_routed_operations(
+        router: Router,
+        operations: &std::collections::BTreeSet<(&str, String)>,
+    ) {
+        // Stop before authentication and handlers. A method fallback also
+        // passes through the layer, but axum identifies it with an Allow header.
+        let router = router
+            .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+            .method_not_allowed_fallback(|| async { axum::http::StatusCode::METHOD_NOT_ALLOWED })
+            .route_layer(axum::middleware::from_fn(
+                |_: axum::extract::Request, _: axum::middleware::Next| async {
+                    axum::http::StatusCode::NO_CONTENT
+                },
+            ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for (path, method) in operations {
+            let uri = path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "parity-fixture"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            let request = axum::http::Request::builder()
+                .uri(uri)
+                .method(method.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = runtime.block_on(router.clone().oneshot(request)).unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NO_CONTENT,
+                "registered routes must all have a CLI pair: {method} {path} is not routed"
+            );
+            assert!(
+                !response.headers().contains_key(axum::http::header::ALLOW),
+                "registered routes must all have a CLI pair: {method} {path} used a method fallback"
+            );
+        }
+    }
+
+    fn assert_parity(router: Router, description: serde_json::Value) {
+        let described = description["paths"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(path, methods)| {
+                methods
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(move |method| (path.as_str(), method.to_ascii_uppercase()))
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let routed = super::PAGES
+            .iter()
+            .filter(|route| route.serves_api())
+            .map(|route| (route.api, route.method.as_str().to_owned()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            described, routed,
+            "OpenAPI operations must match API routes"
+        );
         // Measure the GET registration footprint through axum's public layer
         // interface after attaching state, as the production router does, so
         // this does not depend on its implicit HEAD/fallback count.
@@ -872,30 +1779,40 @@ mod tests {
                 .with_state(changes),
         );
         // Each unique path has one fallback; merged methods share it.
-        let unique_paths = super::PAGES
+        let mut registrations = Vec::new();
+        for page in super::PAGES {
+            let is_get = page.method == axum::http::Method::GET;
+            registrations.push((page.path, is_get));
+            if page.serves_api() && page.api != page.path {
+                registrations.push((page.api, is_get));
+            }
+        }
+        let unique_paths = registrations
             .iter()
-            .map(|page| page.path)
+            .map(|(path, _)| path)
             .collect::<std::collections::BTreeSet<_>>()
             .len();
-        let shared_fallbacks = super::PAGES.len() - unique_paths;
-        let expected = super::PAGES
+        let shared_fallbacks = registrations.len() - unique_paths;
+        let expected = registrations
             .iter()
-            .map(|page| {
-                if page.method == axum::http::Method::GET {
-                    get_methods
-                } else {
-                    post_methods
-                }
-            })
+            .map(
+                |(_, is_get)| {
+                    if *is_get { get_methods } else { post_methods }
+                },
+            )
             .sum::<usize>()
             + get_methods
             - shared_fallbacks;
         assert_eq!(
-            registered_methods(router),
+            registered_methods(router.clone()),
             expected,
             "registered routes must all have a CLI pair; only static resources are exempt"
         );
+        assert_routed_operations(router, &described);
         for route in super::PAGES {
+            if route.serves_api() {
+                assert_api_metadata(route);
+            }
             assert!(
                 !route.cli.is_empty(),
                 "{} has no paired CLI command",
@@ -917,9 +1834,98 @@ mod tests {
         }
     }
 
+    fn assert_api_metadata(route: &super::PageRoute) {
+        assert!(
+            route.api.starts_with("/api/v1/"),
+            "{} has no versioned API path",
+            route.path
+        );
+        assert!(
+            route.scope.is_some() || matches!(route.view, super::View::Whoami),
+            "{} has no API scope",
+            route.path
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "has no versioned API path")]
+    fn parity_rejects_a_route_without_an_api_path() {
+        assert_api_metadata(&super::PageRoute {
+            api: "",
+            ..super::PAGES[0].clone()
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "has no API scope")]
+    fn parity_rejects_a_route_without_a_scope() {
+        assert_api_metadata(&super::PageRoute {
+            scope: None,
+            ..super::PAGES[0].clone()
+        });
+    }
+
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
         assert_cli_parity(router());
+    }
+
+    #[test]
+    fn token_management_has_no_http_routes() {
+        for route in super::PAGES {
+            assert!(
+                !route
+                    .api
+                    .split('/')
+                    .any(|part| matches!(part, "token" | "tokens"))
+            );
+            assert!(
+                route
+                    .cli
+                    .iter()
+                    .all(|cli| !cli.starts_with("thirdshift console token "))
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "OpenAPI operations must match API routes")]
+    fn parity_rejects_an_api_route_missing_from_openapi() {
+        let mut description = super::openapi::document();
+        description["paths"]
+            .as_object_mut()
+            .unwrap()
+            .remove("/api/v1/metrics");
+        assert_parity(router(), description);
+    }
+
+    #[test]
+    #[should_panic(expected = "OpenAPI operations must match API routes")]
+    fn parity_rejects_an_openapi_operation_without_a_route() {
+        let mut description = super::openapi::document();
+        description["paths"]["/api/v1/status"]["post"] = serde_json::json!({});
+        assert_parity(router(), description);
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_an_api_route_registered_outside_the_table() {
+        assert_cli_parity(router().route("/api/v1/undocumented", get(|| async {})));
+    }
+
+    #[test]
+    #[should_panic(expected = "registered routes must all have a CLI pair")]
+    fn parity_rejects_api_routes_mounted_under_wrong_prefix() {
+        assert_cli_parity(Router::new().nest("/wrong", router()));
+    }
+
+    #[test]
+    #[should_panic(expected = "used a method fallback")]
+    fn parity_rejects_a_different_method_at_the_described_path() {
+        assert_routed_operations(
+            Router::new().route("/api/v1/status", post(|| async {})),
+            &std::collections::BTreeSet::from([("/api/v1/status", "GET".to_owned())]),
+        );
     }
 
     #[test]

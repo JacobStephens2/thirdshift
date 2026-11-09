@@ -79,6 +79,8 @@ fn release_uses_the_last_tag_and_only_touched_suites_and_resumes() {
     assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
     assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
     assert_eq!(experiment["suites"], json!(["spec-review"]));
+    assert_eq!(experiment["name"], "Release candidate");
+    assert_eq!(experiment["name_set"], false);
     let calls = fixture.trial_calls().len();
     let resumed = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
@@ -87,6 +89,36 @@ fn release_uses_the_last_tag_and_only_touched_suites_and_resumes() {
         experiment
     );
     assert_eq!(fixture.trial_calls().len(), calls);
+}
+
+#[test]
+fn release_can_keep_the_published_baseline_when_recovering_an_unpublished_tag() {
+    let fixture = Fixture::new();
+    fixture
+        .scenario
+        .launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+    fixture
+        .scenario
+        .launch_git(&["tag", "v0.2.0", &fixture.candidate]);
+    fixture.scenario.agent_does(review_reports_prelude());
+
+    let run = fixture.scenario.run_with_env(
+        &[
+            "experiment",
+            "--release",
+            "candidate",
+            "--baseline",
+            "v0.1.0",
+            "--json",
+        ],
+        &NO_SANDBOX,
+    );
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
+    assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
+    assert_eq!(experiment["suites"], json!(["spec-review"]));
 }
 
 #[test]

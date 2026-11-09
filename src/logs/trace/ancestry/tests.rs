@@ -258,7 +258,7 @@ fn each_session_attaches_once_to_its_descendant_or_first_naming_stage() {
                 .as_ref()
                 .map(|time| time.stage.name.clone()),
         ),
-        _ => panic!("not a Session"),
+        Fact::Command | Fact::Run | Fact::Stage(_) => panic!("not a Session"),
     };
 
     // The descendant claims first, so the ancestor's Repair stage loses it.

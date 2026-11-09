@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Pass, reading, status};
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct PassStart {
     pub repository: String,
     pub kind: Pass,
@@ -44,13 +44,15 @@ pub(super) fn path(root: &Path, pass: Pass) -> PathBuf {
         Pass::Architect => "architect",
         Pass::Pickup => "pickup",
         Pass::Security => "secure",
+        Pass::Review => "review",
+        Pass::Fix => "fix",
     };
     root.join(format!("{kind}.last-fired"))
 }
 
 pub(super) fn read(root: &Path, repository: &str, now: DateTime<Local>) -> Result<Vec<PassStart>> {
     let mut starts = Vec::new();
-    for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
+    for pass in Pass::ALL {
         let path = path(root, pass);
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,

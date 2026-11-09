@@ -23,7 +23,7 @@ enum Standing {
 }
 
 /// A Spec run's Tickets, as last read, and where each one it started stands.
-pub(super) struct TicketBoard {
+pub(crate) struct TicketBoard {
     spec: IssueUrl,
     tickets: Vec<Ticket>,
     standings: BTreeMap<IssueIdentity, Standing>,
@@ -108,7 +108,9 @@ impl TicketBoard {
                 let state = match self.standings.get(&ticket.issue.identity()) {
                     Some(Standing::Running) => TicketState::Running,
                     _ if !ticket.is_open => TicketState::Merged,
-                    Some(Standing::Ended(Ended::NotReproduced { .. })) => TicketState::NotStarted,
+                    Some(Standing::Ended(
+                        Ended::NotReproduced { .. } | Ended::ArchitectureReview { .. },
+                    )) => TicketState::NotStarted,
                     Some(Standing::Ended(_)) => TicketState::Failed,
                     _ if !ticket.open_blockers.is_empty() => TicketState::Waiting,
                     _ => TicketState::NotStarted,
@@ -139,7 +141,7 @@ impl TicketBoard {
                 Standing::Ended(
                     Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
                 ) => local_work.as_slice(),
-                _ => &[],
+                Standing::Running | Standing::Ended(_) => &[],
             })
             .cloned()
             .collect()
@@ -165,12 +167,17 @@ impl TicketBoard {
         }
     }
 
-    /// The Tickets not done, the open ones, in the order they were read.
+    /// The open Tickets' names and reasons they are not done, in the order
+    /// they were read, without the unready prefix or Session trace paths.
     pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets
             .iter()
             .filter(|ticket| ticket.is_open)
-            .map(|ticket| self.name(&ticket.issue))
+            .map(|ticket| {
+                let standing = self.standing(ticket);
+                let reason = standing.strip_prefix("unready: ").unwrap_or(&standing);
+                format!("{} ({reason})", self.name(&ticket.issue))
+            })
             .collect()
     }
 
@@ -265,6 +272,9 @@ impl TicketBoard {
         match self.standings.get(&identity) {
             Some(Standing::Ended(Ended::NotReproduced { comment_url })) => {
                 return format!("bug not reproduced: {comment_url}");
+            }
+            Some(Standing::Ended(Ended::ArchitectureReview { reason })) => {
+                return format!("Architecture review ended: {reason}");
             }
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
@@ -586,7 +596,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(board.not_done(), ["#23", "#22"]);
+        assert_eq!(board.not_done(), ["#23 (not started)", "#22 (not started)"]);
     }
 
     #[test]

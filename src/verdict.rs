@@ -9,20 +9,29 @@
 
 use anyhow::{Result, ensure};
 use rand::SeedableRng;
-use rand_distr::{Distribution, Gamma};
+use rand_distr::{Distribution, Gamma, Open01};
 use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 
+mod levels;
 mod prediction;
 
-const METHOD: &str =
+pub(crate) use levels::decimal;
+pub use levels::{Intervals, Levels, PassRule};
+
+const MARGIN_METHOD: &str =
+    "paired-dirichlet-v3; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
+const REACHES_ZERO_METHOD: &str =
+    "paired-dirichlet-v2; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
+const LEGACY_METHOD: &str =
     "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bar {
     /// Signed lower bound on Candidate minus Baseline (a ten-point tolerance).
     pub margin: f64,
-    pub credible_level: f64,
+    #[serde(flatten)]
+    pub levels: Levels,
     /// Total pseudo Eval tasks, spread evenly across all possible differences.
     pub prior: f64,
     pub seed: u64,
@@ -53,7 +62,7 @@ impl Default for Bar {
     fn default() -> Self {
         Self {
             margin: -0.10,
-            credible_level: 0.95,
+            levels: Levels::default(),
             prior: 1.0,
             seed: 0,
             draws: 20_000,
@@ -79,7 +88,9 @@ pub struct TaskScores {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interval {
+    #[serde(deserialize_with = "decimal")]
     pub lower: f64,
+    #[serde(deserialize_with = "decimal")]
     pub upper: f64,
 }
 
@@ -116,8 +127,13 @@ pub struct Assessment {
     /// Counts ordered from -1 to +1 in steps of 1 / Trials per Eval task.
     /// For wrong findings, positive means fewer wrong findings in the Candidate.
     pub difference_counts: Vec<usize>,
-    pub interval: Interval,
+    #[serde(flatten)]
+    pub intervals: Intervals,
     pub verdict: Decision,
+    /// A pass whose pass-level interval lies wholly below zero: statistically
+    /// worse, but within the margin. It never changes the decision.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub worse_within_margin: bool,
     pub more_tasks: Option<MoreTasks>,
 }
 
@@ -160,10 +176,13 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
         let candidate_wrong = task.candidate.iter().filter(|s| s.wrong_finding).count();
         wrong_counts[baseline_wrong + trials - candidate_wrong] += 1;
     }
+    // With no retained observations, report prior uncertainty without trying
+    // to forecast additional tasks from prior-only draws.
+    let predictions = predictions && dropped_tasks < scores.len();
     let accuracy = assess(&counts, bar, bar.seed, predictions)?;
     let wrong_findings = assess(&wrong_counts, bar, bar.seed.wrapping_add(1), predictions)?;
     let decisions = [accuracy.verdict, wrong_findings.verdict];
-    let verdict = if dropped_tasks > scores.len() / 10 {
+    let verdict = if scores.is_empty() || dropped_tasks > scores.len() / 10 {
         Decision::Inconclusive
     } else if decisions.contains(&Decision::Fail) {
         Decision::Fail
@@ -176,7 +195,18 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
     Ok(Verdict {
         bar: bar.clone(),
         thirdshift_version: env!("CARGO_PKG_VERSION").to_owned(),
-        method: METHOD.to_owned(),
+        method: match bar.levels {
+            Levels::Separate {
+                pass_rule: PassRule::Margin,
+                ..
+            } => MARGIN_METHOD,
+            Levels::Separate {
+                pass_rule: PassRule::ReachesZero,
+                ..
+            } => REACHES_ZERO_METHOD,
+            Levels::Legacy { .. } => LEGACY_METHOD,
+        }
+        .to_owned(),
         accuracy,
         wrong_findings,
         verdict,
@@ -189,8 +219,11 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
     })
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {
-    ensure!(!scores.is_empty(), "at least one Eval task is required");
     ensure!(
         matches!(bar.trials_per_task, 1 | 3),
         "Trials per Eval task must be one or three"
@@ -199,10 +232,7 @@ fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {
         bar.margin.is_finite() && (-1.0..=1.0).contains(&bar.margin),
         "margin must be finite and within [-1, 1]"
     );
-    ensure!(
-        bar.credible_level.is_finite() && bar.credible_level > 0.0 && bar.credible_level < 1.0,
-        "credible level must be strictly between zero and one"
-    );
+    bar.levels.validate()?;
     let prior_per_value = bar.prior / (2 * bar.trials_per_task + 1) as f64;
     ensure!(
         bar.prior.is_finite() && prior_per_value > 0.0,
@@ -237,43 +267,42 @@ fn assess(counts: &[usize], bar: &Bar, seed: u64, predictions: bool) -> Result<A
         draws.iter().all(|d| d.is_finite()),
         "posterior draws are outside floating-point range"
     );
-    let interval = interval(&mut draws, bar.credible_level);
-    let verdict = decide(interval, bar.margin);
+    let intervals = Intervals::from_draws(&mut draws, bar.levels);
+    let verdict = intervals.decide(bar.margin, bar.levels.pass_rule());
     Ok(Assessment {
         difference_counts: counts.to_vec(),
-        interval,
+        intervals,
         verdict,
+        worse_within_margin: verdict == Decision::Pass && intervals.pass().upper < 0.0,
         more_tasks: (predictions && verdict == Decision::Inconclusive)
             .then(|| prediction::more_tasks(&posterior, bar, &mut rng))
             .transpose()?,
     })
 }
 
-fn decide(interval: Interval, margin: f64) -> Decision {
-    if interval.upper < 0.0 {
-        Decision::Fail
-    } else if interval.lower > margin && interval.upper >= 0.0 {
-        Decision::Pass
-    } else {
-        Decision::Inconclusive
-    }
-}
-
 struct Posterior {
     samplers: Vec<Gamma<f64>>,
     values: Vec<f64>,
+    prior_shape: Option<f64>,
 }
 
 impl Posterior {
     fn new(counts: &[usize], bar: &Bar) -> Result<Self> {
+        let shape = bar.prior / counts.len() as f64;
+        let prior_shape = (shape < 1.0 && counts.iter().all(|&count| count == 0)).then_some(shape);
+        let boost = if prior_shape.is_some() { 1.0 } else { 0.0 };
         let samplers = counts
             .iter()
-            .map(|&n| Gamma::new(n as f64 + bar.prior / counts.len() as f64, 1.0))
+            .map(|&n| Gamma::new(n as f64 + shape + boost, 1.0))
             .collect::<std::result::Result<_, _>>()?;
         let values = (0..counts.len())
             .map(|i| (i as f64 - bar.trials_per_task as f64) / bar.trials_per_task as f64)
             .collect();
-        Ok(Self { samplers, values })
+        Ok(Self {
+            samplers,
+            values,
+            prior_shape,
+        })
     }
 
     fn draw(&self, rng: &mut Pcg64) -> Draw {
@@ -281,6 +310,26 @@ impl Posterior {
             total: 0.0,
             weighted: 0.0,
         };
+        if let Some(shape) = self.prior_shape {
+            // Gamma(shape) = Gamma(shape + 1) * U^(1 / shape), as in
+            // rand_distr's small-shape sampler. Normalize in log space so a
+            // small prior cannot underflow every weight of an empty suite.
+            let logs: Vec<_> = self
+                .samplers
+                .iter()
+                .map(|sampler| {
+                    let unit: f64 = Open01.sample(rng);
+                    unit.ln() + shape * sampler.sample(rng).ln()
+                })
+                .collect();
+            let maximum = logs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            for (&log, &value) in logs.iter().zip(&self.values) {
+                let weight = ((log - maximum) / shape).exp();
+                draw.total += weight;
+                draw.weighted += weight * value;
+            }
+            return draw;
+        }
         for (sampler, &value) in self.samplers.iter().zip(&self.values) {
             let weight = sampler.sample(rng);
             draw.total += weight;

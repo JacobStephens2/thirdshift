@@ -5,6 +5,185 @@ use std::os::unix::fs::symlink;
 
 use super::*;
 
+#[test]
+fn retained_pull_request_repairs_are_recovered_at_the_same_checkout() {
+    let (_temp, launch) = super::tests::launch_directory();
+    let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
+    let owner = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+    let path = owner.path().to_path_buf();
+    let git = Git::new(&path);
+    fs::write(path.join("fix.txt"), "preserved repair\n").unwrap();
+    git.run(&["add", "fix.txt"]).unwrap();
+    git.run(&["commit", "-m", "Review repair"]).unwrap();
+    let repaired = owner.head().unwrap();
+    drop(owner);
+    fs::write(path.join("validation.log"), "disposable output\n").unwrap();
+
+    let recovered = SkillWorktree::on_pull_request(&launch, "feature", &start)
+        .unwrap_or_else(|error| panic!("{error:#}"));
+
+    assert_eq!(recovered.path(), path);
+    assert_eq!(recovered.head().unwrap(), repaired);
+    assert!(!path.join("validation.log").exists());
+    assert_eq!(
+        fs::read_to_string(path.join("fix.txt")).unwrap(),
+        "preserved repair\n"
+    );
+    // Publish through the fixture remote so normal cleanup can remove it.
+    git.run(&["push", "origin", "feature"]).unwrap();
+    drop(recovered);
+    assert!(!path.exists());
+}
+
+#[test]
+fn unsafe_retained_pull_request_checkouts_preserve_work_and_give_advice() {
+    for damage in [
+        "tracked",
+        "staged",
+        "token",
+        "root",
+        "admin",
+        "common",
+        "rewritten",
+        "locked",
+        "merge",
+        "rebase",
+        "human",
+        "moved-origin",
+    ] {
+        let (temp, launch) = super::tests::launch_directory();
+        let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
+        let owner = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+        let path = owner.path().to_path_buf();
+        let git = Git::new(&path);
+        let admin = PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"]).unwrap());
+        fs::write(path.join("fix.txt"), "preserve me\n").unwrap();
+        git.run(&["add", "fix.txt"]).unwrap();
+        git.run(&["commit", "-m", "Preserved review fix"]).unwrap();
+        drop(owner);
+        let mut retry_head = start.clone();
+        match damage {
+            "tracked" | "staged" => {
+                fs::write(path.join("fix.txt"), "unfinished repair\n").unwrap();
+                if damage == "staged" {
+                    git.run(&["add", "fix.txt"]).unwrap();
+                }
+            }
+            "token" => fs::write(path.join(".thirdshift-review-token"), "wrong token").unwrap(),
+            "root" | "admin" | "common" => {
+                let record_path = admin.join("thirdshift-review.json");
+                let mut record: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+                record[damage]["inode"] = 0.into();
+                fs::write(record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+            }
+            "rewritten" => {
+                git.run(&["checkout", "--orphan", "unrelated"]).unwrap();
+                git.run(&["commit", "-m", "Unrelated history"]).unwrap();
+                let unrelated = git.run(&["rev-parse", "HEAD"]).unwrap();
+                git.run(&["checkout", "feature"]).unwrap();
+                git.run(&["reset", "--hard", &unrelated]).unwrap();
+            }
+            "locked" => {
+                launch
+                    .run(&["worktree", "lock", path.to_str().unwrap()])
+                    .unwrap();
+            }
+            "merge" => fs::write(admin.join("MERGE_HEAD"), format!("{start}\n")).unwrap(),
+            "rebase" => fs::create_dir(admin.join("rebase-merge")).unwrap(),
+            "human" => fs::remove_file(admin.join("thirdshift-review.json")).unwrap(),
+            "moved-origin" => retry_head = git.run(&["rev-parse", "HEAD"]).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = git.run(&["rev-parse", "HEAD"]).unwrap();
+        let contents = fs::read(path.join("fix.txt")).unwrap();
+        let error = SkillWorktree::on_pull_request(&launch, "feature", &retry_head)
+            .err()
+            .expect(damage);
+        assert!(
+            format!("{error:#}").contains("Occupied checkout"),
+            "{damage}: {error:#}"
+        );
+        assert_eq!(git.run(&["rev-parse", "HEAD"]).unwrap(), before, "{damage}");
+        assert_eq!(
+            fs::read(path.join("fix.txt")).unwrap(),
+            contents,
+            "{damage}"
+        );
+        assert!(path.exists());
+        if damage == "locked" {
+            launch
+                .run(&["worktree", "unlock", path.to_str().unwrap()])
+                .unwrap();
+        }
+        // All resources below were allocated solely for this fixture.
+        launch
+            .run(&["worktree", "remove", "--force", path.to_str().unwrap()])
+            .unwrap();
+        drop(temp);
+    }
+}
+
+#[test]
+fn recovery_keeps_preexisting_local_branch_ownership() {
+    let (_temp, launch) = super::tests::launch_directory();
+    let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
+    launch.run(&["branch", "feature", &start]).unwrap();
+    let owner = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+    let path = owner.path().to_path_buf();
+    let git = Git::new(&path);
+    git.run(&["commit", "--allow-empty", "-m", "Retained repair"])
+        .unwrap();
+    drop(owner);
+    let recovered = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+    git.run(&["push", "origin", "feature"]).unwrap();
+    let head = recovered.head().unwrap();
+    drop(recovered);
+    assert!(!path.exists());
+    assert_eq!(local_head(&launch, "feature").unwrap(), Some(head));
+}
+
+#[test]
+fn retained_conflict_inspection_does_not_run_repository_hooks() {
+    let (temp, launch) = super::tests::launch_directory();
+    let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
+    let owner = SkillWorktree::on_pull_request(&launch, "feature", &start).unwrap();
+    let path = owner.path().to_path_buf();
+    let git = Git::new(&path);
+    fs::write(path.join("fix.txt"), "preserved repair\n").unwrap();
+    git.run(&["add", "fix.txt"]).unwrap();
+    git.run(&["commit", "-m", "Retained repair"]).unwrap();
+    drop(owner);
+    let marker = temp.path().join("hook-ran");
+    let marker_path = marker.to_str().unwrap();
+    assert!(
+        !marker_path.contains('\''),
+        "fixture path must be shell-safe"
+    );
+    crate::test_support::write_executable(
+        &temp.path().join("hooks").join("post-index-change"),
+        &format!("#!/bin/sh\nprintf ran > '{marker_path}'\n"),
+    );
+    // A stat change makes the inspection status rewrite the index, which is
+    // when Git runs post-index-change. Content stays committed.
+    fs::write(path.join("fix.txt"), "preserved repair\n").unwrap();
+
+    let outcome = SkillWorktree::on_pull_request(&launch, "feature", &start);
+    let adopted = outcome.is_ok();
+    // Disposal repeats its own status after recovery returns. Judge the
+    // recovery commands, then publish so disposal can remove the checkout.
+    let ran = marker.exists();
+    if let Ok(recovered) = outcome {
+        git.run(&["push", "origin", "feature"]).unwrap();
+        drop(recovered);
+    }
+
+    assert!(
+        !ran,
+        "inspection executed a repository hook (adopted: {adopted})"
+    );
+}
+
 struct StaleReview {
     _temp: tempfile::TempDir,
     launch: Git,
@@ -16,7 +195,7 @@ struct StaleReview {
 impl StaleReview {
     fn create() -> Self {
         let (temp, launch) = super::tests::launch_directory();
-        let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+        let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
         let path = owner.path().to_path_buf();
         let git = Git::new(&path);
         let admin = PathBuf::from(git.run(&["rev-parse", "--absolute-git-dir"]).unwrap());
@@ -39,7 +218,7 @@ impl StaleReview {
             .run(&["worktree", "list", "--porcelain"])
             .unwrap();
         let refs = self.launch.run(&["show-ref"]).unwrap();
-        let error = ReviewWorktree::create(&self.launch, "work", "main")
+        let error = ReviewWorktree::create(&self.launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -230,10 +409,11 @@ fn replaced_directories_or_changed_registration_identity_do_not_inherit_disposal
             "missing-root" | "admin-link" | "damaged-registration" | "backlink"
         ) {
             let refs = fixture.launch.run(&["show-ref"]).unwrap();
-            let error = ReviewWorktree::create(&fixture.launch, "work", "main")
-                .err()
-                .unwrap()
-                .to_string();
+            let error =
+                ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
+                    .err()
+                    .unwrap()
+                    .to_string();
             assert!(
                 error.contains("retaining checkout")
                     && error.contains(fixture.path.to_str().unwrap()),
@@ -280,7 +460,7 @@ fn legacy_paths_and_dangling_links_are_retained_before_add() {
             _ => symlink(temp.path().join("absent"), &path).unwrap(),
         }
         let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -300,7 +480,7 @@ fn legacy_paths_and_dangling_links_are_retained_before_add() {
 fn live_review_cleanup_does_not_require_restart_evidence() {
     for missing in ["token", "record", "both"] {
         let (_temp, launch) = super::tests::launch_directory();
-        let owner = ReviewWorktree::create(&launch, "work", "main").unwrap();
+        let owner = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap();
         let path = owner.path().to_path_buf();
         let admin = PathBuf::from(
             Git::new(&path)
@@ -333,7 +513,8 @@ fn process_death_with_prepared_markers_does_not_authorize_a_review_retry() {
     use std::time::{Duration, Instant};
     const NAME: &str = "worktree::review_recovery_tests::process_death_with_prepared_markers_does_not_authorize_a_review_retry";
     if let Some(launch) = std::env::var_os("THIRDSHIFT_REVIEW_CRASH_LAUNCH") {
-        let _owner = ReviewWorktree::create(&Git::new(launch), "work", "main").unwrap();
+        let _owner =
+            ReviewWorktree::create(&Git::new(launch), "work", "main", PassKind::Architect).unwrap();
         panic!("fixture failed to stop acquisition before publication");
     }
     let (temp, launch) = super::tests::launch_directory();
@@ -395,7 +576,7 @@ exec "$THIRDSHIFT_REAL_GIT" "$@"
     let head = Git::new(&path).run(&["rev-parse", "HEAD"]).unwrap();
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
 
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -425,10 +606,11 @@ fn recorded_interruption_leaves_an_eligible_stale_review_untouched() {
                 .run(&["worktree", "list", "--porcelain"])
                 .unwrap();
             signal_hook::low_level::raise(signal).unwrap();
-            let error = ReviewWorktree::create(&fixture.launch, "work", "main")
-                .err()
-                .unwrap()
-                .to_string();
+            let error =
+                ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
+                    .err()
+                    .unwrap()
+                    .to_string();
             assert_eq!(error, "interrupted");
             assert_eq!(
                 fs::read_to_string(fixture.path.join("retained.txt")).unwrap(),
@@ -477,7 +659,7 @@ fn token_creation_never_overwrites_existing_files_links_or_tracked_tokens() {
                 &format!("#!/bin/sh\nset -e\n{create}\nprintf 'hook scratch\\n' > retained.txt\n"),
             );
         }
-        let error = ReviewWorktree::create(&launch, "work", "main")
+        let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
             .err()
             .unwrap()
             .to_string();
@@ -526,8 +708,9 @@ fn stale_recovery_and_new_acquisition_wait_for_the_repository_worktree_lock() {
     let held = lock_launch(&fixture.launch).unwrap();
     let original_token = fs::read(fixture.path.join(".thirdshift-review-token")).unwrap();
     let launch = Git::new(fixture.launch.dir());
-    let acquiring =
-        std::thread::spawn(move || ReviewWorktree::create(&launch, "work", "main").unwrap());
+    let acquiring = std::thread::spawn(move || {
+        ReviewWorktree::create(&launch, "work", "main", PassKind::Architect).unwrap()
+    });
     std::thread::sleep(Duration::from_millis(300));
     let retained_while_locked = fs::read_to_string(fixture.path.join("retained.txt")).ok();
     let token_while_locked = fs::read(fixture.path.join(".thirdshift-review-token")).ok();
@@ -549,7 +732,7 @@ fn a_missing_registered_review_reports_its_available_head_and_retains_registrati
         .launch
         .run(&["worktree", "list", "--porcelain"])
         .unwrap();
-    let error = ReviewWorktree::create(&fixture.launch, "work", "main")
+    let error = ReviewWorktree::create(&fixture.launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();
@@ -583,7 +766,7 @@ fn a_repository_negating_the_token_exclusion_refuses_review_acquisition() {
     let registrations = launch.run(&["worktree", "list", "--porcelain"]).unwrap();
     let refs = launch.run(&["show-ref"]).unwrap();
 
-    let error = ReviewWorktree::create(&launch, "work", "main")
+    let error = ReviewWorktree::create(&launch, "work", "main", PassKind::Architect)
         .err()
         .unwrap()
         .to_string();

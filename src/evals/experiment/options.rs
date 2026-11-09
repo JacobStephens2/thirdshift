@@ -18,6 +18,8 @@ pub struct Options {
     pub(super) trials_per_task: Option<usize>,
     pub(super) json: bool,
     pub(super) release: bool,
+    pub(super) yes: bool,
+    pub(super) name: Option<String>,
 }
 
 #[derive(Default)]
@@ -48,38 +50,97 @@ impl ArmOptions {
     }
 }
 
+enum ArgumentKind {
+    Json,
+    Release,
+    Yes,
+    ValuedFlag,
+    Positional,
+}
+
+fn argument_kind(word: &str) -> ArgumentKind {
+    match word {
+        "--json" => ArgumentKind::Json,
+        "--release" => ArgumentKind::Release,
+        "--yes" => ArgumentKind::Yes,
+        flag if flag.starts_with("--") => ArgumentKind::ValuedFlag,
+        _ => ArgumentKind::Positional,
+    }
+}
+
+/// Translate a captured legacy command for readers, retaining every other
+/// argument literally and taking both levels from its recorded Bar.
+pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> Option<String> {
+    if !matches!(levels, crate::verdict::Levels::Legacy { .. }) {
+        return Some(command.to_owned());
+    }
+    let mut original = shlex::split(command)?.into_iter();
+    let mut updated = Vec::new();
+    while let Some(word) = original.next() {
+        if matches!(
+            word.as_str(),
+            "--credible-level" | "--pass-level" | "--fail-level"
+        ) {
+            original.next()?;
+        } else {
+            let takes_value = matches!(argument_kind(&word), ArgumentKind::ValuedFlag);
+            updated.push(word);
+            if takes_value {
+                updated.push(original.next()?);
+            }
+        }
+    }
+    updated.extend([
+        "--pass-level".into(),
+        levels.pass().to_string(),
+        "--fail-level".into(),
+        levels.fail().to_string(),
+    ]);
+    Some(crate::args::shell_command(updated))
+}
+
 pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();
     let mut candidate = None;
     let mut json = false;
     let mut release = false;
+    let mut yes = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if arg == "--json" {
-            ensure!(!json, "repeated --json");
-            json = true;
-        } else if arg == "--release" {
-            ensure!(!release, "repeated --release");
-            release = true;
-        } else if arg.starts_with("--") {
-            let value = args
-                .next()
-                .with_context(|| format!("{arg} requires a value"))?;
-            if arg == "--suite" {
-                crate::evals::format::name(value)?;
-                ensure!(suites.insert(value.clone()), "repeated suite {value}");
-            } else {
+        match argument_kind(arg) {
+            ArgumentKind::Json => {
+                ensure!(!json, "repeated --json");
+                json = true;
+            }
+            ArgumentKind::Release => {
+                ensure!(!release, "repeated --release");
+                release = true;
+            }
+            ArgumentKind::Yes => {
+                ensure!(!yes, "repeated --yes");
+                yes = true;
+            }
+            ArgumentKind::ValuedFlag => {
+                let value = args
+                    .next()
+                    .with_context(|| format!("{arg} requires a value"))?;
+                if arg == "--suite" {
+                    crate::evals::format::name(value)?;
+                    ensure!(suites.insert(value.clone()), "repeated suite {value}");
+                } else {
+                    ensure!(
+                        flags.insert(arg.as_str(), value.as_str()).is_none(),
+                        "repeated {arg}"
+                    );
+                }
+            }
+            ArgumentKind::Positional => {
                 ensure!(
-                    flags.insert(arg.as_str(), value.as_str()).is_none(),
-                    "repeated {arg}"
+                    candidate.replace(arg.clone()).is_none(),
+                    "only one Candidate is accepted"
                 );
             }
-        } else {
-            ensure!(
-                candidate.replace(arg.clone()).is_none(),
-                "only one Candidate is accepted"
-            );
         }
     }
     let mut arm = |prefix: &str| -> Result<ArmOptions> {
@@ -100,11 +161,18 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let baseline_setup = arm("baseline")?;
     let candidate_setup = arm("candidate")?;
     let baseline = flags.remove("--baseline").map(String::from);
+    let name = flags
+        .remove("--name")
+        .map(|name| super::names::parse(name)?.context("Experiment name must not be empty"))
+        .transpose()?;
     ensure!(
-        !release || (baseline.is_none() && suites.is_empty()),
-        "release mode selects its Baseline and touched suites; --baseline and --suite do not apply"
+        !release || suites.is_empty(),
+        "release mode selects its touched suites; --suite does not apply"
     );
-    let mut bar = Bar::default();
+    let mut bar = Bar {
+        min_discriminating_tasks: Some(20),
+        ..Bar::default()
+    };
     macro_rules! number {
         ($flag:literal, $target:expr) => {
             if let Some(value) = flags.remove($flag) {
@@ -115,10 +183,21 @@ pub fn parse(args: &[String]) -> Result<Options> {
         };
     }
     number!("--margin", bar.margin);
-    number!("--credible-level", bar.credible_level);
+    let mut pass_level = bar.levels.pass();
+    let mut fail_level = bar.levels.fail();
+    number!("--pass-level", pass_level);
+    number!("--fail-level", fail_level);
+    bar.levels = crate::verdict::Levels::Separate {
+        pass_level,
+        fail_level,
+        pass_rule: crate::verdict::PassRule::Margin,
+    };
     number!("--prior", bar.prior);
     number!("--seed", bar.seed);
     number!("--draws", bar.draws);
+    let mut minimum = bar.min_discriminating_tasks.unwrap();
+    number!("--min-discriminating-tasks", minimum);
+    bar.min_discriminating_tasks = Some(minimum);
     number!("--timeout", bar.timeout_seconds);
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
@@ -138,10 +217,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         bar.margin.is_finite() && (-1.0..=1.0).contains(&bar.margin),
         "margin must be within [-1, 1]"
     );
-    ensure!(
-        bar.credible_level.is_finite() && bar.credible_level > 0.0 && bar.credible_level < 1.0,
-        "credible level must be between zero and one"
-    );
+    bar.levels.validate()?;
     ensure!(
         bar.prior.is_finite() && bar.prior > 0.0 && bar.draws >= 2 && bar.timeout_seconds > 0,
         "prior and timeout must be positive; at least two draws are required"
@@ -151,7 +227,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     }
     Ok(Options {
         candidate: candidate.context(
-            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]",
+            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes]",
         )?,
         baseline,
         baseline_setup,
@@ -161,5 +237,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         trials_per_task,
         json,
         release,
+        yes,
+        name,
     })
 }

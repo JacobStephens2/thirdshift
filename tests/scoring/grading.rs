@@ -193,8 +193,9 @@ fn bug_origins_survive_a_grader_limit_stop_and_scores_resume_without_repeating_a
     scenario.agent_does_in_session(2, "printf '%s\\n' '{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\"}}'\nsleep 30\n");
 
     let stopped = scenario.run(&["score"]);
-    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(stopped.code, Some(1), "{}", stopped.stderr);
     assert!(stopped.stderr.contains("plan-limit warning"));
+    assert_eq!(scenario.command_record(LOGS)["outcome"], "paused");
     let pending = saved_weeks(&scenario).remove(0);
     assert_eq!(pending["bug_origins"][0]["state"], "proposed");
     assert!(pending["sample"][0]["assessment"].is_null());
@@ -296,19 +297,43 @@ fn plan_limit_stops_before_more_graders_and_the_next_command_scores_the_remainde
             r#"mkdir -p "$HOME/.codex/sessions"
 cat > "$HOME/.codex/sessions/rollout-fixture-fake-thread-2.jsonl" <<EOF
 {"type":"session_meta","payload":{"id":"fake-thread-2","cwd":"$PWD"}}
-{"type":"event_msg","timestamp":"2099-01-01T00:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":85}}}}
+{"type":"event_msg","timestamp":"2099-01-01T00:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":86,"resets_at":1793397600}}}}
 EOF
 sleep 30
 "#.to_string()
         } else {
             format!(
-                "printf '%s\\n' '{{\"type\":\"rate_limit_event\",\"rate_limit_info\":{{\"status\":\"{warning}\"}}}}'\nsleep 30\n"
+                "printf '%s\\n' '{{\"type\":\"rate_limit_event\",\"rate_limit_info\":{{\"status\":\"{warning}\",\"rateLimitType\":\"seven_day\",\"utilization\":0.86,\"unifiedWindows\":{{\"seven_day\":{{\"utilization\":0.86,\"resetsAt\":1793397600}}}}}}}}'\nsleep 30\n"
             )
         };
         scenario.agent_does_in_session(2, &quota);
         let started = std::time::Instant::now();
         let result = scenario.run(&["score"]);
-        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let record = scenario.command_record(LOGS);
+        assert_eq!(record["outcome"], "paused", "{record}");
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(record["resume_command"], "thirdshift score");
+        assert_eq!(
+            record["limit"]["harness"],
+            if warning == "codex-native" {
+                "codex"
+            } else {
+                "claude"
+            }
+        );
+        assert_eq!(
+            record["limit"]["window"],
+            if warning == "codex-native" {
+                "primary"
+            } else {
+                "seven_day"
+            }
+        );
+        assert_eq!(record["limit"]["utilization"], 0.86);
+        assert_eq!(record["limit"]["resets_at"], "2026-10-30T22:00:00Z");
+        let status = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(status["commands"][0]["needs_you_kind"], "paused");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(15),
             "did not stop the live session"
@@ -340,6 +365,16 @@ sleep 30
         let result = scenario.run(&["score"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(calls().len(), 4, "completed Scores must not be repeated");
+        let status = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        assert!(
+            !status["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["outcome"] == "paused" && row["group"] == "needs you"),
+            "{status}"
+        );
         let retained = saved_weeks(&scenario);
         assert_eq!(retained.len(), 2);
         assert!(

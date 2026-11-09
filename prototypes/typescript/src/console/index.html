@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbox · thirdshift TypeScript prototype</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10151c; color: #e3eaf3; }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; max-width: 1040px; padding: 32px 20px; }
+    header { border-bottom: 1px solid #394859; margin-bottom: 28px; }
+    h1 { font-size: 36px; margin: 8px 0 14px; }
+    h2 { font-size: 18px; color: #aebed1; }
+    p { line-height: 1.5; }
+    .brand { color: #8acfb2; letter-spacing: .08em; font-size: 14px; }
+    form { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+    label { display: grid; gap: 8px; max-width: 100%; }
+    input, button { border: 1px solid #587466; border-radius: 6px; padding: 10px 14px; font: inherit; }
+    input { background: #19232e; color: inherit; min-width: 0; max-width: 100%; }
+    button { background: #243d33; color: #d4ffe7; cursor: pointer; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #9ee9c5; outline-offset: 3px; }
+    button:disabled { opacity: .5; cursor: wait; }
+    section { margin: 24px 0; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #19232e; border: 1px solid #304052; padding: 16px; border-radius: 8px; margin: 10px 0; }
+    li span { overflow-wrap: anywhere; min-width: 0; }
+    li button { flex-shrink: 0; }
+    #error { color: #ffc6b8; overflow-wrap: anywhere; }
+    #active-runs { color: #8acfb2; }
+    [hidden] { display: none; }
+    @media (max-width: 480px) { body { padding: 24px 16px; } h1 { font-size: 30px; } li { padding: 12px; } }
+  </style>
+</head>
+<body>
+  <header><p class="brand">THIRDSHIFT · TYPESCRIPT PROTOTYPE</p><h1>Inbox</h1></header>
+  <form>
+    <label>Console token <input type="password" autocomplete="off" required></label>
+    <button type="submit">Open Inbox</button>
+  </form>
+  <p id="error" role="alert"></p>
+  <main hidden><p id="active-runs"></p><div id="groups"></div></main>
+  <script type="module" src="/client.js"></script>
+</body>
+</html>

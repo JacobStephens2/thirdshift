@@ -18,9 +18,20 @@ def main():
         raise ValueError(f"unexpected release Experiment Verdict: {outcome}")
     print(f"release: Experiment {experiment}: {outcome}", file=sys.stderr)
     for name, suite in view["verdict"]["suites"].items():
+        if suite.get("advisory", False):
+            print(f"release: {name}: Advisory suite ({suite['verdict']})", file=sys.stderr)
         for key, label in [("accuracy", "accuracy"), ("wrong_findings", "wrong findings")]:
-            interval = suite[key]["interval"]
-            print(f"release: {name}: {label} [{interval['lower']}, {interval['upper']}]", file=sys.stderr)
+            assessment = suite[key]
+            if "interval" in assessment:
+                intervals = [(label, assessment["interval"])]
+            else:
+                intervals = [
+                    (f"{label} {kind} ({suite['bar'][kind + '_level']:.0%})",
+                     assessment[kind + "_interval"])
+                    for kind in ("pass", "fail")
+                ]
+            for interval_label, interval in intervals:
+                print(f"release: {name}: {interval_label} [{interval['lower']}, {interval['upper']}]", file=sys.stderr)
     if outcome == "waiting_on_rechecks":
         pending = view["pending_rechecks"]
         if not pending:

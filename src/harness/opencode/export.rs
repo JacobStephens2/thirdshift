@@ -115,14 +115,22 @@ impl SessionExport {
     }
 }
 
-pub(in crate::harness) fn read(worktree: &Path, id: &str) -> Result<Option<SessionExport>> {
-    let output = super::super::process::output(
-        &OpenCode,
-        Command::new(OpenCode.name())
-            .args(["session", "export", "--standalone", id])
-            .current_dir(worktree),
-        None,
-    );
+pub(in crate::harness) fn read(
+    worktree: &Path,
+    id: &str,
+    home: Option<&Path>,
+) -> Result<Option<SessionExport>> {
+    let mut command = Command::new(OpenCode.name());
+    command
+        .args(["session", "export", "--standalone", id])
+        .current_dir(worktree);
+    if let Some(home) = home {
+        command.env("HOME", home);
+        for (name, relative) in crate::harness::PRIVATE_HOME_XDG {
+            command.env(name, home.join(relative));
+        }
+    }
+    let output = super::super::process::output(&OpenCode, &mut command, None);
     match output {
         Ok(output) if output.status.success() => {
             Ok(SessionExport::parse(&String::from_utf8_lossy(&output.stdout), id).ok())
@@ -135,18 +143,26 @@ pub(in crate::harness) fn read(worktree: &Path, id: &str) -> Result<Option<Sessi
 /// A readable standalone export owns completion, including empty fields.
 pub(super) struct Completion {
     worktree: PathBuf,
+    home: Option<PathBuf>,
 }
 
 impl Completion {
     pub(super) fn new(worktree: PathBuf) -> Self {
-        Self { worktree }
+        Self {
+            worktree,
+            home: None,
+        }
     }
 }
 
 impl Retained for Completion {
+    fn set_home(&mut self, home: &Path) {
+        self.home = Some(home.to_path_buf());
+    }
+
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
         if let Some(id) = facts.ended.session_id.as_deref()
-            && let Some(export) = read(&self.worktree, id)?
+            && let Some(export) = read(&self.worktree, id, self.home.as_deref())?
         {
             facts.ended.final_message = export.message;
             facts.ended.completed = export.completed;

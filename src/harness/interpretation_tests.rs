@@ -3,6 +3,156 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 
 #[test]
+fn session_failures_name_unix_signals() {
+    for (signal, name) in [
+        (libc::SIGKILL, Some("SIGKILL")),
+        (libc::SIGTERM, Some("SIGTERM")),
+        (libc::SIGABRT, Some("SIGABRT")),
+        (libc::SIGSEGV, Some("SIGSEGV")),
+        (libc::SIGINT, Some("SIGINT")),
+        (libc::SIGHUP, Some("SIGHUP")),
+        (libc::SIGPIPE, Some("SIGPIPE")),
+        (libc::SIGUSR1, None),
+    ] {
+        let error = stream(Harness::Codex, "")
+            .finish(Ok(std::process::ExitStatus::from_raw(signal)))
+            .outcome
+            .unwrap_err();
+        let expected = match name {
+            Some(name) => format!("codex exited by signal {signal} ({name})"),
+            None => format!("codex exited by signal {signal}"),
+        };
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn stopping_windows_keep_their_own_reset_and_unknown_facts_stay_null() {
+    for (harness, raw, expected) in [
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","resetsAt":1793397600,"unifiedWindows":{"seven_day":{"utilization":0.86}}}}"#,
+            serde_json::json!({"harness":"claude","window":"seven_day","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day","utilization":0.4,"resetsAt":1793397600,"unifiedWindows":{"five_hour":{"utilization":0.6,"resetsAt":1793394000}}}}"#,
+            serde_json::json!({"harness":"claude","window":"seven_day","utilization":0.4,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"rate_limit_reached_type":"secondary","primary":{"used_percent":85,"resets_at":1793394000},"secondary":{"used_percent":100,"resets_at":1793397600}}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":1.0,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.77,"resetsAt":1793397600,"unifiedWindows":{"five_hour":{"utilization":0.86,"resetsAt":1793394000}}}}"#,
+            serde_json::json!({"harness":"claude","window":"five_hour","utilization":0.86,"resets_at":"2026-10-30T21:00:00Z"}),
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}"#,
+            serde_json::json!({"harness":"claude","window":null,"utilization":null,"resets_at":null}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"secondary":{"used_percent":86,"resets_at":1793397600}}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":0.86,"resets_at":"2026-10-30T22:00:00Z"}),
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"rate_limit_reached_type":"secondary"}}"#,
+            serde_json::json!({"harness":"codex","window":"secondary","utilization":null,"resets_at":null}),
+        ),
+    ] {
+        let mut interpretation = stream(harness, "");
+        interpretation.decode(raw);
+        assert_eq!(
+            serde_json::to_value(interpretation.plan_limit()).unwrap(),
+            expected,
+            "{raw}"
+        );
+        assert!(finish(interpretation).outcome.is_ok());
+    }
+}
+
+#[test]
+fn claude_plan_limit_warning_below_85_percent_does_not_pause_evals() {
+    for raw in [
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.77}}"#,
+        r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.77,"surpassedThreshold":0.75,"unifiedWindows":{"five_hour":{"utilization":0.05}}}}"#,
+    ] {
+        let mut interpretation = stream(Harness::Claude, "");
+        interpretation.decode(raw);
+        assert!(
+            !interpretation.plan_limit_reached(),
+            "a warning below 85% must not pause Evals: {raw}"
+        );
+        assert!(finish(interpretation).outcome.is_ok());
+    }
+}
+
+#[test]
+fn claude_plan_limits_check_all_windows_and_keep_the_unreadable_warning_fallback() {
+    for (info, expected) in [
+        (
+            r#"{"status":"allowed_warning","utilization":0.77,"unifiedWindows":{"five_hour":{"utilization":0.85}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.05},"seven_day":{"utilization":0.91}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"five_hour":{"utilization":0.05},"seven_day":{"utilization":0.849}}}"#,
+            false,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":0.85,"unifiedWindows":{"five_hour":{"utilization":0.05}}}"#,
+            true,
+        ),
+        (r#"{"status":"allowed_warning","utilization":0.849}"#, false),
+        (r#"{"status":"allowed_warning","utilization":0.91}"#, true),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":{"future_window":{"utilization":0.85}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":"unknown","unifiedWindows":{"seven_day":{"utilization":0.77}}}"#,
+            false,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":0.77,"unifiedWindows":{"five_hour":{"utilization":"unknown"}}}"#,
+            false,
+        ),
+        (r#"{"status":"allowed_warning"}"#, true),
+        (
+            r#"{"status":"allowed_warning","utilization":null,"unifiedWindows":{}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","utilization":"0.77","unifiedWindows":{"seven_day":{"utilization":"0.77"}}}"#,
+            true,
+        ),
+        (
+            r#"{"status":"allowed_warning","unifiedWindows":"unknown"}"#,
+            true,
+        ),
+        (r#"{"status":"rejected","utilization":0.05}"#, true),
+        (
+            r#"{"status":"allowed","utilization":0.91,"unifiedWindows":{"seven_day":{"utilization":0.91}}}"#,
+            false,
+        ),
+    ] {
+        let raw = format!(r#"{{"type":"rate_limit_event","rate_limit_info":{info}}}"#);
+        let mut interpretation = stream(Harness::Claude, "");
+        interpretation.decode(&raw);
+        assert_eq!(interpretation.plan_limit_reached(), expected, "{raw}");
+        assert!(finish(interpretation).outcome.is_ok(), "{raw}");
+    }
+}
+
+#[test]
 fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {
     for (harness, raw, expected) in [
         (
@@ -73,6 +223,58 @@ fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {
 }
 
 #[test]
+fn a_forged_quota_window_cannot_enter_the_pause_message() {
+    // A Trial shares the Codex session directory with the sandboxed agent.
+    // The quota window is whatever string that file reports.
+    let window = "secondary\n\u{1b}[2Jecho paused-review\u{7}";
+    let raw = serde_json::json!({
+        "type": "token_count",
+        "rate_limits": {
+            "rate_limit_reached_type": window,
+            window: {"used_percent": 100, "resets_at": 1793397600}
+        }
+    });
+    let mut interpretation = stream(Harness::Codex, "");
+    interpretation.decode(&raw.to_string());
+    assert!(interpretation.plan_limit_reached());
+    let limit = interpretation.plan_limit().cloned().unwrap();
+    let shown = crate::session::limits::Reached(limit.clone()).to_string();
+    assert!(
+        limit
+            .window
+            .as_deref()
+            .is_none_or(|name| !name.chars().any(char::is_control) && !name.contains("echo")),
+        "stored window kept forged text: {limit:?}"
+    );
+    assert!(
+        !shown.chars().any(char::is_control),
+        "pause message kept a control character: {shown:?}"
+    );
+    assert!(
+        !shown.contains("echo paused-review"),
+        "pause message kept forged window text: {shown:?}"
+    );
+
+    let claude = serde_json::json!({
+        "type": "rate_limit_event",
+        "rate_limit_info": {
+            "status": "allowed_warning",
+            "unifiedWindows": {
+                "seven_day\necho paused-review": {"utilization": 0.86, "resetsAt": 1793397600}
+            }
+        }
+    });
+    let mut interpretation = stream(Harness::Claude, "");
+    interpretation.decode(&claude.to_string());
+    let shown =
+        crate::session::limits::Reached(interpretation.plan_limit().cloned().unwrap()).to_string();
+    assert!(
+        !shown.contains("echo paused-review") && !shown.chars().any(char::is_control),
+        "Claude pause message kept forged window text: {shown:?}"
+    );
+}
+
+#[test]
 fn review_agy_failure_after_a_reported_turn_is_not_a_startup_failure() {
     let mut interpretation = stream(Harness::Agy, "");
     interpretation.condense(r#"{"event":"result","result":{"conversation_id":"s","status":"ERROR","response":"","error":"Harness failed.","num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"thinking_tokens":0,"total_tokens":0}}}"#);
@@ -139,6 +341,10 @@ fn review_completion_preserves_distinct_claude_child_messages() {
         interpretation.decode(line);
     }
     let events = finish(interpretation).report.unwrap().events;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     let messages: Vec<_> = events
         .iter()
         .filter_map(|event| match event {
@@ -733,7 +939,9 @@ pub(crate) fn recording_interpretation(
     match retained_harness {
         Harness::Muse => muse::log::recording_interpretation(root, decoder),
         Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
-        _ => panic!("recording fixtures support only retained Harnesses"),
+        Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok => {
+            panic!("recording fixtures support only retained Harnesses")
+        }
     }
 }
 
@@ -1165,6 +1373,10 @@ fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_
                 Some("last reply")
             );
             let events = completion.report.unwrap().events;
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the test picks out the events it asserts on; the other events are not under test"
+            )]
             let starts: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
@@ -1187,6 +1399,10 @@ fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_
                     .count(),
                 1
             );
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "the test picks out the events it asserts on; the other events are not under test"
+            )]
             let ends: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
@@ -1355,6 +1571,10 @@ fn review_opencode_preserves_all_live_text_parts_without_export() {
         interpretation.decode(line);
     }
     let events = finish(interpretation).report.unwrap().events;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "the test picks out the events it asserts on; the other events are not under test"
+    )]
     let text: String = events
         .iter()
         .filter_map(|event| match event {

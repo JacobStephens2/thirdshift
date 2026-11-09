@@ -5,7 +5,7 @@ use crate::asks::Asks;
 use crate::harness::Choice;
 
 /// The Command's checked Harness, Model and Effort, those of its Security
-/// review, its Security fix ask and its Security review ask, as every child
+/// review, its Security fix, close and review asks, as every child
 /// Run is given them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ChildAsks {
@@ -21,6 +21,8 @@ pub struct ChildAsks {
     pub security_review_default: Option<Choice>,
     /// Whether a Security run may fix reproduced findings.
     pub security_fix: bool,
+    /// Whether a merged Security fix may close its finding.
+    pub security_close: bool,
     /// Whether the Command asked for a Security review, for every child Run too.
     pub security_review: bool,
 }
@@ -37,6 +39,7 @@ impl ChildAsks {
             security_review_harness: asks.security_review_harness.clone(),
             security_review_default: asks.security_review_default.clone(),
             security_fix: asks.security_fix,
+            security_close: asks.security_close,
             security_review: asks.security_review,
         }
     }

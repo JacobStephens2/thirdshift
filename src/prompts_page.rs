@@ -19,7 +19,10 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, Process, ScoringRun, SecurityRun, Trial, Units};
+use Sender::{
+    ArchitectRun, Experiment, FixRun, Process, ReviewRun, ScoringRun, SecurityRun, TriageRun,
+    Trial, Units,
+};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -101,6 +104,7 @@ enum Sender {
     Units(&'static [Unit]),
     /// An Architect run, which the press units, a Ticket run's, don't cover.
     ArchitectRun,
+    TriageRun,
     /// A Security run, before any dispatched Ticket run.
     SecurityRun,
     /// An Experiment's private model Grader.
@@ -110,6 +114,8 @@ enum Sender {
     Trial,
     /// A Step of a Custom process.
     Process,
+    ReviewRun,
+    FixRun,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -244,11 +250,32 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::architecture_review(BASE, Some(FOCUS)),
         },
         Prompt {
+            id: "prompt-triage",
+            title: "Triage run",
+            when: "Investigates a Report read-only in a throwaway worktree without waiting for a person. thirdshift files the recommended issues or comments on existing open issues unless --recommend-only is given, and retains the result for stdout and the Run notification.",
+            sender: TriageRun,
+            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
+        },
+        Prompt {
             id: "prompt-security-review",
             title: "Security review",
             when: "When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
             sender: Units(&[REVIEW]),
             text: prompt::security_review(&issue, BASE, BRANCH),
+        },
+        Prompt {
+            id: "prompt-pull-request-security-review",
+            title: "Review run Security review",
+            when: "When enabled, reviews security after a Review run addresses Standards and Spec findings. Delivery pushes its fixes with the others and includes unaddressed introduced findings in the comment. Recommend-only skips this session.",
+            sender: ReviewRun,
+            text: prompt::pull_request_security_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.to_string(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                BRANCH,
+            ),
         },
         Prompt {
             id: "prompt-security-audit",
@@ -339,6 +366,111 @@ fn prompts() -> Vec<Prompt> {
                 },
                 None,
                 prompt::ProcessWorktree::Throwaway,
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-address",
+            title: "Review run, address findings",
+            when: "Reviews a pull request against its own base and addresses findings under the Ticket run's rules. Delivery pushes fixes without force and posts the final report as a comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                crate::review::Mode::Address,
+                &[],
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-review",
+            title: "Review run, recommendations",
+            when: "Reviews a pull request's captured head against its own base, using linked closing issues as the Spec or the body alone. Posts recommendations without changing the branch.",
+            sender: ReviewRun,
+            text: prompt::pull_request_review(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                crate::review::Mode::RecommendOnly,
+                &[],
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-validation",
+            title: "Review run, validation after later fixes",
+            when: "A later editing Step changed the reviewed head. Repeats repository final validation and extra commands before Delivery, and appends the results to the comment.",
+            sender: ReviewRun,
+            text: prompt::pull_request_validation(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                OWN_HEAD,
+                &[],
+            ),
+        },
+        Prompt {
+            id: "prompt-pull-request-ci-fix-repair",
+            title: "Review run, CI-fix Repair",
+            when: "After publication, fixes the branch's own failed checks without merging or rebasing the author's branch or stack. Validates the final fix commit before guarded publication and CI watch. An unchanged Repair gets at most one eligible Check re-run.",
+            sender: ReviewRun,
+            text: prompt::pull_request_ci_fix_repair(
+                &crate::review::PullRequestUrl {
+                    url: PR_URL.into(),
+                    issue: issue.clone(),
+                },
+                BASE,
+                BRANCH,
+                &failed_with_inherited,
+                &[],
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-conflict-repair",
+            title: "Fix run, conflict Repair",
+            when: "A Fix run resolves a merge conflict against its pull request's Base branch, using trusted pull request and closing-issue context.",
+            sender: FixRun,
+            text: prompt::conflict_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BASE,
+                BRANCH,
+                PR_URL,
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-ci-repair",
+            title: "Fix run, CI-fix Repair",
+            when: "A Fix run repairs its own failed checks, using trusted pull request and closing-issue context. Delivery owns Check re-run and CI watch.",
+            sender: FixRun,
+            text: prompt::ci_fix_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BASE,
+                BRANCH,
+                PR_URL,
+                &failed_with_inherited,
+            ),
+        },
+        Prompt {
+            id: "prompt-fix-review-repair",
+            title: "Fix run, Foreign-commit review Repair",
+            when: "Before Self-merge, a Fix run reviews Foreign commits against its last known head using the pull request's trusted context.",
+            sender: FixRun,
+            text: prompt::review_repair(
+                prompt::RepairSubject::PullRequest(PR_URL),
+                BRANCH,
+                PR_URL,
+                OWN_HEAD,
             ),
         },
         Prompt {
@@ -506,7 +638,7 @@ fn fence(text: &str) -> String {
 fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
-        "thirdshift-code-review" => format!("{}, or a Code review Trial", unit_links(&[REVIEW])),
+        "thirdshift-code-review" => format!("{}, a Review run, or a Code review Trial", unit_links(&[REVIEW])),
         "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
@@ -519,6 +651,10 @@ fn skill_used_by(skill: &str) -> String {
         }
         "thirdshift-security-audit" => {
             "the Security audit, in a Security run, or a Security review".to_string()
+        }
+        "thirdshift-triage" => "a Triage run, investigating a Report".to_string(),
+        "thirdshift-to-questionnaire" => {
+            "a Triage run, when an issue needs a person's answer".to_string()
         }
         _ => panic!("the Factory skill {skill} has no user: add it to skill_used_by"),
     }
@@ -730,11 +866,14 @@ fn sent_by(sender: &Sender) -> String {
     match sender {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
+        TriageRun => "a Triage run".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
         ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
         Process => "a Custom process".to_string(),
+        ReviewRun => "a Review run or a Custom pull-request Process".to_string(),
+        FixRun => "a Fix run".to_string(),
     }
 }
 
@@ -788,6 +927,22 @@ mod tests {
     /// check them.
     fn updating() -> bool {
         std::env::var_os("UPDATE_PROMPTS").is_some()
+    }
+
+    #[test]
+    fn review_ci_fix_repair_is_published_with_its_ownership_rules() {
+        let file = prompt_files()
+            .into_iter()
+            .find(|file| file.name == "pull-request-ci-fix-repair.md")
+            .expect("Review CI-fix Repair is absent from the generated prompt catalogue");
+        for instruction in [
+            "Do not merge or rebase the author's branch or stack",
+            "Do not push or edit the pull request",
+            "thirdshift owns CI watch and the Check re-run.",
+            "After the final fix commit",
+        ] {
+            assert!(file.contents.contains(instruction), "missing {instruction}");
+        }
     }
 
     #[test]
@@ -892,6 +1047,11 @@ mod tests {
                     | "prompt-spec-review"
                     | "prompt-architecture-review"
                     | "prompt-security-review"
+                    | "prompt-pull-request-security-review"
+                    | "prompt-pull-request-ci-fix-repair"
+                    | "prompt-fix-conflict-repair"
+                    | "prompt-fix-ci-repair"
+                    | "prompt-fix-review-repair"
                     | "prompt-conflict-repair"
                     | "prompt-foreign-conflict-repair"
                     | "prompt-review-repair"
@@ -900,6 +1060,7 @@ mod tests {
                     | "prompt-process-step"
                     | "prompt-process-step-later"
                     | "prompt-process-step-issue"
+                    | "prompt-pull-request-address"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

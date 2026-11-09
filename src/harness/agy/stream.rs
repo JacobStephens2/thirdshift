@@ -166,6 +166,10 @@ mod tests {
             interpretation.decode(line);
         }
         let events = finish(interpretation).report.unwrap().events;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test picks out the events it asserts on; the other events are not under test"
+        )]
         let text: String = events
             .iter()
             .filter_map(|event| match event {
@@ -231,6 +235,10 @@ mod tests {
             stream.decode(line);
         }
         let events = finish(stream).report.unwrap().events;
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "the test picks out the events it asserts on; the other events are not under test"
+        )]
         let calls: Vec<_> = events
             .iter()
             .filter_map(|event| match event {

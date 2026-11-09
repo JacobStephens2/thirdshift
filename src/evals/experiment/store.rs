@@ -1,4 +1,5 @@
-//! Atomic metadata and one result per Trial. An exclusive lock fences resumes.
+//! Atomic metadata and one result per Trial. An exclusive lock fences resumes;
+//! a short metadata lock fences each `experiment.json` write, renames included.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -21,6 +22,9 @@ pub(super) struct Stored {
     #[serde(flatten)]
     pub details: Details,
     pub(super) created_at: String,
+    /// The Day shift's name; unset means the default from the Arms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub verdict: Option<super::grading::Verdict>,
@@ -36,6 +40,9 @@ pub(super) struct Stored {
 
 #[derive(Serialize)]
 pub(crate) struct View {
+    pub format: u32,
+    pub name: String,
+    pub name_set: bool,
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
@@ -72,6 +79,8 @@ pub(crate) struct Details {
     pub resume_command: Option<String>,
     #[serde(default)]
     pub command_log: Option<PathBuf>,
+    #[serde(default)]
+    pub release: bool,
 }
 
 #[derive(Serialize)]
@@ -194,6 +203,25 @@ impl Stored {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
             let started = directory.join("started").exists();
+            if started && stored.description.bar.discriminating_tasks.is_some() {
+                for task in &stored.tasks {
+                    let current = crate::evals::format::Task::load(&task.directory)?;
+                    ensure!(
+                        current.difficulty == task.manifest.difficulty,
+                        "Bar cannot change after the first Trial: Difficulty changed for {}/{}",
+                        task.suite,
+                        task.name
+                    );
+                }
+            }
+            if stored.description.bar.min_discriminating_tasks.is_none() {
+                // Saved Experiments keep their original aggregation policy.
+                description.bar.min_discriminating_tasks = None;
+            }
+            if stored.description.bar.discriminating_tasks.is_none() {
+                // Pre-selection Experiments keep judging all retained tasks.
+                description.bar.discriminating_tasks = None;
+            }
             if started {
                 // Cause defaults belong to the installed runner, not a CLI
                 // override. Resume keeps the rules recorded before its Trials.
@@ -203,8 +231,24 @@ impl Stored {
                     .causes
                     .clone_from(&stored.description.bar.void_rules.causes);
             }
-            if stored.description.bar != description.bar {
+            let stored_levels = stored.description.bar.levels;
+            if description.bar.levels.pass() == stored_levels.pass()
+                && description.bar.levels.fail() == stored_levels.fail()
+            {
+                // Equivalent CLI settings resume the original method and JSON,
+                // including a single-level Bar or ADR-0024's pass rule.
+                description.bar.levels = stored_levels;
+            }
+            if stored.description.bar != description.bar
+                || (!started && description.bar.discriminating_tasks.is_some())
+            {
                 ensure!(!started, "Bar cannot change after the first Trial");
+                // Before any Trial, refresh retained Difficulty even when a
+                // new reading leaves the judged list unchanged.
+                let Some(tasks) = tasks(&description)? else {
+                    return Ok(None);
+                };
+                stored.tasks = tasks;
                 stored.description.bar = description.bar;
             }
             stored
@@ -220,6 +264,7 @@ impl Stored {
                 state: State::Prepared,
                 details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
+                name: None,
                 tasks,
                 verdict: None,
                 rechecks: BTreeMap::new(),
@@ -235,8 +280,39 @@ impl Stored {
         Ok(Some(stored))
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// Remove an Experiment this command created and nothing has run in.
+    pub fn discard(self) -> Result<()> {
+        fs::remove_dir_all(&self.directory)?;
+        Ok(())
+    }
+
+    /// A rename may land while a run holds the Experiment lock, so every
+    /// metadata write keeps the name saved on disk.
+    pub fn save(&mut self) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        let path = self.directory.join("experiment.json");
+        if path.exists() {
+            #[derive(Deserialize)]
+            struct Saved {
+                #[serde(default)]
+                name: Option<String>,
+            }
+            let saved: Saved = serde_json::from_slice(&fs::read(&path)?)?;
+            self.name = saved.name;
+        }
+        write(&path, self)
+    }
+
+    pub fn rename(&mut self, name: Option<String>) -> Result<()> {
+        let _metadata = metadata_lock(&self.directory)?;
+        self.name = name;
         write(&self.directory.join("experiment.json"), self)
+    }
+
+    pub fn name(&self) -> String {
+        self.name
+            .clone()
+            .unwrap_or_else(|| super::names::default(&self.description, &self.details))
     }
 
     pub fn results(&self) -> Result<Vec<TrialResult>> {
@@ -247,19 +323,42 @@ impl Stored {
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
-        let (verdict, pending) =
-            super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
+        let (verdict, pending) = super::grading::assess(
+            &self.tasks,
+            &self.results()?,
+            &self.description.bar,
+            &self.description.baseline,
+        )?;
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
         Ok(())
     }
 
     fn upgrade_verdict(&mut self) -> Result<()> {
+        let missing_flip_verdicts = self
+            .pending_rechecks
+            .iter()
+            .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
+        if self.description.bar.min_discriminating_tasks.is_none() && self.verdict.is_some() {
+            // A saved pre-Advisory Verdict is evidence, not an invitation to
+            // recalculate it under a newer runner's recheck policy.
+            if self.state == State::Completed && missing_flip_verdicts {
+                let (_, pending) = super::grading::assess(
+                    &self.tasks,
+                    &self.results()?,
+                    &self.description.bar,
+                    &self.description.baseline,
+                )?;
+                self.pending_rechecks = pending;
+            }
+            return Ok(());
+        }
         if self.state == State::Completed
-            && self
+            && (self
                 .verdict
                 .as_ref()
-                .is_none_or(|verdict| verdict.provisional_verdict.is_none())
+                .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
+                || missing_flip_verdicts)
         {
             self.refresh_verdict()?;
         }
@@ -323,8 +422,11 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
+                "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
+Baseline: {}
+Candidate: {}{}{}",
                 self.description.id,
+                view.name,
                 self.state,
                 self.description.baseline.commit,
                 self.description.candidate.commit,
@@ -333,6 +435,14 @@ impl Stored {
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome())
                     .replace('_', " "),
+                self.verdict
+                    .as_ref()
+                    .map(super::grading::Verdict::worse_within_margin_metrics)
+                    .filter(|metrics| !metrics.is_empty())
+                    .map_or(String::new(), |metrics| format!(
+                        " ({}: worse, within the margin)",
+                        metrics.join(", ")
+                    )),
                 view.minutes.baseline,
                 view.usage.baseline(),
                 view.minutes.candidate,
@@ -347,10 +457,18 @@ impl Stored {
                             .iter()
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
-                    .collect::<String>()
+                    .collect::<String>(),
+                self.verdict.as_ref().map_or(String::new(), |verdict| verdict.selection_report())
             ))
         }
     }
+}
+
+/// Held only across one read-and-write of `experiment.json`, never for a run.
+fn metadata_lock(directory: &Path) -> Result<File> {
+    let lock = File::create(directory.join("metadata.lock"))?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -393,6 +511,21 @@ pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
         return Ok(vec![Stored::load(&root, id, false)?.view()?]);
     }
     list(&root)?.iter().map(Stored::view).collect()
+}
+
+/// Renames in any state: only the metadata lock fences this write, as it does
+/// a running Experiment's own.
+pub(super) fn rename(root: &Path, id: &str, name: Option<String>, json: bool) -> Result<String> {
+    let directory = Stored::directory(root, id)?;
+    let mut stored = {
+        let _metadata = metadata_lock(&directory)?;
+        let mut stored = Stored::metadata(&Native, directory, id)?;
+        stored.name = name;
+        write(&stored.directory.join("experiment.json"), &stored)?;
+        stored
+    };
+    stored.upgrade_verdict()?;
+    stored.render(json)
 }
 
 pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {

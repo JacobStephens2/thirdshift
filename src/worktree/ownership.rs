@@ -17,13 +17,16 @@ use crate::progress;
 
 #[path = "review_recovery.rs"]
 mod review_recovery;
+pub(super) use review_recovery::pull_request_conflict;
 pub(super) use review_recovery::{Publication, recover as recover_review};
+pub(super) use review_recovery::{clean_retained, restart_retained, retained_pull_request};
 
 pub(super) struct Checkout {
     root: Directory,
     admin: Directory,
     common: Directory,
     branch: Option<String>,
+    preserve_local_branch: bool,
 }
 
 impl Checkout {
@@ -37,6 +40,7 @@ impl Checkout {
             ))?,
             common: Directory::open(launch.common_dir()?.canonicalize()?)?,
             branch: branch.map(str::to_string),
+            preserve_local_branch: false,
         };
         owner.inspect(launch)?;
         Ok(owner)
@@ -44,6 +48,10 @@ impl Checkout {
 
     pub(super) fn path(&self) -> &Path {
         &self.root.path
+    }
+
+    pub(super) fn preserve_local_branch(&mut self) {
+        self.preserve_local_branch = true;
     }
 
     /// One interruptible operation owns the lock, including observations and
@@ -105,6 +113,7 @@ impl Checkout {
         launch: &Git,
         base: &str,
         reason: &str,
+        failed_work: super::FailedWork,
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
@@ -120,14 +129,39 @@ impl Checkout {
             .with_context(|| operation.context.clone())?;
         operation.inspect()?;
         if operation.merge_in_progress()? {
-            operation.run(&["merge", "--abort"])?;
+            if failed_work == super::FailedWork::Fix {
+                // Abort clears the Repair's resolution along with the merge.
+                // Capture its complete working tree first, then restore those
+                // files on the pre-merge head for the failure commit. A retry
+                // still has to reconcile the Base branch through Delivery.
+                operation.run(&["add", "-A"])?;
+                let snapshot = operation.run(&["write-tree"])?;
+                let restore = || {
+                    format!(
+                        "Repair work is saved in tree {snapshot}; restore it in the retained worktree before retrying"
+                    )
+                };
+                operation.run(&["merge", "--abort"]).with_context(restore)?;
+                operation
+                    .run(&["read-tree", "--reset", "-u", &snapshot])
+                    .with_context(restore)?;
+            } else {
+                operation.run(&["merge", "--abort"])?;
+            }
         }
         operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
+        let has_work = if failed_work == super::FailedWork::Fix {
+            // Existing PR commits are already published. A failed Fix run
+            // records only work the Repair left uncommitted.
+            !operation.succeeds(&["diff", "--cached", "--quiet"])?
+        } else {
+            !operation.succeeds(&["diff", "--cached", "--quiet", &base])?
+        };
         if has_work {
+            let run_name = failed_work.run_name();
             let message = format!(
-                "thirdshift: failed ticket run ({reason})\n\n\
+                "thirdshift: failed {run_name} ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
                 timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 host = host::name().as_deref().unwrap_or("unknown"),
@@ -143,6 +177,10 @@ impl Checkout {
             ])?;
             operation.push_if_needed(branch, actionable)?;
         }
+        if failed_work == super::FailedWork::Fix && !has_work {
+            // A Repair may have committed without pushing before it failed.
+            operation.push_if_needed(branch, actionable)?;
+        }
         operation.inspect()?;
         Ok(if has_work {
             super::Preserved::Pushed
@@ -156,19 +194,19 @@ impl Checkout {
         self.cleanup_checked(launch, kept, &|| Ok(()));
     }
 
-    /// A standalone skill owns no automatic publication step. Retain local
+    /// A skill or Process may own no automatic publication step. Retain local
     /// work, rechecking under the disposal locks before every removal attempt.
-    pub(super) fn cleanup_skill(&self, launch: &Git) {
+    pub(super) fn cleanup_preserving_work(&self, launch: &Git, untracked: super::UntrackedFiles) {
         self.cleanup_checked(launch, false, &|| {
             let git = Git::new(self.path()).completion();
-            if super::uncommitted_changes(|args| git.run(args))? {
-                bail!("the skill worktree has uncommitted changes");
+            if super::uncommitted_changes(|args| git.run(args), untracked)? {
+                bail!("the worktree has uncommitted changes");
             }
             if !git
                 .run(&["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"])?
                 .is_empty()
             {
-                bail!("the skill worktree has unpushed commits");
+                bail!("the worktree has unpushed commits");
             }
             Ok(())
         });
@@ -186,6 +224,9 @@ impl Checkout {
                 return;
             }
             progress::step(match &self.branch {
+                Some(branch) if self.preserve_local_branch => {
+                    format!("cleaning up the worktree; keeping existing local branch {branch}")
+                }
                 Some(branch) => format!("cleaning up the worktree and local branch {branch}"),
                 None => "cleaning up the worktree".to_string(),
             });
@@ -414,7 +455,9 @@ impl<'a> Disposal<'a> {
                 },
             )
             .context("owned checkout removal failed; local branch retained")?;
-        if let Some(branch) = &self.checkout.branch {
+        if let Some(branch) = &self.checkout.branch
+            && !self.checkout.preserve_local_branch
+        {
             self.remove_branch(branch)?;
         }
         Ok(())

@@ -1,0 +1,335 @@
+# Experiment results (format 4)
+
+`thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
+`Experiment` below. `thirdshift experiments --json` emits an array of those
+objects. The starting command, `thirdshift experiment ... --json`, and
+`thirdshift recheck ... --json` return the same view. Progress goes to stderr.
+These results complement the [Eval task input format](eval-tasks.md) and
+[Trial protocol](trial.md); there is no separate export command.
+
+## Stability and versioning
+
+`format: 4` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 4.
+Adding, removing, renaming or retyping a field, changing its meaning or presence
+rules, or changing an enum requires a new format number and an updated document
+and drift test in the same change. Readers should reject unsupported formats.
+Object key order, whitespace, diagnostic/reason text, absolute paths, opaque IDs
+and the contents of review reports are not stable. Dynamic map keys (suite names,
+Model names and Void causes) vary with the Experiment. Unknown measurements are
+`null`, never zero. Timestamps are RFC 3339 strings; paths are JSON strings local
+to the machine retaining the Experiment.
+
+The private `experiment.json` already has `format: 1`. The CLI view projects its
+metadata and retained evidence; it is not a copy of that internal storage file.
+Older CLI builds without a `format` field predate this documented contract.
+Format 2 replaced format 1's single credible level and interval with the
+two-level Bar: `pass_level`, `fail_level` and `pass_rule` in each Bar,
+`pass_interval` and `fail_interval` in each assessment, and
+`worse_within_margin`. It also added `decisive_verdicts` to pending rechecks
+and lets a saved single-level Verdict omit `provisional_verdict`. Experiments
+saved before the two-level Bar still show `credible_level` and `interval`.
+Format 2 shipped in v0.17.4. Format 3 adds `bar.discriminating_tasks` and each
+suite's `counts` and `measurement` fields for `paired-dirichlet-v4`, without
+rewriting the stored Bar or Verdict of older Experiments.
+Format 4 adds `bar.min_discriminating_tasks` and each suite's `advisory` flag.
+Only suites that are not advisory decide the overall Verdict and require
+rechecks; every suite advisory gives inconclusive. Saved Experiments without
+the minimum keep their original Bar, Verdict and aggregation policy.
+The Arm record's `prepared.format` and each attempt's `version` identify their
+own formats, independently of the result format.
+
+## Experiment view
+
+`id` identifies the fixed pair of Arms and selected suites. `baseline` and
+`candidate` hold resolved commits and requested Harness/Model/Effort; a `null`
+Model or Effort leaves the choice to the Harness. `prepared` holds the pinned
+binaries and Harness executables/versions (the [Arm record](eval-tasks.md)).
+`suites` lists suite names; `tasks` lists the fixed approved Eval tasks by suite
+and name, without disclosing their private inputs or success criteria.
+
+`state` is `prepared`, `running`, `completed`, `interrupted` or `paused`.
+`completed` means grading finished; its Verdict can still wait on rechecks.
+`name` is the saved name when `name_set` is true, otherwise the readable default
+derived from the Arms (including `A/A at <ref>` and `Release <ref>`). Names can
+change in any state without changing the Experiment's identity, Bar or results.
+`created_at` and nullable `ended_at` bound the Experiment. Nullable `baseline_ref`,
+`candidate_ref` and `title` are display descriptions; `pause_reason`,
+`resume_command` and `command_log` supply recovery and factory-log context.
+`release` records whether `--release` has run for this Experiment and remains
+true on later resumes. These fields do not participate in Experiment identity
+or the Bar.
+
+`running_trials` gives active Trial IDs and start times. `sessions` inventories
+retained Trial Sessions: opaque Session ID, Trial ID, zero-based attempt index
+and whether the readable file is an OTLP trace. Read one with
+`thirdshift experiments <id> --session <session-id> --json`; this returns
+`SessionContents` below (`contents` is UTF-8 text, not parsed JSON).
+IDs are opaque: use the returned ID rather than constructing a filename.
+
+`results` holds terminal Trials. `unfinished_trials` holds checkpointed attempts
+awaiting continuation; a paused Experiment can have both. `minutes` sums each
+Arm's completed attempt durations, including voids and timeouts. `voids` counts
+completed Void attempts and groups them by cause, including unfinished Trials.
+`findings` contains human-readable resource diagnostics, currently repeated
+memory-cap kills. `usage` groups observed tokens and USD costs by Arm and Model;
+unreported Model identity uses the key `unknown`. Input tokens include cache
+reads and writes; cache counters are also reported separately. Partial totals
+follow the [guide's Session usage rules](guide.md#experiments).
+
+## Trial files and Scores
+
+Private artifacts live under `~/.thirdshift/evals/experiments/<id>/`:
+
+```text
+experiment.json                  # fixed inputs, state, Verdict, recheck history
+results/<trial-id>.json           # one terminal TrialResult
+trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
+trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
+```
+
+Trial result files have the `TrialResult` shape below, governed by their parent
+Experiment's format. They have no separate format field. Trial indices are
+zero-based within an Eval task and Arm; `outcome` is `succeeded`, `failed` or
+`void`. `attempts` retains each Trial protocol result in execution order,
+including retries/resumes. Its `version: 1`, timing milliseconds, nullable
+failure cause, Void cause, Session ID, log, Model evidence and report paths are
+defined by the [Trial result protocol](trial.md#result). Report text and Session
+trajectories stay in those files; [OTLP export](guide.md#experiments) remains
+the trajectory export.
+
+`score` is nullable until graded. `checks` is an ordered list of mechanical
+checks: nullable argv `command` (null for built-in checks), boolean `passed`
+and human-readable `reason`. `model` is a nullable Model Grader decision with
+its blind packet `label`, decision, reason, wrong-finding flag and borderline
+flag. The Score passes only if all mechanical checks and the Model Grader pass.
+Mechanical checks alone cannot judge a wrong finding. `borderline` flags a
+Score needing the Day shift's judgment.
+
+The original Score and Model decision remain unchanged after rechecking.
+The CLI overlays `score.rechecks` in recording order, omitting that key when
+empty. The latest recheck's `passed` is effective; its `wrong_finding` overrides
+the original only when non-null. A null value leaves the original wrong-finding
+flag in force. Each entry retains `reason` and `recorded_at`. Terminal result
+files retain original Scores; the history is stored in `experiment.json` and
+overlaid in the view. Do not rewrite the result files to apply a recheck.
+
+## Verdict and Bar
+
+`verdict` is null until assessment. Its `verdict` is `pass`, `fail`,
+`inconclusive` or `waiting_on_rechecks`. `provisional_verdict` is the paired
+decision before required rechecks; `borderline_trials` counts borderline Scores.
+`pending_rechecks` names Trials requiring review, with `borderline` and
+`decisive` flags. `decisive_flips` says whether flipping `passed`,
+`wrong_finding`, or both would change the whole Experiment's decision, and
+`decisive_verdicts` maps each such flip to the provisional decision it gives.
+A saved single-level Verdict may omit `provisional_verdict` or record it as
+null; both are preserved as saved.
+
+`verdict.suites` maps suite names to paired Verdicts. Each retains its statistical
+`bar`, producer `thirdshift_version` and seeded sampling `method` description,
+`accuracy` and `wrong_findings` assessments, final decision, retained/dropped
+Eval task counts and nullable `pass_cubed`. The latter is present as an object
+only for three-Trial suites: each Arm's share of retained Eval tasks for which
+all three Trials passed.
+
+New Experiments use `paired-dirichlet-v4`: only the names in the Experiment
+Bar's per-suite `discriminating_tasks` list enter the statistics, predictions
+and required rechecks. Each suite adds `counts`: `judged` counts retained listed
+tasks, `measurement_only` counts retained unlisted tasks, `void_dropped` counts
+all tasks dropped after exhausted Void retries, and `other_setup` counts judged
+tasks whose recorded Difficulty's commit, Harness, Model or Effort differs from
+the Baseline's. The first three partition the approved tasks. `retained_tasks`
+and `dropped_tasks` refer only to the judged list, including for dropout guards.
+`measurement` lists each unlisted task and its Trials: Arm, zero-based Trial
+index, outcome, effective passed/wrong-finding flags and original borderline
+flag. Full original Scores, rechecks and attempt evidence remain in `results`.
+An empty judged list gives an inconclusive suite. Older Experiments omit the
+list, counts and measurement, keeping their stored method, Bar and Verdict.
+
+The Experiment Bar's `min_discriminating_tasks` defaults to 20 and is set by
+`--min-discriminating-tasks`. Each suite's `advisory` flag says whether its fixed
+discriminating list is shorter than that minimum, before Void dropouts.
+Advisory suites retain their own Verdict and intervals but are excluded from the
+overall decision, dropout guard and required rechecks. When every suite is
+advisory, the overall Verdict is inconclusive. Saved Experiments without the
+minimum omit `advisory` and retain their original aggregation policy.
+
+Each assessment has `difference_counts`, ordered from -1 to +1 in steps of
+1 / Trials per Eval task, its intervals (`lower`, `upper`), decision and
+nullable `more_tasks` forecast. A two-level Bar gives `pass_interval` and
+`fail_interval` at its pass and fail levels; a saved single-level Bar gives one
+credible `interval`. `worse_within_margin`, present only when true, marks a
+pass whose pass-level interval lies wholly below zero: worse, but within the
+margin. It never changes the decision. Differences are Candidate minus Baseline;
+for wrong findings, positive means fewer wrong findings in the Candidate.
+`more_tasks.target_probability` is the forecast target; `additional_tasks`
+is null if the search budget ran out. `clear_probabilities[k-1]` estimates the
+chance of a clear Verdict after k additional completed, non-void Eval tasks.
+
+The Experiment's top-level `bar` fixes the margin, levels, prior, seed,
+draw count, per-suite Trials per Eval task, per-Trial timeout in seconds and
+Void cause/retry policy. A two-level Bar records `pass_level`, `fail_level` and
+`pass_rule`: `margin` means a pass needs only the pass-level lower bound above
+the margin; `reaches_zero`, shown only by two-level Bars saved before that rule,
+also needed the pass-level upper bound to reach zero. A saved single-level Bar
+records `credible_level` instead. `void_rules.retries` counts fresh retries after the
+first attempt (at most two). Suite Bars hold the corresponding scalar
+`trials_per_task` and the posterior prediction budget (`simulations`,
+`interval_draws`, `max_additional_tasks`), rather than the execution policy.
+Among suites that are not advisory, any failed suite fails the Experiment;
+otherwise an inconclusive suite or more than a tenth of their judged tasks
+dropped as void makes it inconclusive. All suites advisory gives inconclusive. Required rechecks
+withhold the final decision as `waiting_on_rechecks`.
+
+## Paused Command records
+
+An Experiment or Scoring run stopped by a plan-limit warning or rejection has
+Command outcome `paused`, separate from a failure or interruption. `show --json`
+and `status --json` include its saved `resume_command` and `limit`: `harness`,
+`window`, fractional `utilization`, and `resets_at` in RFC 3339. Unknown facts
+are null. These fields are optional on older or other Command records; older
+`failed` records keep that outcome. Without a reported reset time the cause
+keeps the earlier wording. With one it names the stopping window, utilization
+and local reset time. The Inbox shows Paused in Needs you, with that cause and
+a copyable resume command; starting the same Experiment or a later Scoring
+run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
+are kept. There is no automatic resume, failure email or failure metric.
+
+The `CommandPause` projection in the contract below covers those fields on
+the Command record and on `show --json`; it does not change Experiment format 4.
+
+## Checked field contract
+
+This JSON type notation is part of the document, read directly by
+`cargo test --test experiments result_format`. A string names a primitive type
+or another definition; `a|b` lists allowed string values. `integer` means an
+unsigned integer; `number` permits integer or fractional JSON numbers. A suffix
+`?` on a type permits null; a suffix `?` on a field name permits omission.
+Other fields are required, including nullable fields. A one-item array means
+an array of that item type (possibly empty). `{"*": T}` is a string-keyed map
+of T; all other objects have exactly the listed fields. Numeric literals are
+exact values. The test checks real CLI output from fake Harnesses and retained
+Trial files, rejecting undocumented, missing and retyped fields recursively.
+
+<!-- result-contract -->
+```json
+{
+  "CommandPause": {
+    "outcome": "paused|failed|interrupted",
+    "resume_command": "string",
+    "limit": {
+      "harness": "string?", "window": "string?", "utilization": "number?", "resets_at": "string?"
+    }
+  },
+  "Experiment": {
+    "format": 4,
+    "name": "string",
+    "name_set": "boolean",
+    "id": "string",
+    "baseline": "Setup",
+    "candidate": "Setup",
+    "suites": ["string"],
+    "bar": "Bar",
+    "prepared": "Prepared?",
+    "state": "prepared|running|completed|interrupted|paused",
+    "baseline_ref": "string?",
+    "candidate_ref": "string?",
+    "title": "string?",
+    "ended_at": "string?",
+    "pause_reason": "string?",
+    "resume_command": "string?",
+    "command_log": "string?",
+    "release": "boolean",
+    "created_at": "string",
+    "tasks": [{"suite": "string", "name": "string"}],
+    "running_trials": [{"id": "string", "started_at": "string"}],
+    "sessions": [{"id": "string", "trial_id": "string", "attempt": "integer", "trace": "boolean"}],
+    "results": ["TrialResult"],
+    "unfinished_trials": ["TrialResult"],
+    "verdict": "Verdict?",
+    "pending_rechecks": ["Pending"],
+    "minutes": {"baseline": "number", "candidate": "number"},
+    "usage": {"baseline": "Usage", "candidate": "Usage"},
+    "voids": {"baseline": "Voids", "candidate": "Voids"},
+    "findings": ["string"]
+  },
+  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?"},
+  "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
+  "PreparedArm": {
+    "commit": "string", "binary": "string",
+    "harness": {"name": "string", "path": "string", "version": "string"}
+  },
+  "Bar": {
+    "margin": "number", "pass_level?": "number", "fail_level?": "number",
+    "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
+    "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
+    "discriminating_tasks?": {"*": ["string"]},
+    "min_discriminating_tasks?": "integer",
+    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
+  },
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
+  "TrialResult": {
+    "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
+    "outcome": "succeeded|failed|void", "score": "Score?", "attempts": ["Attempt"]
+  },
+  "Attempt": {
+    "version": 1, "outcome": "succeeded|failed|void",
+    "timings": {"total_ms": "integer", "session_ms": "integer"},
+    "void_cause": "VoidCause?", "cause": "string?", "session_id": "string?",
+    "log": "string?", "model_evidence": "string?",
+    "reports": {"standards": "string?", "spec": "string?"}
+  },
+  "Score": {
+    "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean",
+    "model": "ModelScore?", "checks": ["Check"], "rechecks?": ["Recheck"]
+  },
+  "ModelScore": {
+    "label": "string", "passed": "boolean", "reason": "string",
+    "wrong_finding": "boolean", "borderline": "boolean"
+  },
+  "Command": ["string"],
+  "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},
+  "Recheck": {"passed": "boolean", "reason": "string", "wrong_finding": "boolean?", "recorded_at": "string"},
+  "Pending": {
+    "id": "string", "suite": "string", "task": "string", "arm": "baseline|candidate",
+    "trial": "integer", "borderline": "boolean", "decisive": "boolean",
+    "decisive_flips": ["passed|wrong_finding"],
+    "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
+  },
+  "Verdict": {
+    "verdict": "pass|fail|inconclusive|waiting_on_rechecks",
+    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
+  },
+  "Decision": "pass|fail|inconclusive",
+  "SuiteVerdict": {
+    "advisory?": "boolean",
+    "bar": "SuiteBar", "thirdshift_version": "string", "method": "string",
+    "accuracy": "Assessment", "wrong_findings": "Assessment", "verdict": "Decision",
+    "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?",
+    "counts?": {"judged": "integer", "measurement_only": "integer", "void_dropped": "integer", "other_setup": "integer"},
+    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
+  },
+  "SuiteBar": {
+    "margin": "number", "pass_level?": "number", "fail_level?": "number",
+    "pass_rule?": "margin|reaches_zero", "credible_level?": "number", "prior": "number",
+    "seed": "integer", "draws": "integer", "trials_per_task": "integer",
+    "prediction": {"simulations": "integer", "interval_draws": "integer", "max_additional_tasks": "integer"}
+  },
+  "Assessment": {
+    "difference_counts": ["integer"], "pass_interval?": "Interval", "fail_interval?": "Interval",
+    "interval?": "Interval", "verdict": "Decision", "worse_within_margin?": "boolean",
+    "more_tasks": "MoreTasks?"
+  },
+  "Interval": {"lower": "number", "upper": "number"},
+  "MoreTasks": {"target_probability": "number", "additional_tasks": "integer?", "clear_probabilities": ["number"]},
+  "PassCubed": {"baseline": "number", "candidate": "number"},
+  "Usage": {"models": {"*": "Measurement"}, "cost_usd": "number?"},
+  "Measurement": {
+    "input_tokens": "integer?", "output_tokens": "integer?",
+    "cache_read_tokens": "integer?", "cache_write_tokens": "integer?", "cost_usd": "number?"
+  },
+  "Voids": {"count": "integer", "causes": {"*": "integer"}},
+  "SessionContents": {"id": "string", "trace": "boolean", "contents": "string"}
+}
+```

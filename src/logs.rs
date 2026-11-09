@@ -11,6 +11,9 @@
 //! One owned recording implementation holds the complete lifecycle. The
 //! process-wide interface serializes its operations, including emitted output.
 
+pub(crate) mod accounts;
+mod actor;
+pub(crate) use actor::Actor;
 mod activity;
 mod command_record;
 pub mod dismiss;
@@ -30,6 +33,7 @@ mod run_metrics;
 pub(crate) mod session;
 pub(crate) mod session_signals;
 pub(crate) mod spans;
+pub(crate) mod start_notice;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
@@ -37,6 +41,7 @@ mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
@@ -50,6 +55,26 @@ pub use command_record::StageName as Stage;
 pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
+
+/// Find only a retained record owned by the process this Console just spawned.
+pub(crate) fn command_for_process(
+    config: &UserConfig,
+    repo: &Repo,
+    process_id: u32,
+    started_after: chrono::DateTime<chrono::Local>,
+) -> anyhow::Result<Option<String>> {
+    Ok(
+        reading::repository_records(&root_under(&config.logs_dir, repo))?
+            .into_values()
+            .find(|tree| {
+                tree.command.process_id == process_id
+                    && tree.command.parent_record.is_none()
+                    && chrono::DateTime::parse_from_rfc3339(&tree.command.started_at)
+                        .is_ok_and(|start| start >= started_after)
+            })
+            .map(|tree| tree.command.name),
+    )
+}
 
 /// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
 fn unix_user(action: &str) -> anyhow::Result<String> {
@@ -83,8 +108,11 @@ pub enum CommandKind {
     Pickup,
     Secure,
     Scoring,
+    Triage,
     Experiment,
     Process,
+    Review,
+    Fix,
 }
 
 impl CommandKind {
@@ -95,8 +123,11 @@ impl CommandKind {
             Self::Pickup => "pickup",
             Self::Secure => "secure",
             Self::Scoring => "scoring",
+            Self::Triage => "triage",
             Self::Experiment => "experiment",
             Self::Process => "process",
+            Self::Review => "review",
+            Self::Fix => "fix",
         }
     }
 
@@ -107,8 +138,11 @@ impl CommandKind {
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
             "scoring" => Some(Self::Scoring),
+            "triage" => Some(Self::Triage),
             "experiment" => Some(Self::Experiment),
             "process" => Some(Self::Process),
+            "review" => Some(Self::Review),
+            "fix" => Some(Self::Fix),
             _ => None,
         }
     }
@@ -128,6 +162,13 @@ pub enum Begin<'a> {
     PickupRun,
     SecurityRun,
     ScoringRun,
+    ReviewRun {
+        pass: bool,
+    },
+    FixRun {
+        pass: bool,
+    },
+    TriageRun,
     Experiment,
     /// `thirdshift process <name> [issue <issue>]`, a Custom process.
     /// `pass` holds the first lines, as the other Passes do, when it was
@@ -154,6 +195,9 @@ pub enum Work<'a> {
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
     ScoringRun(&'a Repo),
+    ReviewRun(&'a Repo),
+    FixRun(&'a Repo),
+    TriageRun(&'a Repo),
     Experiment(&'a Repo),
     /// A Custom process, named by its file.
     Process {
@@ -168,14 +212,26 @@ pub enum Pass {
     Architect,
     Pickup,
     Security,
+    Review,
+    Fix,
 }
 
 impl Pass {
+    const ALL: [Self; 5] = [
+        Self::Architect,
+        Self::Pickup,
+        Self::Security,
+        Self::Review,
+        Self::Fix,
+    ];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Architect => "Architect",
             Self::Pickup => "Pickup",
             Self::Security => "Security",
+            Self::Review => "Review",
+            Self::Fix => "Fix",
         }
     }
 }
@@ -189,6 +245,16 @@ impl Display for Pass {
 impl serde::Serialize for Pass {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Pass {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Self::ALL
+            .into_iter()
+            .find(|pass| pass.to_string() == name)
+            .ok_or_else(|| serde::de::Error::custom("unknown Pass kind"))
     }
 }
 
@@ -259,11 +325,26 @@ pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
 }
 
+/// Capture the Custom process's loaded source before recording its start or skip.
+pub(crate) fn process_loaded(identity: crate::processes::Identity) {
+    record().process_loaded(identity);
+}
+
+/// A selected Ticket Process belongs to the active dispatched run.
+pub(crate) fn process_running(identity: crate::processes::Identity) {
+    record().process_running(identity);
+}
+
+pub(crate) fn custom_process() -> Option<crate::processes::Identity> {
+    record().custom_process()
+}
+
 /// Record that `pass` was skipped on `repo` for `reason`, unless the last
 /// Activity log line of its kind there already says so. Nothing is shown:
 /// under `activity.quiet_skips`, whatever the pass prints about its skip
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
+    start_notice::skipped(&reason);
     record().skipped(pass, repo, reason);
 }
 
@@ -316,6 +397,11 @@ pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 
+/// The target pull request, available while the Command is still running.
+pub(crate) fn pull_request(url: &str) {
+    record().pull_request(url);
+}
+
 /// Retain Delivery's final counts for the active Run's completion metrics.
 pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
     record().unaddressed_findings(counts);
@@ -328,6 +414,14 @@ pub fn finished(account: &crate::run_ending::Account<'_>) {
 
 pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
     record().experiment(description);
+}
+
+pub(crate) fn resumable(command: &str) {
+    record().resumable(command);
+}
+
+pub(crate) fn paused(limit: &crate::session::limits::Limit) {
+    record().paused(limit);
 }
 
 pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
@@ -417,8 +511,38 @@ pub(crate) fn trace_context() -> Option<trace::Context> {
     record().trace_context()
 }
 
+/// Sessions started while this is held export nothing. `fix-findings` and
+/// `close-findings` hold it so a Process command does not send private
+/// Security records, or the Ticket runs those Steps start, to OTLP.
+static OTLP_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct SuppressOtlp;
+
+impl SuppressOtlp {
+    pub(crate) fn new() -> Self {
+        OTLP_SUPPRESSED.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for SuppressOtlp {
+    fn drop(&mut self) {
+        OTLP_SUPPRESSED.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn otlp_suppressed() -> bool {
+    OTLP_SUPPRESSED.load(Ordering::Acquire) > 0
+}
+
+/// The configured OTLP endpoint, or none for a Security or Scoring command
+/// and while a [`SuppressOtlp`] guard is held.
 pub(crate) fn otlp_endpoint() -> Option<String> {
-    record().otlp_endpoint()
+    if otlp_suppressed() {
+        None
+    } else {
+        record().otlp_endpoint()
+    }
 }
 
 /// Print `line` on stderr, and keep it in the Command log.
@@ -437,12 +561,33 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
 }
 
 impl<'a> Work<'a> {
+    fn process(self) -> crate::processes::Identity {
+        use crate::processes::Identity;
+        let file = match self {
+            Self::Run(_) | Self::BaseFix(_) => "ticket-run",
+            Self::SpecRun(_) => "spec-run",
+            Self::ArchitectRun(_) => "architect-run",
+            Self::SecurityRun(_) => "security-run",
+            Self::PickupRun(_) => "pickup-run",
+            Self::ScoringRun(_) => "scoring-run",
+            Self::ReviewRun(_) => "review-run",
+            Self::FixRun(_) => "fix-run",
+            Self::TriageRun(_) => "triage-run",
+            Self::Experiment(_) => "experiment",
+            Self::Process { name, .. } => return Identity::custom(name, None),
+        };
+        Identity::built_in(file, &self.kind().to_string())
+    }
+
     fn initial_stage(self) -> Option<Stage> {
         match self {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
             Work::ScoringRun(_) => Some(Stage::Sampling),
+            Work::ReviewRun(_) => Some(Stage::CodeReview),
+            Work::FixRun(_) => Some(Stage::PullRequest),
+            Work::TriageRun(_) => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
@@ -456,6 +601,9 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(repo)
             | Work::SecurityRun(repo)
             | Work::ScoringRun(repo)
+            | Work::ReviewRun(repo)
+            | Work::FixRun(repo)
+            | Work::TriageRun(repo)
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
         }
@@ -470,6 +618,9 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
             Work::ScoringRun(_) => Kind::ScoringRun,
+            Work::ReviewRun(_) => Kind::ReviewRun,
+            Work::FixRun(_) => Kind::FixRun,
+            Work::TriageRun(_) => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
         }
@@ -483,6 +634,9 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
+            | Work::ReviewRun(_)
+            | Work::FixRun(_)
+            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

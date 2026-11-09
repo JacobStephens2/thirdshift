@@ -217,7 +217,7 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
     // keeps every other proposal, and its artifacts are published with them.
     match ran {
         Err(error) if error.is::<crate::session::limits::Reached>() => {
-            anyhow::bail!("Scoring stopped at a plan-limit warning; window was not advanced")
+            return Err(error.context("Scoring paused; window was not advanced"));
         }
         Err(error) if interrupt::requested() => return Err(error),
         Err(error) => return Ok(failed(&format!("Bug-origin session failed: {error:#}"))),

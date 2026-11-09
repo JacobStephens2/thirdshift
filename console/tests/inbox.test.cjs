@@ -16,7 +16,7 @@ before(async () => {
   const configDir = join(home, ".thirdshift");
   const records = join(configDir, "logs/acme/widgets/commands/issue");
   await mkdir(records, { recursive: true });
-  await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nother_consoles = ["https://other.example.test"]\n');
+  await writeFile(join(configDir, "config.toml"), '[console]\nport = 0\nfleet = [{ name = "other.example.test", address = "https://other.example.test" }]\n');
   for (let number = 1; number <= 10; number++) {
     const now = new Date().toISOString();
     await writeFile(join(records, `${number}-fixture.command.json`), JSON.stringify({
@@ -66,6 +66,207 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Paused rows and Command details copy the saved resume command', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const resume = "thirdshift experiment 'feature with spaces' --yes";
+  fixture.outcome = 'paused';
+  fixture.kind = 'Experiment';
+  fixture.resume_command = resume;
+  fixture.cause = 'Command paused at a plan-limit warning: Claude seven-day window at 86%, resets Fri Oct 30 22:00 UTC';
+  fixture.limit = { harness: 'claude', window: 'seven_day', utilization: 0.86, resets_at: '2026-10-30T22:00:00Z' };
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.goto(`${origin}/?section=needs-you`);
+    const row = page.locator('#inbox li.command[data-state="Paused"]');
+    await row.getByText(/resets Fri Oct 30 22:00/).waitFor();
+    await row.getByRole('button', { name: 'Copy resume command', exact: true }).click();
+    await row.getByText('CLI copied.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), resume);
+    fixture.cause += ' Updated after copying.';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await row.getByText(fixture.cause, { exact: true }).waitFor();
+    await row.getByText('CLI copied.', { exact: true }).waitFor();
+    await row.locator('.state').click();
+    const details = page.locator('#peek-content');
+    await details.getByRole('button', { name: 'Copy resume command', exact: true }).click();
+    await details.getByText('CLI copied.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), resume);
+    assert.equal(await details.getByText(/^Failed:/).count(), 0);
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
+test('Copy fix command works on ready Inbox rows and in Command details', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const path = join(logs, 'acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const cache = join(logs, 'github-inbox.json');
+  const previous = await readFile(cache, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  const fixture = { ...JSON.parse(original), kind: 'Review run', issue: null, tickets: [], cause: null,
+    pull_request: 'https://github.com/acme/widgets/pull/42' };
+  const cli = `thirdshift fix ${fixture.pull_request}`;
+  try {
+    for (const width of [1440, 390]) {
+      const page = await pageFor(t, { viewport: { width, height: width === 390 ? 844 : 900 } });
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+      for (const [outcome, ci, mergeable, offered] of [
+        ['ready for review', 'red', 'mergeable', true],
+        ['ready for review', 'green', 'conflicting', true],
+        ['ready for review', 'red', 'conflicting', true],
+        ['ready for review', 'pending', 'conflicting', true],
+        ['ready for review', 'green', 'mergeable', false],
+        ['ready for review', 'unknown', 'unknown', false],
+        ['failed', 'red', 'conflicting', false],
+      ]) {
+        await replaceRecord(path, JSON.stringify({ ...fixture, outcome }));
+        await replaceRecord(cache, JSON.stringify({ version: 1, subjects: {
+          [fixture.pull_request]: { state: 'Open', ci, mergeable, title: 'Repair these widgets' },
+        } }));
+        await writeFile(join(logs, 'github-inbox.changed'), `${width}:${outcome}:${ci}:${mergeable}`);
+        await page.goto(`${origin}/?section=${outcome === 'failed' ? 'needs-you' : 'ready-for-review'}`);
+        const row = page.locator('.command[data-command$="1-fixture.command.json"]');
+        await row.waitFor();
+        const copy = row.getByRole('button', { name: 'Copy fix command', exact: true });
+        assert.equal(await copy.count(), offered ? 1 : 0, `${width}:${outcome}:${ci}:${mergeable}`);
+        if (offered) {
+          assert.equal(await copy.getAttribute('type'), 'button');
+          assert.equal(await copy.getAttribute('data-copy-cli'), cli);
+          assert.equal(await row.locator('.peek-cli code').textContent(), cli);
+          await copy.click();
+          await row.getByText('CLI copied.', { exact: true }).waitFor();
+          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), cli);
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'CLI fits the viewport');
+        }
+        await row.locator('.state').click();
+        const details = page.locator('#peek-content');
+        await details.locator('h2').waitFor();
+        const detailCopy = details.getByRole('button', { name: 'Copy fix command', exact: true });
+        assert.equal(await detailCopy.count(), offered ? 1 : 0, `${width}:${outcome}:${ci}:${mergeable} Peek`);
+        if (offered) {
+          assert.equal(await detailCopy.getAttribute('data-copy-cli'), cli);
+          await detailCopy.click();
+          await details.getByText('CLI copied.', { exact: true }).waitFor();
+          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), cli);
+        }
+      }
+    }
+  } finally {
+    await replaceRecord(path, original);
+    if (previous === null) await rm(cache, { force: true });
+    else await replaceRecord(cache, previous);
+    await writeFile(join(logs, 'github-inbox.changed'), 'restored');
+  }
+});
+
+test('A later Command takes up ready and failed Inbox rows on its pull request', async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const paths = [351, 352, 353].map(number => join(dir, `${number}-fixture.command.json`));
+  const old = new Date(Date.now() - 3 * 86400000).toISOString();
+  const fixture = { ...base, issue: null, tickets: [], kind: 'Review run',
+    pull_request: 'https://github.com/acme/widgets/pull/351', started_at: old, ended_at: old };
+  const page = await pageFor(t);
+  const rowFor = index => page.locator(`.command[data-command$="${[351, 352, 353][index]}-fixture.command.json"]`);
+  try {
+    await replaceRecord(paths[0], JSON.stringify({ ...fixture, outcome: 'ready for review', cause: null }));
+    await replaceRecord(paths[1], JSON.stringify({ ...fixture, outcome: 'failed', cause: 'Waiting for a Fix run' }));
+    await page.goto(origin);
+    await page.locator('#inbox > [data-group="ready for review"]').locator(rowFor(0)).waitFor();
+    await page.locator('#inbox > [data-group="needs you"]').locator(rowFor(1)).waitFor();
+    const now = new Date().toISOString();
+    await replaceRecord(paths[2], JSON.stringify({ ...fixture, kind: 'Fix run', started_at: now, ended_at: now, outcome: 'ready for review', cause: null }));
+    await page.goto(`${origin}/?section=resolved`);
+    for (const [index, from] of [[0, 'ready for review'], [1, 'needs you']]) {
+      const row = page.locator('#inbox > [data-group="resolved"]').locator(rowFor(index));
+      await row.waitFor();
+      assert.match(await row.locator('.left').textContent(), new RegExp(`left ${from}: taken up by a later Command started at`));
+    }
+  } finally {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+  }
+});
+
+test('Inbox keeps issue numbers visible for long repository and Process subjects', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  fixture.repository = 'Educational-Travel-Adventures/some-long-repository-name';
+  fixture.issue = { number: 123, url: `https://github.com/${fixture.repository}/issues/123`, title: 'Keep the issue number visible' };
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  try {
+    for (const process of [null, 'nightly']) {
+      await t.test(process ? 'Process issue' : 'ordinary issue', async () => {
+        fixture.kind = process ? 'Process' : 'Spec run';
+        fixture.process_name = process;
+        await replaceRecord(path, JSON.stringify(fixture));
+        await page.goto(`${origin}/?section=needs-you`);
+        await page.evaluate(() => document.fonts.ready);
+        const subject = page.locator('#inbox .row-head > .subject').filter({ has: page.locator(`a[href="${fixture.issue.url}"]`) });
+        const visibility = await subject.evaluate(node => {
+          const texts = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+          let text;
+          while ((text = texts.nextNode()) && !text.textContent.endsWith('#123')) {}
+          const range = document.createRange();
+          range.setStart(text, text.length - 4);
+          range.setEnd(text, text.length);
+          const number = range.getBoundingClientRect();
+          const subject = node.getBoundingClientRect();
+          return { left: number.left, right: number.right, subjectLeft: subject.left, subjectRight: subject.right };
+        });
+        assert.ok(visibility.left >= visibility.subjectLeft && visibility.right <= visibility.subjectRight + 1,
+          `#123 must be visible inside its subject: ${JSON.stringify(visibility)}`);
+        const full = `${process ? 'Process nightly · ' : ''}${fixture.repository}#123`;
+        assert.equal(await subject.textContent(), full);
+        assert.equal(await subject.getAttribute('title'), full);
+        assert.equal(await subject.locator('a').getAttribute('href'), fixture.issue.url);
+        // Insert and measure in one browser task so a live refresh cannot
+        // remove the fixture tag before its layout is checked.
+        const tagged = await subject.evaluate(node => {
+          const tag = document.createElement('span');
+          tag.className = 'account-tag';
+          tag.textContent = 'conductor';
+          node.prepend(tag, ' ');
+          const subject = node.getBoundingClientRect();
+          const account = node.querySelector('.account-tag').getBoundingClientRect();
+          const issue = node.querySelector('.subject-issue').getBoundingClientRect();
+          return { left: account.left, right: issue.right, subjectLeft: subject.left, subjectRight: subject.right,
+            accountTop: account.top, accountBottom: account.bottom, issueTop: issue.top, issueBottom: issue.bottom };
+        });
+        assert.ok(tagged.left >= tagged.subjectLeft && tagged.right <= tagged.subjectRight + 1,
+          `account and #123 must fit inside the subject: ${JSON.stringify(tagged)}`);
+        assert.ok(tagged.accountTop < tagged.issueBottom && tagged.issueTop < tagged.accountBottom,
+          `account and #123 must share one line: ${JSON.stringify(tagged)}`);
+      });
+    }
+    fixture.issue = null;
+    fixture.name = 'fixture';
+    for (const process of [null, 'nightly']) {
+      await t.test(process ? 'Process without an issue' : 'Command without an issue', async () => {
+        fixture.kind = process ? 'Process' : 'Spec run';
+        fixture.process_name = process;
+        await replaceRecord(path, JSON.stringify(fixture));
+        await page.goto(`${origin}/?section=needs-you`);
+        const full = `${process ? 'Process nightly' : 'fixture'} on ${fixture.repository}`;
+        const subject = page.locator('#inbox .row-head > .subject', { hasText: full });
+        assert.equal(await subject.textContent(), full);
+        assert.equal(await subject.getAttribute('title'), full);
+        assert.equal(await subject.locator('a').count(), 0);
+        assert.equal(await subject.evaluate(node => getComputedStyle(node).textOverflow), 'ellipsis');
+      });
+    }
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('Command details times out a held request and can be opened again', async t => {
   const page = await pageFor(t);
   await page.clock.install();
@@ -92,14 +293,212 @@ test('Command details times out a held request and can be opened again', async t
   await page.locator('#peek dt').first().waitFor();
 });
 
-// The Inbox shows one section, a folder, at a time; Details opens from a row.
+// Overview combines the current groups; folders can filter to one section.
 const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${group}"]`);
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
+const shownGroups = page => shownGroup(page).evaluateAll(groups => groups.map(group => group.dataset.group));
+const overviewGroups = ['needs you', 'ready for review', 'landing', 'working'];
+
+test('Inbox group headings fold independently by pointer and keyboard on desktop and phone', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const page = await pageFor(t, { viewport });
+    await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const ready = page.locator('#inbox > [data-group="ready for review"]');
+    const heading = needs.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await needs.getAttribute('open'), '');
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.getByRole('heading', { name: /^Needs you \d+$/, level: 3 }).waitFor();
+    const count = await heading.locator('.count').textContent();
+    await heading.click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await heading.locator('.count').textContent(), count);
+    assert.equal(await ready.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+    await page.keyboard.press('Space');
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('j');
+    await ready.locator(':scope > summary.is-selected').waitFor();
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => !document.querySelector('#inbox > [data-group="ready for review"]').open);
+    assert.equal(await needs.getAttribute('open'), null);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#inbox > [data-group="ready for review"]').open);
+    await page.reload();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await ready.getAttribute('open'), '');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'visible' });
+        await heading.click();
+        await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
+      }
+    }
+  }
+});
+
+test('Inbox group choices survive reload before the native toggle event', async t => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await t.test(`${viewport.width}px`, async t => {
+      const page = await pageFor(t, { viewport });
+      await page.goto(origin);
+      const ready = page.locator('#inbox > [data-group="ready for review"]');
+      const needs = page.locator('#inbox > [data-group="needs you"]');
+      await ready.locator(':scope > summary').click();
+      // Start with a saved, folded group before racing its next toggle.
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await page.reload();
+      assert.equal(await ready.getAttribute('open'), null);
+      await page.evaluate(() => {
+        const group = document.querySelector('#inbox > [data-group="ready for review"]');
+        // Model navigation discarding the queued event, regardless of whether
+        // this renderer would otherwise deliver it before leaving the page.
+        window.addEventListener('toggle', event => {
+          if (event.target === group) event.stopImmediatePropagation();
+        }, true);
+        // Mutation observers run before the queued native toggle event.
+        const observer = new MutationObserver(() => {
+          observer.disconnect();
+          location.reload();
+        });
+        observer.observe(group, { attributes: true, attributeFilter: ['open'] });
+      });
+      await ready.locator(':scope > summary').focus();
+      await Promise.all([page.waitForNavigation(), page.keyboard.press('Enter')]);
+      assert.equal(await ready.getAttribute('open'), '');
+      assert.equal(await needs.getAttribute('open'), '');
+    });
+  }
+});
+
+test('reloading another Console tab preserves the newer Inbox group choice', async t => {
+  for (const path of ['/', '/resources']) {
+    await t.test(path, async t => {
+      const inbox = await pageFor(t);
+      await inbox.goto(origin);
+      const other = await inbox.context().newPage();
+      await other.goto(`${origin}${path}`);
+      const ready = inbox.locator('#inbox > [data-group="ready for review"]');
+      await ready.locator(':scope > summary').click();
+      await inbox.waitForFunction(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review'] === false);
+      await other.reload();
+      assert.equal(await inbox.evaluate(() => JSON.parse(localStorage.getItem('thirdshift:console:folded'))?.['ready for review']), false);
+      await inbox.reload();
+      await ready.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    });
+  }
+});
+
+test('folded Inbox groups keep live counts and choices through folders, hiding and reloads', async t => {
+  const page = await pageFor(t);
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const config = join(home, '.thirdshift/config.toml');
+  const original = await readFile(path, 'utf8');
+  const originalConfig = await readFile(config, 'utf8');
+  await page.goto(origin);
+  const needs = page.locator('#inbox > [data-group="needs you"]');
+  const ready = page.locator('#inbox > [data-group="ready for review"]');
+  const done = page.locator('#inbox > [data-group="done"]');
+  const count = Number(await needs.locator(':scope > summary .count').textContent());
+  const active = await page.locator('.active-runs strong').textContent();
+  try {
+    await needs.locator('summary').click();
+    await ready.locator('summary').click();
+    await folder(page, 'done').click();
+    await done.locator('summary').click();
+    await folder(page, 'overview').click();
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.waitForFunction(expected => document.querySelector('#inbox > [data-group="needs you"] > summary .count').textContent === String(expected), count - 1);
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('.active-runs strong').textContent(), active);
+    await folder(page, 'done').click();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.locator('.is-selected').waitFor({ state: 'visible' });
+    await page.reload();
+    await done.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig + 'hidden_sections = ["needs-you"]\n');
+    await folder(page, 'needs you').waitFor({ state: 'hidden' });
+    await writeFile(config, originalConfig);
+    await folder(page, 'needs you').waitFor({ state: 'visible' });
+    await folder(page, 'overview').click();
+    await needs.locator(':scope > summary').waitFor({ state: 'visible' });
+    assert.equal(await needs.getAttribute('open'), null);
+    assert.equal(await ready.getAttribute('open'), null);
+    assert.equal(await page.locator('#inbox > [data-group="landing"]').getAttribute('open'), '');
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(config, originalConfig);
+  }
+});
+
+test('every Inbox section folder has a native disclosure without JavaScript', async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  await page.goto(origin);
+  for (const group of ['needs you', 'ready for review', 'landing', 'working', 'done', 'resolved']) {
+    await folder(page, group).click();
+    const section = shownGroup(page);
+    const heading = section.locator(':scope > summary');
+    await heading.waitFor();
+    assert.equal(await section.getAttribute('open'), '');
+    await heading.focus();
+    await page.keyboard.press('Enter');
+    await section.locator(':scope > .commands').waitFor({ state: 'hidden' });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])').open);
+  }
+});
+
 async function showDetails(page, row) {
   const group = await row.evaluate(node => node.closest('.group').dataset.group);
   if (await folder(page, group).getAttribute('aria-current') !== 'page') await folder(page, group).click();
   await row.locator(':scope > .row-head > .state').click();
 }
+
+test('Command details shows recent Command output and follows new output on desktop and phone', async t => {
+  const log = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.log');
+  const original = await readFile(log, 'utf8');
+  try {
+    for (const width of [1280, 390]) {
+      await writeFile(log, 'Old output\n' + 'Earlier progress\n'.repeat(1000)
+        + 'Checking CI\nWaiting for checks\nStill waiting\nChecks complete\nLatest <script>unsafe()</script>\n');
+      const page = await pageFor(t, { viewport: { width, height: 844 } });
+      await page.goto(origin);
+      await showDetails(page, page.locator('#inbox .command').filter({
+        has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#1$/ })
+      }));
+      const preview = page.getByRole('region', { name: 'Recent Command output', exact: true });
+      await preview.waitFor();
+      assert.match(await preview.textContent(), /Latest <script>unsafe\(\)<\/script>/);
+      assert.equal(await preview.locator('pre').textContent(),
+        'Checking CI\nWaiting for checks\nStill waiting\nChecks complete\nLatest <script>unsafe()</script>');
+      assert.equal(await preview.locator('script').count(), 0);
+      assert.equal(await preview.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      await appendFile(log, 'New progress ' + 'x'.repeat(500) + '\n');
+      await preview.getByText('New progress ', { exact: false }).waitFor();
+      assert.equal(await preview.locator('pre').evaluate(el => el.textContent.split('\n').length), 5);
+      assert.equal(await preview.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      assert.equal(await preview.locator('pre').evaluate(el =>
+        el.scrollHeight - el.scrollTop <= el.clientHeight + 1), true);
+      await page.getByRole('link', { name: 'Full Command log', exact: true }).click();
+      await page.locator('#log-content').getByText(/Old output/).waitFor();
+      await page.close();
+    }
+  } finally {
+    await writeFile(log, original);
+  }
+});
 
 test('Command details opens with the Inbox subject and full title above its actions', async t => {
   for (const width of [1280, 390]) {
@@ -120,17 +519,51 @@ test('Command details opens with the Inbox subject and full title above its acti
     assert.equal(await pane.getByRole('link', { name: /^Issue #/ }).count(), 0);
     assert.equal(await heading.evaluate(el => Boolean(el.compareDocumentPosition(
       el.parentElement.querySelector('form[data-dismiss]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
-    const wrapped = await heading.locator('span').evaluate(el => ({
-      height: el.getBoundingClientRect().height,
-      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
-      fits: el.scrollWidth <= el.clientWidth,
-      whiteSpace: getComputedStyle(el).whiteSpace,
-    }));
+    // A live refresh replaces the pane, so look the title up and measure it in one step.
+    const wrapped = await page.evaluate(() => {
+      const el = document.querySelector('#peek-content > section[aria-label="Command details"] h2 span');
+      return {
+        height: el.getBoundingClientRect().height,
+        lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+        fits: el.scrollWidth <= el.clientWidth,
+        whiteSpace: getComputedStyle(el).whiteSpace,
+      };
+    });
     assert.ok(wrapped.height > wrapped.lineHeight, JSON.stringify({ width, wrapped }));
     assert.equal(wrapped.fits, true);
     assert.equal(wrapped.whiteSpace, 'normal');
     await page.close();
   }
+});
+
+test('Command details shows the full failure reason below its heading on desktop and phone', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const cause = 'codex exited 1: Selected model is at capacity. Please try a different model. See https://example.test/status <script>unsafe</script>';
+  fixture.cause = cause;
+  try {
+    await replaceRecord(path, JSON.stringify(fixture));
+    for (const width of [1280, 390]) {
+      const page = await pageFor(t, { viewport: { width, height: 844 } });
+      await page.goto(`${origin}/?section=needs-you`);
+      const row = page.locator('#inbox .command').filter({
+        has: page.locator('.subject a[href="https://github.com/acme/widgets/issues/1"]'),
+      });
+      await showDetails(page, row);
+      const pane = page.getByRole('region', { name: 'Command details', exact: true });
+      const reason = pane.locator('h2 + .peek-failure');
+      await reason.waitFor();
+      assert.equal(await reason.textContent(), `Failed: ${cause}`);
+      assert.equal(await reason.getByRole('link').getAttribute('href'), 'https://example.test/status');
+      assert.equal(await reason.locator('script, details').count(), 0);
+      assert.equal(await reason.evaluate(el => Boolean(el.compareDocumentPosition(
+        el.parentElement.querySelector('form[data-dismiss]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+      const fits = await reason.evaluate(el => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight);
+      assert.equal(fits, true, `full failure reason fits at width ${width}`);
+      await page.close();
+    }
+  } finally { await replaceRecord(path, original); }
 });
 
 test('inline Dismiss leaves Needs you without opening details and offers Undo on a phone', async t => {
@@ -160,6 +593,7 @@ test('j then d dismisses and selects the next row, respecting typing, dialogs an
   const rows = page.locator('#inbox > [data-group="needs you"] .command');
   const count = await rows.count();
   const next = await rows.nth(1).getAttribute('data-command');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   const command = await page.locator('.command[aria-current="true"]').getAttribute('data-command');
   for (const key of ['Control+d', 'Meta+d', 'Alt+d', 'Shift+d']) await page.keyboard.press(key);
@@ -295,7 +729,9 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
       await page.goto(`${origin}/?page=inbox`);
       const section = page.locator(`#inbox > [data-group="${group}"]`);
       if (group === 'ready for review') await folder(page, group).click();
-      const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      const subjectUrl = group === 'ready for review'
+        ? 'https://github.com/acme/widgets/pull/224' : 'https://github.com/acme/widgets/issues/223';
+      const row = section.locator('.command').filter({ has: page.locator(`.subject a[href="${subjectUrl}"]`) });
       await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
       if (javaScriptEnabled) {
         await row.waitFor({ state: 'detached' });
@@ -310,7 +746,7 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
         await page.clock.fastForward(10001);
         await notice.waitFor({ state: 'detached' });
       } else await page.waitForURL(`${origin}/`);
-      assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+      assert.equal(await section.locator(`.subject a[href="${subjectUrl}"]`).count(), 0);
       assert.equal(await page.locator('#peek').isVisible(), false);
       await folder(page, 'done').click();
       const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
@@ -532,8 +968,7 @@ test("Inbox folders load only their own resources and fit a 390 px phone", async
   const response = await page.goto(origin);
   assert.equal(response.status(), 200);
   await page.evaluate(() => document.fonts.ready);
-  assert.equal(await shownGroup(page).count(), 1);
-  assert.equal(await shownGroup(page).getAttribute("data-group"), "needs you");
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.locator('#peek').isVisible(), false, 'a phone opens Details only on a tap');
   assert.match(await page.locator(".plan").first().textContent(), /Ticket #98 · waiting on #97/);
   assert.equal(await page.locator('.command .state').first().textContent(), "Failed");
@@ -684,10 +1119,12 @@ test("Run metrics show present and missing signals in details, including at 390 
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   await page.goto(origin);
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   await folder(page, 'working').click();
   await page.waitForURL('**/?section=working');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
+  await folder(page, 'overview').click();
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(247, 247, 245)");
   await page.emulateMedia({ colorScheme: "dark" });
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
@@ -697,12 +1134,14 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
   const config = join(home, '.thirdshift/config.toml');
   const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
   const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
+  const fired = join(home, '.thirdshift/logs/acme/widgets/pickup.last-fired');
   const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
   Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
   fixture.issue.number = 203;
   await replaceRecord(ready, JSON.stringify(fixture));
   await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
   await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
+  await writeFile(fired, '2026-01-02T15:04:05Z');
   try {
     for (const javaScriptEnabled of [false, true]) {
       const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
@@ -717,6 +1156,12 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
       await summary.focus();
       await page.keyboard.press('Enter');
       await reason.waitFor({ state: 'visible' });
+      assert.match(await notice.locator('#idle-passes li').textContent(), /^2026-01-01 12:00 · Pickup run idle/);
+      await notice.locator('#pass-starts summary').click();
+      const started = notice.locator('#pass-starts li');
+      await started.waitFor({ state: 'visible' });
+      assert.equal(await started.locator('time').getAttribute('datetime'), '2026-01-02T15:04:05Z');
+      assert.match(await started.textContent(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+ · Pickup last fired/);
       assert.equal(await notice.locator('script').count(), 0);
       assert.equal((await notice.textContent()).includes('Needs you'), false);
       for (const [label, section] of [['Ready for review', 'ready-for-review']]) {
@@ -730,6 +1175,10 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
         await replaceRecord(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
         const updated = notice.getByText('Pickup run idle on acme/widgets: Claim limit reached', { exact: true });
         await updated.waitFor({ state: 'visible' });
+        assert.match(await notice.locator('#idle-passes li').textContent(), /^2026-01-01 12:01 · Pickup run idle/);
+        await replaceRecord(fired, '2026-01-03T15:04:05Z');
+        await page.waitForFunction(() => document.querySelector('#pass-starts time')?.dateTime === '2026-01-03T15:04:05Z');
+        assert.match(await started.textContent(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+ · Pickup last fired/);
         assert.equal(await page.evaluate(() => window.visitMarker), 'same idle Inbox');
         await summary.click();
         await updated.waitFor({ state: 'hidden' });
@@ -745,6 +1194,7 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
     }
   } finally {
     await rm(activity, { force: true });
+    await rm(fired, { force: true });
     await rm(ready, { force: true });
     await writeFile(config, '[console]\nport = 0\n');
   }
@@ -804,7 +1254,7 @@ test("push morphs keep the selected row, folder and scroll without a reload", as
   await row.locator('.issue-title').filter({ hasText: 'Advanced while you watched' }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
   assert.equal(await page.evaluate(() => window.visitMarker), "same document");
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.equal(await page.evaluate(() => scrollY), 120);
   assert.deepEqual(errors, []);
 });
@@ -837,14 +1287,16 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.keyboard.press('w');
     await page.waitForURL('**/?section=working');
     assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
-    assert.equal(await page.locator('.is-selected').count(), 0);
+    await page.locator('#inbox > [data-group="working"] > summary.is-selected').waitFor();
+    assert.equal(await page.locator('.is-selected.command').count(), 0);
   } finally { await replaceRecord(path, original); }
 });
 
-test("tab title and favicon follow Needs you through pushes", async t => {
+test("tab title keeps the host while Needs you and favicon follow pushes", async t => {
   const page = await pageFor(t);
   await page.goto(origin);
-  assert.equal(await page.title(), '10 need you · thirdshift Console');
+  const host = await page.locator('header h1').textContent();
+  assert.equal(await page.title(), `10 need you · ${host} · thirdshift Console`);
   assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon-urgent.svg');
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const fixtures = [];
@@ -857,9 +1309,33 @@ test("tab title and favicon follow Needs you through pushes", async t => {
       fixture.outcome = 'merged';
       await replaceRecord(path, JSON.stringify(fixture));
     }
-    await page.waitForFunction(() => document.title === '0 need you · thirdshift Console');
+    await page.waitForFunction(host => document.title === `0 need you · ${host} · thirdshift Console`, host);
     assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
   } finally { for (const [path, original] of fixtures) await replaceRecord(path, original); }
+});
+
+test('reader page titles identify the host without JavaScript', async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false });
+  await page.goto(origin);
+  const host = await page.locator('header h1').textContent();
+  for (const [path, title] of [
+    ['/?page=history', 'History'], ['/?page=security', 'Security'],
+    ['/lanes', 'Lanes'], ['/stages', 'Stages'], ['/?page=waterfall', 'Waterfall'],
+    ['/logs', 'Logs'], ['/cronjobs', 'Cron jobs'], ['/resources', 'Resources'],
+    ['/scores', 'Scores'], ['/bug-origins', 'Bug origins'], ['/experiments', 'Experiments']
+  ]) {
+    const response = await page.goto(`${origin}${path}`);
+    assert.equal(response.status(), 200, path);
+    assert.equal(await page.title(), `${title} · ${host} · thirdshift`, path);
+  }
+  await page.goto(`${origin}/logs`);
+  await page.locator('.log-list a').filter({ hasText: 'Command log' }).first().click();
+  assert.equal(await page.title(), `Command log · ${host} · thirdshift`);
+  await page.goto(origin);
+  const command = await page.locator('.command[data-command]').first().getAttribute('data-command');
+  const response = await page.goto(`${origin}/stop?${new URLSearchParams({ command })}`);
+  assert.equal(response.status(), 200);
+  assert.equal(await page.title(), `Stop · ${host} · thirdshift`);
 });
 
 test("new since the last visit survives browser storage and clears after looking", async t => {
@@ -909,27 +1385,36 @@ test("cutting the open stream falls back to polling and catches up", async t => 
   } finally { await replaceRecord(path, original); }
 });
 
-for (const storage of ['blocked', 'malformed']) {
+for (const storage of ['blocked', 'read-only', 'malformed']) {
   test(`live Inbox works with ${storage} browser storage`, async t => {
     const page = await pageFor(t);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(mode => {
       if (mode === 'blocked') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+      else if (mode === 'read-only') Storage.prototype.setItem = () => { throw new Error('Storage full'); };
       else {
         localStorage.setItem('thirdshift:console:folded', 'false');
         localStorage.setItem('thirdshift:console:last-look', '{broken');
       }
     }, storage);
     await page.goto(origin);
+    const needs = page.locator('#inbox > [data-group="needs you"]');
+    const count = Number(await needs.locator(':scope > summary .count').textContent());
+    await needs.locator(':scope > summary').click();
+    await needs.locator(':scope > .commands').waitFor({ state: 'hidden' });
     const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
     const original = await readFile(path, 'utf8');
     try {
       const fixture = JSON.parse(original);
       fixture.issue.title = `Still live with ${storage} storage`;
       await replaceRecord(path, JSON.stringify(fixture));
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await needs.getAttribute('open'), null);
+      assert.equal(Number(await needs.locator(':scope > summary .count').textContent()), count);
+      assert.deepEqual(await shownGroups(page), overviewGroups);
+      await needs.locator(':scope > summary').click();
       await page.getByText(fixture.issue.title, { exact: true }).waitFor();
-      assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
       assert.deepEqual(errors, []);
     } finally { await replaceRecord(path, original); }
   });
@@ -1012,6 +1497,118 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
+test('Ready rows link PR subjects, show titles and CI across widths, and update live', async t => {
+  const logs = join(home, '.thirdshift/logs');
+  const dir = join(logs, 'acme/widgets/commands/issue');
+  const cache = join(logs, 'github-inbox.json');
+  const changed = join(logs, 'github-inbox.changed');
+  const previous = await readFile(cache, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const states = [
+    [229, 'green', 'CI green', 'ready', 'conflicting'], [230, 'red', 'CI red', 'urgent', 'mergeable'],
+    [231, 'pending', 'CI pending', 'look', 'unknown'], [232, 'no_checks', 'No CI checks', 'done', 'conflicting'],
+    [233, undefined, 'CI unknown', 'done'], [234, null, 'CI unknown', 'done'],
+  ];
+  const subjects = {};
+  const paths = [];
+  try {
+    for (const [number, ci, , , mergeable] of states) {
+      const path = join(dir, `${number}-fixture.command.json`);
+      paths.push(path);
+      const url = `https://github.com/acme/widgets/pull/${number}`;
+      await replaceRecord(path, JSON.stringify({ ...base, kind: 'Run', outcome: 'ready for review',
+        cause: null, tickets: [], pull_request: url,
+        issue: number === 229 ? null : { ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}`, title: 'A distinct issue title that must not replace the PR title' } }));
+      // Undefined represents an old cache; null represents an unread PR.
+      if (ci !== null) subjects[url] = { state: 'Open', merged_at: null, closed_at: null, ci, mergeable,
+        ...(ci === undefined ? {} : { title: `PR ${number}: safely show <script>unsafe()</script> & a long title on phones` }) };
+    }
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'CI fixture');
+    const rowFor = (page, number) => page.locator(`.command:has(> .row-head > .subject a[href="https://github.com/acme/widgets/pull/${number}"])`);
+    for (const javaScriptEnabled of [true, false]) {
+      const page = await pageFor(t, { javaScriptEnabled });
+      await page.goto(`${origin}/?section=ready-for-review`);
+      for (const width of [1440, 768, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const theme of ['focus-light', 'focus-dark', 'signal-light', 'signal-dark']) {
+          await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+          for (const [number, ci, label, tag, mergeable] of states) {
+            const row = rowFor(page, number);
+            assert.equal(await row.getAttribute('data-state'), 'Ready');
+            assert.equal(await row.locator('.subject a').textContent(), `acme/widgets#${number}`);
+            assert.equal(await row.locator('.row-head > .issue-title').textContent(),
+              ci == null ? '(title unavailable)' : `PR ${number}: safely show <script>unsafe()</script> & a long title on phones`);
+            assert.equal(await row.locator('script').count(), 0);
+            assert.equal(await row.locator('.row-head > .issue-title').isVisible(), true);
+            assert.equal(await row.locator('.merge-conflict').count(), mergeable === 'conflicting' ? 1 : 0);
+            const badges = [[row.locator('.ci'), label, tag]];
+            if (mergeable === 'conflicting') badges.push([row.locator('.merge-conflict'), 'Merge conflict', 'urgent']);
+            for (const [badge, label, tag] of badges) {
+              await badge.getByText(label, { exact: true }).waitFor();
+              const seen = await badge.evaluate((node, tag) => {
+                const probe = document.createElement('span');
+                document.body.append(probe);
+                const token = name => { probe.style.color = `var(--${name})`; return getComputedStyle(probe).color; };
+                const expected = { color: token(`tag-${tag}-text`), background: token(`tag-${tag}-bg`) };
+                probe.remove();
+                const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+                return { expected, color: style.color, background: style.backgroundColor,
+                  clipped: node.scrollWidth > node.clientWidth, fits: rect.left >= 0 && rect.right <= innerWidth };
+              }, tag);
+              assert.equal(seen.color, seen.expected.color, `${theme}: ${label}`);
+              assert.equal(seen.background, seen.expected.background, `${theme}: ${label}`);
+              assert.equal(seen.clipped, false, `${width}: ${label} must be readable`);
+              assert.equal(seen.fits, true, `${width}: ${label} must fit`);
+            }
+          }
+        }
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      }
+    }
+    const page = await pageFor(t);
+    await page.goto(`${origin}/?section=ready-for-review`);
+    const row = rowFor(page, 229);
+    await row.locator('.merge-conflict').waitFor();
+    subjects['https://github.com/acme/widgets/pull/229'].mergeable = 'mergeable';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'Mergeability changed');
+    await row.locator('.merge-conflict').waitFor({ state: 'detached' });
+    await row.locator('.ci').getByText('CI green', { exact: true }).waitFor();
+    subjects['https://github.com/acme/widgets/pull/229'].ci = 'red';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'CI changed');
+    await row.locator('.ci').getByText('CI red', { exact: true }).waitFor();
+    assert.equal(await row.getAttribute('data-state'), 'Ready');
+    subjects['https://github.com/acme/widgets/pull/229'].title = 'Renamed PR <title> & ship';
+    await replaceRecord(cache, JSON.stringify({ version: 1, subjects }));
+    await writeFile(changed, 'Title changed');
+    await row.locator('.issue-title').getByText('Renamed PR <title> & ship', { exact: true }).waitFor();
+    // Both pointer and native keyboard activation follow GitHub directly.
+    // Fulfil the destination locally so this checks navigation without network.
+    const url = 'https://github.com/acme/widgets/pull/229';
+    await page.route(url, route => route.fulfill({ body: 'Pull request destination' }));
+    let peeks = 0;
+    page.on('request', request => { if (new URL(request.url()).pathname === '/peek') peeks++; });
+    for (const activation of ['pointer', 'keyboard']) {
+      await page.goto(`${origin}/?section=ready-for-review`);
+      const link = rowFor(page, 229).locator('.subject a');
+      if (activation === 'pointer') await link.click();
+      else { await link.focus(); await link.press('Enter'); }
+      await page.waitForURL(url);
+      assert.equal(peeks, 0, `${activation} PR activation must not open Details`);
+    }
+  } finally {
+    for (const path of paths) await rm(path, { force: true });
+    if (previous === null) await rm(cache, { force: true });
+    else await replaceRecord(cache, previous);
+    await writeFile(changed, 'CI fixture removed');
+  }
+});
+
 test('Landing, Ready and Stopping rows carry their state, Theme tags and still-able motion', { skip: process.platform !== 'linux' }, async t => {
   // The live fixtures borrow the Console's own process identity, as above.
   const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
@@ -1025,6 +1622,8 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
     212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
     213: live('implement'),
   };
+  const subjectUrl = number => number === 212
+    ? 'https://github.com/acme/widgets/pull/212' : `https://github.com/acme/widgets/issues/${number}`;
   const stop = join(dir, '213-fixture.command.stop.json');
   const paths = [stop];
   for (const [number, change] of Object.entries(fixtures)) {
@@ -1036,8 +1635,23 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   try {
     const page = await pageFor(t);
     await page.goto(origin);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await folder(page, 'done').click();
+      await folder(page, 'overview').click();
+      assert.deepEqual(await shownGroups(page), overviewGroups);
+      for (const [group, title, number] of [
+        ['needs you', 'Needs you', 1], ['ready for review', 'Ready for review', 212],
+        ['landing', 'Landing', 211], ['working', 'Working', 213]
+      ]) {
+        const section = page.getByRole('group', { name: title, exact: true });
+        assert.equal(await section.getByRole('heading', { name: new RegExp(`^${title} \\d+$`) }).isVisible(), true);
+        assert.equal(await section.locator(`.subject a[href="${subjectUrl(number)}"]`).isVisible(), true, group);
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
     for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
-    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href="${subjectUrl(number)}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
       const probe = document.createElement('span');
       document.body.append(probe);
@@ -1127,7 +1741,7 @@ test("selection survives a move into the Done folder and regains focus when it i
     await replaceRecord(path, JSON.stringify(fixture));
     await page.waitForFunction(id => document.getElementById(id)?.closest('.group').dataset.group === 'done', id);
     assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
-    assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+    assert.deepEqual(await shownGroups(page), overviewGroups);
     await folder(page, 'done').click();
     await page.waitForFunction(id => document.activeElement.id === id, id);
   } finally { await replaceRecord(path, original); }
@@ -1186,13 +1800,13 @@ test("folders switch in place and Back and Forward return to them, including a U
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(`${origin}/?page=inbox`);
   await page.evaluate(() => { window.sameDocument = true; });
-  await page.waitForURL('**/?section=needs-you');
+  await page.waitForURL('**/?section=overview');
   await folder(page, 'done').click();
   await page.waitForURL('**/?section=done');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
   await page.goBack();
-  await page.waitForURL('**/?section=needs-you');
-  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   await page.goForward();
   await page.waitForURL('**/?section=done');
   assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
@@ -1202,11 +1816,11 @@ test("folders switch in place and Back and Forward return to them, including a U
   await folder(page, 'resolved').click();
   await page.goBack();
   // The reload names the default folder in the URL as soon as it loads.
-  await page.waitForURL('**/?section=needs-you');
-  await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'needs you');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
 });
 
-test("hiding the open folder with Sections opens the first folder left with rows", async t => {
+test("hiding the open folder with Sections returns to Overview", async t => {
   const config = join(home, '.thirdshift/config.toml');
   const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
   const merged = join(directory, '225-fixture.command.json');
@@ -1222,8 +1836,8 @@ test("hiding the open folder with Sections opens the first folder left with rows
     await page.getByLabel('Show Needs you', { exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save sections' }).click();
     await page.locator('#inbox .folders a[data-group="needs you"][hidden]').waitFor({ state: 'attached' });
-    // Ready for review comes first but is empty, so Done opens.
-    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'done');
+    await page.waitForURL('**/?section=overview');
+    assert.deepEqual(await shownGroups(page), ['ready for review', 'landing', 'working']);
   } finally {
     await writeFile(config, '[console]\nport = 0\n');
     await rm(merged, { force: true });
@@ -1247,6 +1861,8 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   assert.equal(await selected.count(), 0);
   assert.equal(await page.locator('#peek').isVisible(), false);
   await page.keyboard.press('j');
+  await page.locator('#inbox > [data-group="needs you"] > summary.is-selected').waitFor();
+  await page.keyboard.press('j');
   const first = await selected.getAttribute('id');
   await page.keyboard.press('Space');
   await detailsShow();
@@ -1256,7 +1872,10 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   await page.keyboard.press('k');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('k');
-  assert.equal(await selected.evaluate(el => el === el.parentElement.lastElementChild), true, 'k wraps to the last row');
+  assert.equal(await selected.evaluate(el => el.matches('summary')), true, 'k returns to the heading');
+  await page.keyboard.press('k');
+  assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), 'working', 'k wraps to the last visible heading');
+  await page.keyboard.press('j');
   await page.keyboard.press('j');
   assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('Space');
@@ -1290,6 +1909,10 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
     assert.equal(await folder(page, group).getAttribute('aria-current'), 'page');
   }
   assert.equal(await selected.getAttribute('id'), first, 'opening a folder selects its first row');
+  await page.keyboard.press('g');
+  await page.keyboard.press('u');
+  await page.waitForURL('**/?section=overview');
+  assert.deepEqual(await shownGroups(page), overviewGroups);
   assert.deepEqual(await page.evaluate(() => window.listChanges), []);
   assert.equal(await page.evaluate(() => window.rowsBefore.every((row, i) => row === document.querySelectorAll('.command')[i])), true);
   await page.keyboard.press('Enter');
@@ -1570,11 +2193,12 @@ test('Command details keeps its fallback selection across a live refresh', { ski
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
     await row.locator('.state').click();
     await page.locator('#peek [data-live="true"]').waitFor();
-    await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+    const line = page.locator('#peek .peek-cli').filter({ hasText: 'thirdshift show' });
+    await line.getByRole('button', { name: 'Copy CLI', exact: true }).click();
     await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
     const cli = await page.evaluate(() => getSelection().toString());
     assert.match(cli, /^thirdshift show '.*' --json$/);
-    const before = await page.locator('#peek .peek-cli').elementHandle();
+    const before = await line.elementHandle();
     await appendFile(session, traceRecord(' growth'));
     await appendFile(join(dir, '203-fixture.log'), ' more');
     await page.waitForFunction(old => !old.isConnected, before, { timeout: 5000 });
@@ -1628,6 +2252,9 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
     await write(separate, 224);
     await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    await page.locator('#inbox > [data-group="working"] > summary').click();
+    await page.locator('#inbox > [data-group="working"] > .commands').waitFor({ state: 'hidden' });
+    assert.equal(await total.locator('strong').textContent(), '2 active runs');
     // Moving between folders, into and out of the live work, leaves the total alone.
     for (const group of ['working', 'needs you']) {
       await folder(page, group).click();

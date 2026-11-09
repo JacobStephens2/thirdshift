@@ -70,7 +70,8 @@ async function contextFor(t, mode = 'granted') {
 }
 
 async function count(page, value) {
-  await page.waitForFunction(value => document.title === `${value} need you · thirdshift Console`, value);
+  const host = await page.locator('header h1').textContent();
+  await page.waitForFunction(({ value, host }) => document.title === `${value} need you · ${host} · thirdshift Console`, { value, host });
 }
 
 test('notifications ask on click, survive reload and open the Inbox for a rise', async t => {
@@ -96,7 +97,8 @@ test('notifications ask on click, survive reload and open the Inbox for a rise',
     const notice = await page.evaluate(() => ({ title: notices[0].title, body: notices[0].options.body }));
     const host = await page.locator('header h1').textContent();
     assert.equal(notice.title, `2 need you · ${host}`);
-    assert.match(notice.body, /acme\/widgets#2.*Problem 2/);
+    // A narrow toast truncates the body, so the state comes before what it is about (#1493).
+    assert.equal(notice.body, 'Failed · acme/widgets#2 · Problem 2');
     const focused = await page.evaluate(() => { notices[0].onclick({ preventDefault() {} }); return focusCalls; });
     assert.equal(focused, 1);
     await page.waitForURL(`${origin}/?page=inbox`);
@@ -347,7 +349,7 @@ test('the Inbox keeps updating when an in-flight notification request is turned 
     await page.getByRole('button', { name: 'Turn notifications off', exact: true }).click();
     await page.getByRole('button', { name: 'Turn notifications on', exact: true }).waitFor();
     await item(16);
-    await page.waitForFunction(() => document.title === '3 need you · thirdshift Console', null, { timeout: 6000 });
+    await count(page, 3);
     assert.equal(await page.evaluate(() => notices.length), 0);
   } finally {
     release();

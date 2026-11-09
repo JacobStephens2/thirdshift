@@ -10,6 +10,16 @@ How the engineering skills should consume this repo's domain documentation when 
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
+## Pull-request work and Inbox hand-off
+
+For `thirdshift fix`, read **Fix run**, **Delivery**, **Repair loop**, **Base branch**
+and **Recovery** before following the domain-to-code index. A Fix run works on a
+pull request even when it has no linked issue. For **Inbox** and **Needs you**,
+read the pull-request hand-off rule too: a later **Command** on the same pull
+request, as on the same issue, takes up an earlier waiting row. **Ready for
+review** can still show **CI red** or **Merge conflict** after Delivery ended;
+the Console's **Copy fix command** offers a new Fix run on that pull request.
+
 ## File structure
 
 Single-context repo (most repos):

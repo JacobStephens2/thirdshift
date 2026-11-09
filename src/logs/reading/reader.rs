@@ -41,8 +41,13 @@ pub(crate) struct Reader {
     path: PathBuf,
     writer: Option<Writer>,
     session: Option<SessionOwner>,
-    /// The lexical root of the inventory that selected this file, if any.
+    /// The root of the inventory that selected this file, if any.
+    /// For another account this is the canonical directory discovery accepted.
     inventory: Option<PathBuf>,
+    other_account: bool,
+    /// Canonical log directory an Other-account read must stay under.
+    /// Absent for the serving account. It is not resolved again.
+    accepted: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -69,13 +74,24 @@ impl Reader {
                 started_at: command.record.started_at.clone(),
             }),
             inventory: None,
+            other_account: false,
+            accepted: None,
+        }
+    }
+
+    /// Read `path` only while its canonical path stays under `root`.
+    pub(super) fn under_accepted(self, root: &Path) -> Self {
+        Self {
+            accepted: Some(root.to_owned()),
+            ..self
         }
     }
 
     /// Require each read to find the file still listed beneath `root`.
-    pub(super) fn within(self, root: &Path) -> Self {
+    pub(super) fn within(self, root: &Path, other_account: bool) -> Self {
         Self {
             inventory: Some(root.to_owned()),
+            other_account,
             ..self
         }
     }
@@ -118,17 +134,39 @@ impl Reader {
         Ok(true)
     }
 
+    fn open(&self) -> Result<std::fs::File> {
+        if let Some(root) = &self.inventory {
+            ensure!(
+                catalog::still_listed(root, &self.path, self.other_account),
+                catalog::UNLISTED
+            );
+        }
+        if let Some(root) = &self.accepted {
+            ensure!(
+                super::inventory::stays_under(root, &self.path),
+                "outside accepted log directory"
+            );
+        }
+        std::fs::File::open(&self.path)
+            .with_context(|| format!("could not open {}", self.path.display()))
+    }
+
+    /// A snapshot tail uses the same eligibility checks and an owning file
+    /// descriptor, and reads at most the requested byte budget.
+    pub(crate) fn tail(&self, budget: usize) -> Result<Vec<u8>> {
+        let mut file = self.open()?;
+        let offset = file.metadata()?.len().saturating_sub(budget as u64);
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::new();
+        file.take(budget as u64).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
     /// Check eligibility, then observe completion before draining; a bounded
     /// batch is done only at EOF.
     pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
-        if let Some(root) = &self.inventory {
-            ensure!(catalog::still_listed(root, &self.path), catalog::UNLISTED);
-        }
+        let mut file = BufReader::new(self.open()?);
         let complete = !self.live()?;
-        let mut file = BufReader::new(
-            std::fs::File::open(&self.path)
-                .with_context(|| format!("could not open {}", self.path.display()))?,
-        );
         let length = file.get_ref().metadata()?.len();
         ensure!(offset <= length, "log was truncated; reopen the reader");
         file.seek(SeekFrom::Start(offset))?;

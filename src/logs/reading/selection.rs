@@ -10,10 +10,22 @@ use super::{Command, Entry};
 use crate::issue::IssueUrl;
 use crate::logs::owner;
 
+const COMMAND_PREFIXES: &[(&str, &str)] = &[
+    ("Architect run", "architect"),
+    ("Pickup run", "pickup"),
+    ("Security run", "secure"),
+    ("Triage run", "triage"),
+    ("Review run", "review"),
+    ("Fix run", "fix"),
+    ("Scoring run", "scoring"),
+    ("Experiment", "experiment"),
+    ("Process", "process"),
+];
+
 enum Name {
     Path(PathBuf),
     Issue { repository: String, number: u64 },
-    Pass(String),
+    KindStamp(String),
 }
 
 impl Name {
@@ -40,18 +52,10 @@ impl Name {
                 });
             }
         }
-        if [
-            "architect-",
-            "pickup-",
-            "secure-",
-            "scoring-",
-            "experiment-",
-            "process-",
-        ]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+        if let Some((prefix, _)) = name.split_once('-')
+            && COMMAND_PREFIXES.iter().any(|(_, known)| *known == prefix)
         {
-            return Ok(Self::Pass(name.into()));
+            return Ok(Self::KindStamp(name.into()));
         }
         bail!("invalid Command name: {name}; use repo#number, an Issue URL or kind-stamp")
     }
@@ -66,7 +70,7 @@ impl Name {
                             .next()
                             .is_some_and(|name| name.eq_ignore_ascii_case(repository)))
             }
-            Self::Pass(_) | Self::Path(_) => true,
+            Self::KindStamp(_) | Self::Path(_) => true,
         }
     }
 }
@@ -79,6 +83,28 @@ pub(in crate::logs) enum Observation<'a> {
 }
 
 impl<'a> Observation<'a> {
+    pub(in crate::logs) fn account(self) -> Option<&'a str> {
+        match self {
+            Self::Record(command) => command.account.as_deref(),
+            Self::History(command) => command.account.as_deref(),
+        }
+    }
+
+    /// The canonical log directory discovery accepted for another account.
+    pub(in crate::logs) fn accepted_log_directory(self) -> Option<&'a Path> {
+        match self {
+            Self::Record(command) => command.inventory.accepted_directory(),
+            Self::History(command) => command.inventory.accepted_directory(),
+        }
+    }
+
+    pub(in crate::logs) fn require_writable(self, action: &str) -> Result<()> {
+        if let Some(account) = self.account() {
+            bail!("cannot {action}: Command belongs to account {account} and is read-only");
+        }
+        Ok(())
+    }
+
     fn repository(self) -> &'a str {
         match self {
             Self::Record(command) => &command.record.repository,
@@ -108,10 +134,10 @@ impl<'a> Observation<'a> {
                 };
                 issue.is_some_and(|issue| issue.number == *number)
             }
-            Name::Pass(name) => match self {
+            Name::KindStamp(name) => match self {
                 Self::Record(command) => command.record.name == *name,
                 Self::History(command) => command.command_log.as_ref().is_some_and(|path| {
-                    let Some(kind) = pass_prefix(&command.kind) else {
+                    let Some(kind) = kind_prefix(&command.kind) else {
                         return false;
                     };
                     super::command_stamp(path)
@@ -194,13 +220,19 @@ impl<'a> Observation<'a> {
         {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
-                .or_else(|| pass_prefix(kind).map(String::from))
+                .or_else(|| kind_prefix(kind).map(String::from))
                 .context("cannot name Session traces for this Command kind")?;
             for path in inventory.sessions_of(log, &prefix)? {
                 if !paths.contains(&path) {
                     paths.push(path);
                 }
             }
+        }
+        if let Self::Record(command) = self
+            && command.account.is_some()
+        {
+            let root = command.record_path.parent();
+            paths.retain(|path| root.is_some_and(|root| super::contained_session(root, path)));
         }
         Ok(inventory.ordered(paths))
     }
@@ -223,16 +255,10 @@ impl<'a> Observation<'a> {
     }
 }
 
-pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
-    match kind {
-        "Architect run" => Some("architect"),
-        "Pickup run" => Some("pickup"),
-        "Security run" => Some("secure"),
-        "Scoring run" => Some("scoring"),
-        "Experiment" => Some("experiment"),
-        "Process" => Some("process"),
-        _ => None,
-    }
+fn kind_prefix(kind: &str) -> Option<&'static str> {
+    COMMAND_PREFIXES
+        .iter()
+        .find_map(|&(stored, prefix)| (stored == kind).then_some(prefix))
 }
 
 /// A selected Run and its captured outer process/record. Child refusal is an
@@ -245,7 +271,17 @@ pub(in crate::logs) struct Selection<'a> {
 }
 
 impl Selection<'_> {
+    pub(in crate::logs) fn security_details(self) -> bool {
+        self.owner
+            .is_some_and(|owner| owner.record.kind == "Security run")
+            || match self.observation {
+                Observation::Record(command) => command.record.kind == "Security run",
+                Observation::History(command) => command.kind == "Security run",
+            }
+    }
+
     pub(in crate::logs) fn stop_target(self, input: &str) -> Result<PathBuf> {
+        self.observation.require_writable("stop")?;
         if let Some(owner) = self.child_owner {
             bail!(
                 "cannot stop {input}: child Ticket run; stop {} {} instead",
@@ -282,7 +318,11 @@ impl Selection<'_> {
     }
 
     pub(in crate::logs) fn reader(self, path: PathBuf) -> super::Reader {
-        super::Reader::captured(path, self.owner, false)
+        let reader = super::Reader::captured(path, self.owner, false);
+        match self.observation.accepted_log_directory() {
+            Some(root) => reader.under_accepted(root),
+            None => reader,
+        }
     }
 }
 
@@ -332,7 +372,7 @@ pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection
         );
     }
     candidates.retain(|command| command.observation.matches(&name));
-    if matches!(name, Name::Pass(_)) {
+    if matches!(name, Name::KindStamp(_)) {
         let repositories: BTreeSet<_> = candidates
             .iter()
             .map(|command| command.observation.repository())
@@ -347,7 +387,12 @@ pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection
     // A bare record/log path names its outer Command before any dispatched Run.
     // Named selectors still prefer live/latest; suffixed paths are already exact.
     if !matches!(name, Name::Path(_)) {
-        candidates.sort_by_key(|command| command.observation.ordering());
+        candidates.sort_by_key(|command| {
+            (
+                command.observation.account().is_some(),
+                command.observation.ordering(),
+            )
+        });
     }
     candidates
         .into_iter()
@@ -390,6 +435,8 @@ pub(in crate::logs) enum Detailed<'a> {
 /// retaining the status reader's version 1 field names.
 #[derive(Serialize)]
 pub(in crate::logs) struct Details<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<&'a str>,
     #[serde(flatten)]
     record: &'a crate::logs::command_record::CommandRecord,
     state: &'static str,
@@ -408,6 +455,7 @@ pub(in crate::logs) struct Details<'a> {
 impl<'a> Details<'a> {
     fn new(command: &'a Command) -> Result<Self> {
         Ok(Self {
+            account: command.account.as_deref(),
             record: &command.record,
             state: command.state,
             health: &command.health,

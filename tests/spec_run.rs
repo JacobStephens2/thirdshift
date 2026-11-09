@@ -221,7 +221,17 @@ fn status_keeps_concurrent_ticket_runs_separate_and_detects_a_killed_child() {
             .unwrap()
             .success()
     });
-    let after = scenario.run(&["status", "--json"]);
+    let deadline = std::time::Instant::now() + WAIT_BOUND;
+    let after = loop {
+        let json = scenario.run(&["status", "--json"]);
+        let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+        if status["commands"][0]["children"][0]["state"] == "died"
+            || std::time::Instant::now() >= deadline
+        {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     let text = scenario.run(&["status"]);
     std::fs::write(scenario.path("release"), "").unwrap();
     let ended = held.finish();
@@ -235,7 +245,6 @@ fn status_keeps_concurrent_ticket_runs_separate_and_detects_a_killed_child() {
         assert_eq!(child["state"], "live");
         assert_eq!(child["stage"]["name"], "implement");
     }
-    let after: serde_json::Value = serde_json::from_str(&after.stdout).unwrap();
     let killed = &after["commands"][0]["children"][0];
     assert_eq!(killed["issue"]["number"], 21);
     assert_eq!(killed["state"], "died");
@@ -790,13 +799,11 @@ fn each_ticket_branches_off_the_spec_branch_and_its_prompts_name_it_as_the_base(
 
 /// The file in the scenario root that says the stand-in for a newer
 /// thirdshift was run.
-#[cfg(target_os = "linux")]
 const REPLACEMENT_RAN: &str = "replacement-ran";
 
 /// Rename a stand-in for a newer thirdshift, a script that only records that
 /// it was run, over `installed`, as the release installer, `thirdshift
 /// update` and `cargo install` each put a new binary in place.
-#[cfg(target_os = "linux")]
 fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
     let script = format!(
         "#!/bin/sh\ntouch {}\nexit 1\n",
@@ -807,7 +814,6 @@ fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
     std::fs::rename(&new, installed).unwrap();
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_tickets_run_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_binary() {
     let scenario = linear_spec();
@@ -852,7 +858,6 @@ fn a_tickets_run_started_after_thirdshift_was_replaced_runs_the_spec_runs_own_bi
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn a_tickets_run_started_after_thirdshift_was_replaced_can_still_start_its_base_fix() {
     let scenario = spec_of(&[(21, &[]), (22, &[21])]);
@@ -1875,7 +1880,10 @@ exit 1
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(spec_pr(&scenario)["body"], "untouched");
-    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(
+        &result.stderr,
+        "/pull/2 was retargeted from main to develop under this Spec run",
+    );
     assert_contains(&result.stderr, "#22 failed");
     assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
 }
@@ -1905,13 +1913,15 @@ gh fake pr issue-20 body '"untouched"'"#
         assert_contains(
             &result.stderr,
             if replacement {
-                "is closed, not open"
+                "/pull/2 was closed under this Spec run"
             } else {
-                "PR targets develop, not main"
+                "/pull/2 was retargeted from main to develop under this Spec run"
             },
         );
-        assert_contains(&result.stderr, "#22 landed");
-        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        // #22 started once the Spec PR was open, so its Self-merge checks it.
+        assert_contains(&result.stderr, "#22 failed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+        assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
         if replacement {
             assert_eq!(spec_pr(&scenario)["isDraft"], false);
         }
@@ -2709,7 +2719,7 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
         "{text}"
     );
     for part in [
-        "Cause:        Tickets not done: #21, #22\n",
+        "Cause:        Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)\n",
         "#21 failed: claude exited 1 (session trace: ",
         "#22 blocked by #21\n",
         "#23 landed with https://github.com/acme/widgets/pull/1\n",
@@ -3569,4 +3579,93 @@ fi
         "{args:?}"
     );
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+}
+
+#[test]
+fn issue_1471_a_spec_pr_closed_mid_run_starts_no_further_ticket() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[21])]);
+    scenario.agent_does_for(22, "gh fake pr issue-20 state '\"CLOSED\"'\nexit 1");
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "22"],
+        "{}",
+        result.stderr
+    );
+    assert!(pr_from(&scenario, "issue-23").is_none());
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_ticket_running_when_the_spec_pr_closes_is_not_self_merged() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}\ngh fake pr issue-20 state '\"CLOSED\"'\n",
+            agent_lands(22, "22.txt")
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let ticket_pr = pr_from(&scenario, "issue-22").unwrap();
+    assert_ne!(ticket_pr["state"], "MERGED", "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("#22: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_base_fix_into_the_spec_branch_is_not_self_merged_once_the_spec_pr_closes() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"
+gh fake pr issue-20 state '"CLOSED"'
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "#22: starting Base fix #23 into issue-20");
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_ne!(fix["state"], "MERGED", "{}", result.stderr);
+    assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_none());
 }

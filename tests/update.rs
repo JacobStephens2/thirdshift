@@ -3,6 +3,9 @@
 
 mod support;
 
+#[path = "update/console.rs"]
+mod console;
+
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};

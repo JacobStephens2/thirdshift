@@ -18,15 +18,15 @@ use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{ChildAsks, Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening, OpeningSession};
+use crate::delivery::{Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::labels::Label;
+use crate::processes::builtin::Step;
 use crate::progress;
-use crate::prompt;
-use crate::pull_request::PullRequest;
+use crate::pull_request::{PullRequest, SpecPrChanged};
 use crate::recovery::{Preservation, Recovery, Stage, TicketProgress};
 use crate::run::Reached;
 use crate::trust;
@@ -78,8 +78,8 @@ pub fn unstartable(spec: &IssueUrl, ticket: &Ticket) -> Option<Unstartable> {
 
 /// Take the Spec, `delivery`'s issue, whose Tickets were last read as
 /// `tickets`, from its Spec branch, checked out in `worktree`, to a Spec PR
-/// into `delivery`'s Base branch that reaches its goal, as [`run_through`]
-/// says, once the Spec PR, if it is open, is turned back into a draft. The
+/// into `delivery`'s Base branch that reaches its goal, as the Built-in Process
+/// specifies, once the Spec PR, if it is open, is turned back into a draft. The
 /// worktree is cleaned up when this returns, or kept by the Failed run path
 /// if its work did not reach origin. If `delivery`'s Base fix may start one,
 /// so may each Ticket's Run, into the Spec branch.
@@ -89,38 +89,79 @@ pub fn run(
     delivery: Delivery,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
+    let sequence = crate::processes::spec::sequence()?;
     let (spec, base) = (delivery.issue, delivery.base);
     let branch = worktree.branch().to_string();
     let mut spec_pr = PullRequest::new(spec, &branch, base, GitHub::new());
     spec_pr.resume_spec()?;
-    let mut outside = ChildRunsAndGitHub::new(worktree, delivery, spec_pr);
-    run_through(&mut outside, spec, base, &branch, tickets, parallel)
+    let mut held = Some(worktree);
+    let mut outside = ChildRunsAndGitHub::new(&mut held, delivery, &mut spec_pr, &sequence.process);
+    crate::processes::spec::run_through(
+        &mut outside,
+        spec,
+        base,
+        &branch,
+        tickets,
+        parallel,
+        sequence.delivery,
+    )
 }
 
-/// Take `spec`, whose Tickets were last read as `tickets`, from its Spec
-/// branch `branch` to a Spec PR into `base` that reaches its goal, all
-/// through `outside`. The Spec branch is pushed before any Ticket starts,
-/// and up to `parallel` Tickets run at once, the graph read again whenever
-/// one ends. The Spec PR is opened as a draft once the first Ticket lands,
-/// and its Tickets checklist rewritten as Tickets start and end. A Ticket
-/// that fails stops only the Tickets it blocks; with any Ticket not done,
-/// this is a Failed spec run, with the Spec PR's URL if it is open, which
-/// leaves it a draft. An interrupt ends it too, once the running Tickets'
-/// Runs have ended, starting nothing more. Once every Ticket has landed,
-/// the Spec PR is told so, and taken to its goal by the Delivery, opening
-/// with the Spec review on the Spec branch caught up from origin, and the
-/// Tickets checklist put back in the Spec PR's body before it is marked
-/// ready, and shown again if the Delivery fails. However it ends, it carries
-/// a line on each Ticket it landed or did not get done, for the Run
-/// notification.
-fn run_through(
+/// The catalogue Step: gather Tickets and finish their accounting, retaining
+/// the Spec checkout and draft PR for later Steps. It shares the Built-in
+/// Spec run's scheduler, trust gates and failure accounting.
+pub(crate) fn land(
+    spec: &IssueUrl,
+    worktree: &mut Option<Worktree>,
+    spec_pr: &mut PullRequest,
+    child_asks: &ChildAsks,
+    parallel: NonZeroUsize,
+    process: &str,
+) -> Result<AccountedTickets, FailedRun> {
+    let tickets = GitHub::new().tickets(spec)?;
+    spec_pr.resume_spec()?;
+    let mut outside = ChildRunsAndGitHub {
+        spec,
+        children: Runs::default(),
+        active: std::collections::BTreeMap::new(),
+        worktree,
+        delivery: None,
+        base_fix: BaseFixAsk::Forbid,
+        child_asks,
+        spec_pr,
+        process,
+    };
+    let accounted = account_tickets(&mut outside, spec, tickets, parallel)?;
+    outside.worktree().fast_forward_to_origin()?;
+    Ok(accounted)
+}
+
+pub(crate) struct AccountedTickets {
+    pub checklist: String,
+    pub pr_url: String,
+    pub(crate) lines: Vec<String>,
+    progress: TicketProgress,
+    local_work: Vec<String>,
+}
+
+impl AccountedTickets {
+    /// Carry the Ticket loop's evidence into a later catalogue Step's failure.
+    pub(crate) fn record_failure(&self, failed: &mut FailedRun) {
+        let recovery = failed.recovery.get_or_insert_with(|| {
+            Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+        });
+        recovery.add_tickets(self.progress, true);
+        recovery.add_child_work(self.local_work.clone());
+        failed.ticket_lines = self.lines.clone();
+    }
+}
+
+pub(crate) fn account_tickets(
     outside: &mut impl Outside,
     spec: &IssueUrl,
-    base: &str,
-    branch: &str,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
-) -> Result<Reached, FailedRun> {
+) -> Result<AccountedTickets, FailedRun> {
     let Landing {
         lines: ticket_lines,
         failed_log,
@@ -134,81 +175,48 @@ fn run_through(
         let spec_pr_url = outside.landed(&checklist)?;
         Ok((checklist, spec_pr_url))
     });
-    let all_tickets_accounted = landed.is_ok();
-    let ended = match landed {
-        Ok((checklist, spec_pr_url)) => {
-            review_and_deliver(outside, spec, base, branch, &checklist, &spec_pr_url)
-        }
+    let spec_pr_changed = landed
+        .as_ref()
+        .is_err_and(|error| error.is::<SpecPrChanged>());
+    match landed {
+        Ok((checklist, pr_url)) => Ok(AccountedTickets {
+            checklist,
+            pr_url,
+            lines: ticket_lines,
+            progress,
+            local_work,
+        }),
         Err(error) => {
             let interrupted = outside.interrupted();
+            let mut recovery = Recovery::new(
+                if pushed { Stage::Tickets } else { Stage::Push },
+                if pushed {
+                    Preservation::Remote
+                } else {
+                    Preservation::None
+                },
+            );
+            recovery.add_tickets(progress, false);
+            recovery.add_child_work(local_work);
+            if spec_pr_changed {
+                recovery.add_spec_pr_changed();
+            }
             Err(FailedRun {
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
                 log: failed_log,
                 interrupted,
-                ticket_lines: Vec::new(),
-                recovery: Some(Box::new(Recovery::new(
-                    if pushed { Stage::Tickets } else { Stage::Push },
-                    if pushed {
-                        Preservation::Remote
-                    } else {
-                        Preservation::None
-                    },
-                ))),
+                ticket_lines,
+                recovery: Some(Box::new(recovery)),
             })
         }
-    };
-    match ended {
-        Ok(reached) => Ok(Reached {
-            ticket_lines,
-            ..reached
-        }),
-        Err(mut failed) => {
-            let recovery = failed.recovery.get_or_insert_with(|| {
-                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
-            });
-            recovery.add_tickets(progress, all_tickets_accounted);
-            recovery.add_child_work(local_work);
-            failed.ticket_lines = ticket_lines;
-            Err(failed)
-        }
     }
-}
-
-/// Once every Ticket has landed, with `checklist`, and the Spec PR,
-/// `spec_pr_url`, is told so: take it to its goal by the Delivery, opening
-/// with the Spec review, all through `outside`, as [`run_through`] does.
-fn review_and_deliver(
-    outside: &mut impl Outside,
-    spec: &IssueUrl,
-    base: &str,
-    branch: &str,
-    checklist: &str,
-    spec_pr_url: &str,
-) -> Result<Reached, FailedRun> {
-    if outside.interrupted() {
-        return Err(FailedRun {
-            interrupted: true,
-            pr_url: Some(spec_pr_url.to_string()),
-            ..FailedRun::from(anyhow::anyhow!("interrupted"))
-        });
-    }
-    let opening = Opening {
-        session: OpeningSession::SpecReview,
-        prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
-    };
-    // The Spec review may have rewritten the body without the checklist.
-    let delivered = outside.deliver(opening, checklist);
-    if delivered.is_err() {
-        outside.show(checklist);
-    }
-    delivered
 }
 
 /// What the Spec run does or reads outside itself: the push of the Spec
 /// branch, the Tickets' child Runs, the graph read again, the Spec PR, the
 /// Delivery, the interrupt and its progress lines.
-trait Outside {
+pub(crate) trait Outside {
     /// Record the board independently of the children's owned records.
     fn record_tickets(&mut self, _board: &TicketBoard) {}
     /// Push the Spec branch to origin.
@@ -221,7 +229,10 @@ trait Outside {
     /// The Spec's Tickets, read again.
     fn tickets(&mut self) -> Result<Vec<Ticket>>;
     /// Show `checklist` as the Spec PR's Tickets checklist, if it is open.
-    fn show(&mut self, checklist: &str);
+    /// Fails only on a Spec PR changed under the Spec run.
+    fn show(&mut self, checklist: &str) -> Result<()>;
+    /// Fail if the Spec PR, once captured, changed under the Spec run.
+    fn ensure_spec_pr_unchanged(&mut self) -> Result<()>;
     /// A Ticket landed: open the Spec PR as a draft with `checklist`, or
     /// show it. Returns the Spec PR's URL.
     fn landed(&mut self, checklist: &str) -> Result<String>;
@@ -229,7 +240,12 @@ trait Outside {
     fn spec_pr_url(&mut self) -> Option<String>;
     /// Take the Spec PR to its goal, restoring `checklist` before readiness.
     /// Called at most once, after the Ticket loop.
-    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun>;
+    fn deliver(
+        &mut self,
+        opening: Opening,
+        checklist: &str,
+        steps: Vec<Step>,
+    ) -> Result<Reached, FailedRun>;
     /// Whether the Spec run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
@@ -250,27 +266,34 @@ struct ChildRunsAndGitHub<'a> {
     /// Full identities of local Tickets keyed by the child supervisor's number.
     active: std::collections::BTreeMap<u64, IssueUrl>,
     /// Held until the Delivery starts, which takes it.
-    worktree: Option<Worktree>,
+    worktree: &'a mut Option<Worktree>,
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
     child_asks: &'a ChildAsks,
-    spec_pr: PullRequest,
+    spec_pr: &'a mut PullRequest,
+    process: &'a str,
 }
 
 impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
-    fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
+    fn new(
+        worktree: &'a mut Option<Worktree>,
+        delivery: Delivery<'a>,
+        spec_pr: &'a mut PullRequest,
+        process: &'a str,
+    ) -> Self {
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
-            worktree: Some(worktree),
+            worktree,
             base_fix: delivery.base_fix.ask_of_tickets(),
             child_asks: delivery.child_asks,
             delivery: Some(delivery),
             spec_pr,
+            process,
         }
     }
 
@@ -296,12 +319,18 @@ impl Outside for ChildRunsAndGitHub<'_> {
         }
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
+            spec_pr: self.spec_pr.captured_spec_pr(),
         };
         if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
-        self.children
-            .start(ticket, kind, self.base_fix.clone(), self.child_asks)?;
+        self.children.start(
+            ticket,
+            kind,
+            self.base_fix.clone(),
+            self.child_asks,
+            self.process,
+        )?;
         self.active.insert(ticket.number, ticket.clone());
         Ok(())
     }
@@ -315,6 +344,9 @@ impl Outside for ChildRunsAndGitHub<'_> {
             progress::step(match ended {
                 Ended::NotReproduced { comment_url } => {
                     format!("#{number} bug not reproduced: {comment_url}")
+                }
+                Ended::ArchitectureReview { reason } => {
+                    format!("#{number} Architecture review ended: {reason}")
                 }
                 Ended::Reached { .. } => format!("#{number} landed"),
                 Ended::Interrupted { .. } => format!("#{number} interrupted"),
@@ -332,8 +364,12 @@ impl Outside for ChildRunsAndGitHub<'_> {
         GitHub::new().completion().tickets(self.spec)
     }
 
-    fn show(&mut self, checklist: &str) {
-        self.spec_pr.show_checklist(checklist);
+    fn show(&mut self, checklist: &str) -> Result<()> {
+        self.spec_pr.show_checklist(checklist)
+    }
+
+    fn ensure_spec_pr_unchanged(&mut self) -> Result<()> {
+        self.spec_pr.ensure_spec_pr_unchanged()
     }
 
     fn landed(&mut self, checklist: &str) -> Result<String> {
@@ -344,10 +380,15 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.spec_pr.info().map(|pr| pr.url)
     }
 
-    fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
+    fn deliver(
+        &mut self,
+        opening: Opening,
+        checklist: &str,
+        steps: Vec<Step>,
+    ) -> Result<Reached, FailedRun> {
         let worktree = self.worktree.take().expect("the Delivery starts once");
         let delivery = self.delivery.take().expect("the Delivery starts once");
-        delivery.deliver(worktree, opening, &mut self.spec_pr, Some(checklist))
+        delivery.spec_review(worktree, opening.prompt, self.spec_pr, checklist, steps)
     }
 
     fn interrupted(&mut self) -> bool {
@@ -442,6 +483,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             let Some(ticket) = board.next_to_start() else {
                 break;
             };
+            if let Err(changed) = outside.ensure_spec_pr_unchanged() {
+                keep_cause(&mut error, changed);
+                continue;
+            }
             outside.step(format!("starting #{}", ticket.number));
             match outside.start_ticket(&ticket) {
                 Ok(()) => {
@@ -452,8 +497,8 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
                 Err(start_error) => error = Some(start_error),
             }
         }
-        if started {
-            outside.show(&board.checklist());
+        if started && let Err(show_error) = outside.show(&board.checklist()) {
+            keep_cause(&mut error, show_error);
         }
         if !board.any_running() {
             break;
@@ -482,10 +527,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         outside.record_tickets(board);
         if landed {
             if let Err(open_error) = outside.landed(&list) {
-                error.get_or_insert(open_error);
+                keep_cause(&mut error, open_error);
             }
-        } else {
-            outside.show(&list);
+        } else if let Err(show_error) = outside.show(&list) {
+            keep_cause(&mut error, show_error);
         }
     }
     if let Some(error) = error {
@@ -497,6 +542,18 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
     Ok(())
 }
 
+/// Keep the first error as the Ticket loop's cause, unless `new` says the
+/// Spec PR changed under the Spec run: that decides the Recovery.
+fn keep_cause(error: &mut Option<anyhow::Error>, new: anyhow::Error) {
+    let changed = |error: &anyhow::Error| error.is::<SpecPrChanged>();
+    if error
+        .as_ref()
+        .is_none_or(|kept| changed(&new) && !changed(kept))
+    {
+        *error = Some(new);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -505,6 +562,9 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+    use crate::delivery::OpeningSession;
+    use crate::prompt;
+    use crate::pull_request::SpecPrChange;
     use crate::run::Goal;
 
     /// The Spec PR's URL, once it is open.
@@ -582,6 +642,9 @@ mod tests {
         landed_fails: bool,
         /// Whether the Spec PR is open before any Ticket lands.
         spec_pr_open: bool,
+        /// The check of the Spec PR, counting from 1, from which on it is
+        /// found closed under the Spec run.
+        spec_pr_closed_at_check: Option<usize>,
         /// Whether putting the checklist back fails.
         put_back_fails: bool,
         /// Whether the Delivery's opening session fails, before the step
@@ -607,6 +670,8 @@ mod tests {
         not_interrupted: usize,
         /// Whether the Spec PR is open.
         spec_pr_open: bool,
+        /// How many times the Spec PR was checked.
+        spec_pr_checks: usize,
     }
 
     impl Scripted {
@@ -618,6 +683,7 @@ mod tests {
                 started_urls: Vec::new(),
                 running: Vec::new(),
                 not_interrupted: 0,
+                spec_pr_checks: 0,
             }
         }
 
@@ -722,8 +788,25 @@ mod tests {
             Ok(self.graph())
         }
 
-        fn show(&mut self, checklist: &str) {
+        fn show(&mut self, checklist: &str) -> Result<()> {
             self.did.push(Did::Show(checklist.to_string()));
+            self.ensure_spec_pr_unchanged()
+        }
+
+        fn ensure_spec_pr_unchanged(&mut self) -> Result<()> {
+            self.spec_pr_checks += 1;
+            if self
+                .script
+                .spec_pr_closed_at_check
+                .is_some_and(|at| self.spec_pr_checks >= at)
+            {
+                return Err(SpecPrChanged {
+                    url: SPEC_PR.to_string(),
+                    change: SpecPrChange::NotOpen(crate::github::PrState::Closed),
+                }
+                .into());
+            }
+            Ok(())
         }
 
         fn landed(&mut self, checklist: &str) -> Result<String> {
@@ -731,6 +814,7 @@ mod tests {
             if self.script.landed_fails {
                 bail!("could not open the Spec PR");
             }
+            self.ensure_spec_pr_unchanged()?;
             self.spec_pr_open = true;
             Ok(SPEC_PR.to_string())
         }
@@ -739,10 +823,15 @@ mod tests {
             self.spec_pr_open.then(|| SPEC_PR.to_string())
         }
 
-        fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
+        fn deliver(
+            &mut self,
+            opening: Opening,
+            checklist: &str,
+            _steps: Vec<Step>,
+        ) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
                 kind: opening.session.kind(),
-                catch_up: opening.session.catches_up_from_origin(),
+                catch_up: opening.session == OpeningSession::SpecReview,
                 prompt: opening.prompt,
             });
             let delivered = if self.script.review_fails {
@@ -863,7 +952,15 @@ mod tests {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         let tickets = outside.graph();
         let parallel = NonZeroUsize::new(parallel).unwrap();
-        run_through(outside, &spec, "main", "issue-20", tickets, parallel)
+        crate::processes::spec::run_through(
+            outside,
+            &spec,
+            "main",
+            "issue-20",
+            tickets,
+            parallel,
+            crate::processes::spec::sequence()?.delivery,
+        )
     }
 
     /// The Reached of `ended`, which must be one.
@@ -993,22 +1090,27 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_sub_issue_is_unready_and_never_starts_a_run() {
+    fn an_unready_label_and_a_foreign_ticket_are_named_with_reasons_in_the_cause() {
         let mut foreign = open(21, &[]);
         foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
         let mut outside = Scripted::new(Script {
-            tickets: vec![foreign, open(22, &[])],
+            tickets: vec![foreign, labelled(22, "ready-for-human"), open(23, &[])],
             ..Script::default()
         });
 
         let failed = failed_of(spec_run(&mut outside, 2));
 
-        assert_eq!(outside.did_only(runs), [Did::Start(22), Did::Ended(22)]);
+        assert_eq!(outside.did_only(runs), [Did::Start(23), Did::Ended(23)]);
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: https://github.com/other/widgets/issues/21 (outside the Spec's repository), #22 (labelled ready-for-human)"
+        );
         assert_eq!(
             failed.ticket_lines,
             [
                 "https://github.com/other/widgets/issues/21 unready: outside the Spec's repository",
-                "#22 landed"
+                "#22 unready: labelled ready-for-human",
+                "#23 landed"
             ]
         );
         assert!(outside.did.iter().any(|did| matches!(did, Did::Landed(list)
@@ -1117,7 +1219,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 1);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)"
+        );
         let expected = [
             "#21 failed: claude exited 1 (session trace: /logs/session.jsonl)",
             "#22 blocked by #21",
@@ -1145,7 +1250,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (labelled needs-info), #22 (blocked by #21)"
+        );
         assert_eq!(
             lines,
             [
@@ -1167,7 +1275,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (blocked by #90 (outside the Spec))"
+        );
         assert_eq!(
             lines,
             ["#21 blocked by #90 (outside the Spec)", "#22 landed"]
@@ -1184,7 +1295,10 @@ mod tests {
 
         let (lines, landed) = land(&mut outside, 3);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (in a cycle: #21 blocked by #22 blocked by #21), #22 (in a cycle: #22 blocked by #21 blocked by #22)"
+        );
         assert_eq!(
             lines,
             [
@@ -1333,7 +1447,10 @@ mod tests {
 
         let (_, landed) = land(&mut outside, 2);
 
-        assert_eq!(error(landed), "Tickets not done: #22, #23");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #22 (failed: claude exited 1), #23 (blocked by #22)"
+        );
         assert_eq!(
             outside.did_only(spec_pr_calls),
             [
@@ -1374,7 +1491,10 @@ mod tests {
 
         let (_, landed) = land(&mut outside, 2);
 
-        assert_eq!(error(landed), "Tickets not done: #21, #22");
+        assert_eq!(
+            error(landed),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (interrupted)"
+        );
         assert_eq!(
             outside.did_only(spec_pr_calls),
             [
@@ -1449,195 +1569,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn once_every_ticket_lands_the_spec_review_opens_the_delivery_and_the_checklist_goes_back_before_ready()
-     {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![open(21, &[])],
-            ..Script::default()
-        });
-
-        let reached = reached_of(spec_run(&mut outside, 3));
-
-        let done = checklist(&["[x] #21 landed"]);
-        assert_eq!(
-            outside.did_only(after_the_loop),
-            [
-                Did::Show(checklist(&["[ ] #21 running"])),
-                Did::Landed(done.clone()),
-                Did::Landed(done.clone()),
-                spec_review_opening(),
-                Did::PutBack(done),
-                Did::Ready,
-            ]
-        );
-        assert_eq!(reached.resolution.url(), SPEC_PR);
-        assert_eq!(reached.log, Some(PathBuf::from(DELIVERY_LOG)));
-        assert_eq!(reached.ticket_lines, ["#21 landed"]);
-    }
-
-    #[test]
-    fn a_failed_landing_means_no_delivery_and_carries_the_spec_prs_url_and_the_ticket_lines() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![open(21, &[]), open(22, &[])],
-            endings: VecDeque::from([(21, Ok(failed("claude exited 1")))]),
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 1));
-
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21");
-        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
-        assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
-        assert!(!failed.interrupted);
-        assert_eq!(
-            failed.ticket_lines,
-            [
-                "#21 failed: claude exited 1 (session trace: /logs/session.jsonl)",
-                "#22 landed"
-            ]
-        );
-        assert!(
-            !outside
-                .did
-                .iter()
-                .any(|did| matches!(did, Did::Deliver { .. }))
-        );
-    }
-
-    #[test]
-    fn a_failed_landing_with_no_spec_pr_open_carries_no_pr_url() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![labelled(21, "needs-info")],
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        assert_eq!(failed.pr_url, None);
-        assert_eq!(failed.ticket_lines, ["#21 unready: labelled needs-info"]);
-    }
-
-    #[test]
-    fn a_failed_landing_with_an_interrupt_requested_ends_as_interrupted() {
-        // Found not interrupted before #21, the only time the loop asks once
-        // its start failed; the interrupt comes as the landing fails.
-        let mut outside = Scripted::new(Script {
-            tickets: vec![open(21, &[])],
-            spec_pr_open: true,
-            start_fails: vec![21],
-            interrupted_after: Some(1),
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        assert!(failed.interrupted);
-        assert_eq!(format!("{:#}", failed.error), "interrupted");
-        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
-        assert_eq!(failed.ticket_lines, ["#21 not started"]);
-    }
-
-    #[test]
-    fn a_spec_pr_that_cannot_be_opened_after_the_last_landing_means_no_delivery() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![closed(21)],
-            landed_fails: true,
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        assert_eq!(format!("{:#}", failed.error), "could not open the Spec PR");
-        assert_eq!(failed.pr_url, None);
-        assert_eq!(
-            outside.did_only(after_the_loop),
-            [Did::Landed(checklist(&["[x] #21 done"]))]
-        );
-    }
-
-    #[test]
-    fn a_failed_delivery_shows_the_checklist_again_and_keeps_its_pr_url_log_and_the_ticket_lines() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![open(21, &[])],
-            delivery_fails: true,
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        let done = checklist(&["[x] #21 landed"]);
-        assert_eq!(
-            format!("{:#}", failed.error),
-            "checks failed on the Spec PR"
-        );
-        assert_eq!(
-            outside.did_only(after_the_loop),
-            [
-                Did::Show(checklist(&["[ ] #21 running"])),
-                Did::Landed(done.clone()),
-                Did::Landed(done.clone()),
-                spec_review_opening(),
-                Did::PutBack(done.clone()),
-                Did::Ready,
-                Did::Show(done),
-            ]
-        );
-        assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
-        assert_eq!(failed.log, Some(PathBuf::from(DELIVERY_LOG)));
-        assert_eq!(failed.ticket_lines, ["#21 landed"]);
-    }
-
-    #[test]
-    fn a_put_back_that_fails_fails_the_delivery_before_ready() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![closed(21)],
-            put_back_fails: true,
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        let done = checklist(&["[x] #21 done"]);
-        assert_eq!(
-            format!("{:#}", failed.error),
-            "could not put the Tickets checklist back"
-        );
-        assert_eq!(
-            outside.did_only(after_the_loop),
-            [
-                Did::Landed(done.clone()),
-                spec_review_opening(),
-                Did::PutBack(done.clone()),
-                Did::Show(done),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_delivery_that_fails_in_the_spec_review_shows_the_checklist_again_without_a_put_back() {
-        let mut outside = Scripted::new(Script {
-            tickets: vec![closed(21)],
-            review_fails: true,
-            ..Script::default()
-        });
-
-        let failed = failed_of(spec_run(&mut outside, 3));
-
-        let done = checklist(&["[x] #21 done"]);
-        assert_eq!(
-            format!("{:#}", failed.error),
-            "the spec-review session failed"
-        );
-        assert_eq!(
-            outside.did_only(after_the_loop),
-            [
-                Did::Landed(done.clone()),
-                spec_review_opening(),
-                Did::Show(done)
-            ]
-        );
-    }
+    #[path = "process.rs"]
+    mod process;
 
     #[test]
     fn a_spec_run_failed_by_one_tickets_session_names_that_sessions_log() {
@@ -1658,7 +1591,10 @@ mod tests {
             ..Script::default()
         });
         let failed = failed_of(spec_run(&mut outside, 1));
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (blocked by #21)"
+        );
         assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
     }
 
@@ -1673,7 +1609,10 @@ mod tests {
             ..Script::default()
         });
         let failed = failed_of(spec_run(&mut outside, 1));
-        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(
+            format!("{:#}", failed.error),
+            "Tickets not done: #21 (failed: claude exited 1), #22 (failed: claude exited 1)"
+        );
         assert_eq!(failed.log, None);
     }
 }

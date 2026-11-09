@@ -1,6 +1,4 @@
 //! The CLI and Console share one state-only, atomic approval.
-use std::io::Write;
-
 use anyhow::Result;
 use serde::Serialize;
 
@@ -42,7 +40,7 @@ pub(crate) fn approve(suite: &str, task: &str) -> Result<Approval> {
     let directory = crate::config::home()?
         .join(".thirdshift/evals/suites")
         .join(suite);
-    suite::Manifest::load(&directory)?;
+    let _lock = suite::lock(&directory)?;
     let directory = directory.join("tasks").join(task);
     let manifest = format::Task::load(&directory)?;
     if manifest.state == format::State::Proposed {
@@ -53,10 +51,7 @@ pub(crate) fn approve(suite: &str, task: &str) -> Result<Approval> {
         let decor = value.decor().clone();
         *value = toml_edit::Value::from("approved");
         *value.decor_mut() = decor;
-        let mut file = tempfile::NamedTempFile::new_in(&directory)?;
-        file.write_all(document.to_string().as_bytes())?;
-        file.flush()?;
-        file.persist(&path)?;
+        format::write(&path, &document)?;
     }
     Ok(Approval {
         suite: suite.into(),

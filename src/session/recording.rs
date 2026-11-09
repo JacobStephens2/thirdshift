@@ -15,10 +15,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::harness::interpretation::{Ended, Interpretation};
+use crate::harness::interpretation::{Ended, Interpretation, SessionFailure};
 use crate::harness::{Choice, process};
 use crate::logs::owner::Owner;
 use crate::{logs, progress};
+
+#[cfg(test)]
+mod lifetime_tests;
 
 /// Immutable Command identity, captured after Command logging is established.
 #[derive(Clone)]
@@ -27,6 +30,7 @@ pub struct Recording {
     /// Command remain errors; they must never select the Trial's storage.
     owner: std::result::Result<Option<Owner>, String>,
     trial_context: Option<logs::trace::Context>,
+    process: Option<crate::processes::Identity>,
 }
 
 /// Session interpretation policy, prompt transport and execution limits.
@@ -59,7 +63,22 @@ impl Recording {
         Self {
             owner: logs::captured_owner().map(Some),
             trial_context: None,
+            process: None,
         }
+    }
+
+    /// Custom Steps keep their own Process even while a parallel dispatch is active.
+    pub fn for_process() -> Self {
+        Self {
+            process: logs::custom_process(),
+            ..Self::capture()
+        }
+    }
+
+    /// A selected child captures its Process independently of the parent.
+    pub fn with_process(mut self, process: crate::processes::Identity) -> Self {
+        self.process = Some(process);
+        self
     }
 
     /// Trial artifacts have their own empty output directory and no Command.
@@ -69,7 +88,12 @@ impl Recording {
             trial_context: std::env::var(logs::trace::TRIAL_CONTEXT)
                 .ok()
                 .and_then(|json| serde_json::from_str(&json).ok()),
+            process: None,
         }
+    }
+
+    pub(super) fn is_trial(&self) -> bool {
+        matches!(self.owner, Ok(None))
     }
 
     /// Construct from captured facts; fixtures need no process-global changes.
@@ -82,6 +106,7 @@ impl Recording {
                 .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
             trial_context: None,
+            process: None,
         }
     }
 
@@ -136,6 +161,10 @@ impl Recording {
         log: &Path,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        let borrowed_trial = invocation
+            .parts()
+            .1
+            .is_some_and(crate::scope::Scope::borrows_trial);
         let command = invocation.command();
         let directory = match command.get_current_dir() {
             Some(dir) if dir.is_absolute() => dir.to_path_buf(),
@@ -169,12 +198,15 @@ impl Recording {
                 .with_context(|| format!("could not create {}", dir.display()))?;
         }
         let started = Instant::now();
-        let context = self
+        let mut context = self
             .trial_context
             .clone()
             .or_else(logs::trace_context)
             .or_else(|| self.owner().map(logs::trace::Context::of_owner))
             .unwrap_or_else(|| logs::trace::Context::of_session(log));
+        if let Some(process) = &self.process {
+            context.process = process.clone();
+        }
         let trace = Arc::new(Mutex::new(super::trace::Trace::create(
             log,
             kind,
@@ -184,6 +216,11 @@ impl Recording {
             command,
             self.command_log(),
         )?));
+        if borrowed_trial {
+            // Supervisor-side metadata must finish before the Harness adds
+            // members to the borrowed Trial cgroup's cleanup population.
+            trace.lock().unwrap().prepare_version();
+        }
         let streaming_trace = Arc::clone(&trace);
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
@@ -229,7 +266,15 @@ impl Recording {
             }
         };
 
-        let completion = executed.state.finish(executed.execution);
+        let mut completion = executed.state.finish(executed.execution);
+        if let Err(error) = &mut completion.outcome
+            && let Some(failure) = error.downcast_mut::<SessionFailure>()
+        {
+            failure.oom_killed = invocation
+                .parts()
+                .1
+                .is_some_and(crate::scope::Scope::oom_killed);
+        }
         let finished = (|| {
             let mut trace = trace.lock().unwrap();
             if let Some(report) = &completion.report {
@@ -435,8 +480,8 @@ fn follow(
             for raw in progress.limit_records() {
                 record_line(kind, raw.as_bytes(), log, progress, trace, policy.private)?;
             }
-            if progress.plan_limit_reached() {
-                return super::limits::stop();
+            if let Some(limit) = progress.plan_limit() {
+                return super::limits::stop(limit.clone());
             }
         }
         if eof {

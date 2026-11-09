@@ -1,12 +1,11 @@
 //! `thirdshift update`: replace this copy of thirdshift with the latest stable
 //! GitHub Release, through the install receipt the shell installer wrote.
 //!
-//! Only the `update` command calls this; a Run never checks for updates. The
+//! The CLI and Console's requested Update action call this; a Run never checks for updates. The
 //! release's installer moves the new binary into place with a rename, so a Run
-//! or a Spec run still using the old binary keeps running it. On Linux so do
-//! the child Runs it starts afterwards, which the child Run module starts from
-//! the running binary rather than from its install path; on macOS those are
-//! started from the install path, and run the new binary.
+//! or a Spec run still using the old binary keeps running it. So do the child
+//! Runs it starts afterwards, which the child Run module starts from the
+//! running binary rather than from its install path.
 
 use std::fmt::Display;
 
@@ -14,6 +13,56 @@ use anyhow::{Context, Error, Result, anyhow};
 use axoupdater::{AxoUpdater, AxoupdateError};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(serde::Serialize)]
+pub struct Versions {
+    pub current: String,
+    pub latest: String,
+}
+
+/// Ask the same release source as the installer without changing this copy.
+pub fn check() -> Result<Versions> {
+    let mut updater = AxoUpdater::new_for("thirdshift");
+    updater.set_release_source(axoupdater::ReleaseSource {
+        release_type: axoupdater::ReleaseSourceType::GitHub,
+        owner: "JacobStephens2".into(),
+        name: "thirdshift".into(),
+        app_name: "thirdshift".into(),
+    });
+    updater.set_client(
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?,
+    );
+    // axoupdater exposes a blocking installer, but only an async version query.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let latest = runtime
+        .block_on(updater.query_new_version())?
+        .context("no stable thirdshift release is available")?
+        .to_string();
+    Ok(Versions {
+        current: VERSION.into(),
+        latest,
+    })
+}
+
+pub fn command(check_only: bool, json: bool) -> Result<String> {
+    if check_only {
+        let versions = check()?;
+        Ok(if json {
+            serde_json::to_string(&versions)?
+        } else {
+            format!(
+                "thirdshift {}; latest release {}",
+                versions.current, versions.latest
+            )
+        })
+    } else {
+        Ok(serde_json::to_string(&update()?)?)
+    }
+}
 
 /// How to update the kinds of install that `update` won't touch.
 const OTHER_INSTALLS: &str = concat!(

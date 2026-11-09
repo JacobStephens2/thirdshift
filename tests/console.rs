@@ -1,6 +1,30 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
 mod support;
 
+#[path = "console/api.rs"]
+mod api;
+
+#[path = "console/start.rs"]
+mod start;
+
+#[path = "console/user_config.rs"]
+mod user_config;
+
+#[path = "console/admin.rs"]
+mod admin;
+
+#[path = "console/actions.rs"]
+mod actions;
+
+#[path = "console/tokens.rs"]
+mod tokens;
+
+#[path = "console/fleet.rs"]
+mod fleet;
+
+#[path = "console/remote_details.rs"]
+mod remote_details;
+
 #[path = "console/resources.rs"]
 mod resources;
 
@@ -14,12 +38,14 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-#[cfg(unix)]
 #[path = "console/accounts.rs"]
 mod accounts;
 
 #[path = "console/look.rs"]
 mod look;
+
+#[path = "console/other_accounts.rs"]
+mod other_accounts;
 
 #[path = "console/assets.rs"]
 mod assets;
@@ -42,15 +68,12 @@ mod spans;
 #[path = "console/metrics.rs"]
 mod metrics;
 
-#[cfg(target_os = "linux")]
 #[path = "console/idle.rs"]
 mod idle;
 
-#[cfg(unix)]
 #[path = "console/watching.rs"]
 mod watching;
 
-#[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
 
@@ -182,7 +205,7 @@ fn sse_event(stream: &mut impl BufRead) -> String {
 fn configure(home: &Path) {
     fs::create_dir_all(home.join(".thirdshift")).unwrap();
     fs::write(home.join(".thirdshift/config.toml"),
-        "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
+        "[console]\nport = 0\nfleet = [{ name = 'other.example.test', address = 'https://other.example.test' }]\ntheme = \"focus-auto\"\n").unwrap();
 }
 
 /// How the Console shows `rfc3339` up to its zone name: this machine's date
@@ -192,7 +215,7 @@ fn section<'a>(page: &'a str, group: &str) -> &'a str {
     page.split(&format!("class=\"group\" data-group=\"{group}\""))
         .nth(1)
         .expect(page)
-        .split("</section>")
+        .split("</details>")
         .next()
         .unwrap()
 }
@@ -238,6 +261,24 @@ fn tool_spans(tree: &Value) -> Vec<&Value> {
         .iter()
         .filter(|span| span["kind"] == "tool")
         .collect()
+}
+
+#[test]
+fn console_pages_show_the_running_thirdshift_version() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let version = Command::new(binary).arg("--version").output().unwrap();
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let brand = format!(">{} / Console</p>", version.trim());
+    let console = Console::start(binary, home.path());
+
+    for path in ["/", "/logs", "/account", "/console-log"] {
+        let response = console.get(path);
+        assert_eq!(response.status(), 200, "{path}");
+        assert!(response.text().unwrap().contains(&brand), "{path}: {brand}");
+    }
 }
 
 #[test]
@@ -684,7 +725,6 @@ fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -755,7 +795,7 @@ fn security_lists_findings_and_sessions_from_the_cli_inventory() {
     assert!(html.contains("GHSA-test"));
     assert!(html.contains("2-fixture-security-audit.logs.jsonl"));
     assert!(!html.contains("acme/widgets#1"));
-    assert!(html.contains("thirdshift status --all --json"));
+    assert!(html.contains("thirdshift status --local --all --json"));
     assert!(html.contains("show"));
     let shown = Command::new(binary)
         .args(["show", "secure-fixture", "--json"])
@@ -868,6 +908,7 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
     configure(home.path());
     // Pickup run 1 dispatched a ready Run on issue 7, replaced by record 2;
     // Pickup run 3 dispatched a ready Run on issue 9, older than inbox.days.
+    // Each issue has its own PR, so a later Command cannot take up the other.
     for (file, issue, hours) in [(1, 7, 2), (3, 9, 8 * 24 + 1)] {
         let ended = (chrono::Local::now() - chrono::Duration::hours(hours)).to_rfc3339();
         let mut outer = record(home.path(), file, Some("ready for review"), 0);
@@ -881,6 +922,7 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
         dispatched["kind"] = json!("Run");
         dispatched["name"] = json!(format!("acme/widgets#{issue}"));
         dispatched["issue"]["number"] = json!(issue);
+        dispatched["pull_request"] = json!(format!("https://github.com/acme/widgets/pull/{issue}"));
         dispatched["started_at"] = json!(ended);
         dispatched["ended_at"] = json!(ended);
         outer["dispatched"] = json!([dispatched]);
@@ -1690,27 +1732,30 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
         ]
     );
     let subjects: Vec<_> = html
-        .split("<span class=\"subject\">")
+        .split("<span class=\"subject\" title=\"")
         .skip(1)
-        .map(|rest| rest.split("</a></span>").next().unwrap())
-        .map(|subject| subject.rsplit('>').next().unwrap())
+        .map(|rest| rest.split('"').next().unwrap())
         .collect();
-    let expected: Vec<_> = status["commands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| {
-            format!(
-                "{}#{}",
-                item["repository"].as_str().unwrap(),
-                item["issue"]["number"]
-            )
-        })
-        .collect();
-    assert_eq!(subjects, expected);
+    assert_eq!(
+        subjects,
+        [
+            "acme/widgets#1",
+            "acme/widgets#10",
+            "acme/widgets#3",
+            "acme/widgets#4"
+        ]
+    );
     for item in status["commands"].as_array().unwrap() {
-        let number = item["issue"]["number"].as_u64().unwrap();
         let group = item["group"].as_str().unwrap();
+        let number = if group == "ready for review" {
+            assert_eq!(
+                item["pull_request"],
+                "https://github.com/acme/widgets/pull/10"
+            );
+            10
+        } else {
+            item["issue"]["number"].as_u64().unwrap()
+        };
         let section = section(&html, group);
         assert!(
             section.contains(&format!("acme/widgets#{number}")),
@@ -1833,7 +1878,7 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
     for settings in [
         "port = -1",
         "port = 65536",
-        "other_consoles = ['javascript:alert(1)']",
+        "fleet = [{ name = 'unsafe', address = 'javascript:alert(1)' }]",
         "theme = 'typo'",
         "bind = '0.0.0.0'",
     ] {
@@ -1852,7 +1897,6 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     let home = tempfile::tempdir().unwrap();
@@ -1863,7 +1907,6 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     assert_eq!(console.get("/").status(), 200);
     let _open_stream = console.get("/events");
     // A reader must not keep graceful shutdown waiting on an infinite stream.
-    #[cfg(target_os = "linux")]
     let _stream = {
         let mut live = record(home.path(), 7, None, 0);
         let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();
@@ -1924,7 +1967,7 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     let html = console.get("/").text().unwrap();
     let pr = "<a href=\"https://github.com/acme/widgets/pull/834\">https://github.com/acme/widgets/pull/834</a>";
     for expected in [
-        "<span class=\"subject\"><a href=\"https://github.com/acme/widgets/issues/812\">acme/widgets#812</a></span>",
+        "<a href=\"https://github.com/acme/widgets/issues/812\"><span class=\"subject-repository\">acme/widgets</span><span class=\"subject-issue\">#812</span></a>",
         &format!("<p class=\"pr\">{pr}</p>"),
         &format!("<p>PR {pr} is a draft. &#60;b&#62;javascript:alert(1)&#60;/b&#62;</p>"),
         "waiting on <a href=\"https://github.com/other/repo/issues/98\">https://github.com/other/repo/issues/98</a>",
@@ -1949,6 +1992,75 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     ] {
         assert!(peek.contains(expected), "missing {expected}: {peek}");
     }
+}
+
+#[test]
+fn command_output_preview_handles_long_lines_empty_and_unavailable_logs() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("failed"), 0);
+    let log = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.log");
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let peek = || {
+        let response = console.get("/peek?command=acme/widgets%237");
+        assert_eq!(response.status(), 200);
+        response.text().unwrap()
+    };
+    assert!(peek().contains("Command output unavailable."));
+    fs::write(&log, "").unwrap();
+    assert!(peek().contains("No Command output yet."));
+    fs::write(&log, format!("{}latest progress\n", "x".repeat(8192))).unwrap();
+    let html = peek();
+    let output = html
+        .split_once("<pre>")
+        .expect("a long line still shows recent output")
+        .1
+        .split_once("</pre>")
+        .unwrap()
+        .0;
+    assert!(output.ends_with("latest progress"), "{output}");
+    assert!(output.len() <= 4096, "the preview stays bounded");
+    fs::write(&log, "Output without a final newline").unwrap();
+    assert!(peek().contains("<pre>Output without a final newline</pre>"));
+    fs::remove_file(&log).unwrap();
+    let html = peek();
+    assert!(html.contains("Command output unavailable."));
+    assert!(html.contains("Full Command log"));
+    assert!(html.contains("Widgets &#60;script&#62;alert(1)&#60;/script&#62;"));
+}
+
+#[test]
+fn command_output_preview_keeps_a_complete_line_at_the_budget_boundary() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("failed"), 0);
+    let log = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.log");
+    let suffix = "\nsecond\nthird\nfourth\nfifth\n";
+    let tail = format!("{}{suffix}", "x".repeat(4096 - suffix.len()));
+    assert_eq!(tail.len(), 4096);
+    fs::write(&log, format!("older\n{tail}")).unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let response = console.get("/peek?command=acme/widgets%237");
+    assert_eq!(response.status(), 200);
+    let html = response.text().unwrap();
+    let output = html
+        .split_once("<pre>")
+        .expect("recent output should be present")
+        .1
+        .split_once("</pre>")
+        .unwrap()
+        .0;
+    assert_eq!(
+        output,
+        tail.trim_end_matches('\n'),
+        "the 4 KiB tail begins with a complete line; preserve all five lines"
+    );
 }
 
 #[test]

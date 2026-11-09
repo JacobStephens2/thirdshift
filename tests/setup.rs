@@ -11,7 +11,6 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-#[cfg(target_os = "linux")]
 use support::write_executable;
 use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
 
@@ -30,7 +29,20 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
-#[cfg(target_os = "linux")]
+fn assert_config_preserved(completed: &str, original: &str) {
+    // A new root setting must precede the retained sections in valid TOML.
+    // Keep the original text byte-for-byte, allowing only that default before it.
+    let (prefix, _) = completed
+        .split_once(original)
+        .unwrap_or_else(|| panic!("the original config text changed:\n{completed}"));
+    let added: toml::Table = prefix.parse().unwrap();
+    assert_eq!(added.len(), 1, "{prefix}");
+    assert_eq!(
+        added["launch_directories"].as_array().map(Vec::is_empty),
+        Some(true)
+    );
+}
+
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
@@ -70,7 +82,6 @@ fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     assert!(user_config(&scenario).unwrap().contains("[harness]"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_missing_bwrap_warns_without_losing_settings() {
     let scenario = Scenario::new();
@@ -88,7 +99,6 @@ fn security_sandbox_missing_bwrap_warns_without_losing_settings() {
     assert!(user_config(&scenario).unwrap().contains("fix = true"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_runs_only_for_the_saved_security_settings() {
     for (review, fix) in [(false, false), (true, false), (false, true)] {
@@ -113,7 +123,6 @@ fn security_sandbox_runs_only_for_the_saved_security_settings() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     let scenario = Scenario::new();
@@ -132,7 +141,6 @@ fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     assert!(user_config(&scenario).unwrap().contains("[harness]"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn security_sandbox_checks_real_isolation_and_detects_each_removed_control() {
     let available = std::process::Command::new("/usr/bin/bwrap")
@@ -183,6 +191,8 @@ fn setup_probe_scope_tracks_security_skill_requirements() {
     // requiring a decision about Setup's probe coverage. #608 checks network,
     // read-only host home and scratch writes; it does not certify the remaining
     // environment/resource/credential controls of the target-code runner (#726).
+    // The User manual's Setup section and the Architecture page restate these
+    // controls; update them with it.
     let skill = include_str!("../skills/thirdshift-security-audit/SKILL.md");
     let requirements = skill
         .split_once("provides all of these controls:\n\n")
@@ -217,6 +227,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[base]",
             "[launch]",
             "[email]",
+            "[review]",
             "[logs]",
             "[otlp]",
             "[inbox]",
@@ -224,6 +235,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[activity]",
             "[spec]",
             "[resources]",
+            "[pass]",
             "[pickup]",
             "[harness]",
             "[harness.claude]",
@@ -232,6 +244,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]"
@@ -241,6 +254,12 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["merge"]["always"].as_bool(), Some(false));
     assert_eq!(config["base"]["fix"].as_bool(), Some(false));
     assert_eq!(config["launch"]["pull"].as_bool(), Some(false));
+    assert!(
+        config["review"]["commands_by_repo"]
+            .as_table()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(config["email"]["always"].as_bool(), Some(false));
     assert_eq!(
         config["email"]["from"].as_str(),
@@ -251,13 +270,18 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(5));
     assert_eq!(config["inbox"]["silent_minutes"].as_integer(), Some(10));
     assert_eq!(config["console"]["port"].as_integer(), Some(8711));
-    assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
     assert!(
-        config["console"]["other_consoles"]
-            .as_array()
+        config["console"]["address_scopes"]
+            .as_table()
             .unwrap()
             .is_empty()
     );
+    assert!(
+        text.contains("an address absent here has all five scopes"),
+        "{text}"
+    );
+    assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
+    assert!(config["console"]["fleet"].as_array().unwrap().is_empty());
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(
@@ -268,7 +292,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         config["resources"]["max_load_per_cpu_percent"].as_integer(),
         Some(0)
     );
-    assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
+    assert_eq!(config["pickup"]["failure_limit"].as_integer(), Some(3));
+    assert!(config["pickup"].get("limit").is_none(), "{text}");
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
@@ -294,6 +319,24 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         result.stderr.contains(".thirdshift/config.toml"),
         "stderr: {}",
         result.stderr
+    );
+}
+
+#[test]
+fn setup_preserves_address_scopes() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[console]\nallowed_emails = ['reader@example.test']\n[console.address_scopes] # permissions\n'reader@example.test' = ['read'] # keep read-only\n");
+    let result = scenario.run(&["setup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let text = user_config(&scenario).unwrap();
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["address_scopes"]["reader@example.test"][0].as_str(),
+        Some("read")
+    );
+    assert!(
+        text.contains("# permissions") && text.contains("# keep read-only"),
+        "{text}"
     );
 }
 
@@ -345,14 +388,17 @@ effort = 'high' # my Effort
             "[harness]",
             "[harness.claude]",
             "[harness.codex]",
+            "[review]",
             "[otlp]",
             "[inbox]",
             "[console]",
             "[resources]",
+            "[pass]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[triage]",
             "[security]",
             "[scoring]",
             "[trial]",
@@ -366,6 +412,12 @@ effort = 'high' # my Effort
     assert!(text.contains("effort = 'high' # my Effort\n"), "{text}");
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["harness"]["default"].as_str(), Some("codex"));
+    assert!(
+        config["review"]["commands_by_repo"]
+            .as_table()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["review"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
@@ -422,6 +474,31 @@ fn setup_keeps_existing_security_outside_completed_harness_settings() {
 }
 
 #[test]
+fn setup_preserves_repository_email_routes_and_their_spelling() {
+    for routes in [
+        "[email.to_by_repo]\n'Acme/Widgets' = 'personal@example.com' # personal inbox\n",
+        "[email]\nto_by_repo = { 'Acme/Widgets' = 'personal@example.com' } # personal inbox\n",
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(routes);
+
+        let result = scenario.run(&["setup"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let text = user_config(&scenario).unwrap();
+        assert_config_preserved(&text, routes);
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(
+            config["email"]["to_by_repo"]["Acme/Widgets"].as_str(),
+            Some("personal@example.com")
+        );
+        let again = scenario.run(&["setup"]);
+        assert_eq!(again.code, Some(0), "{}", again.stderr);
+        assert_eq!(user_config(&scenario).unwrap(), text);
+    }
+}
+
+#[test]
 fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then_avoids_replacement()
  {
     let scenario = Scenario::new();
@@ -438,7 +515,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let text = user_config(&scenario).unwrap();
-    assert!(text.starts_with(original), "{text}");
+    assert_config_preserved(&text, original);
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));
@@ -523,6 +600,7 @@ const EFFORT: &str = "Effort for claude";
 const MERGE: &str = "Self-merges?";
 const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
+const TRIAGE_READY: &str = "Triage runs may file ready-for-agent issues by default?";
 const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const SECURITY_CLOSE: &str = "close a finding their fix merged?";
@@ -548,6 +626,7 @@ fn a_claude_setup_token_is_saved_with_hidden_input_even_without_notifications() 
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
+        (TRIAGE_READY, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, "n"),
@@ -691,6 +770,7 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "n"),
@@ -701,10 +781,18 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
                 "https://thirdshift.example.com",
             ),
             ("Allowed emails (comma-separated) [owner@example.com]", ""),
+            ("Other local accounts", "conductor,operator"),
         ],
     );
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["other_accounts"].as_array().unwrap(),
+        &[
+            toml::Value::from("conductor"),
+            toml::Value::from("operator")
+        ]
+    );
     assert_eq!(
         config["console"]["address"].as_str(),
         Some("https://thirdshift.example.com")
@@ -747,6 +835,7 @@ fn cancelling_the_console_questions_preserves_the_user_config() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "n"),
@@ -763,6 +852,47 @@ fn cancelling_the_console_questions_preserves_the_user_config() {
 }
 
 #[test]
+fn setup_can_enable_triage_readiness_keep_it_and_turn_it_off() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[triage] # my triage settings\nallow_ready_for_agent = false # readiness\n",
+    );
+    for (answer, choices, enabled) in [
+        ("y", "[y/N]", true),
+        ("", "[Y/n]", true),
+        ("n", "[Y/n]", false),
+    ] {
+        let result = setup_on_terminal(
+            &scenario,
+            &[],
+            &[
+                (HARNESS, ""),
+                (MODEL, ""),
+                (EFFORT, ""),
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (TRIAGE_READY, answer),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ],
+        );
+        assert!(result.stderr.contains(&format!("{TRIAGE_READY} {choices}")));
+        let text = result.user_config.unwrap();
+        let config: toml::Table = text.parse().unwrap();
+        assert_eq!(
+            config["triage"]["allow_ready_for_agent"].as_bool(),
+            Some(enabled)
+        );
+        assert_config_preserved(&text, "[triage] # my triage settings\n");
+        assert!(text.contains("# readiness\n"));
+    }
+}
+
+#[test]
 fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
     let scenario = Scenario::new();
     for (answer, choices) in [("y", "[y/N]"), ("", "[Y/n]")] {
@@ -776,6 +906,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
                 (MERGE, ""),
                 (BASE_FIX, ""),
                 (PULL, ""),
+                (TRIAGE_READY, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, answer),
                 (NOTIFY, ""),
@@ -806,6 +937,7 @@ fn setup_keeps_fixing_opt_in_and_defaults_to_closing_merged_findings() {
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, "y"),
             (SECURITY_CLOSE, ""),
             (SECURITY_REVIEW, ""),
@@ -854,6 +986,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, answer),
         ];
         if let Some(close) = close {
@@ -882,7 +1015,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
         assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
-        assert!(text.starts_with("# my Security settings\n[security]\n"));
+        assert_config_preserved(&text, "# my Security settings\n[security]\n");
         assert!(text.contains("# keep this choice\n"));
         assert!(text.contains("harness = 'codex' # use Codex\n"));
     }
@@ -1036,6 +1169,7 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
                     TerminalStep::line(MERGE, ""),
                     TerminalStep::line(BASE_FIX, ""),
                     TerminalStep::line(PULL, ""),
+                    TerminalStep::line(TRIAGE_READY, ""),
                     TerminalStep::line(SECURITY_FIX, ""),
                     TerminalStep::line(SECURITY_REVIEW, ""),
                     TerminalStep::line(NOTIFY, "y"),
@@ -1081,7 +1215,7 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
         &[],
         &[(
             HARNESS,
-            "  claude  \n\n\n\n\n\n\n\ny\n  café@example.com  \n\n\n\n",
+            "  claude  \n\n\n\n\n\n\n\n\ny\n  café@example.com  \n\n\n\n",
         )],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
@@ -1124,6 +1258,7 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(MERGE, ""),
             TerminalStep::line(BASE_FIX, ""),
             TerminalStep::line(PULL, ""),
+            TerminalStep::line(TRIAGE_READY, ""),
             TerminalStep::line(SECURITY_FIX, ""),
             TerminalStep::line(SECURITY_REVIEW, ""),
             // Queue EOF for both the partial answer and the next question.
@@ -1166,6 +1301,7 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
+        (TRIAGE_READY, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, "y"),
@@ -1194,6 +1330,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (MERGE, ""),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
@@ -1292,6 +1429,7 @@ fn ctrl_c_during_the_questions_writes_no_user_config() {
             (MERGE, "y"),
             (BASE_FIX, ""),
             (PULL, ""),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, CTRL_C),
         ],
     );
@@ -1318,6 +1456,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
             (MERGE, "n"),
             (BASE_FIX, ""),
             (PULL, "y"),
+            (TRIAGE_READY, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, "y"),

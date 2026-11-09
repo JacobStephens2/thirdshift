@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
+use crate::command_limit::PassKind;
 use crate::git::Git;
 use crate::progress;
 
@@ -29,6 +30,29 @@ mod preservation_tests;
 mod review_recovery_tests;
 #[cfg(test)]
 mod synchronization_tests;
+
+#[derive(Clone, Copy)]
+enum UntrackedFiles {
+    Preserve,
+    DiscardValidationArtifacts,
+}
+
+/// Failure preservation differs for a Ticket's implementation and an
+/// existing PR's Repairs, independently of their human-facing names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailedWork {
+    Ticket,
+    Fix,
+}
+
+impl FailedWork {
+    fn run_name(self) -> &'static str {
+        match self {
+            Self::Ticket => "ticket run",
+            Self::Fix => "fix run",
+        }
+    }
+}
 
 /// A successful preservation either published work or found no changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,14 +131,22 @@ impl ForeignCommits {
 }
 
 pub struct Worktree {
+    failed_work: FailedWork,
     checkout: ownership::Checkout,
     launch: Git,
     branch: String,
     /// Per-instance identity: a later worktree at the same path must not
     /// consume this one's observations. No lock is held by an observation.
     synchronization_owner: Arc<()>,
-    /// Leave the worktree and local Issue branch in place when dropped.
-    kept: bool,
+    /// How Drop disposes of the acquired checkout and local Issue branch.
+    cleanup: Cleanup,
+}
+
+#[derive(Clone, Copy)]
+enum Cleanup {
+    Remove,
+    Retain,
+    KeepUnpublished,
 }
 
 impl Worktree {
@@ -155,11 +187,12 @@ impl Worktree {
         ));
         let checkout = acquisition::add(launch, Some(branch), &path, start)?;
         Ok(Worktree {
+            failed_work: FailedWork::Ticket,
             checkout,
             launch: Git::new(root),
             branch: branch.to_string(),
             synchronization_owner: Arc::new(()),
-            kept: false,
+            cleanup: Cleanup::Remove,
         })
     }
 
@@ -207,18 +240,35 @@ impl Worktree {
         reason: &str,
         actionable: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Preserved> {
-        self.kept = true;
-        let pushed = self
-            .checkout
-            .preserve_failed_run(&self.launch, base, reason, actionable)?;
-        self.kept = false;
+        self.cleanup = Cleanup::Retain;
+        let pushed = self.checkout.preserve_failed_run(
+            &self.launch,
+            base,
+            reason,
+            self.failed_work,
+            actionable,
+        )?;
+        self.cleanup = Cleanup::Remove;
         Ok(pushed)
+    }
+
+    pub(crate) fn for_fix_run(mut self) -> Self {
+        self.failed_work = FailedWork::Fix;
+        self
     }
 
     /// Keep the acquired checkout and local branch without publishing obsolete
     /// work after the PR became terminal or its lifecycle could not be read.
     pub fn retain_local(&mut self) {
-        self.kept = true;
+        self.cleanup = Cleanup::Retain;
+    }
+
+    /// A Process without Delivery must prove its work is published before
+    /// removing the checkout and local branch.
+    pub fn keep_unpublished_on_cleanup(&mut self) {
+        if matches!(self.cleanup, Cleanup::Remove) {
+            self.cleanup = Cleanup::KeepUnpublished;
+        }
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -241,7 +291,10 @@ impl Worktree {
     /// checkout under the synchronization lock, without staging or committing.
     pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
-            Ok(!uncommitted_changes(|args| operation.run(args))? && operation.head()? == head)
+            Ok(
+                !uncommitted_changes(|args| operation.run(args), UntrackedFiles::Preserve)?
+                    && operation.head()? == head,
+            )
         })
     }
 
@@ -376,7 +429,10 @@ impl Worktree {
 
 /// Use each caller's checked Git execution and interruption policy while
 /// sharing the evidence required to establish absence of uncommitted work.
-fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> {
+fn uncommitted_changes(
+    run: impl Fn(&[&str]) -> Result<String>,
+    untracked: UntrackedFiles,
+) -> Result<bool> {
     let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
     Ok(index_hides_tracked_work(&entries)
         || !run(&[
@@ -384,7 +440,10 @@ fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> 
             "core.fsmonitor=false",
             "status",
             "--porcelain",
-            "--untracked-files=all",
+            match untracked {
+                UntrackedFiles::Preserve => "--untracked-files=all",
+                UntrackedFiles::DiscardValidationArtifacts => "--untracked-files=no",
+            },
             "--ignore-submodules=none",
         ])?
         .is_empty())
@@ -442,7 +501,13 @@ pub(crate) fn check_local_branch(
 impl Drop for Worktree {
     fn drop(&mut self) {
         crate::logs::stage(crate::logs::Stage::Cleanup);
-        self.checkout.cleanup(&self.launch, self.kept);
+        match self.cleanup {
+            Cleanup::Remove => self.checkout.cleanup(&self.launch, false),
+            Cleanup::Retain => self.checkout.cleanup(&self.launch, true),
+            Cleanup::KeepUnpublished => self
+                .checkout
+                .cleanup_preserving_work(&self.launch, UntrackedFiles::Preserve),
+        }
     }
 }
 
@@ -456,6 +521,18 @@ pub struct ReviewWorktree {
 }
 
 impl ReviewWorktree {
+    /// Triage runs may overlap, so each disposable checkout has its own path.
+    pub fn for_triage(launch: &Git, repo: &str, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        let name = format!("{repo}-triage-{:016x}", rand::random::<u64>());
+        let (root, path) = sibling(launch, &name)?;
+        let checkout = acquisition::add(launch, None, &path, commit)?;
+        Ok(Self {
+            launch: Git::new(root),
+            checkout,
+        })
+    }
+
     /// Reproduce one finding at its audited commit, without fetching a newer
     /// Base branch. Uses the review checkout's acquisition and disposal rules.
     pub fn at_commit(launch: &Git, repo: &str, commit: &str) -> Result<Self> {
@@ -474,13 +551,16 @@ impl ReviewWorktree {
     }
 
     /// Check out `origin/<base>`, detached, in a new worktree next to the
-    /// launch repository's root, named `<repo>-architect`. A worktree left
-    /// there by a process that ended before cleanup is removed only with
-    /// evidence of successful acquisition and unchanged instance ownership.
-    /// Failed, unmarked and uncertain acquisitions are retained and named.
-    pub fn create(launch: &Git, repo: &str, base: &str) -> Result<Self> {
+    /// launch repository's root, named for the Pass of `kind` that runs in
+    /// it: `<repo>-architect` or `<repo>-security`. A worktree left there by
+    /// a process that ended before cleanup is removed only with evidence of
+    /// successful acquisition and unchanged instance ownership. Failed,
+    /// unmarked and uncertain acquisitions are retained and named. Only a
+    /// Pass of `kind` creates it, holding the lock of its kind, so no live
+    /// Pass's worktree is ever taken for such a leftover.
+    pub fn create(launch: &Git, repo: &str, base: &str, kind: PassKind) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        let (root, path) = sibling(launch, &format!("{repo}-architect"))?;
+        let (root, path) = sibling(launch, &format!("{repo}-{}", kind.slug()))?;
         ownership::recover_review(launch, &path)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;

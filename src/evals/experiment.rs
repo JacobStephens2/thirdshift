@@ -1,11 +1,14 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod cost;
+mod difficulty;
 mod evidence;
 mod execution;
 mod grading;
 mod integrity;
 mod model_grader;
+mod names;
 mod options;
 mod reading;
 mod rechecks;
@@ -33,10 +36,12 @@ use crate::git::Git;
 use crate::harness::{Choice, ChosenBy, Harness};
 use crate::issue::Repo;
 use crate::trial::VoidCause;
+use crate::verdict::{Levels, decimal};
 use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
+pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use session_evidence::{SessionLog, read as read_session};
@@ -47,26 +52,21 @@ pub(crate) use trial_results::{Arm, TrialResult, trial_key};
 pub(crate) struct Bar {
     #[serde(deserialize_with = "decimal")]
     pub margin: f64,
-    #[serde(deserialize_with = "decimal")]
-    pub credible_level: f64,
+    #[serde(flatten)]
+    pub levels: Levels,
     #[serde(deserialize_with = "decimal")]
     pub prior: f64,
     pub seed: u64,
     pub draws: usize,
     pub trials_per_task: BTreeMap<String, usize>,
+    /// Absent in Experiments that judged every approved Eval task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discriminating_tasks: Option<BTreeMap<String, Vec<String>>>,
+    /// Absent in saved Experiments from before Advisory suites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_discriminating_tasks: Option<usize>,
     pub timeout_seconds: u64,
     pub void_rules: VoidRules,
-}
-
-// serde's flattened-record buffer sees arbitrary-precision JSON decimals as
-// Number maps. Value preserves that representation before conversion to f64.
-fn decimal<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<f64, D::Error> {
-    let value = serde_json::Value::deserialize(deserializer)?;
-    value
-        .as_f64()
-        .ok_or_else(|| serde::de::Error::custom("expected a decimal"))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,11 +80,13 @@ impl Default for Bar {
         let statistics = crate::verdict::Bar::default();
         Self {
             margin: statistics.margin,
-            credible_level: statistics.credible_level,
+            levels: statistics.levels,
             prior: statistics.prior,
             seed: statistics.seed,
             draws: statistics.draws,
             trials_per_task: BTreeMap::new(),
+            discriminating_tasks: None,
+            min_discriminating_tasks: None,
             timeout_seconds: 1800,
             void_rules: VoidRules {
                 retries: 2,
@@ -104,7 +106,27 @@ impl Default for Bar {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+impl Bar {
+    fn advisory(&self, suite: &str) -> Option<bool> {
+        self.min_discriminating_tasks.map(|minimum| {
+            self.discriminating_tasks
+                .as_ref()
+                .and_then(|suites| suites.get(suite))
+                .map_or(0, Vec::len)
+                < minimum
+        })
+    }
+
+    fn judges(&self, suite: &str, task: &str) -> bool {
+        self.discriminating_tasks.as_ref().is_none_or(|suites| {
+            suites
+                .get(suite)
+                .is_some_and(|tasks| tasks.iter().any(|name| name == task))
+        })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Setup {
     pub commit: String,
     pub harness: String,
@@ -134,6 +156,15 @@ pub(crate) struct Description {
     pub prepared: Option<arms::Prepared>,
 }
 
+impl Description {
+    pub(crate) fn setup(&self, arm: Arm) -> &Setup {
+        match arm {
+            Arm::Baseline => &self.baseline,
+            Arm::Candidate => &self.candidate,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Task {
     suite: String,
@@ -147,7 +178,7 @@ pub fn run(options: Options) -> Result<()> {
     let repository = std::env::current_dir()?;
     let git = Git::new(&repository);
     let candidate = resolve(&git, &options.candidate)?;
-    let baseline_reference = if options.release {
+    let baseline_reference = if options.release && options.baseline.is_none() {
         Some(git.run(&[
             "--no-replace-objects",
             "describe",
@@ -198,6 +229,13 @@ pub fn run(options: Options) -> Result<()> {
     let baseline = options.baseline_setup.resolve(baseline, &config);
     let candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
+    // Keep the judged list and the retained manifest snapshots on one reading
+    // of Difficulty, fenced against approval and Difficulty publication.
+    let suite_locks = suites
+        .iter()
+        .map(|name| suite::lock(&suites_root.join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    let mut discriminating = BTreeMap::new();
     for name in &suites {
         let manifest = suite::Manifest::load(&suites_root.join(name))?;
         bar.trials_per_task.insert(
@@ -206,7 +244,21 @@ pub fn run(options: Options) -> Result<()> {
                 .trials_per_task
                 .unwrap_or(manifest.trials_per_arm.get()),
         );
+        let mut listed = Vec::new();
+        for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
+            let task = format::Task::load(&directory)?;
+            if task.state == format::State::Approved
+                && task
+                    .difficulty
+                    .as_ref()
+                    .is_some_and(format::Difficulty::discriminating)
+            {
+                listed.push(name);
+            }
+        }
+        discriminating.insert(name.clone(), listed);
     }
+    bar.discriminating_tasks = Some(discriminating);
     ensure!(
         bar.trials_per_task.values().all(|n| matches!(n, 1 | 3)),
         "Trials per Eval task must be one or three"
@@ -221,6 +273,11 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    let fresh = !root
+        .join("experiments")
+        .join(&description.id)
+        .join("experiment.json")
+        .exists();
     let Some(mut experiment) =
         store::Stored::open(&root.join("experiments"), description, |description| {
             // The release Baseline probe can build an Arm too. Check new
@@ -241,10 +298,25 @@ pub fn run(options: Options) -> Result<()> {
             options.json,
         );
     };
+    drop(suite_locks);
+    if let Some(name) = options.name {
+        experiment.rename(Some(name))?;
+    }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
+        logs::start_notice::skipped(format!(
+            "Experiment {} is already completed",
+            experiment.description.id
+        ));
         return Ok(());
+    }
+    if let Err(error) = cost::confirm(&experiment, options.yes) {
+        // A declined new Experiment leaves no record to list as running.
+        if fresh {
+            experiment.discard()?;
+        }
+        return Err(error);
     }
     if experiment.details.candidate_ref.is_none() {
         experiment.details.baseline_ref =
@@ -257,11 +329,12 @@ pub fn run(options: Options) -> Result<()> {
             &experiment.description.candidate.commit,
         ])?);
     }
+    experiment.details.release |= options.release;
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
-                std::env::args()
-                    .skip(1)
+                resume_args(std::env::args().skip(1))
+                    .into_iter()
                     .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
             )
             .collect::<Vec<_>>()
@@ -278,6 +351,7 @@ pub fn run(options: Options) -> Result<()> {
         &experiment.description.candidate.choice(),
     );
     logs::experiment(&experiment.description);
+    logs::resumable(experiment.details.resume_command.as_deref().unwrap());
     experiment.details.command_log = logs::command_log_path();
     experiment.details.ended_at = None;
     experiment.details.pause_reason = None;
@@ -336,6 +410,19 @@ pub fn run(options: Options) -> Result<()> {
     }
     let outcome = if interrupt::requested() {
         "interrupted"
+    } else if saved.is_ok()
+        && result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<crate::session::limits::Reached>())
+    {
+        let reached = result
+            .as_ref()
+            .unwrap_err()
+            .downcast_ref::<crate::session::limits::Reached>()
+            .unwrap();
+        logs::paused(&reached.0);
+        "paused"
     } else if result.is_err() || saved.is_err() {
         "failed"
     } else {
@@ -357,24 +444,49 @@ pub fn run(options: Options) -> Result<()> {
 pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag] = positional.as_slice()
+        && flag.as_str() == "--record-difficulty"
+    {
+        return difficulty::record(&root, id, json);
+    }
+    if let [id, flag, name] = positional.as_slice()
+        && flag.as_str() == "--name"
+    {
+        return store::rename(&root, id, names::parse(name)?, json);
+    }
     if let [id, flag, session] = positional.as_slice()
         && flag.as_str() == "--session"
     {
         let session = read_session(id, session)?;
         return Ok(if json {
-            serde_json::to_string_pretty(&serde_json::json!({
-                "id": session.id, "trace": session.trace, "contents": session.contents
-            }))?
+            serde_json::to_string_pretty(&session)?
         } else {
             session.contents
         });
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)
+}
+
+/// The shown resume command leaves out `--name`, so following it keeps a
+/// later rename. Flags pair with values as `options::parse` reads them.
+fn resume_args(mut args: impl Iterator<Item = String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--json" || arg == "--release" || !arg.starts_with("--") {
+            kept.push(arg);
+        } else if arg == "--name" {
+            args.next();
+        } else {
+            kept.push(arg);
+            kept.extend(args.next());
+        }
+    }
+    kept
 }
 
 fn resolve(git: &Git, reference: &str) -> Result<String> {

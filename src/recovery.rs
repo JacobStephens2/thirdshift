@@ -106,6 +106,9 @@ pub struct Recovery {
     security_review_harness: Option<Harness>,
     /// Factory-reported retention facts from child Runs, including their paths.
     local_child_work: Vec<String>,
+    /// The Spec PR changed under the Spec run, so no command resumes it.
+    spec_pr_changed: bool,
+    fix_run: bool,
 }
 
 impl Recovery {
@@ -118,6 +121,8 @@ impl Recovery {
             continuation: None,
             security_review_harness: None,
             local_child_work: Vec::new(),
+            spec_pr_changed: false,
+            fix_run: false,
         }
     }
 
@@ -150,9 +155,19 @@ impl Recovery {
         self.continuation = Some(context);
     }
 
+    pub(crate) fn for_fix_run(&mut self) {
+        self.fix_run = true;
+    }
+
     /// Add child Runs' retained `work`, after any already added.
     pub fn add_child_work(&mut self, work: impl IntoIterator<Item = String>) {
         self.local_child_work.extend(work);
+    }
+
+    /// The Spec PR was closed, merged or retargeted under the Spec run: no
+    /// Recovery command resumes its Spec branch.
+    pub fn add_spec_pr_changed(&mut self) {
+        self.spec_pr_changed = true;
     }
 
     /// The Security review's Harness when `security.harness` chose one
@@ -193,7 +208,15 @@ impl Recovery {
         if self.preservation == Preservation::Local || !self.local_child_work.is_empty() {
             lines.push(format!("{BEFORE_RETRYING}inspect and publish the retained work, reconcile with origin without forcing, then free the Issue branch and Worktree acquisition path. Do not discard local work."));
         }
+        if self.spec_pr_changed {
+            lines.push(format!("{BEFORE_RETRYING}the Spec PR changed under the Spec run, so no Recovery command resumes {} into {}. Decide the Spec's Base branch and Spec branch before starting it again.", context.branch, context.base));
+            return lines;
+        }
         lines.push(format!("{RECOVERY}{}", context.command));
+        if self.fix_run {
+            lines.push(format!("{LAUNCH}{} or another clone passing Origin match. The Fix run uses the pull request's Base branch {} and continues its Repair loop.", context.launch.display(), context.base));
+            return lines;
+        }
         if let Some(harness) = self.security_review_harness {
             lines.push(format!(
                 "{SECURITY_REVIEW}{}, chosen by security.harness in the User config.",
@@ -273,6 +296,18 @@ mod tests {
         assert_eq!(preserved(&recovery), "Preserved: remotely on issue-21");
         assert!(has(&recovery, CONTINUING));
         assert!(!has(&recovery, RETRY));
+    }
+
+    #[test]
+    fn a_spec_pr_changed_under_the_spec_run_leaves_out_every_command_line() {
+        let mut recovery = Recovery::new(Stage::Tickets, Preservation::Remote);
+        recovery.add_command_context(context(), true);
+        recovery.add_spec_pr_changed();
+        assert_eq!(preserved(&recovery), "Preserved: remotely on issue-21");
+        assert!(has(&recovery, BEFORE_RETRYING));
+        for command in [RECOVERY, LAUNCH, CONTINUING, RETRY] {
+            assert!(!has(&recovery, command), "{command}");
+        }
     }
 
     #[test]

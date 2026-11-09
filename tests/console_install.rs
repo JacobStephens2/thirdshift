@@ -1,5 +1,4 @@
 //! Installation is exercised through the binary and its printed shell script.
-#![cfg(target_os = "linux")]
 
 mod support;
 
@@ -325,6 +324,14 @@ fn resolving_console_address_continues_proxy_installation() {
             }
         }
     }
+}
+
+#[test]
+fn console_service_preserves_detached_commands_on_restart() {
+    let machine = Machine::new();
+    machine.tool("caddy", "exit 0");
+    let script = machine.script();
+    assert!(script.contains("KillMode=process\n"), "{script}");
 }
 
 #[test]

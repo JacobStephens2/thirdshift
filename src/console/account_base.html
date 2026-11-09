@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}{% endblock %} · thirdshift</title>
+  <title>{% block title %}{% endblock %} · {{ crate::console::hostname() }} · thirdshift</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/console.css">
 </head>
 <body>
-  <header><p class="brand">thirdshift / Console</p>
+  <header>{% include "console/brand.html" %}
     {% block navigation %}{% include "console/nav.html" %}{% endblock %}
     {% block notifications %}{% endblock %}
   </header>

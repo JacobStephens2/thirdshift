@@ -42,7 +42,7 @@ impl DismissedRow {
         DismissalView {
             who: self.who.clone(),
             dismissed_at: self.at.clone(),
-            source: self.source(),
+            source: self.source().to_owned(),
             kind: current_kind.unwrap_or(&self.kind).to_owned(),
             kinds: self.kinds.clone(),
         }
@@ -52,11 +52,11 @@ impl DismissedRow {
 /// A row's dismissal as `status --json` reports it: who, when, from where
 /// and every kind it covers. `kind` is the current kind, or the last one
 /// dismissed while a live row has no problem.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct DismissalView {
     pub who: String,
     pub dismissed_at: String,
-    pub source: &'static str,
+    pub source: String,
     pub kind: String,
     pub kinds: Vec<String>,
 }
@@ -156,6 +156,7 @@ fn row_for(
     undo: bool,
 ) -> Result<DismissalTarget> {
     let selected = snapshot.resolve(input)?;
+    selected.observation.require_writable("dismiss")?;
     let record = match selected.observation {
         Observation::Record(command) => &command.record,
         Observation::History(_) => {
@@ -189,6 +190,7 @@ fn row_for(
         let Observation::Record(command) = item.command else {
             bail!("cannot dismiss {input}: row has no Command record");
         };
+        item.command.require_writable("dismiss")?;
         let selector = item
             .command
             .selector()
@@ -205,7 +207,7 @@ fn row_for(
                 .with_context(|| format!("cannot dismiss {input}: row has no Needs you kind"))?,
         ),
         Group::ReadyForReview => Some(READY_KIND.to_owned()),
-        _ => None,
+        Group::Landing | Group::Working | Group::Done | Group::Resolved | Group::History => None,
     };
     target.kind = match kind {
         Some(kind) => kind,
@@ -232,7 +234,9 @@ impl Action {
     /// Availability for an evaluated row, including every collapsed member.
     pub(super) fn for_row(row: &InboxItem<'_>) -> Option<Self> {
         if !std::iter::once(row).chain(&row.collapsed).all(|item| {
-            matches!(item.command, Observation::Record(_)) && item.command.selector().is_some()
+            matches!(item.command, Observation::Record(_))
+                && item.command.account().is_none()
+                && item.command.selector().is_some()
         }) {
             return None;
         }
@@ -265,15 +269,41 @@ pub(super) fn action(
 }
 
 pub(crate) struct Request {
-    pub who: String,
+    pub actor: super::Actor,
     pub undo: bool,
-    pub from_console: bool,
 }
 
+#[derive(Deserialize)]
 pub(crate) struct Change {
     name: String,
-    group: Group,
+    group: Option<Group>,
     dismissal: Option<DismissalView>,
+}
+
+impl Change {
+    fn print(&self, json: bool) {
+        if json {
+            println!("{}", self.json());
+        } else if self.dismissal.is_some() {
+            println!(
+                "dismissed {} from {}",
+                self.name,
+                self.group.map(Group::title).unwrap_or("Inbox")
+            );
+        } else {
+            println!("took back the dismissal of {}", self.name);
+        }
+    }
+
+    pub(crate) fn json(&self) -> serde_json::Value {
+        match &self.dismissal {
+            Some(dismissal) => serde_json::json!({
+                "version": 1, "name": self.name, "group": self.group,
+                "dismissal": dismissal,
+            }),
+            None => serde_json::json!({"version": 1, "name": self.name, "undone": true}),
+        }
+    }
 }
 
 fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<()> {
@@ -288,54 +318,30 @@ fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<(
 }
 
 pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
-    let who = super::unix_user("dismissal")?;
     let change = request(
         input,
         Request {
-            who,
+            actor: super::Actor::cli("dismissal")?,
             undo,
-            from_console: false,
         },
     )?;
-    if let Some(dismissal) = change.dismissal {
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "version": 1, "name": change.name, "group": change.group,
-                    "dismissal": dismissal,
-                })
-            );
-        } else {
-            println!("dismissed {} from {}", change.name, change.group.title());
-        }
-    } else if json {
-        println!(
-            "{}",
-            serde_json::json!({"version": 1, "name": change.name, "undone": true})
-        );
-    } else {
-        println!("took back the dismissal of {}", change.name);
-    }
+    change.print(json);
+    Ok(())
+}
+
+pub(crate) fn print_remote(value: serde_json::Value, json: bool) -> Result<()> {
+    let change: Change = serde_json::from_value(value)?;
+    change.print(json);
     Ok(())
 }
 
 /// Shared mutation: Console callers supply their authenticated account; the CLI
 /// supplies its Unix user. Neither caller changes GitHub or the live Command.
 pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
-    let Request {
-        who,
-        undo,
-        from_console,
-    } = request;
-    let source = if from_console { "Console" } else { "CLI" };
+    let Request { actor, undo } = request;
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     let github = super::github::load(&config.logs_dir);
     let target = row_for(&snapshot, &github, input, config.inbox_days, undo)?;
     if target.members.is_empty() {
@@ -358,14 +364,11 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         activity_write(
             &config,
             &target.repository,
-            &format!(
-                "{} dismissal taken back from the {source} by {who}",
-                target.subject
-            ),
+            &format!("{} dismissal taken back {actor}", target.subject),
         )?;
         return Ok(Change {
             name: target.name,
-            group: target.group,
+            group: Some(target.group),
             dismissal: None,
         });
     }
@@ -383,9 +386,9 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
             selector: selector.clone(),
             kind: target.kind.clone(),
             kinds,
-            who: who.clone(),
+            who: actor.who().to_owned(),
             at: at.clone(),
-            from_console,
+            from_console: actor.is_console(),
         };
         dismissal.get_or_insert_with(|| row.view(None));
         file.rows.push(row);
@@ -394,11 +397,11 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     activity_write(
         &config,
         &target.repository,
-        &format!("{} dismissed from the {source} by {who}", target.subject),
+        &format!("{} dismissed {actor}", target.subject),
     )?;
     Ok(Change {
         name: target.name,
-        group: target.group,
+        group: Some(target.group),
         dismissal,
     })
 }

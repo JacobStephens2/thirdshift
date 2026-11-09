@@ -3,13 +3,13 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Command;
 use crate::logs::command_record::StageName;
 use crate::logs::usual_range::{UsualRange, UsualRanges};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub(in crate::logs) enum Health {
     Ok,

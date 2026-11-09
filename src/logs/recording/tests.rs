@@ -901,6 +901,8 @@ fn skip(memory: &Scripted, pass: Pass, reason: &str) {
         Pass::Pickup => Begin::PickupRun,
         Pass::Architect => Begin::ArchitectRun,
         Pass::Security => Begin::SecurityRun,
+        Pass::Review => Begin::ReviewRun { pass: true },
+        Pass::Fix => Begin::FixRun { pass: true },
     });
     record.configured(&config(true));
     record.eprint(reason);
@@ -923,8 +925,8 @@ fn separate_recordings_suppress_skips_from_shared_history_until_their_kind_chang
     run.started(Work::Run(&issue()), &harness());
     run.ended("ready");
     skip(&memory, Pass::Pickup, "idle");
-    skip(&memory, Pass::Pickup, "at the Claim limit");
-    skip(&memory, Pass::Pickup, "at the Claim limit");
+    skip(&memory, Pass::Pickup, "at the Failure limit");
+    skip(&memory, Pass::Pickup, "at the Failure limit");
     skip(&memory, Pass::Pickup, "idle");
     let mut pickup = Record::new(memory.clone());
     pickup.begin(Begin::PickupRun);
@@ -948,7 +950,7 @@ fn separate_recordings_suppress_skips_from_shared_history_until_their_kind_chang
     assert_eq!(
         memory.file(ACTIVITY),
         format!(
-            "2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Architect run skipped: a plan is open\n2026-10-03 12:00:00 Run #7 started: {run_path}, on claude · opus · high\n2026-10-03 12:00:00 Run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: at the Claim limit\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 started: {pickup_path}, on claude · opus · high\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: idle\n"
+            "2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Architect run skipped: a plan is open\n2026-10-03 12:00:00 Run #7 started: {run_path}, on claude · opus · high\n2026-10-03 12:00:00 Run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: at the Failure limit\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 started: {pickup_path}, on claude · opus · high\n2026-10-03 12:00:00 Pickup run skipped: idle\n2026-10-03 12:00:00 Pickup run #7 ended: ready\n2026-10-03 12:00:00 Pickup run skipped: idle\n"
         )
     );
 }

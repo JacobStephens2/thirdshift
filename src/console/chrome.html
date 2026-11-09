@@ -7,37 +7,41 @@
     <textarea id="copy-context-text" rows="12" readonly spellcheck="false"></textarea>
     <form method="dialog"><button>Close</button></form>
   </dialog>
-  <footer><button type="button" data-open-keys>Keyboard help (?)</button> <button type="button" data-open-themes>Themes (Shift+T)</button> <button type="button" data-open-sections>Sections</button> <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
+  <footer><button type="button" data-open-keys>Keyboard help (?)</button> {% if page.can_act() || page.can_admin() %}<button type="button" data-open-themes>Themes (Shift+T)</button>{% endif %} {% if page.can_act() %}<button type="button" data-open-sections>Sections</button>{% endif %} <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
+  {% if page.can_act() || page.can_admin() %}
   <dialog id="themes" aria-labelledby="themes-title">
     <h2 id="themes-title">Themes</h2><p><code>thirdshift console theme &lt;name&gt;</code></p>
-    <form id="theme-form"><label>Theme <select id="theme-name" name="theme"></select></label><button>Apply Theme</button></form>
-    <p><button type="button" id="edit-theme">Make a Theme from this</button> <button type="button" id="export-theme">Export JSON</button></p>
+    <form id="theme-form"><label>Theme <select id="theme-name" name="theme"></select></label>{% if page.can_act() %}<button>Apply Theme</button>{% endif %}</form>
+    <p>{% if page.can_admin() %}<button type="button" id="edit-theme">Make a Theme from this</button> {% endif %}<button type="button" id="export-theme">Export JSON</button></p>
     <form id="theme-editor">
       <label for="theme-document">Theme JSON</label>
-      <p>Edit the name and tokens, or paste an exported Theme. Save custom Themes to <code>~/.thirdshift/console/themes/</code>. Copy fonts by hand into its <code>fonts/</code> folder; name a file followed by its fallback stack, such as <code>mine.woff2, sans-serif</code>.</p>
-      <textarea id="theme-document" rows="12" spellcheck="false" required aria-describedby="theme-editor-status"></textarea>
-      <button id="save-theme">Save / import JSON</button>
+      {% if page.can_admin() %}<p>Edit the name and tokens, or paste an exported Theme. Save custom Themes to <code>~/.thirdshift/console/themes/</code>. Copy fonts by hand into its <code>fonts/</code> folder; name a file followed by its fallback stack, such as <code>mine.woff2, sans-serif</code>.</p>{% else %}<p>Export JSON to copy it. Importing a Theme requires admin.</p>{% endif %}
+      <textarea id="theme-document" rows="12" spellcheck="false" required {% if !page.can_admin() %}readonly{% endif %} aria-describedby="theme-editor-status"></textarea>
+      {% if page.can_admin() %}<button id="save-theme">Save / import JSON</button>{% endif %}
       <p id="theme-editor-status" role="status"></p>
     </form>
     <button type="button" data-close-themes>Close Themes</button>
   </dialog>
+  {% endif %}
+  {% if page.can_act() %}
   <dialog id="sections-chooser" aria-labelledby="sections-title">
     <h2 id="sections-title">Sections</h2><p><code>thirdshift console sections --hide done --show working</code></p>
     <form id="sections-form"><fieldset id="section-options"><legend>Visible Inbox sections</legend></fieldset><button>Save sections</button></form>
     <button type="button" data-close-sections>Close Sections</button>
   </dialog>
+  {% endif %}
   <aside id="jumps" hidden role="tooltip" aria-label="Jump to"><p>Jump to… (Esc to cancel)</p></aside>
   <dialog id="keys" aria-labelledby="keys-title">
     <h2 id="keys-title">Keyboard</h2>
     <dl><dt>j / k</dt><dd>Next / previous row or heading, wrapping</dd>
-    <dt>d</dt><dd>Dismiss the selected row when available, then select the next row</dd>
+    {% if page.can_act() %}<dt>d</dt><dd>Dismiss the selected row when available, then select the next row</dd>{% endif %}
     <dt>Space</dt><dd>Toggle a row's Details, or fold a heading</dd>
-    <dt>Enter</dt><dd>Open the full Command log</dd>
+    <dt>Enter</dt><dd>Open the full Command log, or fold an Inbox heading</dd>
     <dt>Esc</dt><dd>Close one layer, then clear selection</dd>
     <dt>1–8</dt><dd>Switch to an available page</dd>
     <dt>g, then a letter</dt><dd>Open an Inbox section or a page; g lists the letters</dd>
-    <dt>z</dt><dd>Fold the current History or Security section</dd>
+    <dt>z</dt><dd>Fold the current section</dd>
     <dt>?</dt><dd>Show this help</dd></dl>
-    <p>Shift+T opens Themes. Sections and Pause motion are in the footer.</p>
+    <p>{% if page.can_act() || page.can_admin() %}Shift+T opens Themes. {% endif %}{% if page.can_act() %}Sections and {% endif %}Pause motion is in the footer.</p>
     <button type="button" data-close-keys>Close (Esc)</button>
   </dialog>

@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::command_limit::PassKind;
 use crate::git::Git;
 use crate::github::{GitHub, SecurityRecord};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::Label;
 use crate::prompt;
+use crate::reservation::Reservation;
 use crate::security::reproduction::FixSize;
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -27,7 +29,7 @@ pub fn publish(
     record: &SecurityRecord,
     url: &str,
     harness: &Choice,
-) -> (Result<IssueUrl>, Option<PathBuf>) {
+) -> (Result<(IssueUrl, Reservation)>, Option<PathBuf>) {
     let size = match record.fix_size() {
         Ok(size) => size,
         Err(error) => return (Err(error), None),
@@ -35,7 +37,10 @@ pub fn publish(
     if record.private_issue_number().is_some() && size == FixSize::Single {
         return (
             publication::publish(
-                &mut GitHub::new(),
+                &mut publication::Shell {
+                    github: GitHub::new(),
+                    launch,
+                },
                 repo,
                 record,
                 url,
@@ -45,7 +50,7 @@ pub fn publish(
             None,
         );
     }
-    let worktree = match ReviewWorktree::create(launch, &repo.name, base) {
+    let worktree = match ReviewWorktree::create(launch, &repo.name, base, PassKind::Security) {
         Ok(worktree) => worktree,
         Err(error) => return (Err(error), None),
     };
@@ -61,7 +66,10 @@ pub fn publish(
         let message =
             sessions.run_to_final_message(purpose, Kind::SecurityFixPublishing, &prompt)?;
         publication::publish(
-            &mut GitHub::new(),
+            &mut publication::Shell {
+                github: GitHub::new(),
+                launch,
+            },
             repo,
             record,
             url,

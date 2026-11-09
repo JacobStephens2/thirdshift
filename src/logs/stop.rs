@@ -20,17 +20,12 @@ pub enum Ending {
 
 #[derive(Deserialize, Serialize)]
 pub struct Request {
-    pub who: String,
+    #[serde(flatten)]
+    pub actor: super::Actor,
     pub requeue: bool,
-    #[serde(default)]
-    pub from_console: bool,
 }
 
 impl Request {
-    pub(super) fn source(&self) -> &'static str {
-        if self.from_console { "Console" } else { "CLI" }
-    }
-
     pub fn ending(&self) -> Ending {
         if self.requeue {
             Ending::Requeue
@@ -68,9 +63,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let request = Request {
-        who: super::unix_user("Stop")?,
+        actor: super::Actor::cli("Stop")?,
         requeue,
-        from_console: false,
     };
     let path = request_stop(input, request)?;
     wait(
@@ -81,11 +75,19 @@ pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     )
 }
 
+/// API Stop has the CLI's quiet wait and exact JSON result.
+pub(crate) fn request_json(input: &str, request: Request) -> Result<serde_json::Value> {
+    let path = request_stop(input, request)?;
+    let mut output = Vec::new();
+    wait(&path, &mut WallClock(Instant::now()), &mut output, true)?;
+    Ok(serde_json::from_slice(&output)?)
+}
+
 /// Both callers publish and signal the same captured Command. Only the CLI
 /// blocks waiting; the Console observes cleanup through its existing stream.
 pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     let path = snapshot.resolve(input)?.stop_target(input)?;
     let tree = read(&path)?;
     require_live(&tree.command)?;
@@ -109,26 +111,34 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    pub fix_command: Option<String>,
+    /// A dispatched Run keeps the privacy of its owning Security run.
+    pub security_details: bool,
     pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
+    /// Canonical log directory an Other-account Process Step read must stay
+    /// under. Absent for the serving account. It is not resolved again.
+    pub accepted_log_directory: Option<PathBuf>,
+}
+
+/// Read privacy from captured ownership, without Scoring or detail enrichment.
+pub(crate) fn security_details(config: &UserConfig, input: &str) -> Result<bool> {
+    let snapshot = Snapshot::for_user(config, chrono::Local::now())?;
+    Ok(snapshot.resolve(input)?.security_details())
 }
 
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
-    let snapshot = Snapshot::load_details(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-        input,
-    )?;
+    let snapshot = Snapshot::details_for_user(config, chrono::Local::now(), input)?;
     let selected = snapshot.resolve(input)?;
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = super::metrics::details(&snapshot, selected.observation)?;
+    let details = super::status::inspect::details(config, &snapshot, selected.observation)?;
+    let security_details = selected.security_details();
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
@@ -140,13 +150,25 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         reading::RetainedWork::default()
     };
     let github = super::github::load(&config.logs_dir);
+    let accepted_log_directory = selected
+        .observation
+        .accepted_log_directory()
+        .map(Path::to_path_buf);
     Ok(Inspection {
+        fix_command: snapshot
+            .evaluate_inbox(config.inbox_days, &github)
+            .into_rows(false)
+            .iter()
+            .find(|row| row.command.selector() == selected.observation.selector())
+            .and_then(|row| row.fix_command()),
+        security_details,
         dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,
         stopping,
         branches: work.branches.into_iter().collect(),
         pull_requests: work.pull_requests.into_iter().collect(),
+        accepted_log_directory,
     })
 }
 
@@ -190,36 +212,50 @@ fn print_ending(
     json: bool,
 ) -> Result<()> {
     let work = reading::retained_work(path, chrono::Local::now())?;
-    if json {
-        writeln!(
-            output,
-            "{}",
-            serde_json::json!({
-                "version": 1,
-                "name": tree.command.name,
-                "outcome": tree.command.outcome.as_deref().unwrap_or("died before recording an outcome"),
-                "issue_branches": work.branches,
-                "pull_requests": work.pull_requests,
-            })
-        )?;
-        return Ok(());
-    }
-    writeln!(
-        output,
-        "{}: {}",
-        tree.command.name,
-        tree.command
+    Completion {
+        version: 1,
+        name: tree.command.name.clone(),
+        outcome: tree
+            .command
             .outcome
             .as_deref()
             .unwrap_or("died before recording an outcome")
-    )?;
-    for branch in work.branches {
-        writeln!(output, "Issue branch left: {branch}")?;
+            .into(),
+        issue_branches: work.branches.into_iter().collect(),
+        pull_requests: work.pull_requests.into_iter().collect(),
     }
-    for pr in work.pull_requests {
-        writeln!(output, "Pull request left: {pr}")?;
+    .write(output, json)
+}
+
+#[derive(Deserialize, Serialize)]
+struct Completion {
+    version: u32,
+    name: String,
+    outcome: String,
+    issue_branches: Vec<String>,
+    pull_requests: Vec<String>,
+}
+
+impl Completion {
+    fn write(&self, output: &mut impl Write, json: bool) -> Result<()> {
+        if json {
+            writeln!(output, "{}", serde_json::to_string(self)?)?;
+        } else {
+            writeln!(output, "{}: {}", self.name, self.outcome)?;
+            for branch in &self.issue_branches {
+                writeln!(output, "Issue branch left: {branch}")?;
+            }
+            for pr in &self.pull_requests {
+                writeln!(output, "Pull request left: {pr}")?;
+            }
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+pub(crate) fn print_remote(value: serde_json::Value, json: bool) -> Result<()> {
+    let completion: Completion = serde_json::from_value(value)?;
+    completion.write(&mut std::io::stdout(), json)
 }
 
 #[cfg(test)]

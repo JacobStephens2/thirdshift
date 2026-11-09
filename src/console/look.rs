@@ -30,29 +30,44 @@ pub fn export_theme(name: &str) -> Result<String> {
 
 pub(super) async fn export_document(
     axum::extract::Path(name): axum::extract::Path<String>,
+    Extension(format): Extension<super::api::Format>,
 ) -> Response {
     match tokio::task::spawn_blocking(move || Theme::export(&name)).await {
         Ok(Ok(theme)) => Json(theme).into_response(),
+        Ok(Err(error)) if format == super::api::Format::Json => {
+            super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)
+        }
         Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         error => failed(error),
     }
 }
 
+pub(super) async fn list_themes(Extension(format): Extension<super::api::Format>) -> Response {
+    super::api::read(format, || Ok(Json(themes::names()?).into_response())).await
+}
+
 pub(super) async fn import_document(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     text: String,
 ) -> Response {
     let theme = match Theme::parse(&text) {
         Ok(theme) => theme,
+        Err(error) if format == super::api::Format::Json => {
+            return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error);
+        }
         Err(error) => return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
     };
     match tokio::task::spawn_blocking(move || {
-        save_theme(&theme, &viewer.email)?;
+        save_theme(&theme, &viewer.caller_label)?;
         Ok::<_, anyhow::Error>(theme)
     })
     .await
     {
         Ok(Ok(theme)) => Json(theme).into_response(),
+        Ok(Err(error)) if format == super::api::Format::Json => {
+            super::api::error(StatusCode::UNPROCESSABLE_ENTITY, error)
+        }
         error => failed(error),
     }
 }
@@ -74,7 +89,7 @@ fn write_sections(hide: &[String], show: &[String], actor: &str) -> Result<Conso
     Ok(settings)
 }
 
-fn cli_actor() -> Result<String> {
+pub(super) fn cli_actor() -> Result<String> {
     let user = std::process::Command::new("id")
         .arg("-un")
         .output()
@@ -117,8 +132,15 @@ pub fn sections(hide: &[String], show: &[String], json_output: bool) -> Result<S
 
 pub(super) async fn get(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Extension(assets): Extension<super::assets::Development>,
 ) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::read(format, || {
+            Ok(Json(UserConfig::load()?.console).into_response())
+        })
+        .await;
+    }
     match tokio::task::spawn_blocking(|| {
         let config = UserConfig::load()?;
         let revision = super::accounts::digest(&export_theme(&config.console.theme)?);
@@ -164,16 +186,26 @@ pub(super) struct SectionsForm {
 
 pub(super) async fn set_theme(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Form(form): Form<ThemeForm>,
 ) -> Response {
+    if format == super::api::Format::Json {
+        return super::api::action(format, "/", move || {
+            write_theme(&form.theme, &viewer.caller_label)
+        })
+        .await;
+    }
     if let Err(error) = console::validate_theme(&form.theme) {
         return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
     }
-    written(tokio::task::spawn_blocking(move || write_theme(&form.theme, &viewer.email)).await)
+    written(
+        tokio::task::spawn_blocking(move || write_theme(&form.theme, &viewer.caller_label)).await,
+    )
 }
 
 pub(super) async fn set_sections(
     Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
     Form(form): Form<SectionsForm>,
 ) -> Response {
     let split = |value: &str| {
@@ -184,12 +216,21 @@ pub(super) async fn set_sections(
             .collect::<Vec<_>>()
     };
     let (hide, show) = (split(&form.hide), split(&form.show));
+    if format == super::api::Format::Json {
+        return super::api::action(format, "/", move || {
+            write_sections(&hide, &show, &viewer.caller_label)
+        })
+        .await;
+    }
     if let Err(error) =
         console::validate_sections(&hide).and_then(|()| console::validate_sections(&show))
     {
         return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
     }
-    written(tokio::task::spawn_blocking(move || write_sections(&hide, &show, &viewer.email)).await)
+    written(
+        tokio::task::spawn_blocking(move || write_sections(&hide, &show, &viewer.caller_label))
+            .await,
+    )
 }
 
 fn written(

@@ -16,6 +16,59 @@ pub(super) fn add(
     start: &str,
 ) -> Result<super::ownership::Checkout> {
     let _refs_lock = launch.lock_worktree_refs()?;
+    acquire(launch, branch, path, start, false)
+}
+
+/// Review cleanup owns a branch it created, but never a pre-existing local
+/// branch. Sample that ownership under the same lock as acquisition.
+pub(super) fn add_review(
+    launch: &Git,
+    branch: &str,
+    path: &Path,
+    start: &str,
+) -> Result<super::ownership::Checkout> {
+    let _refs_lock = launch.lock_worktree_refs()?;
+    acquire(launch, Some(branch), path, start, true)
+}
+
+pub(super) fn recover_pull_request(
+    launch: &Git,
+    branch: &str,
+    start: &str,
+) -> Result<Option<Checkout>> {
+    let _refs_lock = launch.lock_worktree_refs()?;
+    if let Some(checkout) = inspect_review(launch, branch, start)? {
+        super::ownership::clean_retained(launch, &checkout, start)?;
+        return Ok(Some(checkout));
+    }
+    Ok(None)
+}
+
+/// Read-only admission and acquisition share exactly the same ownership checks.
+pub(super) fn inspect_review(launch: &Git, branch: &str, start: &str) -> Result<Option<Checkout>> {
+    let reference = format!("refs/heads/{branch}");
+    if let Some(entry) = registrations(launch)?
+        .into_iter()
+        .find(|entry| entry.branch.as_deref() == Some(&reference))
+    {
+        return super::ownership::retained_pull_request(launch, &entry.path, branch, start)
+            .map(Some)
+            .map_err(|error| {
+                super::advice::occupied_advice(launch, Some(branch), &entry.path, error)
+            });
+    }
+    super::check_local_branch(branch, local_head(launch, branch)?.as_deref(), Some(start))
+        .map_err(|error| super::local_branch_advice(launch, error))?;
+    Ok(None)
+}
+
+fn acquire(
+    launch: &Git,
+    branch: Option<&str>,
+    path: &Path,
+    start: &str,
+    preserve_existing_branch: bool,
+) -> Result<super::ownership::Checkout> {
     let mut owner = Acquisition::inspect(launch, branch, path, start)?;
     let mut args = vec!["worktree", "add"];
     match branch {
@@ -38,18 +91,28 @@ pub(super) fn add(
     owner.armed = true;
     match launch.run(&args).and_then(|_| {
         owner.capture_checkout(launch)?;
-        if branch.is_none() {
-            owner
-                .publication
-                .publish(launch, owner.checkout.captured()?)?;
+        if branch.is_none() || preserve_existing_branch {
+            owner.publication.publish(
+                launch,
+                owner.checkout.captured()?,
+                start,
+                owner.branch_before.is_some(),
+            )?;
         }
         Ok(())
     }) {
         Ok(()) => {
             owner.armed = false;
             match std::mem::replace(&mut owner.checkout, CheckoutCapture::Unattempted) {
-                CheckoutCapture::Complete(checkout) => Ok(checkout),
-                _ => bail!("missing captured checkout"),
+                CheckoutCapture::Complete(mut checkout) => {
+                    if preserve_existing_branch && owner.branch_before.is_some() {
+                        checkout.preserve_local_branch();
+                    }
+                    Ok(checkout)
+                }
+                CheckoutCapture::Unattempted | CheckoutCapture::Incomplete => {
+                    bail!("missing captured checkout")
+                }
             }
         }
         Err(cause) => {
@@ -153,7 +216,9 @@ impl CheckoutCapture {
     fn captured(&self) -> Result<&Checkout> {
         match self {
             Self::Complete(checkout) => Ok(checkout),
-            _ => bail!("checkout ownership capture is incomplete; current head unknown"),
+            Self::Unattempted | Self::Incomplete => {
+                bail!("checkout ownership capture is incomplete; current head unknown")
+            }
         }
     }
 }

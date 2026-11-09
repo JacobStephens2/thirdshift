@@ -9,16 +9,17 @@
 //!
 //! A Run's opening first makes the Origin match and checks that its issue is
 //! open. A run with no Issue URL instead fails on an `origin` that isn't on
-//! GitHub, settles its Base branch at once, then tries a lock, so only one
-//! of them per repository runs at a time on a machine.
+//! GitHub, settles its Base branch at once, then takes a slot on its
+//! repository, unless it is at its Command limit on this machine.
 
 use std::fmt;
-use std::fs::{self, File, TryLockError};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config;
+use crate::command_limit;
+use crate::command_limit::{AlreadyRunning, Sharing};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::{IssueInput, IssueUrl, Repo};
@@ -323,7 +324,7 @@ fn current_dir() -> Result<PathBuf> {
 }
 
 /// The Launch directory of a run with no Issue URL, its checks passed and
-/// its repository's lock held.
+/// a slot on its repository held.
 pub struct Launch {
     pub directory: LaunchDirectory,
     /// The GitHub repository `origin` names.
@@ -334,22 +335,10 @@ pub struct Launch {
 
 /// How a run with no Issue URL starts.
 pub enum Start {
-    /// Its checks passed and its repository's lock is its own.
+    /// Its checks passed and it holds a slot on its repository.
     Clear(Launch),
     /// It is skipped, with nothing done.
     AlreadyRunning(AlreadyRunning),
-}
-
-/// Why a Pass is skipped at its start: another Pass on the repository is
-/// still running on this machine, the Spec run or Run it dispatched included.
-/// Its `Display` is the reason, as the skipped run gives it.
-#[derive(Debug)]
-pub struct AlreadyRunning(pub Repo);
-
-impl fmt::Display for AlreadyRunning {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "another Pass is already running on {}", self.0.slug())
-    }
 }
 
 /// Start a run with no Issue URL from the Launch directory, the current
@@ -358,16 +347,17 @@ impl fmt::Display for AlreadyRunning {
 /// checked out there, so a detached HEAD with neither fails it.
 ///
 /// Once the preflight checks pass, the run is [`AlreadyRunning`], with
-/// nothing done, if another on the same repository is still running on this
-/// machine. Otherwise this process is that repository's one such run until it
-/// exits, through whatever it dispatches.
-pub fn start(base: Option<&str>) -> Result<Start> {
+/// nothing done, if its repository is at its Command `limit` on this
+/// machine, or, as `sharing` says, another Pass of its kind runs there.
+/// Otherwise this process holds a slot there, and the lock of its kind if it
+/// has one, until it exits, through whatever it dispatches.
+pub fn start(base: Option<&str>, limit: NonZeroUsize, sharing: Sharing) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
     crate::logs::pass_fired(&repo);
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
-    if let Some(running) = hold_pass(&repo)? {
+    if let Some(running) = command_limit::hold_pass(&repo, limit, sharing)? {
         return Ok(Start::AlreadyRunning(running));
     }
     Ok(Start::Clear(Launch {
@@ -384,8 +374,8 @@ pub fn repo() -> Result<Repo> {
 }
 
 /// The Base branch a Custom process detaches at: the branch checked out in
-/// the Launch directory, at the commit sampled on origin. This does not take
-/// the Pass lock, and it does not offer `base <branch>`, which this command
+/// the Launch directory, at the commit sampled on origin. This takes no
+/// slot, and it does not offer `base <branch>`, which this command
 /// cannot name.
 pub fn checked_out_base() -> Result<BaseBranch> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Run)?;
@@ -415,47 +405,6 @@ pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {
         repo: repo.name,
         number: number.get(),
     })
-}
-
-/// Take the lock that makes this process the one Pass on `repo`, and hold it
-/// until this process exits. `Some` when another Pass already holds it: this
-/// call took nothing. A Custom process started with no issue uses this; one
-/// started with an issue does not. `start` calls this after the preflight a
-/// Pickup run, Architect run or Security run does.
-pub fn hold_pass(repo: &Repo) -> Result<Option<AlreadyRunning>> {
-    match try_pass_lock(repo)? {
-        Some(lock) => {
-            // Never closed, so the lock is held for as long as this process
-            // lives. The operating system releases it however the process ends.
-            std::mem::forget(lock);
-            Ok(None)
-        }
-        None => Ok(Some(AlreadyRunning(repo.clone()))),
-    }
-}
-
-/// Try, without waiting, for the lock that makes its holder the one Pass on
-/// `repo` on this machine: an advisory lock on a file under `~/.thirdshift`
-/// named for the repository, as GitHub compares names, whatever their case. It is held until the file returned is closed, or the
-/// process ends. `None` if another process holds it: one of them on `repo` is
-/// still running. The lock file itself is never deleted, and means nothing
-/// unless locked. Its directory keeps the name it had when only an Architect
-/// run took the lock, so that a thirdshift from before the Pickup run and
-/// one from after still exclude each other.
-fn try_pass_lock(repo: &Repo) -> Result<Option<File>> {
-    let dir = config::home()?
-        .join(".thirdshift/architect-locks")
-        .join(repo.owner.to_ascii_lowercase());
-    fs::create_dir_all(&dir).with_context(|| format!("can't create {}", dir.display()))?;
-    let path = dir.join(format!("{}.lock", repo.name.to_ascii_lowercase()));
-    let file = File::create(&path).with_context(|| format!("can't open {}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(error)) => {
-            Err(error).with_context(|| format!("can't lock {}", path.display()))
-        }
-    }
 }
 
 #[cfg(test)]

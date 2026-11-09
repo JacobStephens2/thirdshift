@@ -1,11 +1,19 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { createServer } = require("node:http");
-const { readFile } = require("node:fs/promises");
+const { access, readFile } = require("node:fs/promises");
 const { join } = require("node:path");
 const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
+
+test("API start lists include the Experiment command", async () => {
+  for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html"]) {
+    const source = await readFile(join(__dirname, "..", file), "utf8");
+    const paragraph = source.match(/<p\b[^>]*>.*?<\/p>/gs).find(text => text.includes("POST /api/v1/runs"));
+    assert.match(paragraph.replace(/<[^>]+>/g, ""), /Experiment/, file);
+  }
+});
 
 let server, browser, origin;
 before(async () => {
@@ -93,6 +101,45 @@ async function unfoldGuide(page) {
   }
 }
 
+// Exercises the shared supporting-reading disclosures through their summaries.
+async function checkReadingToggles(page, selector) {
+  for (const fold of await page.locator(selector).all()) {
+    const summary = fold.locator(":scope > summary");
+    const content = fold.locator(":scope > .reading-content");
+    await content.waitFor({ state: "hidden" });
+    await summary.click();
+    await content.waitFor({ state: "visible" });
+    assert.equal(await page.locator(`${selector}[open]`).count(), 1);
+    await assertFits(page, selector, `${page.viewportSize().width}px: expanded reading fits`);
+    await summary.focus();
+    await page.keyboard.press("Space");
+    await content.waitFor({ state: "hidden" });
+    await page.keyboard.press("Enter");
+    await content.waitFor({ state: "visible" });
+    await page.keyboard.press("Enter");
+    await content.waitFor({ state: "hidden" });
+  }
+}
+
+test('the architecture page identifies the current Verdict method', async () => {
+  const page = await readFile(join(__dirname, '..', 'architecture', 'index.html'), 'utf8');
+  assert.doesNotMatch(page, /New Verdicts use <code>paired-dirichlet-v3<\/code>/);
+  assert.match(page, /New Verdicts use <code>paired-dirichlet-v4<\/code>/);
+});
+
+test('the architecture page distinguishes Triage stdout JSON from its notification summary', async () => {
+  const page = await readFile(join(__dirname, '..', 'architecture', 'index.html'), 'utf8');
+  const triage = page.split('id="triage-run"')[1].split('</section>')[0];
+  assert.doesNotMatch(triage, /Its JSON result and every filed or commented-on issue link reach stdout and the Run notification\./);
+  assert.match(triage, /full JSON result goes to stdout/);
+  assert.match(triage, /Run notification summarizes/);
+});
+
+test('the workflow page identifies the current Experiment result contract', async () => {
+  const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
+  assert.match(page, /contract with <code>format: 4<\/code>/);
+});
+
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   for (const path of ['/', '/how-it-works/', '/architecture/', '/docs/']) {
@@ -173,14 +220,17 @@ test("every public page identifies its canonical URL, purpose and share metadata
   assert.match(await page.title(), /GitHub issues.*pull requests/);
 });
 
-test("hand-written pages describe the current share card in both alt tags", async (t) => {
+test("every public page describes the current share card in both alt tags", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
-  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+  await page.goto(`${origin}/`);
+  // docs/share-card/render.mjs renders the image from the homepage, so its alt text is the source.
+  const homeAlt = await page.locator('meta[property="og:image:alt"]').getAttribute("content");
+  assert.match(homeAlt, /Your issues become pull requests overnight\./);
+  assert.doesNotMatch(homeAlt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i);
+  for (const path of publicPaths) {
     await page.goto(`${origin}${path}`);
     for (const selector of ['meta[property="og:image:alt"]', 'meta[name="twitter:image:alt"]']) {
-      const alt = await page.locator(selector).getAttribute("content");
-      assert.match(alt, /Your issues become pull requests overnight\./, `${path}: ${selector}`);
-      assert.doesNotMatch(alt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i, `${path}: ${selector}`);
+      assert.equal(await page.locator(selector).getAttribute("content"), homeAlt, `${path}: ${selector}`);
     }
   }
 });
@@ -205,17 +255,61 @@ test("robots advertises a valid sitemap of reachable canonical pages", async (t)
   assert.deepEqual(urls.sort(), publicPaths.map(path => `https://thirdshift.app${path}`));
 });
 
-test("the homepage declares the site name as static structured data", async (t) => {
+test("the homepage describes the site and the software as static structured data", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/`);
   assert.equal(await page.locator('script[type="application/ld+json"]').count(), 1);
-  const site = JSON.parse(await page.locator('script[type="application/ld+json"]').textContent());
-  assert.equal(site["@context"], "https://schema.org");
-  assert.equal(site["@type"], "WebSite");
+  const data = JSON.parse(await page.locator('script[type="application/ld+json"]').textContent());
+  assert.equal(data["@context"], "https://schema.org");
+  const nodes = Object.fromEntries(data["@graph"].map(node => [node["@type"], node]));
+  assert.deepEqual(Object.keys(nodes).sort(), ["SoftwareApplication", "WebSite"]);
+  const site = nodes.WebSite;
   assert.equal(site.name, "thirdshift");
   assert.equal(site.url, "https://thirdshift.app/");
   assert.equal(site.url, await page.locator('link[rel="canonical"]').getAttribute("href"));
   assert.equal(site.name, await page.locator('meta[property="og:site_name"]').getAttribute("content"));
+  const app = nodes.SoftwareApplication;
+  assert.equal(app.name, site.name);
+  assert.equal(app.url, site.url);
+  assert.equal(app.description, await page.locator('meta[name="description"]').getAttribute("content"));
+  assert.doesNotMatch(app.description, /runs [^.]*\bCI in isolated Git worktrees/, "CI runs on GitHub; thirdshift watches it");
+  assert.equal(app.applicationCategory, "DeveloperApplication");
+  assert.equal(app.operatingSystem, "Linux");
+  assert.equal(app.license, "https://opensource.org/licenses/MIT");
+  assert.deepEqual(app.offers, { "@type": "Offer", price: "0", priceCurrency: "USD" });
+  const readme = await readFile(join(__dirname, "..", "..", "README.md"), "utf8");
+  assert.ok(readme.includes(`curl -LsSf ${app.downloadUrl}/download/`), "the download URL is the README installer's release");
+  assert.deepEqual(app.sameAs, ["https://github.com/JacobStephens2/thirdshift"]);
+  assert.match(await readFile(join(__dirname, "..", "..", "LICENSE"), "utf8"), /^MIT License\n/);
+});
+
+test("llms.txt indexes every public page and existing repository files for agents", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const response = await page.request.get(`${origin}/llms.txt`);
+  assert.equal(response.status(), 200);
+  const text = await response.text();
+  assert.match(text, /^# thirdshift\n\n> \S/, "a title, then a one-paragraph summary");
+  const links = [...text.matchAll(/^- \[[^\]]+\]\((https:\/\/[^)\s]+)\): \S/gm)].map(match => match[1]);
+  assert.equal(links.length, (text.match(/^- /gm) ?? []).length, "each list entry is a described link");
+  const pages = new Set(links.filter(link => link.startsWith("https://thirdshift.app/")));
+  assert.deepEqual([...pages].sort(), publicPaths.map(path => `https://thirdshift.app${path}`).sort());
+  const repoFiles = links.flatMap(link => link.match(
+    /^https:\/\/(?:raw\.githubusercontent\.com\/JacobStephens2\/thirdshift|github\.com\/JacobStephens2\/thirdshift\/(?:blob|tree))\/main\/(.+)$/)?.slice(1) ?? []);
+  assert.ok(repoFiles.includes("docs/guide.md"), "links the Markdown manual");
+  for (const file of repoFiles) await access(join(__dirname, "..", "..", file));
+  const readme = await readFile(join(__dirname, "..", "..", "README.md"), "utf8");
+  const install = readme.match(/^curl -LsSf \S+ \| sh$/m);
+  assert.ok(install, "the README has a one-line curl installer");
+  assert.ok(text.includes(`\n${install[0]}\n`), "the install command matches the README");
+  assert.match(text, /from a clone of the issue's repository/i, "says where to start a Ticket run");
+});
+
+test("the homepage links the agents' index without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  assert.equal(await page.locator('link[rel="alternate"][type="text/markdown"]').getAttribute("href"), "/llms.txt");
+  await page.getByRole("contentinfo").getByRole("link", { name: "llms.txt", exact: true }).click();
+  await page.waitForURL(url => url.pathname === "/llms.txt");
 });
 
 test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
@@ -276,24 +370,70 @@ test("homepage accessible names use steps in place of press units", async (t) =>
   assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
 });
 
-test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
+for (const javaScriptEnabled of [false, true]) {
+  test(`the Third shift overview stays compact and its details expand (JavaScript: ${javaScriptEnabled})`, async (t) => {
+    for (const width of [320, 390, 768, 1280]) {
+      const page = await pageForTest(t, { javaScriptEnabled, viewport: { width, height: 900 } });
+      await page.goto(`${origin}/`);
+      await page.evaluate(() => document.fonts.ready);
+      const card = page.locator(".shift.third");
+      const height = await card.evaluate(node => node.getBoundingClientRect().height);
+      assert.ok(height < 800, `${width}px: Third shift overview occupies ${height}px`);
+      await card.getByText("thirdshift takes an Issue URL:").waitFor({ state: "visible" });
+      assert.equal(await card.getByRole("link", { name: "/thirdshift-implement", exact: true }).count(), 1);
+      assert.equal(await card.locator("details").count(), 2);
+      assert.equal(await card.locator("details[open]").count(), 0);
+      await checkReadingToggles(page, ".shift.third .reading-more");
+    }
+  });
+}
+
+test("the homepage keeps seven workflows compact and expandable without JavaScript", async (t) => {
+  const names = ["Ticket run", "Spec run", "Architect run", "Pickup run", "Security run", "Triage run", "Scoring run"];
+  for (const width of [320, 390, 768, 1280]) {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/`);
+    const manual = await (await page.request.get(`${origin}/docs/`)).text();
+    await page.evaluate(() => document.fonts.ready);
+    const section = page.locator("#grows");
+    const height = await section.evaluate(node => node.getBoundingClientRect().height);
+    assert.ok(height < (width < 600 ? 1600 : 1100), `${width}px: closed workflows occupy ${height}px`);
+    assert.deepEqual(await section.locator(".workflow-name").allTextContents(), names);
+    assert.equal(await section.locator("details[open]").count(), 0);
+    for (const fold of await section.locator("details").all()) {
+      const summary = fold.locator(":scope > summary");
+      const content = fold.locator(":scope > .workflow-content");
+      await content.waitFor({ state: "hidden" });
+      await summary.focus();
+      await page.keyboard.press("Enter");
+      await content.waitFor({ state: "visible" });
+      for (const link of await content.locator('a[href^="/docs/#"]').all()) {
+        const href = await link.getAttribute("href");
+        assert.ok(manual.includes(`id="${href.split("#")[1]}"`), href);
+      }
+      await assertFits(page, "#grows, #grows details", `${width}px: expanded workflow fits`);
+      await summary.focus();
+      await page.keyboard.press("Space");
+      await content.waitFor({ state: "hidden" });
+    }
+  }
+});
+
+test("the homepage explains Ticket runs and seven workflows in plain words", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/`);
   assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
   for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
-    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Five workflows",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Seven workflows",
     "Examples", "Real pull requests", "About the name"]) {
     assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
   }
   const opening = await page.locator(".framing").textContent();
-  assert.match(opening, /coding agents you already use, logged in as you/);
-  assert.match(opening, /each agent's plan or account/);
-  assert.match(opening, /Claude Code.*subscription.*usage allowance/);
+  assert.match(opening, /^Give thirdshift a GitHub issue URL\./);
+  assert.match(opening, /coding agents you already use/);
+  assert.match(opening, /implement.*review.*pull request ready for review.*merge.*when asked/);
+  assert.doesNotMatch(opening, /subscription|logged in|log ?in|usage allowance/i);
   assert.match(opening, /free and open source/);
-  assert.deepEqual(await page.locator(".floor .line-label").allTextContents(), [
-    "1 · TICKET RUN", "2 · SPEC RUN", "3 · ARCHITECT RUN", "4 · PICKUP RUN", "5 · SECURITY RUN",
-  ]);
-  assert.doesNotMatch(await page.locator(".floor").textContent(), /INSTALLED|MERGE RUN/);
   assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
 });
 
@@ -307,8 +447,8 @@ test("hand-written pages use the five workflow names outside the recorded replay
       return copy.textContent;
     });
     assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
-    // Run remains a verb and part of Run notification / Run metrics.
-    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    // Run remains a verb, the Run now control, and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from| now)/, path);
     assert.match(prose, /Ticket run/, path);
     assert.match(prose, /Failed ticket run/, path);
   }
@@ -392,6 +532,17 @@ for (const width of [320, 390, 768, 1280]) {
 }
 
 for (const javaScriptEnabled of [false, true]) {
+  test(`API start bookmarks expose the command table (JavaScript: ${javaScriptEnabled})`, async (t) => {
+    for (const fragment of ["starting-commands-through-the-api", "starting-ticket-and-spec-runs-through-the-api"]) {
+      const page = await pageForTest(t, { javaScriptEnabled });
+      await page.goto(`${origin}/docs/#${fragment}`);
+      const section = page.locator("#starting-commands-through-the-api");
+      await section.waitFor({ state: "visible" });
+      await section.locator("table").waitFor({ state: "visible" });
+      assert.match(await section.textContent(), /triage/);
+    }
+  });
+
   test(`guide and manual deep links unfold their content (JavaScript: ${javaScriptEnabled})`, async (t) => {
     const page = await pageForTest(t, { javaScriptEnabled });
     for (const [path, fragment, text] of [
@@ -424,6 +575,34 @@ test("the homepage, the guide and the videos page link to the architecture page 
     await page.goto(`${origin}${path}`);
     await page.getByRole("link", { name: "Architecture", exact: true }).first().click();
     await page.waitForURL(url => url.pathname === "/architecture/");
+  }
+});
+
+test("the architecture overview reaches Figure 1 without screens of supporting text", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 390, height: 900 } });
+  await page.goto(`${origin}/architecture/`);
+  await page.evaluate(() => document.fonts.ready);
+  const gap = await page.locator("#factory").evaluate(section => {
+    const lede = section.querySelector("p.lede");
+    const figure = section.querySelector("figure");
+    return figure.getBoundingClientRect().top - lede.getBoundingClientRect().bottom;
+  });
+  assert.ok(gap <= 900, `Supporting text before Figure 1 occupies ${gap}px at 390px; shorten or collapse it`);
+});
+
+test("architecture supporting topics start compact and expand independently without JavaScript", async (t) => {
+  for (const width of [320, 1280]) {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/architecture/`);
+    const notes = page.locator("#factory .reading-more");
+    assert.deepEqual(await notes.locator(":scope > summary").allTextContents(), [
+      "Console and host resources", "Processes and Session traces", "Experiments and Scores", "Run metrics and Command details",
+    ]);
+    assert.equal(await page.locator("#factory details[open]").count(), 0);
+    const height = await notes.evaluateAll(nodes => nodes.reduce((sum, node) => sum + node.getBoundingClientRect().height, 0));
+    assert.ok(height < 500, `${width}px: closed supporting topics occupy ${height}px`);
+    await page.locator("#factory .arch-stages").waitFor({ state: "visible" });
+    await checkReadingToggles(page, "#factory .reading-more");
   }
 });
 

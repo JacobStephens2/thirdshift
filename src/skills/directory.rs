@@ -12,10 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 // Linking needs directory search permission, not permission to list it.
-#[cfg(target_os = "linux")]
 const DIRECTORY_ACCESS: libc::c_int = libc::O_PATH;
-#[cfg(not(target_os = "linux"))]
-const DIRECTORY_ACCESS: libc::c_int = libc::O_SEARCH;
 
 pub(super) struct CheckedDirectory {
     handle: File,

@@ -43,6 +43,10 @@ pub(super) enum EventKind {
     ThemeChanged,
     ThemeSaved,
     SectionsChanged,
+    ApiCall,
+    ConfigChanged,
+    Updated,
+    EvalsImported,
 }
 
 impl std::fmt::Display for EventKind {
@@ -57,6 +61,10 @@ impl std::fmt::Display for EventKind {
             Self::ThemeChanged => "theme-changed",
             Self::ThemeSaved => "theme-saved",
             Self::SectionsChanged => "sections-changed",
+            Self::ApiCall => "api-call",
+            Self::ConfigChanged => "config-changed",
+            Self::Updated => "updated",
+            Self::EvalsImported => "evals-imported",
         })
     }
 }
@@ -66,6 +74,34 @@ pub(super) struct Event {
     pub time: i64,
     pub email: String,
     pub event: EventKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<ConfigChange>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub(super) struct ConfigChange {
+    key: String,
+    old: serde_json::Value,
+    new: serde_json::Value,
+}
+
+impl Event {
+    pub fn summary(&self) -> String {
+        if let Some(change) = &self.change {
+            return format!(
+                "{} {}: {} → {}",
+                self.event, change.key, change.old, change.new
+            );
+        }
+        match (&self.endpoint, self.outcome) {
+            (Some(endpoint), Some(outcome)) => format!("{} {endpoint} {outcome}", self.event),
+            _ => self.event.to_string(),
+        }
+    }
 }
 
 pub(super) enum SignIn {
@@ -251,15 +287,51 @@ impl Accounts {
     }
 
     pub(super) fn record(&self, email: &str, event: EventKind) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: email.into(),
+            event,
+            endpoint: None,
+            outcome: None,
+            change: None,
+        })
+    }
+
+    pub(super) fn record_api(&self, actor: &str, endpoint: String, outcome: u16) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: actor.into(),
+            event: EventKind::ApiCall,
+            endpoint: Some(endpoint),
+            outcome: Some(outcome),
+            change: None,
+        })
+    }
+
+    pub(super) fn record_config(
+        &self,
+        actor: &str,
+        key: &str,
+        old: serde_json::Value,
+        new: serde_json::Value,
+    ) -> Result<()> {
+        self.append(&Event {
+            time: self.now,
+            email: actor.into(),
+            event: EventKind::ConfigChanged,
+            endpoint: None,
+            outcome: None,
+            change: Some(ConfigChange {
+                key: key.into(),
+                old,
+                new,
+            }),
+        })
+    }
+
+    fn append(&self, event: &Event) -> Result<()> {
         let mut file = private_file(&self.root.join("console.log"))?;
-        serde_json::to_writer(
-            &mut file,
-            &Event {
-                time: self.now,
-                email: email.into(),
-                event,
-            },
-        )?;
+        serde_json::to_writer(&mut file, event)?;
         file.write_all(b"\n")?;
         Ok(())
     }
@@ -284,7 +356,6 @@ fn matches_secret(secret: &str, hash: &str) -> bool {
 fn private_file(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).append(true).create(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);

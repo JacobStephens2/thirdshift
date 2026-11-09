@@ -39,6 +39,9 @@ pub enum Action {
 
 pub fn parse(args: &[String]) -> Result<Action> {
     match args {
+        [] => Ok(Action::List),
+        [flag] if flag == "--json" => Ok(Action::List),
+        [action, flag] if action == "list" && flag == "--json" => Ok(Action::List),
         [action, suite, task] if action == "approve" => {
             format::name(suite)?;
             format::name(task)?;

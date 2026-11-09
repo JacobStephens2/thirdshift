@@ -7,25 +7,23 @@
 //! The script, like the fake `gh` it drives here, relies on GNU tools, so its
 //! tests run on Linux only.
 
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
-
 mod support;
 
-#[cfg(target_os = "linux")]
 #[path = "release/lifetime.rs"]
 mod lifetime;
 
-#[cfg(target_os = "linux")]
 #[path = "release/experiments.rs"]
 mod experiments;
 
+#[path = "release/recovery.rs"]
+mod recovery;
+
+#[path = "release/ancestry.rs"]
+mod ancestry;
+
 use std::fs;
-#[cfg(not(target_os = "linux"))]
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "linux"))]
-use std::process::Stdio;
 use std::process::{Command, Output};
 
 use serde_json::{Value, json};
@@ -278,6 +276,16 @@ impl Release {
         release
     }
 
+    fn failed_unpublished() -> Self {
+        let release = Self::new();
+        release.ci_reports(GREEN);
+        release.release_workflow(failed_release());
+        let output = release.run_script("0.2.0");
+        assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
+        assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+        release
+    }
+
     fn root(&self) -> &Path {
         self.temp.path()
     }
@@ -346,10 +354,9 @@ impl Release {
         self.main_ci_on(&self.origin(&["rev-parse", "main"]), status, conclusion, 0);
     }
 
-    /// Makes each bump PR merged from now on record a release workflow run
-    /// on its merge commit, as pushing its tag starts one: a run that
-    /// succeeded, with `fields` set over it. Merging the PR stands in for the
-    /// tag push, which the fake `gh` doesn't see.
+    /// Makes each tag push record a release workflow run on the bump commit,
+    /// and records one when preparing a merged-resume fixture: a run that
+    /// succeeded, with `fields` set over it.
     fn release_workflow(&self, fields: Value) {
         let mut run = json!({
             "workflow": "release.yml",
@@ -366,11 +373,37 @@ impl Release {
         let script = format!(
             "case $FAKE_MERGE_HEAD in release-*)\n\
              run='{run}'\n\
-             run=${{run//@SHA@/$FAKE_MERGE_SHA}}\n\
+             origin=${{FAKE_GH_STATE%/*}}/origin.git\n\
+             if [ -e \"$FAKE_GH_STATE.tag-pushed\" ]; then exit 0; fi\n\
+             sha=$(git --git-dir=\"$origin\" rev-parse refs/heads/\"$FAKE_MERGE_HEAD\")\n\
+             run=${{run//@SHA@/$sha}}\n\
              gh fake run \"${{run//@TAG@/v${{FAKE_MERGE_HEAD#release-}}}}\"\n\
              esac"
         );
         self.gh(&["fake", "after-merge", &script]);
+        write_executable(
+            &self.bin().join("git"),
+            &format!(
+                r#"#!/bin/bash
+set -euo pipefail
+command -p git "$@"
+if [ "$1" = push ]; then
+    for argument in "$@"; do
+        case $argument in
+        *:refs/tags/v*)
+            sha=${{argument%:refs/tags/*}}
+            tag=${{argument#*:refs/tags/}}
+            run='{run}'
+            run=${{run//@SHA@/$sha}}
+            gh fake run "${{run//@TAG@/$tag}}"
+            touch "$FAKE_GH_STATE.tag-pushed"
+            ;;
+        esac
+    done
+fi
+"#
+            ),
+        );
     }
 
     /// The newest release workflow run recorded.
@@ -429,7 +462,7 @@ fi
         self.merge_pr("incoming", "Merge while releasing", "");
         let new = self.origin(&["rev-parse", "main"]);
         self.origin(&["update-ref", "refs/heads/main", &old]);
-        self.main_ci_on(&new, "completed", conclusion, 2);
+        self.main_ci_on(&new, "completed", conclusion, 20);
         // An older commit's run can be listed newest; select CI by commit.
         self.main_ci_on(&old, "completed", "success", 3);
         self.move_main_after_ci_read(&new);
@@ -462,16 +495,18 @@ fi
 
     /// Calls that attempted to merge a PR, oldest first.
     fn merge_calls(&self) -> Vec<Vec<String>> {
+        self.gh_calls()
+            .into_iter()
+            .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
+            .collect()
+    }
+
+    fn gh_calls(&self) -> Vec<Vec<String>> {
         let path = self.root().join("gh-calls.json");
         if !path.exists() {
             return Vec::new();
         }
-        let calls: Vec<Vec<String>> =
-            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        calls
-            .into_iter()
-            .filter(|call| call.starts_with(&["pr".into(), "merge".into()]))
-            .collect()
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
 
     fn command(&self, program: &Path, dir: &Path) -> Command {
@@ -576,7 +611,10 @@ fi
 
     /// The head commit of `head`'s newest PR, as it was merged if it was.
     fn pr_head(&self, head: &str) -> String {
-        self.pr(head)["headRefOid"].as_str().unwrap().to_owned()
+        self.pr(head)["headRefOid"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.origin(&["rev-parse", &format!("refs/heads/{head}")]))
     }
 
     fn pr_body(&self, head: &str) -> String {
@@ -735,22 +773,8 @@ fn stamped(line: &str) -> Option<(chrono::NaiveTime, &str)> {
     Some((stamp, message))
 }
 
-#[cfg(target_os = "linux")]
 fn with_input(command: &mut Command, input: &str) -> Output {
     support::child_lifetime::FixtureChild::spawn(command, input).wait(support::WAIT_BOUND)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn with_input(command: &mut Command, input: &str) -> Output {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("could not start command");
-    // A rejected command may close stdin before a large input has been written.
-    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
-    child.wait_with_output().unwrap()
 }
 
 fn stdout(output: &Output) -> String {
@@ -819,8 +843,7 @@ const INSTALL_NOTES: &str =
     "## Install thirdshift\n\n```sh\ncurl -LsSf https://example.com/install.sh | sh\n```";
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_release_bumps_only_the_version_merges_the_pr_and_tags_the_merge_commit() {
+fn a_release_bumps_only_the_version_tags_the_bump_and_merges_the_pr() {
     let release = Release::new();
     release.ci_reports(GREEN);
     let main_before = release.origin(&["rev-parse", "main"]);
@@ -853,11 +876,81 @@ fn a_release_bumps_only_the_version_merges_the_pr_and_tags_the_merge_commit() {
         release.origin(&["rev-list", "--parents", "-n", "1", &merge]),
         format!("{merge} {main_before} {head}")
     );
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+    release.origin(&["merge-base", "--is-ancestor", "v0.2.0", "main"]);
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+fn a_pending_main_tip_releases_the_newest_already_green_commit_without_waiting() {
+    let release = Release::new();
+    let green = release.origin(&["rev-parse", "main"]);
+    release.merge_pr("pending", "Not yet green", "");
+    let pending = release.origin(&["rev-parse", "main"]);
+    release.main_ci_on(&pending, "completed", "success", 2);
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), green);
+    assert!(!stderr(&output).contains("waiting for CI on main"));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+}
+
+#[test]
+fn a_failed_bump_merge_keeps_the_tag_and_finishes_publishing() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.gh(&["fake", "fails", "pr merge"]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let pr = release.pr("release-0.2.0");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
+    let err = stderr(&output);
+    assert!(err.contains("release still stands"), "{err}");
+    assert!(err.contains(pr["url"].as_str().unwrap()), "{err}");
+    assert!(err.contains(&release_url()), "{err}");
+}
+
+#[test]
+fn main_moving_during_bump_checks_does_not_change_the_tagged_content() {
+    let release = Release::new();
+    let base = release.origin(&["rev-parse", "main"]);
+    release.merge_pr("concurrent", "Arrived during bump checks", "");
+    let moved = release.origin(&["rev-parse", "main"]);
+    release.origin(&["update-ref", "refs/heads/main", &base]);
+    release.gh(&[
+        "fake", "on-ci-read", "1",
+        &format!("gh fake checks \"$FAKE_CI_SHA\" '{GREEN}'\ngit --git-dir=\"${{FAKE_GH_STATE%/*}}/origin.git\" update-ref refs/heads/main {moved}"),
+    ]);
+    release.gh(&[
+        "fake",
+        "after-merge",
+        r#"case $FAKE_MERGE_HEAD in release-*)
+        test "$(git --git-dir="${FAKE_GH_STATE%/*}/origin.git" rev-parse refs/tags/v0.2.0)" = \
+             "$(git --git-dir="${FAKE_GH_STATE%/*}/origin.git" rev-parse refs/heads/release-0.2.0)"
+        ;; esac"#,
+    ]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+    let merge = release.origin(&["rev-parse", "main"]);
+    assert_eq!(release.origin(&["rev-parse", &format!("{merge}^1")]), moved);
+    release.origin(&["merge-base", "--is-ancestor", "v0.2.0", "main"]);
+}
+
+#[test]
 fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -927,7 +1020,6 @@ fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() 
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn every_harness_receives_the_complete_release_input_above_the_argument_limit() {
     let prompt = format!("Summarize the release.\n{}", "x".repeat(150_000));
     for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
@@ -964,7 +1056,6 @@ fn every_harness_receives_the_complete_release_input_above_the_argument_limit() 
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn every_other_harness_summarizes_without_its_session_permission_bypass() {
     // Release input is contributor-editable, so no summary may run tools
     // that act on the machine, as Claude's runs with `--tools ''`.
@@ -1058,7 +1149,6 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
     for harness in ["agy", "grok", "muse", "opencode"] {
         let release = Release::new();
@@ -1087,7 +1177,6 @@ fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
     for script in [
         "exit 1",
@@ -1123,7 +1212,6 @@ fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_bad_user_config_warns_and_uses_generated_notes_without_calling_a_harness() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1153,7 +1241,6 @@ fn a_bad_user_config_warns_and_uses_generated_notes_without_calling_a_harness() 
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_agent_gets_the_prompt_file_then_the_version_diff_and_the_prs_merged_since_the_last_tag() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1190,7 +1277,6 @@ Closes #7.
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_agent_runs_in_print_mode_with_tools_disabled() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1214,7 +1300,6 @@ fn the_agent_runs_in_print_mode_with_tools_disabled() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_pr_body_has_the_agents_summary_in_a_marked_section_then_the_version_diff() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1233,7 +1318,6 @@ fn the_pr_body_has_the_agents_summary_in_a_marked_section_then_the_version_diff(
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn when_the_agent_fails_the_summary_is_the_generated_notes() {
     // One way to fail end to end; the summary step's own test takes the rest.
     let release = Release::new();
@@ -1260,12 +1344,13 @@ fn when_the_agent_fails_the_summary_is_the_generated_notes() {
     assert!(notes.contains("Add the frobnicator"), "{body}");
     assert!(!notes.contains("Shipped in 0.1.0"), "{body}");
     assert!(rest.contains("```diff"), "{body}");
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
     let notes = "_The agent summary was unavailable, so this is GitHub's generated notes._\n\n\
                  notes: api repos/{owner}/{repo}/releases/generate-notes \
@@ -1295,7 +1380,6 @@ fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
     use chrono::Timelike;
 
@@ -1327,7 +1411,6 @@ fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn each_step_prints_a_progress_line_on_stderr() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1335,21 +1418,21 @@ fn each_step_prints_a_progress_line_on_stderr() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let merge = release.origin(&["rev-parse", "main"]);
+    let head = release.pr_head("release-0.2.0");
     let url = format!("https://github.com/{REPO}/pull/4");
     let expected = [
         "release: writing the summary with the configured Harness".to_owned(),
         format!("release: opened {url}"),
         format!("release: waiting for CI on {url}"),
-        format!("release: merged {url} as {}", &merge[..7]),
         format!(
             "release: tagged v0.2.0 on {} and pushed the tag",
-            &merge[..7]
+            &head[..7]
         ),
         format!(
             "release: waiting for the release workflow at {}",
             release.release_run()["url"].as_str().unwrap()
         ),
+        format!("release: merged {url}"),
         format!("release: released v0.2.0 at {}", release_url()),
     ];
     let err = unstamped(&output);
@@ -1367,7 +1450,6 @@ fn each_step_prints_a_progress_line_on_stderr() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_finish() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1397,21 +1479,21 @@ fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_failed_release_workflow_run_exits_1_naming_the_failed_jobs_and_leaves_the_tag() {
     let release = Release::new();
     release.ci_reports(GREEN);
     release.release_workflow(failed_release());
+    let main_before = release.origin(&["rev-parse", "main"]);
 
     let output = release.run_script("0.2.0");
 
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_release_failed(&release, &output, &merge);
+    assert_release_failed(&release, &output, &release.pr_head("release-0.2.0"));
     assert!(!stderr(&output).contains(&release_url()));
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    assert_eq!(release.origin(&["rev-parse", "main"]), main_before);
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
     for (status, conclusion) in [("in_progress", ""), ("completed", "failure")] {
         let release = Release::new();
@@ -1429,7 +1511,6 @@ fn ci_on_main_for_the_merge_neither_holds_up_nor_fails_the_release() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn failing_checks_leave_the_pr_open_with_no_tag() {
     let release = Release::new();
     release.ci_reports(RED);
@@ -1447,7 +1528,6 @@ fn failing_checks_leave_the_pr_open_with_no_tag() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1488,7 +1568,6 @@ fn the_maintainers_checkout_neither_affects_the_release_nor_is_changed() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1508,7 +1587,6 @@ fn a_failure_to_generate_the_notes_stops_before_the_pr_is_opened() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1528,12 +1606,13 @@ fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
         format!("{AGENT_SUMMARY}\n"),
         "{body}"
     );
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_saved() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1553,12 +1632,13 @@ fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_save
         "The big news is the frobnicator (#2).\n",
         "{body}"
     );
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_no_stops_with_nothing_pushed() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1574,7 +1654,6 @@ fn review_no_stops_with_nothing_pushed() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1583,12 +1662,13 @@ fn without_review_the_script_runs_to_the_tag_without_reading_stdin() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stderr(&output).contains("[y]es"), "{}", stderr(&output));
-    let merge = release.origin(&["rev-parse", "main"]);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_install_instructions()
 {
     // The release script cuts the release the notes are for, and the notes
@@ -1615,7 +1695,6 @@ fn the_release_body_is_the_bump_prs_summary_then_the_generated_notes_then_the_in
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install_instructions() {
     // v0.1.0 is the merge of a PR without a summary section. The bump PR
     // step's own test takes the other ways to have no summary.
@@ -1629,28 +1708,47 @@ fn without_a_bump_pr_summary_the_release_body_is_the_generated_notes_and_install
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn the_summary_is_only_that_of_a_pr_merged_as_the_tagged_commit() {
+fn the_summary_is_from_the_pr_whose_head_or_merge_is_tagged() {
     const TAGGED: &str = "1111111111111111111111111111111111111111";
     const OTHER: &str = "2222222222222222222222222222222222222222";
     let with_summary = "Intro.\n<!-- release-summary:start -->\nThe headline.\n\
                         <!-- release-summary:end -->\nRest.";
+    let release = format!("release-0.2.0 {REPO} {REPO}");
+    let fork = format!("release-0.2.0 attacker/thirdshift {REPO}");
     for (case, pulls, body, summary) in [
         (
             "the merge of a PR with a summary section",
-            format!("{OTHER} 4\n{TAGGED} 5"),
+            format!("{OTHER} {OTHER} other {REPO} {REPO} 4\n{TAGGED} {OTHER} {release} 5"),
             with_summary,
             "The headline.\n",
         ),
         (
             "the merge of a PR without a summary section",
-            format!("{TAGGED} 5"),
+            format!("{TAGGED} {OTHER} {release} 5"),
             "Old news.",
             "",
         ),
         (
             "the head of a PR, not its merge",
-            format!("{OTHER} 5"),
+            format!("none {TAGGED} {release} 5"),
+            with_summary,
+            "The headline.\n",
+        ),
+        (
+            "a fork PR listed ahead of the release PR",
+            format!("none {TAGGED} {fork} 9\nnone {TAGGED} {release} 5"),
+            with_summary,
+            "The headline.\n",
+        ),
+        (
+            "only a fork PR whose head is the tagged commit",
+            format!("none {TAGGED} {fork} 5"),
+            with_summary,
+            "",
+        ),
+        (
+            "a PR for another commit",
+            format!("{OTHER} {OTHER} {release} 5"),
             with_summary,
             "",
         ),
@@ -1665,7 +1763,7 @@ fn the_summary_is_only_that_of_a_pr_merged_as_the_tagged_commit() {
                  \tpr) [ \"$3\" = 5 ] && printf '%s\\n' '{body}' ;;\n\
                  \tesac\n\
                  }}\n\
-                 bump_summary {TAGGED}\n"
+                 bump_summary {TAGGED} release-0.2.0\n"
             ),
         );
 
@@ -1675,18 +1773,69 @@ fn the_summary_is_only_that_of_a_pr_merged_as_the_tagged_commit() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+fn a_foreign_pr_with_the_tagged_head_does_not_supply_the_release_summary() {
+    // The commits API lists every pull request that points at the tagged bump
+    // commit, oldest first. A fork can push that same commit and open first.
+    const TAGGED: &str = "1111111111111111111111111111111111111111";
+    let output = with_functions_of(
+        "release-notes.sh",
+        &format!(
+            r#"gh() {{
+	case $1 in
+	api)
+		jq=
+		while [ $# -gt 0 ]; do
+			if [ "$1" = --jq ]; then jq=$2; fi
+			shift
+		done
+		case $jq in
+		*head.repo.full_name*)
+			printf '%s\n' 'null {tagged} release-0.2.0 attacker/thirdshift JacobStephens2/thirdshift 9' \
+				'null {tagged} release-0.2.0 JacobStephens2/thirdshift JacobStephens2/thirdshift 5'
+			;;
+		*head.sha*)
+			printf '%s\n' 'null {tagged} 9' 'null {tagged} 5'
+			;;
+		*)
+			printf '%s\n' 'null 9' 'null 5'
+			;;
+		esac
+		;;
+	pr)
+		case $3 in
+		9) printf '%s\n' $'<!-- release-summary:start -->\nFOREIGN-SENTINEL\n<!-- release-summary:end -->' ;;
+		5) printf '%s\n' $'<!-- release-summary:start -->\nThe release.\n<!-- release-summary:end -->' ;;
+		esac
+		;;
+	esac
+}}
+bump_summary {tagged} release-0.2.0
+"#,
+            tagged = TAGGED,
+        ),
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let summary = stdout(&output);
+    assert!(
+        !summary.contains("FOREIGN-SENTINEL"),
+        "foreign summary was published: {summary}"
+    );
+    assert_eq!(summary, "The release.\n");
+}
+
+#[test]
 fn when_the_bump_pr_cannot_be_read_the_release_body_is_the_generated_notes_with_a_warning() {
     // The release script only cuts the release the notes are for.
     let release = Release::new();
     release.ci_reports(GREEN);
     let output = release.run_script("0.2.0");
     assert!(output.status.success(), "{}", stderr(&output));
-    let merge = release.origin(&["rev-parse", "main"]);
+    let tagged = release.pr_head("release-0.2.0");
     release.gh(&[
         "fake",
         "fails",
-        &format!("api repos/{{owner}}/{{repo}}/commits/{merge}/pulls"),
+        &format!("api repos/{{owner}}/{{repo}}/commits/{tagged}/pulls"),
     ]);
 
     let output = release.run_notes_script("v0.2.0");
@@ -1722,7 +1871,12 @@ fn assert_refused_by(
 
     let output = run();
 
-    assert_eq!(output.status.code(), Some(1), "{case} was not refused");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{case} was not refused: {}",
+        stderr(&output)
+    );
     let err = unstamped(&output);
     assert!(
         err.contains("release: refusing to release"),
@@ -1736,7 +1890,93 @@ fn assert_refused_by(
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+fn non_linux_hosts_are_refused_before_git_or_github() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.agent_runs("exit 1");
+    write_executable(
+        &release.bin().join("uname"),
+        "#!/bin/sh\nprintf '%s\\n' \"$FAKE_RELEASE_HOST\"\n",
+    );
+    for host in ["Darwin", "MINGW64_NT-10.0", "FreeBSD"] {
+        let trace = release.root().join("git-trace");
+        let calls_before = release.gh_calls();
+        let local_refs = git(&release.maintainer(), &["show-ref"]);
+        assert_refused_by(
+            &release,
+            host,
+            &[
+                "thirdshift",
+                "release.sh",
+                "Linux only",
+                "macOS",
+                "Ubuntu 24.04",
+                "Lima",
+                "Windows",
+                "WSL2",
+            ],
+            || {
+                release.run_script_with(
+                    &["0.2.0"],
+                    "",
+                    &[
+                        ("FAKE_RELEASE_HOST", host),
+                        ("GIT_TRACE", trace.to_str().unwrap()),
+                    ],
+                )
+            },
+        );
+        assert_eq!(release.gh_calls(), calls_before, "{host}: called gh");
+        assert!(release.agent_calls().is_empty(), "{host}: called a Harness");
+        assert_eq!(
+            git(&release.maintainer(), &["show-ref"]),
+            local_refs,
+            "{host}"
+        );
+        assert!(
+            !trace.exists() || fs::read_to_string(&trace).unwrap().is_empty(),
+            "{host}: called git before refusing"
+        );
+    }
+}
+
+#[test]
+fn non_linux_refusal_does_not_need_modern_bash() {
+    let release = Release::new();
+    let calls_before = release.gh_calls();
+    write_executable(&release.bin().join("uname"), "#!/bin/sh\necho Darwin\n");
+    let startup = release.root().join("legacy-bash.sh");
+    // Reproduce Bash 3.2's missing shell features without making CI install
+    // another shell. The refusal must not need either feature.
+    fs::write(
+        &startup,
+        r#"shopt() { echo 'shopt: inherit_errexit: invalid shell option name' >&2; return 1; }
+printf() {
+    case $1 in *'%('*) echo 'printf: unsupported time format' >&2; return 1 ;; esac
+    builtin printf "$@"
+}
+"#,
+    )
+    .unwrap();
+    assert_refused_by(
+        &release,
+        "Bash 3.2 on Darwin",
+        &["Linux only", "Ubuntu 24.04", "Lima", "WSL2"],
+        || {
+            let output =
+                release.run_script_with(&["0.2.0"], "", &[("BASH_ENV", startup.to_str().unwrap())]);
+            let err = stderr(&output);
+            assert!(
+                stamped(err.trim()).is_some(),
+                "missing stamped refusal: {err}"
+            );
+            output
+        },
+    );
+    assert_eq!(release.gh_calls(), calls_before);
+}
+
+#[test]
 fn a_version_that_is_not_plain_semver_is_refused() {
     // One version end to end; the version check's own test takes the rest.
     let release = Release::new();
@@ -1745,7 +1985,6 @@ fn a_version_that_is_not_plain_semver_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_version_not_higher_than_the_one_on_main_is_refused() {
     // One version end to end; the comparison's own test takes the rest.
     let release = Release::new();
@@ -1754,7 +1993,6 @@ fn a_version_not_higher_than_the_one_on_main_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn versions_are_compared_as_numbers_not_text() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -1766,7 +2004,6 @@ fn versions_are_compared_as_numbers_not_text() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn only_plain_x_y_z_versions_with_no_leading_zeros_pass() {
     for (version, plain) in [
         ("0.4.0", true),
@@ -1786,7 +2023,6 @@ fn only_plain_x_y_z_versions_with_no_leading_zeros_pass() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_version_is_higher_only_by_its_parts_as_numbers() {
     for (version, higher) in [
         ("0.1.1", true),
@@ -1804,7 +2040,6 @@ fn a_version_is_higher_only_by_its_parts_as_numbers() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_tag_that_exists_locally_is_refused() {
     let release = Release::new();
     git(&release.maintainer(), &["tag", "v0.2.0"]);
@@ -1813,7 +2048,6 @@ fn a_tag_that_exists_locally_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_tag_that_exists_on_origin_is_refused() {
     let release = Release::new();
     // On a commit main never reaches, so fetching main doesn't bring it in.
@@ -1834,7 +2068,6 @@ fn a_tag_that_exists_on_origin_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
     let release = Release::new();
     let contributor = release.contributor();
@@ -1845,79 +2078,52 @@ fn a_tag_on_main_that_exists_on_origin_is_refused_as_on_origin() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_red_ci_run_on_main_is_refused() {
+fn the_latest_failed_push_run_is_skipped_for_an_older_green_main_commit() {
     let release = Release::new();
+    let older = release.origin(&["rev-parse", "main^1"]);
+    release.main_ci_on(&older, "completed", "success", 0);
+    // This supersedes main's earlier successful run.
     release.main_ci("completed", "failure");
+    release.ci_reports(GREEN);
 
-    assert_refused(&release, "0.2.0", &["CI on main", "failure"]);
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), older);
+    assert!(!stderr(&output).contains("waiting for CI on main"));
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn an_unfinished_ci_run_on_main_is_watched_before_releasing() {
+fn with_no_green_commit_since_the_last_tag_the_script_waits_for_success() {
     let release = Release::new();
+    let base = release.origin(&["rev-parse", "main"]);
+    let previous = release.origin(&["rev-parse", "v0.1.0"]);
+    release.main_ci_on(&previous, "completed", "success", 0);
+    release.main_ci_on(&base, "completed", "success", 3);
     release.ci_reports(GREEN);
-    release.main_ci_on(
-        &release.origin(&["rev-parse", "main"]),
-        "completed",
-        "success",
-        3,
-    );
 
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
-    let waiting = err.find("waiting for CI on main at").expect(&err);
-    let bumping = err.find("bumping the version").expect(&err);
-    assert!(waiting < bumping, "{err}");
-    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.origin(&["rev-parse", "main"]))
-    );
+    assert!(err.find("waiting for CI on main").unwrap() < err.find("bumping the version").unwrap());
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn an_unfinished_ci_run_on_main_that_does_not_succeed_pushes_nothing() {
-    for conclusion in ["failure", "cancelled", "timed_out", "skipped"] {
-        let release = Release::new();
-        release.main_ci_on(
-            &release.origin(&["rev-parse", "main"]),
-            "completed",
-            conclusion,
-            2,
-        );
-
-        assert_refused_by(&release, conclusion, &["CI on main", conclusion], || {
-            let output = release.run_script("0.2.0");
-            let err = stderr(&output);
-            assert!(err.contains("waiting for CI on main at"), "{err}");
-            output
-        });
-        assert!(release.agent_calls().is_empty());
-    }
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn a_main_whose_tip_ci_appears_after_a_few_polls_is_released() {
+fn a_main_whose_ci_appears_after_a_few_polls_is_released() {
     let release = Release::new();
+    release.main_ci("completed", "failure");
     release.merge_pr("untested", "Not yet built", "");
     let base = release.origin(&["rev-parse", "main"]);
     release.gh(&[
         "fake",
         "run",
         &json!({
-            "branch": "main",
-            "workflow": "ci.yml",
-            "event": "push",
-            "headSha": base,
-            "status": "completed",
-            "conclusion": "success",
-            "hidden_polls": 3,
+            "branch": "main", "workflow": "ci.yml", "event": "push",
+            "headSha": base, "status": "completed", "conclusion": "success", "hidden_polls": 3,
         })
         .to_string(),
     ]);
@@ -1926,112 +2132,42 @@ fn a_main_whose_tip_ci_appears_after_a_few_polls_is_released() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
-    let waiting = err
-        .find(&format!(
-            "waiting for CI on main at {} to start",
-            &base[..7]
-        ))
-        .expect(&err);
-    assert!(
-        waiting < err.find("bumping the version").expect(&err),
-        "{err}"
-    );
+    assert!(stderr(&output).contains("waiting for CI on main"));
     let head = release.pr_head("release-0.2.0");
     assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
-    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.origin(&["rev-parse", "main"]))
-    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn main_moving_during_ci_is_followed_and_the_bump_uses_the_tested_tip() {
+fn moving_main_does_not_restart_the_wait_for_an_older_pending_run() {
+    for conclusion in ["success", "failure"] {
+        let release = Release::new();
+        let (old, _) = release.main_moves_while_waiting(conclusion);
+        release.ci_reports(GREEN);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{conclusion}: {}", stderr(&output));
+        let head = release.pr_head("release-0.2.0");
+        assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), old);
+        release.origin(&["merge-base", "--is-ancestor", "v0.2.0", "main"]);
+    }
+}
+
+#[test]
+fn main_moving_during_a_green_ci_read_does_not_discard_that_commit() {
     let release = Release::new();
-    let (old, new) = release.main_moves_while_waiting("success");
+    let (old, _) = release.main_moves_while_waiting("success");
+    release.main_ci_on(&old, "completed", "success", 0);
     release.ci_reports(GREEN);
 
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
-    let moved = err
-        .find(&format!(
-            "main moved from {} to {}; waiting for CI on {}",
-            &old[..7],
-            &new[..7],
-            &new[..7]
-        ))
-        .expect(&err);
-    assert!(
-        moved < err.find("bumping the version").expect(&err),
-        "{err}"
-    );
     let head = release.pr_head("release-0.2.0");
-    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
-    assert_eq!(
-        release.origin(&["diff", "--numstat", &new, &head]),
-        "1\t1\tCargo.lock\n1\t1\tCargo.toml"
-    );
-    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
-    assert_eq!(
-        release.origin_tag("v0.2.0"),
-        Some(release.origin(&["rev-parse", "main"]))
-    );
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), old);
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn failed_ci_on_the_newest_tip_refuses_without_pushing() {
-    let release = Release::new();
-    let (old, new) = release.main_moves_while_waiting("failure");
-    let refs_before = release.origin_refs();
-    let prs_before = release.gh_state()["prs"].clone();
-
-    let output = release.run_script("0.2.0");
-
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let err = stderr(&output);
-    assert!(
-        err.contains(&format!(
-            "refusing to release 0.2.0: CI on main at {} ended in failure",
-            &new[..7]
-        )),
-        "{err}"
-    );
-    // Only the simulated incoming merge may change origin, not the release.
-    assert_eq!(
-        release.origin_refs(),
-        refs_before.replace(
-            &format!("refs/heads/main {old}"),
-            &format!("refs/heads/main {new}")
-        )
-    );
-    assert_eq!(release.gh_state()["prs"], prs_before);
-    assert!(release.agent_calls().is_empty());
-}
-
-#[test]
-#[cfg(target_os = "linux")]
-fn main_moving_during_a_completed_ci_read_is_followed() {
-    for conclusion in ["success", "failure"] {
-        let release = Release::new();
-        let (old, new) = release.main_moves_while_waiting("success");
-        release.main_ci_on(&old, "completed", conclusion, 0);
-        release.ci_reports(GREEN);
-
-        let output = release.run_script("0.2.0");
-
-        assert!(output.status.success(), "{}", stderr(&output));
-        let head = release.pr_head("release-0.2.0");
-        assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
-    }
-}
-
-#[test]
-#[cfg(target_os = "linux")]
 fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
@@ -2050,11 +2186,13 @@ fn a_rerun_after_the_branch_was_pushed_opens_its_pr_then_merges_and_tags() {
     );
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_from_another_repository_is_refused() {
     // The open PR end to end; finding the earlier run takes the rest.
     for (merged, tagged) in [(false, false), (true, false), (true, true)] {
@@ -2062,9 +2200,9 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
         let head = release.push_bump("0.2.0");
         release.open_bump_pr("0.2.0");
         if merged {
-            let merge = release.merge_bump_pr("0.2.0", &head);
+            release.merge_bump_pr("0.2.0", &head);
             if tagged {
-                release.origin(&["tag", "v0.2.0", &merge]);
+                release.origin(&["tag", "v0.2.0", &head]);
             }
         }
         release.gh(&["fake", "pr", "release-0.2.0", "isCrossRepository", "true"]);
@@ -2089,7 +2227,6 @@ fn a_resumed_bump_pr_from_another_repository_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
     // One open PR end to end; checking the bump PR takes the rest.
     for merged in [false, true] {
@@ -2130,7 +2267,6 @@ fn a_resumed_bump_pr_with_changes_beyond_the_version_bump_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
@@ -2152,7 +2288,6 @@ fn a_merged_bump_pr_whose_head_is_not_on_origin_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
@@ -2171,7 +2306,10 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     assert_eq!(release.pr_head("release-0.2.0"), head);
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.pr_head("release-0.2.0"))
+    );
     let err = unstamped(&output);
     assert!(
         err.contains("release: waiting for CI on https://github.com/"),
@@ -2182,37 +2320,35 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_rerun_after_the_merge_tags_the_merge_commit_and_pushes_the_tag() {
+fn a_rerun_after_the_merge_tags_the_bump_commit_and_pushes_the_tag() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
+    release.merge_bump_pr("0.2.0", &head);
     release.merge_pr("later", "Merged after the release", "");
 
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(release.origin_tag("v0.2.0"), Some(merge.clone()));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head.clone()));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
     let err = unstamped(&output);
     assert!(
         err.contains(&format!(
             "release: tagged v0.2.0 on {} and pushed the tag",
-            &merge[..7]
+            &head[..7]
         )),
         "{err}"
     );
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_nothing() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &merge]);
+    release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &head]);
     let refs_before = release.origin_refs();
     let state_before = release.gh_state();
 
@@ -2231,14 +2367,13 @@ fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_no
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
     let release = Release::new();
     release.release_workflow(json!({"pending_polls": 3}));
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &merge]);
+    release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &head]);
     let refs_before = release.origin_refs();
 
     let output = release.run_script("0.2.0");
@@ -2252,24 +2387,32 @@ fn a_rerun_while_the_release_workflow_runs_waits_for_it_then_succeeds() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_rerun_after_the_release_workflow_failed_fails_the_same_way() {
+fn a_rerun_after_the_release_workflow_failed_reruns_failed_jobs_and_merges() {
     let release = Release::new();
-    release.release_workflow(failed_release());
-    let head = release.push_bump("0.2.0");
-    release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &merge]);
-    let refs_before = release.origin_refs();
+    release.ci_reports(GREEN);
+    let mut failed = failed_release();
+    failed["rerun"] = json!({
+        "conclusion": "success", "pending_polls": 2, "stale_polls": 2,
+        "jobs": [{"name": "host", "conclusion": "success"}],
+    });
+    release.release_workflow(failed);
+    let first = release.run_script("0.2.0");
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    let head = release.pr_head("release-0.2.0");
 
     let output = release.run_script("0.2.0");
 
-    assert_release_failed(&release, &output, &merge);
-    assert_eq!(release.origin_refs(), refs_before);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.release_run()["attempt"], 2);
+    assert_eq!(release.release_run()["stale_polls"], 0);
+    assert_eq!(release.release_run()["pending_polls"], 0);
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+    assert!(stderr(&output).contains("reran the failed jobs"));
+    assert!(stderr(&output).contains(&release_url()));
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
     let release = Release::new();
     release.ci_reports(GREEN);
@@ -2297,13 +2440,12 @@ fn a_rerun_after_the_failed_jobs_were_rerun_reports_the_new_attempt() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn an_annotated_tag_on_the_merged_bump_is_reported_as_already_tagged() {
+fn an_annotated_tag_on_the_bump_head_is_reported_as_already_tagged() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "-a", "-m", "Release 0.2.0", "v0.2.0", &merge]);
+    release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "-a", "-m", "Release 0.2.0", "v0.2.0", &head]);
     let refs_before = release.origin_refs();
 
     let output = release.run_script("0.2.0");
@@ -2316,8 +2458,7 @@ fn an_annotated_tag_on_the_merged_bump_is_reported_as_already_tagged() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_tag_that_is_not_on_the_merged_bump_is_refused() {
+fn a_tag_that_is_not_on_the_bump_head_is_refused() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
@@ -2334,25 +2475,24 @@ fn a_tag_that_is_not_on_the_merged_bump_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn a_tag_while_the_bump_pr_is_open_is_refused() {
+fn a_tag_while_the_bump_pr_is_open_resumes_merging_without_retagging() {
     let release = Release::new();
     let head = release.push_bump("0.2.0");
     release.open_bump_pr("0.2.0");
     release.origin(&["tag", "v0.2.0", &head]);
-    let refs_before = release.origin_refs();
+    release.gh(&["fake", "fails", "api repos/{owner}/{repo}/actions/runs"]);
 
     let output = release.run_script("0.2.0");
 
-    assert!(!output.status.success());
-    let err = stderr(&output);
-    assert!(err.contains("v0.2.0 already exists on origin"), "{err}");
-    assert_eq!(release.origin_refs(), refs_before);
-    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("v0.2.0 is already tagged"));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(release.prs_from("release-0.2.0").len(), 1);
+    release.origin(&["merge-base", "--is-ancestor", "v0.2.0", "main"]);
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_tag_with_no_bump_pr_is_refused() {
     let release = Release::new();
     release.origin(&["tag", "v0.2.0", "main"]);
@@ -2368,7 +2508,6 @@ fn a_tag_with_no_bump_pr_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
@@ -2394,7 +2533,6 @@ fn an_open_bump_pr_with_a_different_head_from_origin_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_bump_pr_closed_without_merging_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
@@ -2412,7 +2550,6 @@ fn a_bump_pr_closed_without_merging_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
     // Even a closed PR from another repository leaves nothing to resume.
     for cross_repository in ["false", "true"] {
@@ -2440,13 +2577,14 @@ fn a_bump_pr_closed_without_merging_and_its_branch_deleted_starts_over() {
         assert_eq!(prs.len(), 2);
         assert_eq!(prs[0]["state"], "CLOSED");
         assert_eq!(prs[1]["state"], "MERGED");
-        let merge = release.origin(&["rev-parse", "main"]);
-        assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
+        assert_eq!(
+            release.origin_tag("v0.2.0"),
+            Some(release.pr_head("release-0.2.0"))
+        );
     }
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
     let release = Release::new();
     release.push_bump("0.2.0");
@@ -2466,7 +2604,6 @@ fn review_no_on_a_rerun_after_the_branch_was_pushed_stops_with_no_pr_opened() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
@@ -2484,14 +2621,13 @@ fn review_resumed_branch_without_pr_with_extra_changes_is_refused() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn review_tagged_resumed_pr_with_extra_changes_is_refused() {
     let release = Release::new();
     release.push_bump("0.2.0");
     let head = release.push_change_to_bump("0.2.0", BumpChange::AddedFile);
     release.open_bump_pr("0.2.0");
-    let merge = release.merge_bump_pr("0.2.0", &head);
-    release.origin(&["tag", "v0.2.0", &merge]);
+    release.merge_bump_pr("0.2.0", &head);
+    release.origin(&["tag", "v0.2.0", &head]);
     let url = release.pr("release-0.2.0")["url"]
         .as_str()
         .unwrap()

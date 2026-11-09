@@ -1,49 +1,10 @@
 //! Escaped Experiment markup. The same facts feed the list, grid and Peeks.
 use crate::console::filters::escaped as esc;
 use crate::evals::experiment::{
-    Arm, Conclusion, Flip, Pending, State, TrialResult, View, trial_key,
+    Arm, Conclusion, Flip, Pending, State, TrialResult, View, setup_changes, trial_key,
 };
 use crate::trial::Outcome;
-use crate::verdict::Decision;
-
-pub(super) fn name(view: &View) -> String {
-    let d = &view.description;
-    if d.baseline.commit == d.candidate.commit {
-        let changes: Vec<_> = [
-            (
-                "Harness",
-                d.baseline.harness.as_str(),
-                d.candidate.harness.as_str(),
-            ),
-            (
-                "Model",
-                d.baseline.model.as_deref().unwrap_or("default"),
-                d.candidate.model.as_deref().unwrap_or("default"),
-            ),
-            (
-                "Effort",
-                d.baseline.effort.as_deref().unwrap_or("default"),
-                d.candidate.effort.as_deref().unwrap_or("default"),
-            ),
-        ]
-        .into_iter()
-        .filter(|(_, b, c)| b != c)
-        .map(|(label, b, c)| format!("{label}: {b} → {c}"))
-        .collect();
-        if !changes.is_empty() {
-            return changes.join(" · ");
-        }
-    }
-    match (&view.details.baseline_ref, &view.details.candidate_ref) {
-        (Some(b), Some(c)) if b != c => format!("{b} → {c}"),
-        (_, Some(c)) => c.clone(),
-        _ => format!(
-            "{} → {}",
-            short(&d.baseline.commit),
-            short(&d.candidate.commit)
-        ),
-    }
-}
+use crate::verdict::{Decision, PassRule};
 
 /// An instant as people read it, escaped: this machine's zone, to the minute.
 fn when(text: &str) -> String {
@@ -133,11 +94,13 @@ fn now(view: &View) -> String {
             decision(
                 verdict
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             )
         ));
     }
     for (name, suite) in &verdict.suites {
+        let suite = &suite.statistics;
         if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 {
             reasons.push(format!(
                 "{name}: {} Eval tasks dropped",
@@ -218,7 +181,7 @@ pub(super) fn list(views: &[View]) -> String {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
+            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&view.name), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
         }
         html.push_str("</ul></details>");
     }
@@ -250,38 +213,7 @@ fn question(view: &View) -> String {
         }
         changes.push(build);
     }
-    let versions = d.prepared.as_ref().map(|p| {
-        (
-            p.baseline.harness.version.as_str(),
-            p.candidate.harness.version.as_str(),
-        )
-    });
-    for (label, b, c) in [
-        (
-            "Harness",
-            d.baseline.harness.as_str(),
-            d.candidate.harness.as_str(),
-        ),
-        (
-            "Model",
-            d.baseline.model.as_deref().unwrap_or("default"),
-            d.candidate.model.as_deref().unwrap_or("default"),
-        ),
-        (
-            "Effort",
-            d.baseline.effort.as_deref().unwrap_or("default"),
-            d.candidate.effort.as_deref().unwrap_or("default"),
-        ),
-        (
-            "Harness version",
-            versions.map_or("", |v| v.0),
-            versions.map_or("", |v| v.1),
-        ),
-    ] {
-        if b != c {
-            changes.push(format!("{label}: {b} → {c}"));
-        }
-    }
+    changes.extend(setup_changes(d));
     let body = if changes.is_empty() {
         format!(
             "<p>Both arms are the same build, Harness, Model and Effort, so this Experiment tests no change: it shows how much {} results vary between runs of one setup.</p>",
@@ -320,7 +252,7 @@ pub(super) fn detail(view: &View) -> String {
     );
     let mut html = format!(
         "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div>{}<p>Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
-        esc(&name(view)),
+        esc(&view.name),
         question(view),
         when(&view.created_at),
         view.details
@@ -375,6 +307,7 @@ fn lead(view: &View) -> String {
                     .as_ref()
                     .unwrap()
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             ),
             view.pending_rechecks.len()
@@ -396,14 +329,19 @@ fn points(value: f64) -> String {
     format!("{:+.0}", value * 100.0)
 }
 
-fn interval(assessment: &crate::verdict::Assessment, margin: f64, label: &str) -> String {
-    let lower = assessment.interval.lower;
-    let upper = assessment.interval.upper;
+fn interval(
+    bounds: crate::verdict::Interval,
+    verdict: Decision,
+    margin: f64,
+    label: &str,
+) -> String {
+    let lower = bounds.lower;
+    let upper = bounds.upper;
     let pos = |value: f64| ((value + 0.5) * 100.0).clamp(0.0, 100.0);
     let range = format!("{} to {} points", points(lower), points(upper));
     format!(
         "<span class=\"experiment-interval\" data-tone=\"{}\" role=\"img\" aria-label=\"{}: {}; margin {} points; axis −50 to +50\"><svg viewBox=\"0 0 100 16\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><line class=\"interval-axis\" x1=\"0\" x2=\"100\" y1=\"8\" y2=\"8\"/><line class=\"interval-margin\" x1=\"{}\" x2=\"{}\" y1=\"0\" y2=\"16\"/><line class=\"interval-zero\" x1=\"50\" x2=\"50\" y1=\"0\" y2=\"16\"/><rect class=\"interval-bar\" x=\"{}\" y=\"4\" width=\"{}\" height=\"8\"/>{}{}</svg></span><span class=\"interval-range\">{}</span>",
-        decision(assessment.verdict),
+        decision(verdict),
         esc(label),
         esc(&range),
         points(margin),
@@ -430,13 +368,29 @@ fn list_intervals(view: &View) -> String {
         v.suites
             .iter()
             .map(|(name, suite)| {
+                let suite = &suite.statistics;
+                let (bounds, level, kind) = if suite.accuracy.verdict == Decision::Fail {
+                    (
+                        suite.accuracy.intervals.fail(),
+                        suite.bar.levels.fail(),
+                        "fail",
+                    )
+                } else {
+                    (
+                        suite.accuracy.intervals.pass(),
+                        suite.bar.levels.pass(),
+                        "pass",
+                    )
+                };
+                let label = format!("{name} accuracy · {kind} ({:.0}%)", level * 100.0);
                 format!(
-                    "<p class=\"experiment-list-interval\"><span>{} accuracy</span>{}</p>",
-                    esc(name),
+                    "<p class=\"experiment-list-interval\"><span>{}</span>{}</p>",
+                    esc(&label),
                     interval(
-                        &suite.accuracy,
+                        bounds,
+                        suite.accuracy.verdict,
                         view.description.bar.margin,
-                        &format!("{name} accuracy")
+                        &label
                     )
                 )
             })
@@ -451,35 +405,80 @@ fn verdict(view: &View) -> String {
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
     for (name, suite) in &verdict.suites {
+        let advisory = suite.advisory == Some(true);
+        let counts = suite.counts.as_ref();
+        let suite = &suite.statistics;
+        // The gist shows the interval that decided each metric, as the list does.
+        let decided = |assessment: &crate::verdict::Assessment| {
+            if assessment.verdict == Decision::Fail {
+                assessment.intervals.fail()
+            } else {
+                assessment.intervals.pass()
+            }
+        };
+        let (accuracy, wrong_findings) = (decided(&suite.accuracy), decided(&suite.wrong_findings));
         // Folded to its verdict and intervals; open it for the figures and why.
         html.push_str(&format!(
-            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
+            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span>{}</h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
             esc(name),
             esc(name),
             decision(suite.verdict),
             decision(suite.verdict),
-            points(suite.accuracy.interval.lower),
-            points(suite.accuracy.interval.upper),
-            points(suite.wrong_findings.interval.lower),
-            points(suite.wrong_findings.interval.upper)
+            if advisory { " <span class=\"experiment-tag\">Advisory suite</span>" } else { "" },
+            points(accuracy.lower),
+            points(accuracy.upper),
+            points(wrong_findings.lower),
+            points(wrong_findings.upper)
         ));
+        if let Some(counts) = counts {
+            html.push_str(&format!(
+                "<p>{} judged · {} measurement-only · {} void-dropped · {} other-setup.</p>",
+                counts.judged, counts.measurement_only, counts.void_dropped, counts.other_setup
+            ));
+        }
+        if advisory {
+            html.push_str("<p>This Advisory suite's Verdict cannot pass or block a release.</p>");
+        }
         for (metric, assessment) in [
             ("Accuracy", &suite.accuracy),
             ("Wrong findings", &suite.wrong_findings),
         ] {
-            html.push_str(&format!("<div class=\"experiment-figure\"><span>{metric} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></span>{}</div>", decision(assessment.verdict), decision(assessment.verdict), interval(assessment, view.description.bar.margin, metric)));
+            let intervals = match assessment.intervals {
+                crate::verdict::Intervals::Separate {
+                    pass_interval,
+                    fail_interval,
+                } => vec![
+                    ("pass", suite.bar.levels.pass(), pass_interval),
+                    ("fail", suite.bar.levels.fail(), fail_interval),
+                ],
+                crate::verdict::Intervals::Legacy { interval } => {
+                    vec![("credible", suite.bar.levels.pass(), interval)]
+                }
+            };
+            for (kind, level, bounds) in intervals {
+                let label = format!("{metric} · {kind} ({:.0}%)", level * 100.0);
+                html.push_str(&format!("<div class=\"experiment-figure\"><span>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></span>{}</div>", esc(&label), decision(assessment.verdict), decision(assessment.verdict), interval(bounds, assessment.verdict, view.description.bar.margin, &label)));
+            }
             let why = match assessment.verdict {
-                Decision::Pass => format!(
-                    "The {metric} interval sits above the {}-point margin and reaches zero or above.",
+                Decision::Pass if suite.bar.levels.pass_rule() == PassRule::Margin => format!(
+                    "At the pass level, the {metric} interval sits above the {}-point margin. The interval at the fail level reaches zero or above.",
                     points(view.description.bar.margin)
                 ),
-                Decision::Fail => format!("The whole {metric} interval is below zero."),
-                Decision::Inconclusive => format!(
-                    "The {metric} interval reaches below the {}-point margin and reaches zero or above.",
+                Decision::Pass => format!(
+                    "At the pass level, the {metric} interval sits above the {}-point margin and reaches zero or above. The interval at the fail level reaches zero or above too.",
                     points(view.description.bar.margin)
+                ),
+                Decision::Fail => {
+                    format!("At the fail level, the whole {metric} interval is below zero.")
+                }
+                Decision::Inconclusive => format!(
+                    "The {metric} intervals establish neither a pass nor a fail under the Bar."
                 ),
             };
             html.push_str(&format!("<p class=\"experiment-why\">{why}"));
+            if assessment.worse_within_margin {
+                html.push_str(&format!(" <span class=\"experiment-tag\" data-tone=\"inconclusive\">worse, within the margin</span> The whole {metric} interval at the pass level is below zero; the Bar's margin tolerates it."));
+            }
             if let Some(more) = &assessment.more_tasks {
                 if let Some(count) = more.additional_tasks {
                     html.push_str(&format!(
@@ -503,7 +502,7 @@ fn verdict(view: &View) -> String {
         }
         html.push_str("</details>");
     }
-    html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline, at {:.0}% credibility. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", view.description.bar.credible_level*100.0, points(view.description.bar.margin)));
+    html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline. Each interval is labelled with its credible level. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", points(view.description.bar.margin)));
     html
 }
 
@@ -1134,6 +1133,34 @@ fn change(baseline: Option<f64>, candidate: Option<f64>) -> String {
 
 fn bar(view: &View) -> String {
     let b = &view.description.bar;
+    let levels = match b.levels {
+        crate::verdict::Levels::Separate {
+            pass_level,
+            fail_level,
+            pass_rule,
+        } => format!(
+            "<dt>Pass level</dt><dd>{:.0}%</dd><dt>Fail level</dt><dd>{:.0}%</dd><dt>Pass rule</dt><dd>{}</dd>",
+            pass_level * 100.0,
+            fail_level * 100.0,
+            match pass_rule {
+                crate::verdict::PassRule::Margin =>
+                    "The pass-level interval's lower bound is above the margin.",
+                crate::verdict::PassRule::ReachesZero =>
+                    "The pass-level interval's lower bound is above the margin and its upper bound reaches zero.",
+            }
+        ),
+        crate::verdict::Levels::Legacy { credible_level } => format!(
+            "<dt>Credible level</dt><dd>{:.0}%</dd>",
+            credible_level * 100.0
+        ),
+    };
+    let minimum = b
+        .min_discriminating_tasks
+        .map_or_else(String::new, |minimum| {
+            format!(
+                "<dt>Advisory minimum</dt><dd>{minimum} discriminating Eval tasks per suite</dd>"
+            )
+        });
     let method = view
         .verdict
         .as_ref()
@@ -1144,17 +1171,16 @@ fn bar(view: &View) -> String {
                     format!(
                         "<dt>{} method and version</dt><dd>{} · thirdshift {}</dd>",
                         esc(suite),
-                        esc(&v.method),
-                        esc(&v.thirdshift_version)
+                        esc(&v.statistics.method),
+                        esc(&v.statistics.thirdshift_version)
                     )
                 })
                 .collect::<String>()
         })
         .unwrap_or_default();
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd><dt>Credible level</dt><dd>{:.0}%</dd><dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth dropped makes the Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
-        b.credible_level * 100.0,
         b.prior,
         b.seed,
         b.draws,

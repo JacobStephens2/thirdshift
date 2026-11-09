@@ -69,6 +69,15 @@ impl Trace {
             attribute("thirdshift.command.identity", &context.identity),
             attribute("thirdshift.gen_ai.conventions.version", "1.44.0"),
         ];
+        if let Some(name) = &context.process.name {
+            attrs.push(attribute("thirdshift.process.name", name));
+        }
+        if let Some(kind) = context.process.kind {
+            attrs.push(attribute("thirdshift.process.kind", kind));
+        }
+        if let Some(hash) = &context.process.hash {
+            attrs.push(attribute("thirdshift.process.hash", hash));
+        }
         if let Some(model) = &choice.model {
             attrs.push(attribute("gen_ai.request.model", model));
         }
@@ -81,7 +90,18 @@ impl Trace {
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
             spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
-            export: crate::logs::otlp_endpoint().and_then(Export::start),
+            // These sessions carry private finding write-ups even when a
+            // Custom process, rather than a Security run, owns the Command.
+            export: if super::Logged::read(kind).is_some_and(|logged| {
+                matches!(
+                    logged.kind,
+                    super::Kind::SecurityAudit | super::Kind::SecurityReproduction(_)
+                )
+            }) {
+                None
+            } else {
+                crate::logs::otlp_endpoint().and_then(Export::start)
+            },
             resource: Resource {
                 attributes: {
                     let mut resource = attrs.clone();
@@ -283,6 +303,10 @@ impl Trace {
                     set(&mut self.session.attributes, attr);
                 }
             }
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "only messages and errors name a call or parent to place them under"
+            )]
             let (call, parent) = match event {
                 Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
                 Error { parent_id, .. } => (None, parent_id.as_deref()),
@@ -343,6 +367,10 @@ impl Trace {
         }
     }
 
+    pub(super) fn prepare_version(&mut self) {
+        self.record_version(&Value::Null);
+    }
+
     fn record_version(&mut self, envelope: &Value) {
         let Some(version) = &mut self.version else {
             return;
@@ -384,11 +412,12 @@ fn recorded_arguments(command: &std::process::Command) -> Vec<String> {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    if Path::new(command.get_program())
+    let (program, first_argument) = crate::scope::unwrapped_command(command);
+    if Path::new(program)
         .file_name()
         .is_some_and(|name| name == "bwrap")
     {
-        let mut index = 0;
+        let mut index = first_argument;
         while index < arguments.len() {
             match arguments[index].as_str() {
                 "--" => break,

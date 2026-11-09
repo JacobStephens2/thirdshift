@@ -32,6 +32,7 @@ use crate::skills;
 /// How a command that did factory work, or was skipped before any, ended.
 pub enum Ending {
     Scoring(Result<usize, FailedRun>),
+    Triage(Result<crate::triage::Ended, FailedRun>),
     /// A Run or a Spec run ended: started by hand, or dispatched by a Pickup
     /// run.
     Run(Ended),
@@ -162,6 +163,15 @@ impl Started {
             Ok(account) => account,
             Err(skip) => return run_ending::show_skip(skip),
         };
+        if account.outcome == "paused"
+            && let Ending::Scoring(Err(failed)) = &ending
+            && let Some(reached) = failed
+                .error
+                .downcast_ref::<crate::session::limits::Reached>()
+        {
+            logs::paused(&reached.0);
+            progress::step("Scoring run paused");
+        }
         logs::ended(account.summary());
         logs::finished(&account);
         let elapsed = match &ending {
@@ -171,7 +181,11 @@ impl Started {
                 ..
             }
             | Ending::SecurityFix { .. } => self.started.map(|started| started.elapsed()),
-            _ => None,
+            Ending::Scoring(_)
+            | Ending::Triage(_)
+            | Ending::Architect { .. }
+            | Ending::Security(_)
+            | Ending::Skipped(_) => None,
         };
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {

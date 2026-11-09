@@ -44,6 +44,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                triage: None,
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -56,6 +57,33 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             Err(failed) => Account::of_failure(failed, "failed"),
         }),
         Ending::Run(ended) => Ok(Account::of_run(ended)),
+        Ending::Triage(result) => Ok(match result {
+            Ok(ended) => Account {
+                outcome: if ended.filed { "filed" } else { "recommended" },
+                ended: Ok(if ended.filed {
+                    "Triage run filing complete".into()
+                } else {
+                    "Triage run recommendation complete".into()
+                }),
+                interrupted: false,
+                pr_url: None,
+                advice: &[],
+                base_fix: None,
+                log: None,
+                ticket_lines: &[],
+                review: None,
+                triage: Some(ended),
+                security_findings: None,
+                security_findings_waiting: false,
+                security_fix: None,
+                security_close: None,
+                failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
+                urls: Vec::new(),
+            },
+            Err(failed) => Account::of_failure(failed, "failed"),
+        }),
         Ending::SecurityFix {
             ended,
             finding,
@@ -125,6 +153,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     log: None,
                     ticket_lines: &[],
                     review: None,
+                    triage: None,
                     security_findings: None,
                     security_findings_waiting: false,
                     security_fix: None,
@@ -204,6 +233,8 @@ pub struct Account<'a> {
     pub ticket_lines: &'a [String],
     /// In an Architect run, how its Architecture review ended.
     pub review: Option<Review<'a>>,
+    /// The recommendation a Triage run prints and retains in its notification.
+    pub triage: Option<&'a crate::triage::Ended>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
     /// A fixed operational cause when a Security audit never started.
@@ -271,6 +302,8 @@ pub struct Review<'a> {
 pub struct Cause {
     full: String,
     safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
+    /// Completed Triage writes, retained separately from verbose failure diagnostics.
+    triage_publication: Vec<crate::issue::IssueUrl>,
 }
 
 impl Cause {
@@ -279,6 +312,10 @@ impl Cause {
         Self {
             full: format!("{error:#}"),
             safeguard_refusal: error.downcast_ref().copied(),
+            triage_publication: error
+                .downcast_ref::<crate::triage::IncompletePublication>()
+                .map(|publication| publication.published.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -308,13 +345,20 @@ impl<'a> Account<'a> {
                     .resolution
                     .goal()
                     .map(|goal| goal.outcome())
-                    .unwrap_or("bug not reproduced"),
+                    .unwrap_or(match &reached.resolution {
+                        crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
+                        crate::run::Resolution::PullRequest { .. }
+                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
+                    }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
                         format!("PR {url} is {}", goal.outcome())
                     }
                     crate::run::Resolution::NotReproduced { comment_url } => {
                         format!("bug not reproduced: {comment_url}")
+                    }
+                    crate::run::Resolution::ArchitectureReview { reason, .. } => {
+                        format!("Architecture review ended: {reason}")
                     }
                 }),
                 interrupted: false,
@@ -323,7 +367,17 @@ impl<'a> Account<'a> {
                 base_fix,
                 log: reached.log.as_deref(),
                 ticket_lines: &reached.ticket_lines,
-                review: None,
+                triage: None,
+                review: match &reached.resolution {
+                    crate::run::Resolution::ArchitectureReview { reason, .. } => Some(Review {
+                        title: None,
+                        strength: None,
+                        line: reason.clone(),
+                        dispatched: None,
+                    }),
+                    crate::run::Resolution::PullRequest { .. }
+                    | crate::run::Resolution::NotReproduced { .. } => None,
+                },
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -354,6 +408,7 @@ impl<'a> Account<'a> {
             log: failed.log.as_deref(),
             ticket_lines: &failed.ticket_lines,
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -388,6 +443,7 @@ impl<'a> Account<'a> {
                 log: None,
                 ticket_lines: &[],
                 review: None,
+                triage: None,
                 security_findings: None,
                 security_findings_waiting: false,
                 security_fix: None,
@@ -425,6 +481,18 @@ impl<'a> Account<'a> {
         self.ended.is_ok()
     }
 
+    /// Readable links to completed Triage writes, even after a later publication failure.
+    pub fn triage_publication_lines(&self) -> impl Iterator<Item = String> {
+        let published = match (self.triage, &self.ended) {
+            (Some(triage), _) => triage.published.as_slice(),
+            (None, Err(cause)) => cause.triage_publication.as_slice(),
+            _ => &[],
+        };
+        published
+            .iter()
+            .map(|issue| format!("Issue: {}", issue.url))
+    }
+
     /// Show stopping/recovery facts first, then on stderr its `elapsed` wall
     /// time if this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
@@ -432,6 +500,9 @@ impl<'a> Account<'a> {
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
     pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        if let Some(recommendation) = self.triage {
+            logs::print(&recommendation.json);
+        }
         let mut shown = Shown::of(self);
         if let Some(elapsed) = elapsed {
             let after_recovery = self.recovery.map_or(0, |recovery| recovery.lines().len());
@@ -450,8 +521,8 @@ impl<'a> Account<'a> {
     pub fn summary(&self) -> String {
         let ended = match &self.ended {
             Ok(line) => line.clone(),
-            Err(cause) if self.outcome == "review required" => {
-                format!("review required: {}", cause.first_line())
+            Err(cause) if matches!(self.outcome, "review required" | "paused") => {
+                format!("{}: {}", self.outcome, cause.first_line())
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
         };
@@ -471,6 +542,8 @@ impl<'a> Account<'a> {
 fn failure_outcome(failed: &FailedRun, failure: &'static str) -> &'static str {
     if failed.interrupted {
         "interrupted"
+    } else if failed.error.is::<crate::session::limits::Reached>() {
+        "paused"
     } else if matches!(
         failed.error.downcast_ref::<PolicyRefusal>(),
         Some(PolicyRefusal::ReviewRequired { .. })
@@ -515,6 +588,7 @@ impl Shown {
                 steps.push(format!("{COMMAND_LOG}{}", log.display()));
             }
         }
+        steps.extend(account.triage_publication_lines());
         Shown {
             steps,
             urls: account.urls.iter().map(|url| url.to_string()).collect(),
@@ -586,6 +660,12 @@ impl Reader {
     /// A successful child can hand a bug back instead of delivering a PR.
     pub fn not_reproduced(&self) -> Option<&str> {
         self.cause.as_deref()?.strip_prefix("bug not reproduced: ")
+    }
+
+    pub fn architecture_end(&self) -> Option<&str> {
+        self.cause
+            .as_deref()?
+            .strip_prefix("Architecture review ended: ")
     }
 
     /// Read the next line of the child's stderr.
@@ -698,6 +778,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -722,6 +803,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -806,7 +888,7 @@ mod tests {
         let ended = Ended {
             outcome: Err(FailedRun {
                 ticket_lines: tickets.clone(),
-                ..failed_run("Tickets not done: #22")
+                ..failed_run("Tickets not done: #22 (failed: claude exited 1)")
             }),
             base_fix: None,
             advice: Vec::new(),
@@ -815,7 +897,7 @@ mod tests {
             Account::of_run(&ended),
             Account {
                 ticket_lines: &tickets,
-                ..failed_account("Tickets not done: #22")
+                ..failed_account("Tickets not done: #22 (failed: claude exited 1)")
             }
         );
         let mut ended = reached(Goal::ReadyForReview);
@@ -905,6 +987,7 @@ mod tests {
                     base_fix: None,
                     log: None,
                     ticket_lines: &[],
+                    triage: None,
                     review: Some(Review {
                         title: None,
                         strength: Some(if outcome == "plan published" {

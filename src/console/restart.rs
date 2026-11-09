@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 struct Identity {
     modified: SystemTime,
     size: u64,
-    #[cfg(unix)]
     inode: (u64, u64),
 }
 
@@ -32,18 +31,8 @@ impl Executable {
     pub fn exec(&self) -> Result<()> {
         let mut command = std::process::Command::new(&self.path);
         command.args(std::env::args_os().skip(1));
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            Err(command.exec()).context("can't re-execute the updated Console")
-        }
-        #[cfg(not(unix))]
-        {
-            command
-                .spawn()
-                .context("can't restart the updated Console")?;
-            Ok(())
-        }
+        use std::os::unix::process::CommandExt;
+        Err(command.exec()).context("can't re-execute the updated Console")
     }
 }
 
@@ -52,7 +41,6 @@ fn identity(path: &std::path::Path) -> Result<Identity> {
     Ok(Identity {
         modified: metadata.modified()?,
         size: metadata.len(),
-        #[cfg(unix)]
         inode: {
             use std::os::unix::fs::MetadataExt;
             (metadata.dev(), metadata.ino())

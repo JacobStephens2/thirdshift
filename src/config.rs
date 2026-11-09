@@ -4,6 +4,7 @@
 //! Only a Run offers Setup
 //! when there is none.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -15,16 +16,22 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
+use crate::issue::Repo;
 use crate::ready::PickupOrder;
 
 pub mod console;
+pub mod review;
 pub mod scoring;
+pub mod settings;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    /// Additional known Launch directories for Console API starts.
+    pub launch_directories: Vec<PathBuf>,
+    pub review: review::Settings,
     pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
     pub resources: crate::resources::Limits,
@@ -56,9 +63,13 @@ pub struct UserConfig {
     /// `spec.parallel`: how many Tickets a Spec run runs at once, by
     /// default 3.
     pub spec_parallel: NonZeroUsize,
-    /// `pickup.limit`: the Claim limit, how many open issues carrying a
-    /// Claim stop a Pickup run from taking another, by default 3.
-    pub pickup_limit: NonZeroUsize,
+    /// `pickup.failure_limit`: the Failure limit, how many open issues
+    /// labelled `agent-failed` stop a Pickup run from taking another, by
+    /// default 3.
+    pub pickup_failure_limit: NonZeroUsize,
+    /// `pass.command_limit`: the Command limit, how many live Commands on
+    /// one repository on this machine skip a Pass there, by default 1.
+    pub command_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
     /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
@@ -79,8 +90,16 @@ pub struct UserConfig {
     /// It takes effect only when fixing is also allowed.
     pub security_close: Option<bool>,
     pub security_review: bool,
+    /// `triage.allow_ready_for_agent`: filing may keep recommended readiness.
+    pub triage_allow_ready_for_agent: bool,
+    /// `triage.read_machine`: repositories, as lowercase `owner/repo`, whose
+    /// Triage runs read the whole machine as `--read-machine` lets them.
+    pub triage_read_machine: BTreeSet<String>,
     /// The `[trial]` memory caps for each Trial and Grader scope.
     pub trial_caps: crate::scope::Caps,
+    /// What every Command warns of about the file: a setting it accepts
+    /// but ignores, such as the old `pickup.limit`.
+    pub warnings: Vec<String>,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -99,9 +118,29 @@ pub struct EmailSettings {
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
     pub from: Option<String>,
+    /// `email.to_by_repo`: Run notification recipients keyed by lowercase
+    /// `owner/repo`, ahead of `email.to` and behind an explicit address.
+    pub to_by_repo: BTreeMap<String, String>,
+}
+
+impl EmailSettings {
+    /// The Run notification recipient configured for this repository, if
+    /// any. GitHub repository identity is case-insensitive.
+    pub fn to_for_repo(&self, repo: &Repo) -> Option<String> {
+        self.to_by_repo
+            .get(&repo.slug().to_ascii_lowercase())
+            .cloned()
+    }
 }
 
 impl UserConfig {
+    /// Whether `triage.read_machine` opts this repository's Triage runs into
+    /// reading the whole machine. GitHub repository identity is case-insensitive.
+    pub fn triage_reads_machine(&self, repo: &Repo) -> bool {
+        self.triage_read_machine
+            .contains(&repo.slug().to_ascii_lowercase())
+    }
+
     /// Waiting stages must write before they could be observed as Silent.
     pub fn effective_waiting_line_interval(&self) -> Duration {
         if self.waiting_line_interval >= self.silent_interval {
@@ -126,6 +165,8 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            launch_directories: Vec::new(),
+            review: review::Settings::default(),
             scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
@@ -140,7 +181,8 @@ impl UserConfig {
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
-            pickup_limit: NonZeroUsize::new(3).unwrap(),
+            pickup_failure_limit: NonZeroUsize::new(3).unwrap(),
+            command_limit: NonZeroUsize::MIN,
             pickup_wait: TimeDelta::minutes(5),
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
@@ -148,21 +190,55 @@ impl UserConfig {
             security_fix: None,
             security_close: None,
             security_review: false,
+            triage_allow_ready_for_agent: false,
+            triage_read_machine: BTreeSet::new(),
             trial_caps: crate::scope::Caps::default(),
+            warnings: Vec::new(),
         }
     }
 
     /// Parse `text`, the contents of the User config at `path`, expanding a
     /// leading `~` to `home`. Any key or section thirdshift doesn't know is an
-    /// error, so a typo can't silently leave a setting unset.
+    /// error, so a typo can't silently leave a setting unset. The old
+    /// `pickup.limit`, whatever its value, is accepted and ignored, with a
+    /// warning naming `pickup.failure_limit`, so a scheduled Pass keeps
+    /// running across an update.
     pub fn parse(text: &str, path: &Path, home: &Path) -> Result<Self> {
         let file = format!("the User config {}", path.display());
         let table: Table = text
             .parse()
-            .map_err(|error| anyhow!("{error}"))
+            // TOML's Display includes source lines, which can hold credentials
+            // inside an export URL. Keep the reason and location, not the text.
+            .map_err(|error: toml::de::Error| {
+                let location = error
+                    .span()
+                    .map(|span| {
+                        let before = text.get(..span.start).unwrap_or(text);
+                        let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                        format!(" at line {line}, column {column}")
+                    })
+                    .unwrap_or_default();
+                anyhow!("{}{location}", error.message())
+            })
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "launch_directories" {
+                config.launch_directories = value.as_array()
+                    .context(format!("launch_directories must be a list of paths in {file}"))?
+                    .iter()
+                    .map(|value| {
+                        value.as_str().and_then(|path| expand_home(path, home))
+                            .context(format!("launch_directories entries must be absolute paths or start with ~/ in {file}"))
+                    }).collect::<Result<_>>()?;
+                continue;
+            }
+            if section == "review" {
+                config.review = review::Settings::parse(value)
+                    .with_context(|| format!("invalid [review] in {file}"))?;
+                continue;
+            }
             if section == "scoring" {
                 config.scoring = value
                     .clone()
@@ -186,6 +262,7 @@ impl UserConfig {
                     .clone()
                     .try_into()
                     .with_context(|| format!("invalid [console] in {file}"))?;
+                config.console.migrate_fleet()?;
                 config
                     .console
                     .validate()
@@ -204,10 +281,16 @@ impl UserConfig {
                     | "email"
                     | "spec"
                     | "pickup"
+                    | "pass"
                     | "harness"
                     | "security"
+                    | "triage"
                     | "trial"
             );
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a section key's value is a table or, whatever else TOML parsed, an error"
+            )]
             let settings = match value {
                 Value::Table(settings) if known => settings,
                 Value::Table(_) => bail!("unknown section [{section}] in {file}"),
@@ -217,6 +300,16 @@ impl UserConfig {
             for (key, value) in settings {
                 match (section.as_str(), key.as_str(), value) {
                     ("merge", "always", Value::Boolean(always)) => config.merge_always = *always,
+                    ("triage", "allow_ready_for_agent", Value::Boolean(allow)) => {
+                        config.triage_allow_ready_for_agent = *allow
+                    }
+                    ("triage", "allow_ready_for_agent", _) => {
+                        bail!("triage.allow_ready_for_agent must be true or false in {file}")
+                    }
+                    ("triage", "read_machine", value) => {
+                        config.triage_read_machine =
+                            repository_list(value, "triage.read_machine", &file)?
+                    }
                     ("merge", "always", _) => bail!("merge.always must be true or false in {file}"),
                     ("base", "fix", Value::Boolean(fix)) => config.base_fix = *fix,
                     ("base", "fix", _) => bail!("base.fix must be true or false in {file}"),
@@ -272,11 +365,23 @@ impl UserConfig {
                     ("email", "to" | "from", _) => {
                         bail!("{section}.{key} must be a quoted email address in {file}")
                     }
+                    ("email", "to_by_repo", value) => {
+                        config.email.to_by_repo = repository_recipients(value, &file)?;
+                    }
                     ("spec", "parallel", value) => {
                         config.spec_parallel = whole_number_from_1(value, "spec.parallel", &file)?
                     }
-                    ("pickup", "limit", value) => {
-                        config.pickup_limit = whole_number_from_1(value, "pickup.limit", &file)?
+                    ("pickup", "failure_limit", value) => {
+                        config.pickup_failure_limit =
+                            whole_number_from_1(value, "pickup.failure_limit", &file)?
+                    }
+                    ("pickup", "limit", _) => config.warnings.push(format!(
+                        "pickup.limit is ignored: a Pickup run now counts the issues it \
+                         failed on, up to pickup.failure_limit; remove pickup.limit from {file}"
+                    )),
+                    ("pass", "command_limit", value) => {
+                        config.command_limit =
+                            whole_number_from_1(value, "pass.command_limit", &file)?
                     }
                     ("pickup", "wait_minutes", value) => {
                         config.pickup_wait = value
@@ -373,6 +478,84 @@ impl UserConfig {
     }
 }
 
+/// Read repository routes strictly, so a malformed name or ambiguous case
+/// variant cannot silently send a notification to the host's default inbox.
+fn repository_recipients(value: &Value, file: &str) -> Result<BTreeMap<String, String>> {
+    let routes = value.as_table().with_context(|| {
+        format!("email.to_by_repo must be a table of owner/repo addresses in {file}")
+    })?;
+    let mut recipients = BTreeMap::new();
+    let routes = repository_keys(
+        routes.iter().map(|(repo, value)| (repo.clone(), value)),
+        "email.to_by_repo",
+    )
+    .with_context(|| format!("invalid email.to_by_repo in {file}"))?;
+    for (repo, value) in routes {
+        let to = value
+            .as_str()
+            .filter(|to| !to.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "email.to_by_repo[{repo:?}] must be a nonblank quoted email address in {file}"
+                )
+            })?;
+        recipients.insert(repo, to.to_string());
+    }
+    Ok(recipients)
+}
+
+/// Repository-keyed settings share name validation, case normalization and
+/// ambiguity rejection, while each setting validates its own values.
+fn repository_keys<T>(
+    entries: impl IntoIterator<Item = (String, T)>,
+    setting: &str,
+) -> Result<BTreeMap<String, T>> {
+    let mut normalized = BTreeMap::new();
+    for (repo, value) in entries {
+        if !is_owner_repo(&repo) {
+            bail!("{setting} key {repo:?} must be owner/repo");
+        }
+        if normalized
+            .insert(repo.to_ascii_lowercase(), value)
+            .is_some()
+        {
+            bail!("duplicate repository {repo:?} in {setting} (names are case-insensitive)");
+        }
+    }
+    Ok(normalized)
+}
+
+/// Read a list of repositories strictly, so a malformed name cannot
+/// silently leave a repository out of an opt-in.
+fn repository_list(value: &Value, key: &str, file: &str) -> Result<BTreeSet<String>> {
+    let repos = value
+        .as_array()
+        .with_context(|| format!("{key} must be a list of \"owner/repo\" names in {file}"))?;
+    repos
+        .iter()
+        .map(|repo| {
+            repo.as_str()
+                .filter(|repo| is_owner_repo(repo))
+                .map(str::to_ascii_lowercase)
+                .with_context(|| {
+                    format!("{key} entry {repo} must be a quoted owner/repo in {file}")
+                })
+        })
+        .collect()
+}
+
+/// Whether `repo` names a GitHub repository as `owner/repo`.
+fn is_owner_repo(repo: &str) -> bool {
+    let parts: Vec<_> = repo.split('/').collect();
+    parts.len() == 2
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        })
+}
+
 /// A validated User config with every setting present, ready for Setup.
 /// Preparation and edits preserve the user's TOML spelling and comments.
 /// A Security section between Harness sections moves after them.
@@ -389,6 +572,7 @@ pub struct UserConfigChanges {
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
+    pub triage_allow_ready_for_agent: bool,
     pub security_fix: bool,
     pub security_close: bool,
     pub security_review: bool,
@@ -418,8 +602,10 @@ impl UserConfigDocument {
     }
 
     fn prepare(text: &str, path: &Path, home: &Path) -> Result<Self> {
-        UserConfig::parse(text, path, home)?;
-        let completed = complete(text)?;
+        let settings = UserConfig::parse(text, path, home)?;
+        let mut document: DocumentMut = text.parse()?;
+        console::fleet::migrate_document(&mut document, &settings.console.fleet);
+        let completed = complete(&document.to_string())?;
         let settings = UserConfig::parse(&completed, path, home)?;
         // Completion appends missing implicit sections after the original
         // text. Reparse that text so subsequent edits keep their placement.
@@ -449,10 +635,24 @@ impl UserConfigDocument {
                     let emails: toml_edit::Array = console.allowed_emails.iter().collect();
                     set(&mut document, "console", "allowed_emails", emails);
                 }
+                if console.other_accounts != self.settings.console.other_accounts {
+                    set(
+                        &mut document,
+                        "console",
+                        "other_accounts",
+                        console.other_accounts.value(),
+                    );
+                }
             }
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
+            set(
+                &mut document,
+                "triage",
+                "allow_ready_for_agent",
+                changes.triage_allow_ready_for_agent,
+            );
             set(&mut document, "security", "fix", changes.security_fix);
             set(&mut document, "security", "close", changes.security_close);
             set(&mut document, "security", "review", changes.security_review);
@@ -578,6 +778,11 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    set_value(old, value);
+}
+
+/// Replace a value using the same comment and array edits as Setup.
+fn set_value(old: &mut toml_edit::Value, value: toml_edit::Value) {
     if let (Some(existing), Some(replacement)) = (old.as_array_mut(), value.as_array()) {
         edit_array(existing, replacement);
         return;
@@ -924,7 +1129,9 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// The User config Setup writes with no answers: every key at its default,
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
-pub const DEFAULTS: &str = r#"[merge]
+pub const DEFAULTS: &str = r#"launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
+
+[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
@@ -938,6 +1145,10 @@ always = false                  # every Ticket run sends a Run notification, wit
 unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
+to_by_repo = {}                 # Run notification recipients keyed by "owner/repo"; default empty, falling back to email.to
+
+[review]
+commands_by_repo = {}   # extra validation commands for each "owner/repo" in every Review run; default empty
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
@@ -954,7 +1165,9 @@ silent_minutes = 10   # minutes without growth in either log before a Ticket run
 address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
-other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+address_scopes = {}  # an address absent here has all five scopes; CLI-only; default {}
+fleet = []           # named Console addresses; tokens live in Credentials; default []
+other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
 
@@ -968,8 +1181,11 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
 max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
 
+[pass]
+command_limit = 1   # how many Commands running on one repository on this machine stop a Pass starting another; default 1
+
 [pickup]
-limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
+failure_limit = 3   # how many open issues the factory failed on stop a Pickup run taking another; default 3
 wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
@@ -999,6 +1215,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[triage]
+allow_ready_for_agent = false   # keep recommended ready-for-agent on filed issues; default false
+read_machine = []   # repositories ("owner/repo") whose Triage runs read the whole machine in the read-only sandbox, as --read-machine does; default none
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
@@ -1090,13 +1310,23 @@ pub fn home() -> Result<PathBuf> {
 /// `path` as an absolute path, with a leading `~` expanded to `home`, or
 /// `None` if it is relative: the directory a Run is launched from is no base
 /// for a setting that holds for every Run.
-fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
+pub(crate) fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
     let path = match path.strip_prefix('~') {
         Some("") => home.to_path_buf(),
         Some(rest) => home.join(rest.strip_prefix('/')?),
         None => PathBuf::from(path),
     };
     path.is_absolute().then_some(path)
+}
+
+/// Formatting assertions below and in Setup compare the retained sections,
+/// after verifying the only new root default preceding them.
+#[cfg(test)]
+pub(crate) fn without_launch_directories_default(text: &str) -> String {
+    let mut document: DocumentMut = text.parse().unwrap();
+    let added = document.remove("launch_directories").expect("root default");
+    assert_eq!(added.as_array().map(|array| array.is_empty()), Some(true));
+    document.to_string()
 }
 
 #[cfg(test)]
@@ -1109,6 +1339,29 @@ mod tests {
             Path::new("/home/me/.thirdshift/config.toml"),
             Path::new("/home/me"),
         )
+    }
+
+    #[test]
+    fn triage_read_machine_opts_in_named_repositories_whatever_their_case() {
+        let repo = |owner: &str, name: &str| Repo {
+            owner: owner.into(),
+            name: name.into(),
+        };
+        let widgets = repo("acme", "widgets");
+        assert!(!parse("").unwrap().triage_reads_machine(&widgets));
+        let config = parse("[triage]\nread_machine = [\"Acme/Widgets\"]\n").unwrap();
+        assert!(config.triage_reads_machine(&widgets));
+        assert!(config.triage_reads_machine(&repo("ACME", "WIDGETS")));
+        assert!(!config.triage_reads_machine(&repo("acme", "gadgets")));
+        for text in [
+            "[triage]\nread_machine = \"acme/widgets\"\n",
+            "[triage]\nread_machine = [\"widgets\"]\n",
+            "[triage]\nread_machine = [\"acme/widgets/extra\"]\n",
+            "[triage]\nread_machine = [7]\n",
+        ] {
+            let error = format!("{:#}", parse(text).unwrap_err());
+            assert!(error.contains("triage.read_machine"), "{text}: {error}");
+        }
     }
 
     #[test]
@@ -1128,6 +1381,64 @@ mod tests {
             "[resources]\nunknown = 3\n",
         ] {
             assert!(parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn review_commands_preserve_shell_text_and_order_and_match_repository_case() {
+        let config = parse(
+            r#"[review.commands_by_repo]
+"ACME/Widgets" = ['printf "%s\n" "two words"', "cargo test --test slow"]
+"other/repo" = []
+"#,
+        )
+        .unwrap();
+        let repo = Repo {
+            owner: "acme".into(),
+            name: "WIDGETS".into(),
+        };
+        assert_eq!(
+            config.review.commands_for(&repo),
+            [r#"printf "%s\n" "two words""#, "cargo test --test slow"]
+        );
+        assert!(
+            config
+                .review
+                .commands_for(&Repo {
+                    owner: "other".into(),
+                    name: "repo".into()
+                })
+                .is_empty()
+        );
+        assert!(
+            config
+                .review
+                .commands_for(&Repo {
+                    owner: "unlisted".into(),
+                    name: "repo".into()
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn invalid_review_commands_name_the_config_and_reject_ambiguous_or_empty_entries() {
+        for text in [
+            "review = []",
+            "[review]\nunknown = true",
+            "[review]\ncommands_by_repo = []",
+            "[review.commands_by_repo]\n'widgets' = []",
+            "[review.commands_by_repo]\n'acme/' = []",
+            "[review.commands_by_repo]\n'acme/widget s' = []",
+            "[review.commands_by_repo]\n'acme/widgets/extra' = []",
+            "[review.commands_by_repo]\n'acme/widgets' = 'cargo test'",
+            "[review.commands_by_repo]\n'acme/widgets' = [1]",
+            "[review.commands_by_repo]\n'acme/widgets' = [' ']",
+            "[review.commands_by_repo]\n'Acme/Widgets' = []\n'acme/widgets' = []",
+        ] {
+            let error = format!("{:#}", parse(text).expect_err(text));
+            assert!(error.contains("invalid [review]"), "{text}: {error}");
+            assert!(error.contains("config.toml"), "{text}: {error}");
         }
     }
 
@@ -1162,11 +1473,16 @@ mod tests {
             });
             assert!(comment.contains("default"), "[{section}] {line:?}");
             let key = setting.trim_start_matches("# ").split(' ').next().unwrap();
-            keys.push(format!("{section}.{key}"));
+            keys.push(if section.is_empty() {
+                key.into()
+            } else {
+                format!("{section}.{key}")
+            });
         }
         assert_eq!(
             keys,
             [
+                "launch_directories",
                 "merge.always",
                 "base.fix",
                 "launch.pull",
@@ -1174,6 +1490,8 @@ mod tests {
                 "email.unless_merged",
                 "email.to",
                 "email.from",
+                "email.to_by_repo",
+                "review.commands_by_repo",
                 "logs.dir",
                 "logs.waiting_line_minutes",
                 "otlp.endpoint",
@@ -1182,14 +1500,17 @@ mod tests {
                 "console.address",
                 "console.port",
                 "console.allowed_emails",
-                "console.other_consoles",
+                "console.address_scopes",
+                "console.fleet",
+                "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "resources.min_available_memory_mb",
                 "resources.max_load_per_cpu_percent",
-                "pickup.limit",
+                "pass.command_limit",
+                "pickup.failure_limit",
                 "pickup.wait_minutes",
                 "pickup.order",
                 "harness.default",
@@ -1205,6 +1526,8 @@ mod tests {
                 "harness.muse.effort",
                 "harness.opencode.model",
                 "harness.opencode.effort",
+                "triage.allow_ready_for_agent",
+                "triage.read_machine",
                 "security.fix",
                 "security.close",
                 "security.review",
@@ -1383,11 +1706,46 @@ mod tests {
     }
 
     #[test]
-    fn pickup_limit_is_read_and_defaults_to_3() {
-        let config = parse("[pickup]\nlimit = 1\n").unwrap();
-        assert_eq!(config.pickup_limit.get(), 1);
+    fn pickup_failure_limit_is_read_and_defaults_to_3() {
+        let config = parse("[pickup]\nfailure_limit = 1\n").unwrap();
+        assert_eq!(config.pickup_failure_limit.get(), 1);
         for text in ["", "[pickup]\n"] {
-            assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
+            let config = parse(text).unwrap();
+            assert_eq!(config.pickup_failure_limit.get(), 3, "{text:?}");
+            assert!(config.warnings.is_empty(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn an_old_pickup_limit_of_any_value_is_ignored_with_a_warning_naming_failure_limit() {
+        for value in ["10", "0", "\"3\"", "true"] {
+            let config = parse(&format!("[pickup]\nlimit = {value}\nfailure_limit = 2\n")).unwrap();
+            assert_eq!(config.pickup_failure_limit.get(), 2, "{value}");
+            assert_eq!(
+                config.warnings,
+                [
+                    "pickup.limit is ignored: a Pickup run now counts the issues it failed on, \
+                     up to pickup.failure_limit; remove pickup.limit from the User config \
+                     /home/me/.thirdshift/config.toml"
+                ],
+                "{value}"
+            );
+        }
+        assert_eq!(
+            parse("[pickup]\nlimit = 10\n")
+                .unwrap()
+                .pickup_failure_limit
+                .get(),
+            3
+        );
+    }
+
+    #[test]
+    fn command_limit_is_read_and_defaults_to_1() {
+        let config = parse("[pass]\ncommand_limit = 2\n").unwrap();
+        assert_eq!(config.command_limit.get(), 2);
+        for text in ["", "[pass]\n"] {
+            assert_eq!(parse(text).unwrap().command_limit.get(), 1, "{text:?}");
         }
     }
 
@@ -1603,23 +1961,44 @@ mod tests {
                 "[spec]\nparallel = \"2\"\n",
                 "spec.parallel must be a whole number from 1 up",
             ),
+            (
+                "[pass]\ncomand_limit = 2\n",
+                "unknown key pass.comand_limit",
+            ),
+            ("pass = 2\n", "pass must be the section [pass]"),
+            (
+                "[pass]\ncommand_limit = 0\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = -1\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = 2.5\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
+            (
+                "[pass]\ncommand_limit = \"2\"\n",
+                "pass.command_limit must be a whole number from 1 up",
+            ),
             ("[pickup]\nlimt = 2\n", "unknown key pickup.limt"),
             ("pickup = 2\n", "pickup must be the section [pickup]"),
             (
-                "[pickup]\nlimit = 0\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = 0\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = -1\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = -1\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = 2.5\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = 2.5\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
             (
-                "[pickup]\nlimit = \"2\"\n",
-                "pickup.limit must be a whole number from 1 up",
+                "[pickup]\nfailure_limit = \"2\"\n",
+                "pickup.failure_limit must be a whole number from 1 up",
             ),
         ] {
             let error = format!("{:#}", parse(text).unwrap_err());
@@ -1678,6 +2057,7 @@ mod tests {
             merge_always: true,
             base_fix: true,
             launch_pull: true,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
@@ -1703,7 +2083,7 @@ mod tests {
         assert_eq!(config.harness.codex.effort.as_deref(), Some("max"));
         assert_eq!(config.logs_dir, home.join(".thirdshift/logs"));
         assert_eq!(config.spec_parallel.get(), 3);
-        assert_eq!(config.pickup_limit.get(), 3);
+        assert_eq!(config.pickup_failure_limit.get(), 3);
     }
 
     /// `text` completed, after checking a Run reads it with the settings it
@@ -1839,6 +2219,7 @@ mod tests {
             merge_always: false,
             base_fix: false,
             launch_pull: false,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: true,
             security_review: false,
@@ -1864,7 +2245,8 @@ mod tests {
         let text =
             "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
         let answered = document(text).render(Some(notifications_to("me@example.com")));
-        let lines: Vec<&str> = answered.lines().collect();
+        let retained = without_launch_directories_default(&answered);
+        let lines: Vec<&str> = retained.lines().collect();
         assert_eq!(
             lines[..4],
             ["[email]", "always = true", "", "# mine"],
@@ -1935,6 +2317,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: false,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
@@ -1949,7 +2332,8 @@ mod tests {
         };
         let rendered = document(text).render(Some(changes));
         assert!(
-            rendered.starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
+            without_launch_directories_default(&rendered)
+                .starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
             "{rendered}"
         );
         assert!(
@@ -1982,6 +2366,7 @@ mod tests {
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
+                triage_allow_ready_for_agent: false,
                 security_fix: false,
                 security_close: false,
                 security_review: false,
@@ -2014,9 +2399,12 @@ mod tests {
             assert_eq!(config.logs_dir, before.logs_dir);
             assert_eq!(config.quiet_skips, before.quiet_skips);
             assert_eq!(config.spec_parallel, before.spec_parallel);
-            assert_eq!(config.pickup_limit, before.pickup_limit);
+            assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
             if let Some(comment) = text.lines().next().filter(|line| line.starts_with('#')) {
-                assert!(rendered.starts_with(comment), "{rendered}");
+                assert!(
+                    without_launch_directories_default(&rendered).starts_with(comment),
+                    "{rendered}"
+                );
             }
             // The completed rendering still uses the user's representation.
             if text.contains("merge.always") {
@@ -2038,7 +2426,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    rendered
+                    without_launch_directories_default(&rendered)
                         .starts_with("[harness.codex]\nmodel = \"\"    # mine\neffort = \"\"\n"),
                     "{rendered}"
                 );
@@ -2055,7 +2443,7 @@ mod tests {
         let mut text = "[email]\nalways = true # enabled\nto = 'saved@example.com' # inbox\n\
                         from = 'saved@example.net' # sender\n\
                         [logs]\ndir = '~/custom'\n[activity]\nquiet_skips = true\n\
-                        [spec]\nparallel = 1_000 # capacity\n[pickup]\nlimit = 7\n\
+                        [spec]\nparallel = 1_000 # capacity\n[pickup]\nfailure_limit = 7\n\
                         [harness]\ndefault = 'muse' # chosen\n"
             .to_string();
         for harness in Harness::ALL {
@@ -2070,6 +2458,7 @@ mod tests {
             merge_always: true,
             base_fix: false,
             launch_pull: true,
+            triage_allow_ready_for_agent: false,
             security_fix: false,
             security_close: false,
             security_review: false,
@@ -2085,10 +2474,10 @@ mod tests {
         assert_eq!(config.logs_dir, before.logs_dir);
         assert_eq!(config.quiet_skips, before.quiet_skips);
         assert_eq!(config.spec_parallel, before.spec_parallel);
-        assert_eq!(config.pickup_limit, before.pickup_limit);
+        assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
         assert!(config.merge_always && config.launch_pull);
         assert!(!config.base_fix);
-        assert!(rendered.starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
+        assert!(without_launch_directories_default(&rendered).starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
         for line in text
             .lines()
             .filter(|line| *line != "always = true # enabled")
@@ -2108,7 +2497,8 @@ mod tests {
         let config = parse(&rendered).unwrap();
         assert!(config.email.always);
         assert_eq!(config.email.to.as_deref(), Some(to));
-        let lines: Vec<_> = rendered.lines().collect();
+        let retained = without_launch_directories_default(&rendered);
+        let lines: Vec<_> = retained.lines().collect();
         assert_eq!(lines[..3], ["[email]", "always = true", "# mine"]);
         assert!(lines[3].starts_with("to = "), "{rendered}");
         assert!(
@@ -2160,11 +2550,17 @@ mod tests {
             );
             let completed = document(&text).render(None);
             assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
-            assert!(completed.starts_with(&text), "{completed}");
+            assert!(
+                without_launch_directories_default(&completed).starts_with(&text),
+                "{completed}"
+            );
             assert_eq!(document(&completed).render(None), completed);
 
             let rendered = document(&text).render(Some(notifications_to("me@example.com")));
-            assert!(rendered.starts_with(header), "{rendered}");
+            assert!(
+                without_launch_directories_default(&rendered).starts_with(header),
+                "{rendered}"
+            );
             assert!(!rendered.contains("# to ="), "{rendered}");
             let lines: Vec<_> = rendered.lines().collect();
             let to = lines

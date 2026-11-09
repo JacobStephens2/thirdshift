@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, DismissedRow, READY_KIND};
-use crate::logs::github::{FindingSubject, Kept, RowAnswer, Subject};
+use crate::logs::github::{CommandAnswer, FindingSubject, Kept, Subject};
 use crate::logs::stop;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum Group {
     #[serde(rename = "needs you")]
@@ -28,6 +28,36 @@ pub(in crate::logs) enum Group {
 }
 
 impl Group {
+    pub(in crate::logs) fn row_order(
+        self,
+        kind: Option<NeedsYouKind>,
+        ended_or_started: Option<&str>,
+    ) -> RowOrder {
+        (
+            self,
+            kind.map(NeedsYouKind::priority),
+            Reverse(time(ended_or_started)),
+        )
+    }
+
+    pub(in crate::logs) fn state_word(
+        self,
+        kind: Option<NeedsYouKind>,
+        stopping: bool,
+        state: &str,
+    ) -> &str {
+        if let Some(kind) = kind {
+            return kind.title();
+        }
+        if stopping {
+            return "Stopping";
+        }
+        match self {
+            Self::ReadyForReview => "Ready",
+            Self::Landing => "Landing",
+            Self::NeedsYou | Self::Working | Self::Done | Self::Resolved | Self::History => state,
+        }
+    }
     pub(in crate::logs) const ORDER: [Self; 7] = [
         Self::NeedsYou,
         Self::ReadyForReview,
@@ -51,13 +81,14 @@ impl Group {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum NeedsYouKind {
     Silent,
     Slow,
     Died,
     Failed,
+    Paused,
     Triage,
     Finding,
 }
@@ -69,6 +100,7 @@ impl NeedsYouKind {
             Self::Slow => "Slow",
             Self::Died => "Died",
             Self::Failed => "Failed",
+            Self::Paused => "Paused",
             Self::Triage => "Triage",
             Self::Finding => "Finding",
         }
@@ -78,13 +110,13 @@ impl NeedsYouKind {
         match self {
             Self::Silent => 0,
             Self::Slow => 1,
-            _ => 2,
+            Self::Died | Self::Failed | Self::Paused | Self::Triage | Self::Finding => 2,
         }
     }
 }
 
 /// Why a row left Needs you or Ready for review through the exit this
-/// machine knows: a later Command starting on the same issue.
+/// machine knows: a later Command starting on the same issue or pull request.
 pub(in crate::logs) const TAKEN_UP_REASON: &str = "taken up by a later Command";
 /// Why a waiting row left through GitHub: its pull request merged.
 pub(in crate::logs) const MERGED_REASON: &str = "pull request merged";
@@ -107,34 +139,23 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// A waiting group's departure, absent for rows that never waited or aged out.
     #[serde(flatten)]
     departure: Option<Departure>,
-    /// What GitHub last showed for the row's pull request: `open`,
-    /// `merged` or `closed`. `None` where GitHub speaks for no row: one
-    /// with no pull request, one not read yet, or one GitHub can't resolve.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github_state: Option<String>,
-    /// The pull request's merge or close time, RFC 3339, for a merged or
-    /// closed row: when the row stopped waiting.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github_at: Option<String>,
-    /// The row's own or dispatched issue/PR facts, finding waits and the
-    /// time each was read. History retains its own observation times.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github: Option<RowAnswer>,
+    #[serde(flatten)]
+    pub github: CommandAnswer,
     /// Who dismissed the row, when, from where and all kinds covered.
     /// `None` while the row waits or was never dismissed for its kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissal: Option<DismissalView>,
 }
 
-#[derive(Serialize)]
-struct Departure {
+#[derive(Serialize, Deserialize)]
+pub(in crate::logs) struct Departure {
     left_from: String,
     left_reason: String,
     left_at: String,
 }
 
 impl Departure {
-    fn line(&self) -> String {
+    pub(in crate::logs) fn line(&self) -> String {
         let Self {
             left_from,
             left_reason,
@@ -149,6 +170,24 @@ impl Departure {
 }
 
 impl InboxItem<'_> {
+    pub(in crate::logs) fn order(&self) -> RowOrder {
+        let facts = self.command.facts();
+        self.group.row_order(
+            self.needs_you_kind,
+            facts.ended_at.or(Some(facts.started_at)),
+        )
+    }
+
+    /// Offer the Fix run only for a pull request still waiting for review
+    /// whose latest kept facts show work for Delivery to repair.
+    pub(in crate::logs) fn fix_command(&self) -> Option<String> {
+        (self.group == Group::ReadyForReview
+            && (self.github.ci == Some(crate::github::InboxCi::Red)
+                || self.github.mergeable == Some(crate::github::InboxMergeable::Conflicting)))
+        .then(|| record_pull_request(&self.command).map(|url| format!("thirdshift fix {url}")))
+        .flatten()
+    }
+
     pub(in crate::logs) fn cause(&self) -> Option<&str> {
         self.command.facts().cause
     }
@@ -163,17 +202,11 @@ impl InboxItem<'_> {
     /// The row's state word in the Console and `status`: its Needs you kind,
     /// then Stopping, Ready or Landing, otherwise the Command's own state.
     pub(in crate::logs) fn state_word(&self) -> &str {
-        if let Some(kind) = self.needs_you_kind {
-            return kind.title();
-        }
-        if self.stopping {
-            return "Stopping";
-        }
-        match self.group {
-            Group::ReadyForReview => "Ready",
-            Group::Landing => "Landing",
-            _ => self.command.facts().state,
-        }
+        self.group.state_word(
+            self.needs_you_kind,
+            self.stopping,
+            self.command.facts().state,
+        )
     }
 }
 
@@ -191,6 +224,8 @@ impl<'a> Observation<'a> {
         let facts = self.facts();
         if facts.state == "died" {
             Some(NeedsYouKind::Died)
+        } else if facts.outcome == Some("paused") {
+            Some(NeedsYouKind::Paused)
         } else if matches!(self, Observation::Record(_) if facts.state == "ended" && !facts.ready && stop.is_some_and(|request| !request.requeue))
         {
             Some(NeedsYouKind::Triage)
@@ -347,10 +382,12 @@ impl RefreshWork {
     }
 }
 
+pub(in crate::logs) type RowOrder = (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>);
+
 struct Row<'a> {
     item: InboxItem<'a>,
-    order: (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>),
-    failure: Option<(&'a str, bool)>,
+    order: RowOrder,
+    failure: Option<(&'a str, bool, Option<&'a str>)>,
 }
 
 /// One operation's retained Inbox decisions. Projections read only this value;
@@ -458,14 +495,15 @@ pub(super) fn evaluate<'a>(
         .collect();
     let starts: Vec<_> = observations
         .iter()
-        .map(|row| issue_starts(row.command))
+        .map(|row| work_starts(row.command))
         .collect();
-    let starts_by_issue = all_starts(&starts);
+    let starts_by_work = all_starts(&starts);
+    let commands_for_resume: Vec<_> = observations.iter().map(|row| row.command).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
-        for (issue, start) in starts {
+        for (work, start) in starts {
             latest
-                .entry(issue)
+                .entry(work)
                 .and_modify(|time: &mut DateTime<FixedOffset>| *time = (*time).max(*start))
                 .or_insert(*start);
         }
@@ -513,13 +551,15 @@ pub(super) fn evaluate<'a>(
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let stopping = captured.stopping;
         // When this row stopped waiting through the later-Command exit:
-        // the earliest later start on any of its issues. Only rows that
-        // waited (ended problems and ready Commands) leave through it, so
+        // the earliest later start on any of its issues or pull requests.
+        // Only rows that waited (ended problems and ready Commands) leave through it, so
         // a Command that never waited keeps going by when it ended, and a
         // row that ages out keeps going straight to History.
         let waited = problem.is_some() || facts.ready;
-        let taken_up = if waited {
-            superseded_at(starts, &starts_by_issue, ended)
+        let taken_up = if facts.outcome == Some("paused") {
+            resumed_at(command, &commands_for_resume, ended)
+        } else if waited {
+            superseded_at(starts, &starts_by_work, ended)
         } else {
             None
         };
@@ -551,7 +591,7 @@ pub(super) fn evaluate<'a>(
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
             && !starts
                 .iter()
-                .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start)))
+                .any(|(work, start)| latest.get(work).is_some_and(|latest| latest > start)))
             || github_holds;
         // A dismissal holds for every kind it covered: a row that turns
         // into a kind it wasn't when dismissed waits again. Its kind is
@@ -567,7 +607,12 @@ pub(super) fn evaluate<'a>(
         let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
         let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = live_problem
-            .or_else(|| problem.filter(|_| held && github_moved.is_none()))
+            .or_else(|| {
+                problem.filter(|_| {
+                    held && github_moved.is_none()
+                        && (facts.outcome != Some("paused") || taken_up.is_none())
+                })
+            })
             .filter(|_| !dismissed);
         let from = if problem.is_some() {
             Some("needs you")
@@ -610,7 +655,6 @@ pub(super) fn evaluate<'a>(
         };
         // A row GitHub finished weeks ago goes straight to History when
         // first read, instead of filling Resolved at once.
-        let state = github_state(&command, github);
         let departure = left
             .map(|at| (TAKEN_UP_REASON.to_string(), at))
             .or(github_moved);
@@ -687,15 +731,11 @@ pub(super) fn evaluate<'a>(
                 .as_ref()
                 .is_some_and(|row| row.kind == NeedsYouKind::Failed.title());
         evaluation.rows.push(Row {
-            order: (
-                group,
-                needs_you_kind.map(NeedsYouKind::priority),
-                Reverse(time(facts.ended_at.or(Some(facts.started_at)))),
-            ),
+            order: group.row_order(needs_you_kind, facts.ended_at.or(Some(facts.started_at))),
             failure: facts
                 .cause
                 .filter(|cause| failed && !cause.is_empty())
-                .map(|cause| (cause, dismissal.is_some())),
+                .map(|cause| (cause, dismissal.is_some(), command.account())),
             item: InboxItem {
                 command,
                 group,
@@ -709,11 +749,10 @@ pub(super) fn evaluate<'a>(
                     left_reason: reason,
                     left_at: at.to_rfc3339(),
                 }),
-                github_state: state.map(|state| state.state.to_string()),
-                github_at: state.and_then(event_time).map(str::to_string),
                 github: command
                     .selector()
-                    .and_then(|row| github.row_answer(&row, urls)),
+                    .map(|row| github.command_answer(&row, record_pull_request(&command), urls))
+                    .unwrap_or_default(),
                 dismissal,
             },
         });
@@ -781,11 +820,6 @@ fn github_state<'a>(
     github: &'a Kept,
 ) -> Option<&'a PullRequestState> {
     github.pull_request(&observation.selector()?, record_pull_request(observation)?)
-}
-
-/// The pull request's merge or close time, as GitHub wrote it.
-fn event_time(state: &PullRequestState) -> Option<&str> {
-    state.merged_at.as_deref().or(state.closed_at.as_deref())
 }
 
 /// When an ended row stopped waiting through GitHub, with why it left.
@@ -857,7 +891,7 @@ fn github_work_left(
                     if pull.state != PrState::Merged {
                         return None;
                     }
-                    (MERGED_REASON, event_time(pull))
+                    (MERGED_REASON, pull.event_time())
                 };
                 time(at)
                     .or(ended)
@@ -872,7 +906,7 @@ fn github_work_left(
     }
     let state = github_state(&observation, github)?;
     let (reason, at) = match state.state {
-        PrState::Merged => (MERGED_REASON.to_string(), event_time(state)),
+        PrState::Merged => (MERGED_REASON.to_string(), state.event_time()),
         PrState::Closed => (CLOSED_REASON.to_string(), state.closed_at.as_deref()),
         PrState::Open => return None,
     };
@@ -932,14 +966,21 @@ fn is_landing(command: &Command) -> bool {
             .any(is_landing)
 }
 
-/// Every start on the machine per issue, oldest first.
+/// Work whose later Command can take up an earlier waiting Inbox row.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Work {
+    Issue(String, u64),
+    PullRequest(String),
+}
+
+/// Every start on the machine per issue or pull request, oldest first.
 fn all_starts(
-    starts: &[BTreeMap<(String, u64), DateTime<FixedOffset>>],
-) -> BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> {
-    let mut all: BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> = BTreeMap::new();
+    starts: &[BTreeMap<Work, DateTime<FixedOffset>>],
+) -> BTreeMap<Work, Vec<DateTime<FixedOffset>>> {
+    let mut all: BTreeMap<Work, Vec<DateTime<FixedOffset>>> = BTreeMap::new();
     for starts in starts {
-        for (issue, start) in starts {
-            all.entry(issue.clone()).or_default().push(*start);
+        for (work, start) in starts {
+            all.entry(work.clone()).or_default().push(*start);
         }
     }
     for times in all.values_mut() {
@@ -951,14 +992,14 @@ fn all_starts(
 /// The earliest later start after this row began waiting. An overlapping
 /// Command cannot take up its ended work or hide a subsequent start that can.
 fn superseded_at(
-    starts: &BTreeMap<(String, u64), DateTime<FixedOffset>>,
-    all: &BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>>,
+    starts: &BTreeMap<Work, DateTime<FixedOffset>>,
+    all: &BTreeMap<Work, Vec<DateTime<FixedOffset>>>,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<DateTime<FixedOffset>> {
     starts
         .iter()
-        .filter_map(|(issue, start)| {
-            all.get(issue).and_then(|times| {
+        .filter_map(|(work, start)| {
+            all.get(work).and_then(|times| {
                 times
                     .iter()
                     .find(|time| **time > *start && ended.is_none_or(|end| **time >= end))
@@ -968,17 +1009,61 @@ fn superseded_at(
         .min()
 }
 
-fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<FixedOffset>> {
+/// Eval work has no issue: its own identity supplies the later-Command exit.
+fn resumed_at(
+    command: Observation<'_>,
+    all: &[Observation<'_>],
+    ended: Option<DateTime<FixedOffset>>,
+) -> Option<DateTime<FixedOffset>> {
+    let Observation::Record(command) = command else {
+        return None;
+    };
+    let start = time(Some(&command.record.started_at))?;
+    all.iter()
+        .filter_map(|other| {
+            let Observation::Record(other) = other else {
+                return None;
+            };
+            let same_work = command.account == other.account
+                && command
+                    .record
+                    .repository
+                    .eq_ignore_ascii_case(&other.record.repository)
+                && match (command.record.kind.as_str(), other.record.kind.as_str()) {
+                    ("Experiment", "Experiment") => command
+                        .record
+                        .experiment
+                        .as_ref()
+                        .zip(other.record.experiment.as_ref())
+                        .is_some_and(|(a, b)| a.id == b.id),
+                    ("Scoring run", "Scoring run") => true,
+                    _ => false,
+                };
+            let at = time(Some(&other.record.started_at))?;
+            (same_work && at > start && ended.is_none_or(|end| at >= end)).then_some(at)
+        })
+        .min()
+}
+
+fn work_starts(entry: Observation<'_>) -> BTreeMap<Work, DateTime<FixedOffset>> {
     let mut starts = BTreeMap::new();
-    fn collect(command: &Command, starts: &mut BTreeMap<(String, u64), DateTime<FixedOffset>>) {
+    fn collect(command: &Command, starts: &mut BTreeMap<Work, DateTime<FixedOffset>>) {
         let record = &command.record;
-        if let Some(issue) = &record.issue
-            && let Some(start) = time(Some(&record.started_at))
-        {
-            starts
-                .entry((record.repository.to_ascii_lowercase(), issue.number))
-                .and_modify(|latest| *latest = (*latest).max(start))
-                .or_insert(start);
+        if let Some(start) = time(Some(&record.started_at)) {
+            let issue = record
+                .issue
+                .as_ref()
+                .map(|issue| Work::Issue(record.repository.to_ascii_lowercase(), issue.number));
+            let pull_request = record
+                .pull_request
+                .as_ref()
+                .map(|url| Work::PullRequest(url.trim_end_matches('/').to_ascii_lowercase()));
+            for work in issue.into_iter().chain(pull_request) {
+                starts
+                    .entry(work)
+                    .and_modify(|latest| *latest = (*latest).max(start))
+                    .or_insert(start);
+            }
         }
         for child in command.dispatched.iter().chain(&command.children) {
             collect(child, starts);
@@ -991,7 +1076,7 @@ fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<Fixe
                 && let Some(start) = time(Some(&command.started_at))
             {
                 starts.insert(
-                    (command.repository.to_ascii_lowercase(), issue.number),
+                    Work::Issue(command.repository.to_ascii_lowercase(), issue.number),
                     start,
                 );
             }

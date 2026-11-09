@@ -14,9 +14,9 @@ use super::{Arm, Task, store, trial, trial_results};
 use crate::session::limits;
 use crate::{interrupt, logs, progress};
 
-struct Trial<'a> {
-    task: &'a Task,
-    arm: Arm,
+pub(super) struct Trial<'a> {
+    pub task: &'a Task,
+    pub arm: Arm,
     index: usize,
 }
 
@@ -31,16 +31,8 @@ impl Trial<'_> {
     }
 }
 
-pub(super) fn run(experiment: &store::Stored) -> Result<()> {
-    let signal = experiment.directory.join("plan-limit");
-    match fs::remove_file(&signal) {
-        Ok(()) => (),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-        Err(error) => return Err(error.into()),
-    }
-    logs::stage(logs::Stage::Trials);
-    let context = logs::trace_context().context("Experiment has no Trace context")?;
-    let runner = trial::Runner::prepare(experiment, &signal, &context)?;
+/// The Trials without a terminal result, in the order workers take them.
+pub(super) fn remaining(experiment: &store::Stored) -> VecDeque<Trial<'_>> {
     let mut queue = VecDeque::new();
     for task in &experiment.tasks {
         for index in 0..experiment.description.bar.trials_per_task[&task.suite] {
@@ -52,6 +44,20 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             }
         }
     }
+    queue
+}
+
+pub(super) fn run(experiment: &store::Stored) -> Result<()> {
+    let signal = experiment.directory.join("plan-limit");
+    match fs::remove_file(&signal) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
+    logs::stage(logs::Stage::Trials);
+    let context = logs::trace_context().context("Experiment has no Trace context")?;
+    let runner = trial::Runner::prepare(experiment, &signal, &context)?;
+    let queue = remaining(experiment);
     progress::step(format!("Trials: {} remaining, two workers", queue.len()));
     let queue = Mutex::new(queue);
     let stopped = AtomicBool::new(false);

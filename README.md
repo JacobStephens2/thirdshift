@@ -6,7 +6,7 @@ Use **Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode**, 
 
 Each Ticket run implements the issue, reviews the change against the issue and your repository's standards, and keeps the pull request mergeable and passing CI. It leaves the pull request for your review, or merges it when asked. If a run fails, it reports what work was preserved and how to continue.
 
-Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/).
+Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/). Coding agents can start from [thirdshift.app/llms.txt](https://thirdshift.app/llms.txt), a Markdown index of the manual, the site and the source.
 
 ## Install
 
@@ -15,7 +15,12 @@ curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download
 thirdshift setup
 ```
 
-The installer puts a single binary in `~/.local/bin`; no Rust toolchain or checkout of this repo is needed. Supported: x86_64 Linux (Rocky, Ubuntu and WSL2) and Apple Silicon macOS. See [supported versions](docs/guide.md#supported-platforms) and [other installation methods](docs/guide.md#install).
+The installer puts a single statically linked Linux binary in `~/.local/bin`; no Rust toolchain or checkout of this repo is needed. thirdshift supports Linux only:
+
+- **Test suite in CI:** Ubuntu 24.04.3 and later, `x86_64` and `aarch64`. On Apple Silicon macOS, run Ubuntu 24.04 `aarch64` in a Linux VM such as Lima with `vz` and `--mount-none`. Keep repositories on the VM's Linux filesystem (e.g. `~/repos`), not under `/Users`.
+- **Release smoke check only:** Rocky Linux 9.8 and later (`x86_64`) and WSL2 with Ubuntu 24.04 or later (`x86_64`). In WSL2, keep repositories on the Linux filesystem, not under `/mnt/c`.
+
+Native macOS (including Intel macOS) and native Windows have no binary. See [supported platforms](docs/guide.md#supported-platforms) and [other installation methods](docs/guide.md#install).
 
 Have `git`, authenticated `gh`, and one of the supported coding agent CLIs installed. Set git's `user.name` and `user.email` and make sure it can push. [Prerequisites and permissions](docs/guide.md#prerequisites) covers setup and access: sessions run unattended as your user, with access to that account's files, credentials and tools.
 
@@ -53,9 +58,23 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | Issues marked `ready-for-agent` | `thirdshift pickup` | A [Pickup run](docs/guide.md#pickup-runs) takes the lowest-numbered Ready issue. |
 | Architecture improvements | `thirdshift architect` | An [Architect run](docs/guide.md#architect-runs) reviews the codebase, publishes a plan and builds it, or files an idea for triage. |
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
+| An existing pull request | `thirdshift review <PR URL>` | A [Review run](docs/guide.md#review-runs) addresses Standards and Spec findings, pushes fixes without force and comments with fixes and Unaddressed findings. `--recommend-only` posts findings without fixes. |
+| Base branch CI, conflicts or red CI on a pull request | `thirdshift fix [<PR URL or number>]` | A [Fix run](docs/guide.md#fix-runs) takes an open, ready or draft PR through Delivery and the Repair loop against its own Base branch, with an optional Self-merge. Without a target it is a Pass that checks Base branch CI first unless scoped by author, then selects the lowest-numbered eligible non-draft PR; `base <branch>` and `--author <login>` scope selection. |
+| One author's waiting pull requests | `thirdshift review --author <login>` | A Pass takes the lowest-numbered eligible open pull request by that author. Reviewed heads, `in-progress` pull requests and unreviewed open bases wait. |
+| A Report: an email, chat message, transcript or alert | `thirdshift triage --file report.txt` | A [Triage run](docs/guide.md#triage-runs) investigates it read-only and files triaged issues, or with `--recommend-only` only reports what it would file. |
 | Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores, calibration and proposals by week; `thirdshift scores <pull request> --mine` records yours before revealing the model's. |
 | One skill | `thirdshift skill <skill> [issue <issue>]` | A [standalone skill](docs/guide.md#standalone-skills) runs headlessly and prints its final message. |
-| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and no Issue-branch worktree, it is a Pass and skips while another Pass on the repository is running. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
+| A Custom process | `thirdshift process <name> [issue <issue>]` | An experimental [Custom process](docs/guide.md#custom-processes) runs skill, command or catalogue Steps from `~/.thirdshift/processes/<name>.toml`, in named throwaway worktrees when the file declares them. The catalogue Step `run-published-issue` starts a Ticket run or a Spec run on the issue the session Step before it published. An optional Step can fail without stopping the process. `issue <issue>` gives every session Step that issue. One Issue-branch worktree plus a `delivery` Step publishes a ready-for-review pull request from that Issue branch and then removes the Claim. A `self-merge` Step directly after it merges when `merge` or the User config asks, and a file can only tighten limits. With no issue, and neither an Issue-branch nor a Spec-branch worktree, it is a Pass and skips while the repository is at its Command limit. Status, the Console and the Activity log list it as Process `<name>`. A failed one is in Needs you, and it sends a Run notification under the same email rules as a Ticket run. A skipped Process sends none. Each Step may name its Harness, Model and Effort, otherwise inheriting the Command's. |
+
+A Custom process can use `implement` → `delivery` on an Issue-branch worktree for the Ticket run's implementation and bug diagnosis. An unreproduced bug ends successfully with `needs-info`, skipping later Steps and cleaning up the Claim and worktree.
+
+A Custom process can instead declare a `spec-branch` worktree and use
+`land-tickets` to gather a Spec's Tickets into a draft Spec PR and its checklist,
+in dependency order up to `spec.parallel` at once. The Step's `process` setting
+selects every child Ticket's Process, defaulting to `ticket-run`. A file declares
+one Issue-branch or one Spec-branch worktree, never both; both require an issue,
+and the issue must match the worktree kind. The Claim precedes the worktree and
+stays while the draft Spec PR waits.
 
 Each Architect, Pickup or Security run makes one pass. Use cron or another operating system scheduler to repeat it. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 
@@ -79,7 +98,19 @@ thirdshift console --no-sign-in
 
 Open the localhost address it prints. The Console never starts work. Use [`thirdshift stop <command>`](docs/guide.md#stopping-a-command) to stop a live Command and wait for cleanup; add `--requeue` to return its issue to Pickup. A signed-in Console account can do the same.
 
+These screenshots show the Console's Focus light Theme with sample Commands. Open either image for the full-size view.
+
+[![Console Inbox: a failed Command in Needs you, two pull requests Ready for review, and the selected Command's details.](site/screenshots/inbox.png)](site/screenshots/inbox.png)
+
+The Inbox groups Commands by what needs you. Select a row to inspect its cause, CLI commands and logs alongside the list.
+
+[![Console Waterfall: a Command's stages and Session tool calls drawn on one time axis, with the slowest calls listed above.](site/screenshots/waterfall.png)](site/screenshots/waterfall.png)
+
+Waterfall expands a Command into stages, Sessions and individual calls, so you can see where the time went.
+
 ### Console on a server
+
+The Console and `status` show the serving OS account's Commands by default. To add readable Commands from other local accounts, use `thirdshift console other-accounts readable` (or a comma-separated list of account names). Other-account Commands show their owner and are read-only. See [account visibility](docs/guide.md#other-local-accounts) for filesystem access requirements.
 
 <a name="nginx"></a>
 
@@ -93,6 +124,7 @@ The Console can run as a persistent service behind HTTPS and sign-in. See [serve
 - [Host resources](docs/guide.md#host-resources): `thirdshift resources --json` and the Console's Resources page show RAM, CPU load and configurable limits that delay new sessions.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
+- [Built-in processes](processes/) are compiled into the binary. `thirdshift process list` lists Processes and marks Built-in processes; `thirdshift process show <name>` prints a Process file exactly so you can copy it under a new Custom process name.
 - [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.
 
@@ -135,7 +167,7 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="no-strong-candidate"></a>[No Strong candidate](docs/guide.md#no-strong-candidate)
 - <a name="an-architect-idea-waits-for-triage"></a>[An Architect idea waits for triage](docs/guide.md#an-architect-idea-waits-for-triage)
 - <a name="a-ready-issue-goes-first"></a>[A Ready issue goes first](docs/guide.md#a-ready-issue-goes-first)
-- <a name="one-at-a-time"></a>[One at a time](docs/guide.md#one-at-a-time)
+- <a name="one-at-a-time"></a>[The Command limit](docs/guide.md#the-command-limit)
 - <a name="one-architect-plan-at-a-time"></a>[One Architect plan at a time](docs/guide.md#one-architect-plan-at-a-time)
 - <a name="on-a-schedule"></a>[On a schedule](docs/guide.md#on-a-schedule)
 - <a name="weeding"></a>[Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes)
@@ -143,7 +175,7 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="security-review"></a>[Security review](docs/guide.md#security-review)
 - <a name="fencing"></a>[Security runs on a schedule, with fixing allowed](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed)
 - <a name="pickup-runs"></a>[Pickup runs](docs/guide.md#pickup-runs)
-- <a name="the-claim-limit"></a>[The Claim limit](docs/guide.md#the-claim-limit)
+- <a name="the-claim-limit"></a>[The Failure limit](docs/guide.md#the-failure-limit)
 - <a name="the-sweep"></a>[The Sweep](docs/guide.md#the-sweep)
 - <a name="why-an-issue-was-passed-over"></a>[Why an issue was passed over](docs/guide.md#why-an-issue-was-passed-over)
 - <a name="one-run-notification-for-the-issue-taken"></a>[One Run notification for the issue taken](docs/guide.md#one-run-notification-for-the-issue-taken)

@@ -48,12 +48,17 @@ pub(crate) struct Week {
     initial_calibration: bool,
 }
 
-pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
-    let repo = Repo {
+pub(crate) fn repository() -> Repo {
+    Repo {
         owner: "JacobStephens2".into(),
         name: "thirdshift".into(),
-    };
+    }
+}
+
+pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
+    let repo = repository();
     logs::started(logs::Work::ScoringRun(&repo), &config.scoring.grader());
+    logs::resumable("thirdshift score");
     if config.scoring.owners.is_empty() {
         bail!("configure scoring.owners in the User config before starting a Scoring run");
     }
@@ -61,9 +66,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     let mut previous = store.load()?;
     let mut ordinal = 0;
     for retained in &mut previous {
-        if !grade(config, retained, &mut ordinal)? {
-            return Ok(0);
-        }
+        grade(config, retained, &mut ordinal)?;
     }
     let start = previous
         .last()
@@ -138,7 +141,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     Ok(retained.week.sample.len())
 }
 
-fn grade(config: &UserConfig, retained: &mut store::Retained, ordinal: &mut usize) -> Result<bool> {
+fn grade(config: &UserConfig, retained: &mut store::Retained, ordinal: &mut usize) -> Result<()> {
     for index in 0..retained.week.sample.len() {
         if retained.week.sample[index].assessment.is_some() {
             continue;
@@ -146,19 +149,12 @@ fn grade(config: &UserConfig, retained: &mut store::Retained, ordinal: &mut usiz
         interrupt::check()?;
         let packet = retained.packet(index)?;
         *ordinal += 1;
-        let assessment = match grader::run(
+        let assessment = grader::run(
             &config.scoring,
             &retained.week.sample[index],
             &packet,
             *ordinal,
-        ) {
-            Ok(assessment) => assessment,
-            Err(error) if error.is::<crate::session::limits::Reached>() => {
-                crate::progress::step(error);
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
-        };
+        )?;
         let week = &mut retained.week;
         week.sample[index].assessment = Some(assessment);
         if week.sample[index].command_record.is_none() {
@@ -167,7 +163,7 @@ fn grade(config: &UserConfig, retained: &mut store::Retained, ordinal: &mut usiz
         }
         retained.commit()?;
     }
-    Ok(true)
+    Ok(())
 }
 
 pub fn show(pull_request: Option<&str>, mine: bool, json: bool) -> Result<String> {
@@ -252,23 +248,37 @@ fn write_mine(
 
 fn display(weeks: &[Week], calibration: &calibration::Calibration, json: bool) -> Result<String> {
     if json {
-        let mut view = serde_json::to_value(weeks)?;
-        for week in view.as_array_mut().unwrap() {
-            for pr in week["sample"].as_array_mut().unwrap() {
-                if let Some(scores) = pr
-                    .get_mut("assessment")
-                    .and_then(|assessment| assessment.get_mut("scores"))
-                    .and_then(|scores| scores.as_array_mut())
-                {
-                    for score in scores {
-                        let criterion = serde_json::from_value(score["criterion"].clone())?;
-                        score["calibration"] = serde_json::to_value(&calibration[&criterion])?;
-                    }
+        return Ok(serde_json::to_string_pretty(&json_view(
+            weeks,
+            calibration,
+        )?)?);
+    }
+    display_text(weeks, calibration)
+}
+
+pub(crate) fn json_view(
+    weeks: &[Week],
+    calibration: &calibration::Calibration,
+) -> Result<serde_json::Value> {
+    let mut view = serde_json::to_value(weeks)?;
+    for week in view.as_array_mut().unwrap() {
+        for pr in week["sample"].as_array_mut().unwrap() {
+            if let Some(scores) = pr
+                .get_mut("assessment")
+                .and_then(|assessment| assessment.get_mut("scores"))
+                .and_then(|scores| scores.as_array_mut())
+            {
+                for score in scores {
+                    let criterion = serde_json::from_value(score["criterion"].clone())?;
+                    score["calibration"] = serde_json::to_value(&calibration[&criterion])?;
                 }
             }
         }
-        return Ok(serde_json::to_string_pretty(&view)?);
     }
+    Ok(view)
+}
+
+fn display_text(weeks: &[Week], calibration: &calibration::Calibration) -> Result<String> {
     let mut text = String::new();
     for week in weeks {
         text.push_str(&format!(

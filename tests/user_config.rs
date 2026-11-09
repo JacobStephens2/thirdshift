@@ -8,6 +8,221 @@ mod support;
 
 use support::{RunResult, Scenario};
 
+#[test]
+fn config_edits_root_launch_directories_without_changing_other_settings() {
+    for original in [
+        "# My machine\n[spec]\nparallel = 3 # Tickets\n",
+        "# My machine\nlaunch_directories = [] # Repositories\n\n[spec]\nparallel = 3 # Tickets\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(original);
+        let result = scenario.run(&[
+            "config",
+            "launch_directories",
+            "['~/repos/widgets']",
+            "--json",
+        ]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let setting: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(setting["value"], serde_json::json!(["~/repos/widgets"]));
+        assert_eq!(setting["default"], serde_json::json!([]));
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# My machine"), "{saved}");
+        assert!(
+            saved.contains("[spec]\nparallel = 3 # Tickets\n"),
+            "{saved}"
+        );
+        if original.contains("# Repositories") {
+            assert!(saved.contains("# Repositories"), "{saved}");
+        }
+        let read = scenario.run(&["config", "launch_directories", "--json"]);
+        assert_eq!(read.code, Some(0), "{}", read.stderr);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&read.stdout).unwrap(),
+            setting
+        );
+        let invalid = scenario.run(&["config", "launch_directories", "['relative/path']"]);
+        assert_eq!(invalid.code, Some(1));
+        assert!(invalid.stderr.contains("absolute paths or start with ~/"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+}
+
+#[test]
+fn config_keeps_comments_of_removed_map_entries() {
+    let scenario = Scenario::new();
+    let path = scenario.user_config_is("[email.to_by_repo]\n# Important routing note\n'acme/old' = 'old@example.com' # Original team\n'acme/keep' = 'keep@example.com' # Retained team\n");
+    for value in ["{ 'acme/keep' = 'new@example.com' }", "{}"] {
+        let result = scenario.run(&["config", "email.to_by_repo", value]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for comment in [
+            "# Important routing note",
+            "# Original team",
+            "# Retained team",
+        ] {
+            assert!(saved.contains(comment), "{saved}");
+        }
+        assert!(!saved.contains("old@example.com"));
+    }
+}
+
+#[test]
+fn config_diagnostics_do_not_echo_credentials_from_malformed_toml() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[otlp]\nendpoint = 'https://private:export-secret@example.test/v1/traces\n",
+    );
+    for args in [
+        vec!["config", "--json"],
+        vec!["config", "spec.parallel"],
+        vec!["config", "spec.parallel", "6"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(1));
+        assert!(result.stderr.contains("config.toml"), "{}", result.stderr);
+        assert!(
+            !format!("{}{}", result.stdout, result.stderr).contains("export-secret"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn config_reads_defaults_and_sets_one_value_without_changing_layout() {
+    let scenario = Scenario::new();
+    let original =
+        "# My machine\n[spec]\nparallel = 3   # Tickets at once\n\n[merge]\nalways = false\n";
+    let path = scenario.user_config_is(original);
+    let all = scenario.run(&["config", "--json"]);
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    let all: serde_json::Value = serde_json::from_str(&all.stdout).unwrap();
+    let settings = all["settings"].as_array().unwrap();
+    let parallel = settings
+        .iter()
+        .find(|s| s["key"] == "spec.parallel")
+        .unwrap();
+    assert_eq!(parallel["value"], 3);
+    assert_eq!(parallel["default"], 3);
+    assert!(
+        settings
+            .iter()
+            .any(|s| s["key"] == "email.to" && s["default"].is_null())
+    );
+    assert!(settings.iter().any(|s| s["key"] == "harness.codex.model"));
+    let set = scenario.run(&["config", "spec.parallel", "6", "--json"]);
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let set: serde_json::Value = serde_json::from_str(&set.stdout).unwrap();
+    assert_eq!(set["value"], 6);
+    assert_eq!(set["default"], 3);
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        original.replace("parallel = 3", "parallel = 6")
+    );
+    let one = scenario.run(&["config", "spec.parallel"]);
+    assert_eq!(one.code, Some(0), "{}", one.stderr);
+    assert!(
+        one.stdout.contains("spec.parallel = 6") && one.stdout.contains("default: 3"),
+        "{}",
+        one.stdout
+    );
+    let text = scenario.run(&["config"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("spec.parallel = 6"));
+}
+
+#[test]
+fn config_preserves_dotted_inline_and_map_comments() {
+    for original in [
+        "# Machine\nspec.parallel = 3 # Tickets\n",
+        "# Machine\nspec = { parallel = 3 } # Tickets\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(original);
+        let set = scenario.run(&["config", "spec.parallel", "6"]);
+        assert_eq!(set.code, Some(0), "{}", set.stderr);
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            original.replace("parallel = 3", "parallel = 6")
+        );
+    }
+    let scenario = Scenario::new();
+    let original =
+        "# Recipients\n[email.to_by_repo] # Routing\n\"acme/widgets\" = 'old@example.com' # Team\n";
+    let path = scenario.user_config_is(original);
+    let set = scenario.run(&[
+        "config",
+        "email.to_by_repo",
+        "{ 'acme/widgets' = 'new@example.com' }",
+    ]);
+    assert_eq!(set.code, Some(0), "{}", set.stderr);
+    let saved = std::fs::read_to_string(path).unwrap();
+    for retained in ["# Recipients", "[email.to_by_repo] # Routing", "# Team"] {
+        assert!(saved.contains(retained), "missing {retained}: {saved}");
+    }
+    let value = scenario.run(&["config", "email.to_by_repo", "--json"]);
+    assert_eq!(value.code, Some(0), "{}", value.stderr);
+    let value: serde_json::Value = serde_json::from_str(&value.stdout).unwrap();
+    assert_eq!(value["value"]["acme/widgets"], "new@example.com");
+}
+
+#[test]
+fn config_refuses_access_settings_and_uses_setups_validation_without_leaking_credentials() {
+    let scenario = Scenario::new();
+    let original = "[spec]\nparallel = 3\n[otlp]\nendpoint = 'https://private:export-secret@example.test/v1/traces'\n";
+    let path = scenario.user_config_is(original);
+    std::fs::write(
+        scenario.path("home/.thirdshift/credentials.toml"),
+        "[resend]\napi_key = 'credential-secret'\n",
+    )
+    .unwrap();
+    for key in [
+        "console.allowed_emails",
+        "console.address_scopes",
+        "console.fleet",
+    ] {
+        for args in [vec!["config", key], vec!["config", key, "[]", "--json"]] {
+            let refused = scenario.run(&args);
+            assert_eq!(refused.code, Some(1));
+            assert!(
+                refused.stderr.contains("access") && refused.stderr.contains("machine"),
+                "{}",
+                refused.stderr
+            );
+        }
+    }
+    let invalid = scenario.run(&["config", "spec.parallel", "0"]);
+    assert_eq!(invalid.code, Some(1));
+    assert!(
+        invalid
+            .stderr
+            .contains("spec.parallel must be a whole number from 1 up")
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    let invalid_config = scenario.user_config_is("[spec]\nparallel = 0\n");
+    let setup = scenario.run(&["setup"]);
+    assert_eq!(setup.code, Some(1));
+    assert!(
+        setup
+            .stderr
+            .contains("spec.parallel must be a whole number from 1 up")
+    );
+    std::fs::write(invalid_config, original).unwrap();
+    for args in [
+        vec!["config"],
+        vec!["config", "--json"],
+        vec!["config", "otlp.endpoint", "--json"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            !result.stdout.contains("export-secret")
+                && !result.stdout.contains("credential-secret")
+        );
+    }
+}
+
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
 const AGENT_OPENS_PR: &str = r#"
@@ -82,6 +297,58 @@ fn an_unknown_key_or_section_stops_the_run_naming_it_and_the_file() {
 }
 
 #[test]
+fn invalid_repository_email_routes_stop_before_work_naming_the_file_and_entry() {
+    for (routes, reason) in [
+        (
+            "[email]\nto_by_repo = []\n",
+            "email.to_by_repo must be a table",
+        ),
+        (
+            "[email.to_by_repo]\n'widgets' = 'a@b.c'\n",
+            "key \"widgets\" must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets/extra' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widget s' = 'a@b.c'\n",
+            "must be owner/repo",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets' = 7\n",
+            "email.to_by_repo[\"acme/widgets\"] must be a nonblank quoted email address",
+        ),
+        (
+            "[email.to_by_repo]\n'acme/widgets' = '  '\n",
+            "must be a nonblank quoted email address",
+        ),
+        (
+            "[email.to_by_repo]\n'Acme/Widgets' = 'a@b.c'\n'acme/widgets' = 'd@e.f'\n",
+            "duplicate repository",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(routes);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{routes}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains(reason),
+            "{routes}: {}",
+            result.stderr
+        );
+        assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
+    }
+}
+
+#[test]
 fn invalid_console_sign_in_entries_stop_loading_and_name_the_entry() {
     for email in [
         "jstephens@etadoichuk@etadventures.com",
@@ -138,6 +405,61 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
             "stderr: {}",
             result.stderr
         );
+    }
+}
+
+#[test]
+fn an_old_pickup_limit_of_any_value_is_ignored_and_a_run_warns_of_it_naming_failure_limit() {
+    for config in ["[pickup]\nlimit = 10\n", "[pickup]\nlimit = 0\n"] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(&format!("{config}[merge]\nalways = true\n"));
+        scenario.agent_does(AGENT_OPENS_PR);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_merged(&scenario, &result);
+        let warning = format!(
+            "thirdshift: warning: pickup.limit is ignored: a Pickup run now counts the issues it \
+             failed on, up to pickup.failure_limit; remove pickup.limit from the User config {}\n",
+            path.display()
+        );
+        assert_eq!(
+            result.stderr.matches(&warning).count(),
+            1,
+            "{config}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn a_command_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_and_the_run() {
+    for config in [
+        "[pass]\ncommand_limit = 0\n",
+        "[pass]\ncommand_limit = -1\n",
+        "[pass]\ncommand_limit = 1.5\n",
+        "[pass]\ncommand_limit = \"2\"\n",
+    ] {
+        for pickup in [true, false] {
+            let scenario = Scenario::new();
+            let path = scenario.user_config_is(config);
+            let issue = scenario.issue_url(7);
+            let args = if pickup { "pickup" } else { issue.as_str() };
+
+            let result = scenario.run(&[args]);
+
+            assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+            assert!(
+                result
+                    .stderr
+                    .contains("pass.command_limit must be a whole number from 1 up")
+                    && result.stderr.contains(&path.display().to_string()),
+                "{config}: {}",
+                result.stderr
+            );
+            assert!(scenario.claude_calls().is_empty(), "a session was started");
+            assert!(scenario.gh_calls().is_empty(), "thirdshift called gh");
+        }
     }
 }
 

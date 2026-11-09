@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use crate::child_run::{self, ChildAsks, Ended, Kind};
+use crate::child_run::{self, ChildAsks, Ended, Kind, SpecPr};
 use crate::ci::{self, FailedChecks};
 use crate::git::Git;
 use crate::github::{Check, GitHub, ListedIssue};
@@ -248,7 +248,7 @@ impl BaseFix {
                     ));
                     open
                 }
-                mark => {
+                mark @ (Mark::Running(_) | Mark::None) => {
                     drop(looking);
                     return self.wait_on(outside, open, mark.into_watch(), base);
                 }
@@ -279,6 +279,9 @@ impl BaseFix {
         match outside.run_base_fix(&taken.issue, base)? {
             Ended::NotReproduced { comment_url } => {
                 bail!("Base fix #{number} did not reproduce: {comment_url}")
+            }
+            Ended::ArchitectureReview { reason } => {
+                bail!("Base fix #{number} ended before Delivery: {reason}")
             }
             Ended::Reached { .. } => {
                 taken.reached = true;
@@ -475,6 +478,8 @@ pub struct LaunchAndGitHub<'a> {
     pub launch: &'a Git,
     pub issue: &'a IssueUrl,
     pub asks: &'a ChildAsks,
+    /// The Spec PR a Base fix into a Spec branch depends on.
+    pub spec_pr: Option<SpecPr>,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -531,6 +536,7 @@ impl Outside for LaunchAndGitHub<'_> {
     fn run_base_fix(&mut self, fix: &IssueUrl, base: &str) -> Result<Ended> {
         let kind = Kind::BaseFix {
             base: base.to_string(),
+            spec_pr: self.spec_pr.clone(),
         };
         child_run::start(fix, kind, BaseFixAsk::Forbid, self.asks)?.wait()
     }
@@ -1330,6 +1336,7 @@ mod tests {
     fn a_run_that_is_itself_a_base_fix_sees_no_inherited_failures_and_starts_none() {
         let child = Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
         };
         for ask in [BaseFixAsk::Allow, BaseFixAsk::Forbid, undecided()] {
             let base_fix = BaseFix::new(Some(&child), ask);
@@ -1338,6 +1345,7 @@ mod tests {
         }
         let ticket = Kind::Ticket {
             spec_branch: "spec-3".to_string(),
+            spec_pr: None,
         };
         assert!(BaseFix::new(Some(&ticket), BaseFixAsk::Allow).sees_inherited_failures());
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());

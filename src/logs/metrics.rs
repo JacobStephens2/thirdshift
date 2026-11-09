@@ -92,6 +92,16 @@ fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts
 
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
+    let report = read(&config, asked)?;
+    if asked.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print(&report, 0);
+    }
+    Ok(())
+}
+
+pub(crate) fn read(config: &UserConfig, asked: &MetricsArgs) -> Result<Value> {
     let snapshot = Snapshot::load_metrics(&config.logs_dir, Local::now())?;
     let origins = ConfirmedCounts::read(&snapshot)?;
     let mut report = serde_json::json!({
@@ -106,20 +116,23 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
     } else {
         report["weeks"] = serde_json::to_value(trends::weekly(&snapshot, asked, &origins))?;
     }
-    if asked.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print(&report, 0);
-    }
-    Ok(())
+    Ok(report)
 }
 
 // Both renderers walk the same document, so text cannot silently drop a signal.
 fn print(value: &Value, depth: usize) {
     let indent = "  ".repeat(depth);
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "objects and arrays nest; every other JSON value prints on its line as a scalar"
+    )]
     match value {
         Value::Object(fields) => {
             for (name, value) in fields {
+                #[expect(
+                    clippy::wildcard_enum_match_arm,
+                    reason = "objects and arrays nest; every other JSON value prints on its line as a scalar"
+                )]
                 match value {
                     Value::Object(_) | Value::Array(_) => {
                         println!("{indent}{name}:");
@@ -140,6 +153,10 @@ fn print(value: &Value, depth: usize) {
 }
 
 fn scalar(value: &Value) -> String {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "JSON values without their own wording print as JSON shows them"
+    )]
     match value {
         Value::Null => "missing".into(),
         Value::String(value) => value.clone(),

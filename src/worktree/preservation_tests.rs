@@ -725,7 +725,7 @@ fi
         let launch_view = &launch;
         let acquirer = scope.spawn(move || {
             let _ = acquiring.send(());
-            let result = ReviewWorktree::create(launch_view, "work", "main");
+            let result = ReviewWorktree::create(launch_view, "work", "main", PassKind::Architect);
             let _ = acquired.send(());
             result
         });

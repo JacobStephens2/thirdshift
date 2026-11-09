@@ -87,12 +87,7 @@ impl Drop for Fixture {
         if let Ok(pid) = fs::read_to_string(self.path("pid"))
             && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
         {
-            // SAFETY: clean up only this fixture's exact child and group if
-            // an assertion failed before production cleanup could finish.
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-                libc::kill(pid, libc::SIGKILL);
-            }
+            crate::process::testing::kill_process_and_group(pid);
         }
     }
 }
@@ -141,8 +136,7 @@ fn assert_owned_child_stopped(root: &Path) {
         .trim()
         .parse()
         .unwrap();
-    // SAFETY: probe only this fixture's recorded PID.
-    assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "owned child survived");
+    assert!(!crate::process::is_alive(pid), "owned child survived");
 }
 
 #[test]
@@ -496,6 +490,64 @@ fn missing_review_reports_get_a_progress_line_and_the_run_carries_on() {
         stderr.contains("implement: no review reports were left; carrying on"),
         "{stderr}"
     );
+}
+
+#[test]
+fn a_symlink_review_report_is_not_kept_and_the_run_carries_on() {
+    if let Some(root) = std::env::var_os(FIXTURE) {
+        let root = Path::new(&root);
+        let (result, log) = execute_review(root, Harness::OpenCode);
+        result.unwrap();
+        assert!(root.join("carried-on").exists());
+        let original = crate::logs::session::original(&log);
+        assert_eq!(
+            fs::read_to_string(original.with_extension("standards")).unwrap(),
+            "Standards report\nFiles read: src/session.rs\n"
+        );
+        assert!(
+            fs::symlink_metadata(original.with_extension("spec")).is_err(),
+            "a symlink spec report was kept"
+        );
+        assert!(
+            fs::symlink_metadata(original.with_extension("review-summary.json")).is_err(),
+            "a missing summary was kept"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("secret")).unwrap(),
+            "host secret\n"
+        );
+        for entry in fs::read_dir(root.join("logs")).unwrap() {
+            let entry = entry.unwrap();
+            let bytes = fs::read(entry.path()).unwrap();
+            assert!(
+                !bytes
+                    .windows(b"host secret".len())
+                    .any(|window| window == b"host secret"),
+                "kept {} contains the symlink target",
+                entry.path().display()
+            );
+        }
+        return;
+    }
+    let fixture = review_fixture(&format!(
+        r#"{LEAVE_REPORTS}
+printf 'host secret\n' > "$THIRDSHIFT_SESSION_TEST_DIR/secret"
+ln -sfn "$THIRDSHIFT_SESSION_TEST_DIR/secret" "$reports/spec.md"
+"#
+    ));
+    let output = fixture
+        .command(
+            "session::execution_tests::a_symlink_review_report_is_not_kept_and_the_run_carries_on",
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("implement: spec report is a symlink; not keeping it"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("no review reports were left"), "{stderr}");
 }
 
 #[test]

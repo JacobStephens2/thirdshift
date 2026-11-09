@@ -1,0 +1,1044 @@
+use super::*;
+
+pub(super) struct Machine {
+    root: tempfile::TempDir,
+}
+
+impl Machine {
+    pub(super) fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        for name in ["serving", "conductor", "unreadable"] {
+            configure(&root.path().join(name));
+        }
+        let source = root.path().join("passwd.c");
+        fs::write(&source, r#"
+#include <pwd.h>
+#include <stdio.h>
+#include <stdlib.h>
+static FILE *accounts;
+void setpwent(void) { if (accounts) fclose(accounts); accounts = fopen(getenv("FIXTURE_PASSWD"), "r"); }
+struct passwd *getpwent(void) { return accounts ? fgetpwent(accounts) : NULL; }
+void endpwent(void) { if (accounts) fclose(accounts); accounts = NULL; }
+"#).unwrap();
+        assert!(
+            Command::new("cc")
+                .args(["-shared", "-fPIC"])
+                .arg(&source)
+                .arg("-o")
+                .arg(root.path().join("passwd.so"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        let uid = unsafe { libc::geteuid() };
+        fs::write(root.path().join("passwd"), format!("serving:x:{uid}:1::{}:/bin/sh\nconductor:x:{}:1::{}:/bin/sh\nunreadable:x:{}:1::{}:/bin/sh\n", root.path().join("serving").display(), uid+1, root.path().join("conductor").display(), uid+2, root.path().join("unreadable").display())).unwrap();
+        record(&root.path().join("unreadable"), 99, Some("failed"), 0);
+        fs::set_permissions(
+            root.path().join("unreadable"),
+            fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        fs::write(bin.join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(bin.join("gh"), fs::Permissions::from_mode(0o755)).unwrap();
+        Self { root }
+    }
+
+    pub(super) fn home(&self, name: &str) -> std::path::PathBuf {
+        self.root.path().join(name)
+    }
+    pub(super) fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+        command
+            .env("HOME", self.home("serving"))
+            .env("LD_PRELOAD", self.root.path().join("passwd.so"))
+            .env("FIXTURE_PASSWD", self.root.path().join("passwd"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.root.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            );
+        command
+    }
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        self.command().args(args).output().unwrap()
+    }
+    pub(super) fn setting(&self, value: &str) {
+        assert!(
+            self.run(&["console", "other-accounts", value])
+                .status
+                .success()
+        );
+    }
+}
+
+impl Drop for Machine {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(self.home("unreadable"), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+fn retained_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(retained_files(&path));
+        } else {
+            files.insert(path.clone(), fs::read(path).unwrap());
+        }
+    }
+    files
+}
+
+#[test]
+fn foreign_process_names_and_accounts_survive_across_console_views() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut process = record(&home, 7, Some("failed"), 0);
+    process["kind"] = json!("Process");
+    process["process_name"] = json!("notes");
+    process["name"] = json!("process-fixture");
+    process["issue"] = Value::Null;
+    write_record(&home, 7, &process);
+    machine.setting("readable");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    for page in ["inbox", "lanes", "stages", "waterfall"] {
+        let html = console.get(&format!("/?page={page}")).text().unwrap();
+        assert!(
+            html.contains("Process notes on acme/widgets") && html.contains("conductor"),
+            "{page}: {html}"
+        );
+    }
+    let spans: Value = console.get("/spans").json().unwrap();
+    assert!(
+        spans["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|span| span["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("Process notes on acme/widgets")
+                    && name.contains("conductor"))),
+        "{spans}"
+    );
+}
+
+#[test]
+fn unreadable_foreign_session_traces_leave_waterfall_available() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut command = record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let trace = dir.join("7-fixture-implement.logs.jsonl");
+    fs::write(&trace, "").unwrap();
+    fs::set_permissions(&trace, fs::Permissions::from_mode(0o000)).unwrap();
+    command["session_log"] = json!(trace);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    write_record(&home, 7, &command);
+    fs::write(dir.join("7-fixture.log"), "readable output").unwrap();
+    machine.setting("readable");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    for route in ["/", "/?page=waterfall", "/spans", "/logs"] {
+        let response = console.get(route);
+        assert_eq!(
+            response.status(),
+            200,
+            "{route}: {}",
+            response.text().unwrap()
+        );
+    }
+    let spans: Value = console.get("/spans").json().unwrap();
+    assert!(
+        spans["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|span| span["kind"] == "cmd")
+    );
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+    assert_eq!(
+        fs::metadata(&trace).unwrap().permissions().mode() & 0o777,
+        0o000
+    );
+}
+
+#[test]
+fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
+    let machine = Machine::new();
+    record(&machine.home("conductor"), 7, Some("failed"), 0);
+    machine.setting("readable");
+    let before = retained_files(&machine.home("conductor"));
+    assert!(!machine.home("serving").join(".thirdshift/logs").exists());
+    let output = machine.run(&["status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["account"], "conductor");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    api::assert_status_facts_equal(api::json(console.get("/api/v1/status")), status);
+    assert!(
+        machine
+            .home("serving")
+            .join(".thirdshift/logs/github-inbox.json")
+            .exists()
+    );
+    assert_eq!(retained_files(&machine.home("conductor")), before);
+}
+
+#[test]
+fn unreadable_foreign_logs_are_omitted_without_a_page_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let log = dir.join("7-fixture.log");
+    fs::write(&log, "private output").unwrap();
+    machine.setting("conductor");
+    let output = machine.run(&["logs", "--json"]);
+    let logs: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = logs["logs"][0]["id"].as_str().unwrap();
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+    let output = machine.run(&["logs", "--json"]);
+    let logs: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(logs["logs"].as_array().unwrap().is_empty());
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    assert_eq!(console.get(&format!("/logs/{id}")).status(), 404);
+    let selector = dir.join("7-fixture.command.json");
+    let query = serde_urlencoded::to_string([("command", selector.to_str().unwrap())]).unwrap();
+    assert_eq!(console.get(&format!("/log?{query}")).status(), 404);
+    assert!(console.get("/logs").status().is_success());
+    assert!(console.get("/").status().is_success());
+}
+
+#[test]
+fn other_account_live_actions_never_signal_or_write_and_details_never_cache_there() {
+    use super::watching::{FixtureProcess, live_record};
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+    let fixture = live_record(&home, 8, work.0.id());
+    write_record(&home, 8, &fixture);
+    let mut ended = record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let trace = dir.join("7-fixture-implement.logs.jsonl");
+    fs::write(&trace, "").unwrap();
+    ended["session_log"] = json!(trace);
+    ended["stages"][0]["session_log"] = ended["session_log"].clone();
+    write_record(&home, 7, &ended);
+    machine.setting("conductor");
+    let before = retained_files(&home);
+    let path = dir.join("8-fixture.command.json");
+    let selector = path.to_str().unwrap();
+    for args in [
+        vec!["stop", selector],
+        vec!["stop", selector, "--requeue"],
+        vec!["dismiss", selector],
+        vec!["dismiss", selector, "--undo"],
+    ] {
+        let output = machine.run(&args);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("account conductor"),
+            "{output:?}"
+        );
+        assert!(work.0.try_wait().unwrap().is_none());
+    }
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let token: Value = console.get("/look").json().unwrap();
+    let issued = machine.run(&[
+        "console",
+        "token",
+        "create",
+        "remote-operator",
+        "--scopes",
+        "act",
+    ]);
+    assert!(issued.status.success());
+    let bearer = String::from_utf8(issued.stdout).unwrap();
+    for (action, ending) in [
+        ("stop", "triage"),
+        ("stop", "requeue"),
+        ("dismiss", ""),
+        ("dismiss/undo", ""),
+    ] {
+        let response = reqwest::blocking::Client::new()
+            .post(format!("{}/{action}", console.address))
+            .form(&[
+                ("command", selector),
+                ("csrf", token["csrf"].as_str().unwrap()),
+                ("ending", ending),
+                ("confirmed", "yes"),
+            ])
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        assert!(response.text().unwrap().contains("account conductor"));
+        assert!(work.0.try_wait().unwrap().is_none());
+        let response = actions::post(
+            &console,
+            bearer.trim(),
+            &format!("/api/v1/{action}"),
+            &[
+                ("command", selector),
+                (
+                    "requeue",
+                    if ending == "requeue" { "true" } else { "false" },
+                ),
+            ],
+        );
+        assert_eq!(response.status(), 422);
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("account conductor")
+        );
+        assert!(work.0.try_wait().unwrap().is_none());
+    }
+    let path = dir.join("7-fixture.command.json");
+    let output = machine.run(&["show", path.to_str().unwrap(), "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let details: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(details["command"]["account"], "conductor");
+    assert!(details["command"]["run_metrics"].is_object());
+    let query = serde_urlencoded::to_string([("command", path.to_str().unwrap())]).unwrap();
+    assert!(console.get(&format!("/peek?{query}")).status().is_success());
+    assert_eq!(retained_files(&home), before);
+}
+
+#[test]
+fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
+    let machine = Machine::new();
+    let foreign = machine.home("conductor");
+    let serving = machine.home("serving");
+    let mut own_failure = record(&serving, 1, Some("failed"), 0);
+    own_failure["cause"] = json!("same cause across accounts");
+    write_record(&serving, 1, &own_failure);
+    let mut foreign_failure = record(&foreign, 7, Some("failed"), 0);
+    foreign_failure["cause"] = own_failure["cause"].clone();
+    write_record(&foreign, 7, &foreign_failure);
+    let dir = foreign.join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::write(dir.join("7-fixture.log"), "foreign output\n").unwrap();
+    let override_dir = foreign.join("retained");
+    fs::rename(foreign.join(".thirdshift/logs"), &override_dir).unwrap();
+    fs::write(
+        foreign.join(".thirdshift/config.toml"),
+        "[logs]\ndir = '~/retained/'\n",
+    )
+    .unwrap();
+    let output = machine.run(&["status", "--json"]);
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["commands"].as_array().unwrap().len(), 1);
+    machine.setting("readable");
+    let output = machine.run(&["status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("unreadable"),
+        "{output:?}"
+    );
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rows = status["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{status}");
+    let other = rows
+        .iter()
+        .find(|row| row["account"] == "conductor")
+        .expect("account tag");
+    assert_eq!(other["group"], "needs you");
+    let path = override_dir.join("acme/widgets/commands/issue/7-fixture.command.json");
+    let before = fs::read(&path).unwrap();
+    let command = path.to_str().unwrap();
+    let console = Console::start_command({
+        let mut cmd = machine.command();
+        cmd.args(["console", "--no-sign-in"]);
+        cmd
+    });
+    let html = console.get("/").text().unwrap();
+    assert!(section(&html, "needs you").contains("conductor"), "{html}");
+    assert!(html.contains("2 need you"), "{html}");
+    let row = html
+        .split("<li class=\"command\"")
+        .find(|row| row.contains("account-tag") && row.contains("conductor"))
+        .unwrap();
+    let inventory_url = row
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|part| part.split_once('"'))
+        .map(|(url, _)| url)
+        .find(|url| url.starts_with("/logs/command/"))
+        .unwrap();
+    assert!(
+        console
+            .get(inventory_url)
+            .text()
+            .unwrap()
+            .contains("7-fixture.log")
+    );
+    for page in ["lanes", "stages"] {
+        let html = console.get(&format!("/?page={page}")).text().unwrap();
+        assert!(
+            html.contains("[conductor]") && html.contains("acme/widgets#7"),
+            "{html}"
+        );
+    }
+    let query = serde_urlencoded::to_string([("command", command)]).unwrap();
+    let peek = console.get(&format!("/peek?{query}")).text().unwrap();
+    assert!(peek.contains("conductor"), "{peek}");
+    assert!(
+        !peek.contains(">Stop</button>") && !peek.contains(">Dismiss</button>"),
+        "{peek}"
+    );
+    assert!(
+        console
+            .get("/?page=history")
+            .text()
+            .unwrap()
+            .contains("conductor")
+    );
+    assert!(
+        console
+            .get(&format!("/spans?{query}"))
+            .status()
+            .is_success()
+    );
+    assert!(
+        console
+            .get(&format!("/log?{query}"))
+            .text()
+            .unwrap()
+            .contains("foreign output")
+    );
+    let logs = machine.run(&["logs", "--json"]);
+    let logs: Value = serde_json::from_slice(&logs.stdout).unwrap();
+    let log = logs["logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|log| log["account"] == "conductor")
+        .unwrap();
+    let id = log["id"].as_str().unwrap();
+    assert!(
+        console
+            .get(&format!("/logs/{id}"))
+            .text()
+            .unwrap()
+            .contains("foreign output")
+    );
+    let token: Value = console.get("/look").json().unwrap();
+    for action in ["stop", "dismiss"] {
+        let output = machine.run(&[action, command, "--json"]);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("conductor"),
+            "{output:?}"
+        );
+        let response = reqwest::blocking::Client::new()
+            .post(format!("{}/{action}", console.address))
+            .form(&[
+                ("command", command),
+                ("csrf", token["csrf"].as_str().unwrap()),
+                ("ending", "triage"),
+                ("confirmed", "yes"),
+            ])
+            .send()
+            .unwrap();
+        let body = response.text().unwrap();
+        assert!(body.contains("conductor"), "{body}");
+    }
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
+    assert!(!override_dir.join("acme/widgets/activity.log").exists());
+    machine.setting("conductor,unreadable,missing-account");
+    let output = machine.run(&["status", "--json"]);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(errors.matches("account unreadable").count(), 1, "{errors}");
+    assert_eq!(
+        errors.matches("account missing-account").count(),
+        1,
+        "{errors}"
+    );
+}
+
+/// Another account chooses the Session path in its Command record. The serving
+/// process must not open a trace outside that account's log directory.
+#[test]
+fn other_account_session_references_stay_inside_their_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let outside = machine
+        .home("serving")
+        .parent()
+        .unwrap()
+        .join("outside-secret.logs.jsonl");
+    let secret = "CANARY-OUTSIDE-SESSION";
+    let spans = super::support::session_trace::artifact(&outside, "spans.jsonl");
+    let attr = |key: &str, value: &str| json!({"key": key, "value": {"stringValue": value}});
+    fs::write(
+        &spans,
+        serde_json::to_vec(&json!({
+            "resourceSpans": [{"scopeSpans": [{"spans": [{
+                "spanId": "1111111111111111",
+                "name": "invoke_agent implement",
+                "startTimeUnixNano": "1790856010000000000",
+                "endTimeUnixNano": "1790856050000000000",
+                "attributes": [
+                    attr("gen_ai.operation.name", "invoke_agent"),
+                    attr("thirdshift.session.prompt", secret)
+                ]
+            }]}]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut command = record(&home, 7, Some("failed"), 0);
+    command["session_log"] = json!(outside);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    write_record(&home, 7, &command);
+    machine.setting("readable");
+    let output = machine.run(&["show", "widgets#7", "--spans", "--json"]);
+    let shown = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        shown.contains("conductor"),
+        "the other account's Command was not loaded: {shown}"
+    );
+    assert!(
+        !shown.contains(secret),
+        "session trace outside the other account's logs was read:\n{shown}"
+    );
+}
+
+/// Another account names the Session path in its Command record. Read that
+/// trace only when its canonical path stays inside the directory that holds
+/// the record. A lexical prefix is not enough: a directory symlink can leave.
+#[test]
+fn other_account_session_traces_stay_inside_their_command_record_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut kept = record(&home, 7, Some("failed"), 0);
+    let kept_log = dir.join("7-fixture-implement.logs.jsonl");
+    write_canary_spans(&kept_log, "INSIDE-COMMAND-DIRECTORY");
+    kept["session_log"] = json!(kept_log);
+    kept["stages"][0]["session_log"] = kept["session_log"].clone();
+    write_record(&home, 7, &kept);
+
+    let outside = machine.root.path().join("outside-command-directory");
+    fs::create_dir_all(&outside).unwrap();
+    let outside_log = outside.join("8-fixture-implement.logs.jsonl");
+    write_canary_spans(&outside_log, "CANARY-ESCAPED-SESSION");
+    let alias = dir.join("alias");
+    std::os::unix::fs::symlink(&outside, &alias).unwrap();
+    let mut escaped = record(&home, 8, Some("failed"), 0);
+    let escaped_log = alias.join("8-fixture-implement.logs.jsonl");
+    escaped["session_log"] = json!(escaped_log);
+    escaped["stages"][0]["session_log"] = escaped["session_log"].clone();
+    write_record(&home, 8, &escaped);
+    machine.setting("readable");
+
+    let kept_shown = shown_spans(&machine, "widgets#7");
+    assert!(
+        kept_shown.contains("conductor"),
+        "the other account's Command was not loaded: {kept_shown}"
+    );
+    assert!(
+        kept_shown.contains("INSIDE-COMMAND-DIRECTORY"),
+        "session trace inside the command record directory was not read:\n{kept_shown}"
+    );
+
+    let escaped_shown = shown_spans(&machine, "widgets#8");
+    assert!(
+        escaped_shown.contains("conductor"),
+        "the other account's Command was not loaded: {escaped_shown}"
+    );
+    assert!(
+        !escaped_shown.contains("CANARY-ESCAPED-SESSION"),
+        "session trace whose canonical path leaves the command record directory was read:\n{escaped_shown}"
+    );
+}
+
+/// The spans file is part of the Session trace. A regular logs file inside the
+/// Command record's directory must not make a symlink spans file readable.
+#[test]
+fn other_account_session_trace_sidecars_stay_inside_their_command_record_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut command = record(&home, 9, Some("failed"), 0);
+    fs::remove_file(dir.join("9-fixture.command.json")).unwrap();
+    let outside = machine.root.path().join("outside-spans");
+    fs::create_dir_all(&outside).unwrap();
+    let outside_log = outside.join("9-20261003T120000-0400-implement.logs.jsonl");
+    write_canary_spans(&outside_log, "CANARY-SIDECAR-SESSION");
+    let log = dir.join("9-20261003T120000-0400-implement.logs.jsonl");
+    fs::write(&log, "").unwrap();
+    let spans = super::support::session_trace::artifact(&log, "spans.jsonl");
+    std::os::unix::fs::symlink(
+        super::support::session_trace::artifact(&outside_log, "spans.jsonl"),
+        &spans,
+    )
+    .unwrap();
+    command["session_log"] = json!(log);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    fs::write(
+        dir.join("9-20261003T120000-0400.command.json"),
+        serde_json::to_vec(&command).unwrap(),
+    )
+    .unwrap();
+    machine.setting("readable");
+
+    let shown = shown_spans(&machine, "widgets#9");
+    assert!(
+        shown.contains("conductor"),
+        "the other account's Command was not loaded: {shown}"
+    );
+    assert!(
+        !shown.contains("CANARY-SIDECAR-SESSION"),
+        "session trace sidecar whose canonical path leaves the command record directory was read:\n{shown}"
+    );
+}
+
+fn write_canary_spans(log: &Path, secret: &str) {
+    let spans = super::support::session_trace::artifact(log, "spans.jsonl");
+    fs::write(log, "").unwrap();
+    let attr = |key: &str, value: &str| json!({"key": key, "value": {"stringValue": value}});
+    fs::write(
+        spans,
+        serde_json::to_vec(&json!({
+            "resourceSpans": [{"scopeSpans": [{"spans": [{
+                "spanId": "1111111111111111",
+                "name": "invoke_agent implement",
+                "startTimeUnixNano": "1790856010000000000",
+                "endTimeUnixNano": "1790856050000000000",
+                "attributes": [
+                    attr("gen_ai.operation.name", "invoke_agent"),
+                    attr("thirdshift.session.prompt", secret)
+                ]
+            }]}]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn shown_spans(machine: &Machine, command: &str) -> String {
+    let output = machine.run(&["show", command, "--spans", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Another account's logs are read only from a directory whose canonical path
+/// stays inside that account's home, and only when the file's own canonical
+/// path stays under that directory. A symlink may point at another directory
+/// inside the home. The serving account's commands alias is a separate case.
+#[test]
+fn other_account_logs_stay_inside_that_accounts_home() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let outside = machine.root.path().join("outside-home");
+    place_log(
+        &outside,
+        "widgets",
+        "CANARY-OUTSIDE-HOME.log",
+        "CANARY-OUTSIDE-HOME",
+    );
+    let linked = home.join(".thirdshift/linked-logs");
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    write_logs_dir(&home, Some(&linked));
+    machine.setting("readable");
+    let escaped_directory = observed_logs(&machine);
+    assert!(
+        !escaped_directory.contains("CANARY-OUTSIDE-HOME"),
+        "log directory outside the home was read:\n{escaped_directory}"
+    );
+
+    let real = home.join(".thirdshift/real-logs");
+    place_log(&real, "widgets", "notes.log", "INSIDE-HOME-LINK");
+    let inside = home.join(".thirdshift/logs-link");
+    std::os::unix::fs::symlink(&real, &inside).unwrap();
+    write_logs_dir(&home, Some(&inside));
+    let linked_inside = observed_logs(&machine);
+    assert!(
+        linked_inside.contains("INSIDE-HOME-LINK"),
+        "a log directory inside the home was not read:\n{linked_inside}"
+    );
+
+    write_logs_dir(&home, None);
+    place_log(
+        &home.join(".thirdshift/logs"),
+        "safe",
+        "notes.log",
+        "INSIDE-ACCEPTED-DIRECTORY",
+    );
+    let escaped = machine.root.path().join("outside-commands");
+    fs::create_dir_all(escaped.join("issue")).unwrap();
+    fs::write(escaped.join("issue/notes.log"), "CANARY-OUTSIDE-DIRECTORY").unwrap();
+    let widgets = home.join(".thirdshift/logs/acme/widgets");
+    fs::create_dir_all(&widgets).unwrap();
+    std::os::unix::fs::symlink(&escaped, widgets.join("commands")).unwrap();
+    let escaped_file = observed_logs(&machine);
+    assert!(
+        escaped_file.contains("INSIDE-ACCEPTED-DIRECTORY"),
+        "a file under the accepted directory was not read:\n{escaped_file}"
+    );
+    assert!(
+        !escaped_file.contains("CANARY-OUTSIDE-DIRECTORY"),
+        "a file outside the accepted directory was read:\n{escaped_file}"
+    );
+}
+
+/// `logs --file` is not the only reader. A `commands` symlink outside the
+/// accepted directory must not supply a record or a Command log.
+#[test]
+fn other_account_commands_alias_cannot_leave_the_accepted_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut command = record(&home, 7, Some("failed"), 0);
+    command["issue"]["title"] = json!("CANARY-OUTSIDE-RECORD");
+    let outside = machine.root.path().join("outside-commands/issue");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("7-fixture.command.json"),
+        serde_json::to_vec(&command).unwrap(),
+    )
+    .unwrap();
+    fs::write(outside.join("7-fixture.log"), "CANARY-OUTSIDE-LOG\n").unwrap();
+    let commands = home.join(".thirdshift/logs/acme/widgets/commands");
+    fs::remove_dir_all(&commands).unwrap();
+    std::os::unix::fs::symlink(outside.parent().unwrap(), &commands).unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    assert!(
+        !shown_text.contains("CANARY-OUTSIDE-RECORD"),
+        "command record outside the accepted directory was read:\n{shown_text}"
+    );
+
+    let streamed = machine.run(&["logs", "widgets#7"]);
+    let streamed_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&streamed.stdout),
+        String::from_utf8_lossy(&streamed.stderr)
+    );
+    assert!(
+        !streamed_text.contains("CANARY-OUTSIDE-LOG"),
+        "command log outside the accepted directory was read:\n{streamed_text}"
+    );
+}
+
+/// `logs <command>` opens the Command log beside the record, which discovery
+/// never lists. Read it only when that file's canonical path stays under the
+/// accepted log directory. A symlink may point at another file inside it.
+#[test]
+fn other_account_command_logs_stay_under_their_accepted_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    record(&home, 7, Some("failed"), 0);
+    let escaped = home.join(".thirdshift/escaped-command-log");
+    fs::write(&escaped, "CANARY-ESCAPED-COMMAND-LOG\n").unwrap();
+    std::os::unix::fs::symlink(&escaped, dir.join("7-fixture.log")).unwrap();
+
+    record(&home, 8, Some("failed"), 0);
+    let kept = dir.join("kept.log");
+    fs::write(&kept, "INSIDE-ACCEPTED-COMMAND-LOG\n").unwrap();
+    std::os::unix::fs::symlink(&kept, dir.join("8-fixture.log")).unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.status.success() && shown_text.contains("conductor"),
+        "the other account's Command was not loaded: {shown:?}"
+    );
+
+    let escaped_log = machine.run(&["logs", "widgets#7"]);
+    let escaped_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&escaped_log.stdout),
+        String::from_utf8_lossy(&escaped_log.stderr)
+    );
+    assert!(
+        !escaped_text.contains("CANARY-ESCAPED-COMMAND-LOG"),
+        "command log whose canonical path leaves the accepted directory was read:\n{escaped_text}"
+    );
+
+    let kept_log = machine.run(&["logs", "widgets#8"]);
+    let kept_text = String::from_utf8_lossy(&kept_log.stdout);
+    assert!(
+        kept_log.status.success(),
+        "{kept_log:?} {}",
+        String::from_utf8_lossy(&kept_log.stderr)
+    );
+    assert!(
+        kept_text.contains("INSIDE-ACCEPTED-COMMAND-LOG"),
+        "command log whose canonical path stays under the accepted directory was not read:\n{kept_text}"
+    );
+}
+
+/// `show` and the Console print a Process's Steps from its Command log.
+/// Another account's log is read only when its canonical path stays under
+/// the accepted log directory. A symlink may point at another file inside it.
+#[test]
+fn other_account_process_steps_stay_under_their_accepted_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let mut escaped = record(&home, 7, Some("failed"), 0);
+    escaped["kind"] = json!("Process");
+    escaped["process_name"] = json!("escaped");
+    write_record(&home, 7, &escaped);
+    let outside = home.join(".thirdshift/escaped-step-log");
+    fs::write(
+        &outside,
+        "thirdshift: 03:12:40 step CANARY-ESCAPED-STEP: 1s succeeded (secret)\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("7-fixture.log")).unwrap();
+
+    let mut kept = record(&home, 8, Some("failed"), 0);
+    kept["kind"] = json!("Process");
+    kept["process_name"] = json!("kept");
+    write_record(&home, 8, &kept);
+    let inside = dir.join("kept-steps.log");
+    fs::write(
+        &inside,
+        "thirdshift: 03:12:40 step INSIDE-ACCEPTED-STEP: 1s succeeded (kept)\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&inside, dir.join("8-fixture.log")).unwrap();
+    let result = dir.join("8-fixture.steps");
+    fs::create_dir_all(&result).unwrap();
+    fs::write(result.join("INSIDE-ACCEPTED-STEP.txt"), "kept\n").unwrap();
+    machine.setting("readable");
+
+    let escaped_show = machine.run(&["show", "widgets#7"]);
+    let escaped_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&escaped_show.stdout),
+        String::from_utf8_lossy(&escaped_show.stderr)
+    );
+    assert!(
+        escaped_show.status.success()
+            && escaped_text.contains("conductor")
+            && escaped_text.contains("Process escaped"),
+        "the other account's Process was not loaded: {escaped_show:?} {escaped_text}"
+    );
+    assert!(
+        !escaped_text.contains("CANARY-ESCAPED-STEP"),
+        "process steps were read from a Command log outside the accepted directory:\n{escaped_text}"
+    );
+
+    let kept_show = machine.run(&["show", "widgets#8"]);
+    let kept_text = String::from_utf8_lossy(&kept_show.stdout);
+    assert!(
+        kept_show.status.success(),
+        "{kept_show:?} {}",
+        String::from_utf8_lossy(&kept_show.stderr)
+    );
+    assert!(
+        kept_text.contains("INSIDE-ACCEPTED-STEP"),
+        "process steps whose Command log stays under the accepted directory were not shown:\n{kept_text}"
+    );
+    assert!(
+        kept_text.contains(&format!(
+            "result: {}",
+            result.join("INSIDE-ACCEPTED-STEP.txt").display()
+        )),
+        "a step result inside the accepted directory was not shown:\n{kept_text}"
+    );
+
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let escaped_peek = console.get("/peek?command=widgets%237").text().unwrap();
+    assert!(
+        escaped_peek.contains("conductor") && escaped_peek.contains("Process escaped"),
+        "{escaped_peek}"
+    );
+    assert!(
+        !escaped_peek.contains("CANARY-ESCAPED-STEP"),
+        "the Console read process steps from a Command log outside the accepted directory:\n{escaped_peek}"
+    );
+    let kept_peek = console.get("/peek?command=widgets%238").text().unwrap();
+    assert!(
+        kept_peek.contains("INSIDE-ACCEPTED-STEP"),
+        "the Console omitted process steps whose Command log stays under the accepted directory:\n{kept_peek}"
+    );
+}
+
+/// Activity-log recovery must not read an Other-account Command log whose
+/// canonical path leaves the accepted directory. A decodable stamp is what
+/// history opens; `7-fixture.log` is not.
+#[test]
+fn logs_does_not_read_an_activity_named_command_log_outside_the_accepted_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let repo = home.join(".thirdshift/logs/acme/widgets");
+    record(&home, 7, Some("failed"), 0);
+    let outside = home.join("outside-dir");
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(
+        &outside,
+        repo.join("commands/issue/7-20261101T120000-0400.log"),
+    )
+    .unwrap();
+    fs::write(
+        repo.join("activity.log"),
+        "2026-11-01 12:00:00 Spec run #7 started: commands/issue/7-20261101T120000-0400.log, on codex\n",
+    )
+    .unwrap();
+    machine.setting("readable");
+
+    let shown = machine.run(&["show", "widgets#7"]);
+    let shown_text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.status.success() && shown_text.contains("conductor"),
+        "reading the outside Command log dropped the account: {shown:?} {shown_text}"
+    );
+}
+
+fn write_logs_dir(home: &Path, logs_dir: Option<&Path>) {
+    let mut text = "[console]\nport = 0\n".to_string();
+    if let Some(dir) = logs_dir {
+        text.push_str(&format!("\n[logs]\ndir = \"{}\"\n", dir.display()));
+    }
+    fs::write(home.join(".thirdshift/config.toml"), text).unwrap();
+}
+
+fn place_log(root: &Path, repo: &str, name: &str, body: &str) {
+    let dir = root.join(format!("acme/{repo}/commands/issue"));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(name), body).unwrap();
+}
+
+fn observed_logs(machine: &Machine) -> String {
+    let output = machine.run(&["logs", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let logs: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for log in logs["logs"].as_array().unwrap() {
+        let read = machine.run(&["logs", "--file", log["id"].as_str().unwrap()]);
+        text.push_str(&String::from_utf8_lossy(&read.stdout));
+        text.push_str(&String::from_utf8_lossy(&read.stderr));
+    }
+    text
+}
+
+/// Another account's Command record is untrusted. Its issue URL and repository
+/// must not be interpolated into the serving account's `gh` requests.
+#[test]
+fn other_account_records_cannot_shape_the_serving_accounts_github_requests() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut spec = record(&home, 7, Some("failed"), 0);
+    spec["issue"]["url"] = json!("https://github.com/acme\"/widgets/issues/7");
+    write_record(&home, 7, &spec);
+    let mut security = record(&home, 8, Some("failed"), 0);
+    security["kind"] = json!("Security run");
+    security["security_findings_waiting"] = json!(true);
+    security["repository"] = json!("acme/../../sensitive");
+    security["issue"] = Value::Null;
+    write_record(&home, 8, &security);
+    let log = machine.home("serving").parent().unwrap().join("gh.log");
+    fs::write(
+        machine.home("serving").parent().unwrap().join("bin/gh"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\ncase \"$1 $2\" in\n  'api rate_limit')\n    printf '%s\\n' '{{\"resources\":{{\"graphql\":{{\"remaining\":5000,\"reset\":1893456000}},\"core\":{{\"remaining\":5000,\"reset\":1893456000}}}}}}'\n    ;;\n  'api graphql')\n    printf '%s\\n' '{{\"data\":{{\"rateLimit\":{{\"remaining\":5000,\"resetAt\":\"2030-01-01T00:00:00Z\"}}}}}}'\n    ;;\n  *)\n    printf '%s\\n' '[]'\n    ;;\nesac\nexit 0\n",
+            shell_quote(&log)
+        ),
+    )
+    .unwrap();
+    machine.setting("readable");
+    let output = machine.run(&["status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let seen = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        !seen.contains("acme\"") && !seen.contains("sensitive"),
+        "other-account record reached gh:\n{seen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+#[test]
+fn other_accounts_cli_sets_shows_and_validates_without_changing_other_settings() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let config = home.path().join(".thirdshift/config.toml");
+    let before = fs::read_to_string(&config).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let initial = run(&["console", "other-accounts", "--json"]);
+    assert!(initial.status.success(), "{initial:?}");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&initial.stdout).unwrap(),
+        json!("none")
+    );
+    for (input, expected) in [
+        ("readable", json!("readable")),
+        ("conductor,operator", json!(["conductor", "operator"])),
+        ("none", json!("none")),
+    ] {
+        let result = run(&["console", "other-accounts", input, "--json"]);
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&result.stdout).unwrap(),
+            expected
+        );
+        let result = run(&["console", "other-accounts", "--json"]);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&result.stdout).unwrap(),
+            expected
+        );
+    }
+    assert!(fs::read_to_string(&config).unwrap().starts_with(&before));
+    let saved = fs::read_to_string(&config).unwrap();
+    for invalid in ["../operator", "", "a,,b", "a/b"] {
+        let result = run(&["console", "other-accounts", invalid]);
+        assert!(!result.status.success(), "{result:?}");
+        assert_eq!(fs::read_to_string(&config).unwrap(), saved);
+    }
+}

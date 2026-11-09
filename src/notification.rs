@@ -43,10 +43,31 @@ pub enum About<'a> {
     /// A Security run, from the Launch directory.
     SecurityRun,
     ScoringRun,
+    ReviewRun,
+    FixRun,
+    TriageRun,
     /// A Custom process, named by its file, from the Launch directory.
     Process {
         name: &'a str,
     },
+}
+
+impl About<'_> {
+    /// The repository whose Run notification defaults apply. A Pickup run
+    /// knows its repository before it selects an issue or checks its gates.
+    fn repo(&self) -> Option<Repo> {
+        match self {
+            About::Issue(issue) => Some(issue.repo()),
+            About::ArchitectRun
+            | About::PickupRun
+            | About::SecurityRun
+            | About::TriageRun
+            | About::Process { .. } => launch::repo().ok(),
+            About::ScoringRun => None,
+            About::ReviewRun => launch::repo().ok(),
+            About::FixRun => launch::repo().ok(),
+        }
+    }
 }
 
 /// What a Run notification's subject names.
@@ -66,6 +87,9 @@ enum Subject {
     /// A Security run, with its repository if origin names one.
     SecurityRun(Option<Repo>),
     ScoringRun,
+    ReviewRun(Option<Repo>),
+    FixRun(Option<Repo>),
+    TriageRun(Option<Repo>),
     /// A Pass whose notification subject has not been established yet.
     Pending,
     /// A Custom process, with the repository the Launch directory's `origin`
@@ -84,6 +108,9 @@ impl Subject {
             Subject::ArchitectRun(repo) => Some(("Architect run".into(), repo.as_ref())),
             Subject::SecurityRun(repo) => Some(("Security run".into(), repo.as_ref())),
             Subject::ScoringRun => Some(("Scoring run".into(), None)),
+            Subject::ReviewRun(repo) => Some(("Review run".into(), repo.as_ref())),
+            Subject::FixRun(repo) => Some(("Fix run".into(), repo.as_ref())),
+            Subject::TriageRun(repo) => Some(("Triage run".into(), repo.as_ref())),
             Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
         }
@@ -114,9 +141,11 @@ impl RunNotification {
     pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
         let started = Instant::now();
         let started_at = chrono::Utc::now();
+        let repo = about.repo();
         let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
             NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
+                let to = to.or_else(|| repo.as_ref().and_then(|repo| settings.to_for_repo(repo)));
                 Some(Resend::new(to, settings)?)
             }
             NotificationAsk::Skip => None,
@@ -136,14 +165,17 @@ impl RunNotification {
             },
             // Left out of the subject if origin names none; the Architect
             // run's own preflight reports why.
-            About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
+            About::ArchitectRun => Subject::ArchitectRun(repo),
             About::PickupRun => Subject::Pending,
-            About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
+            About::SecurityRun => Subject::SecurityRun(repo),
             About::ScoringRun => Subject::ScoringRun,
+            About::ReviewRun => Subject::ReviewRun(repo),
+            About::FixRun => Subject::FixRun(repo),
+            About::TriageRun => Subject::TriageRun(repo),
             // The command subject names the process. No issue title is read.
             About::Process { name } => Subject::Process {
                 name: name.to_string(),
-                repo: launch::repo().ok(),
+                repo,
             },
         };
         Ok(RunNotification {
@@ -228,6 +260,7 @@ impl RunNotification {
             }
         }
         if let Some(resend) = self.resend
+            && account.outcome != "paused"
             && !(self.unless_merged && account.merged_with_nothing_waiting())
             && let Err(error) = resend.send(&subject, &text)
         {
@@ -313,6 +346,12 @@ fn body(
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(&command, repo);
+    }
+    if let Some(recommendation) = account.triage {
+        text += &recommendation.notification;
+    }
+    for line in account.triage_publication_lines() {
+        text += &format!("{line}\n");
     }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.
@@ -548,6 +587,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
@@ -572,6 +612,7 @@ mod tests {
             log: None,
             ticket_lines: &[],
             review: None,
+            triage: None,
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,

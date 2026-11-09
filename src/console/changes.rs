@@ -47,7 +47,6 @@ impl Notifier {
 struct Registration {
     mode: RecursiveMode,
     created: Option<SystemTime>,
-    #[cfg(unix)]
     inode: (u64, u64),
 }
 
@@ -57,7 +56,6 @@ impl Registration {
         Ok(Self {
             mode,
             created: metadata.created().ok(),
-            #[cfg(unix)]
             inode: {
                 use std::os::unix::fs::MetadataExt;
                 (metadata.dev(), metadata.ino())
@@ -69,6 +67,7 @@ impl Registration {
 struct Paths {
     root: PathBuf,
     logs: PathBuf,
+    other_logs: Vec<PathBuf>,
     executable: PathBuf,
     assets: Option<PathBuf>,
 }
@@ -78,6 +77,7 @@ impl Paths {
         Self {
             root: observed_path(&root),
             logs: observed_path(&logs),
+            other_logs: Vec::new(),
             executable: observed_path(&executable),
             assets: None,
         }
@@ -142,6 +142,10 @@ impl Paths {
             }
             if path.starts_with(&self.logs)
                 || self.logs.starts_with(&path)
+                || self
+                    .other_logs
+                    .iter()
+                    .any(|root| path.starts_with(root) || root.starts_with(&path))
                 || path.starts_with(self.root.join("console"))
             {
                 revision.commands += 1;
@@ -164,6 +168,11 @@ impl Paths {
             ),
         ]
         .into_iter()
+        .chain(
+            self.other_logs
+                .iter()
+                .map(|path| (path.clone(), RecursiveMode::Recursive)),
+        )
         .chain(
             self.assets
                 .iter()
@@ -198,7 +207,7 @@ impl Paths {
     }
 }
 
-// Native backends may report canonical paths (notably /private/var on macOS).
+// Native backends may report canonical paths.
 // Resolve the existing ancestor so roots created later use the same spelling.
 pub(super) fn observed_path(path: &std::path::Path) -> PathBuf {
     for ancestor in path.ancestors() {
@@ -220,6 +229,12 @@ pub(super) fn observe(
         executable.path.clone(),
     );
     paths.assets = assets.directory().map(PathBuf::from);
+    paths.other_logs = crate::logs::accounts::discover(config)
+        .logs
+        .into_iter()
+        .skip(1)
+        .map(|source| observed_path(&source.root))
+        .collect();
     let paths = Arc::new(RwLock::new(paths));
     let (pending, mut notifications) = watch::channel(Revision::default());
     let notifier = Notifier {
@@ -244,6 +259,7 @@ pub(super) fn observe(
     reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
     reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
     let (sender, changes) = watch::channel(Revision::default());
+    let source_changes = notifier.clone();
     let observer = tokio::spawn(async move {
         let mut previous = Revision::default();
         let mut recovery_tick = tokio::time::interval(Duration::from_secs(60));
@@ -267,7 +283,18 @@ pub(super) fn observe(
             if (fallback || revision.accounts != previous.accounts)
                 && let Ok(config) = crate::config::UserConfig::load()
             {
-                paths.write().unwrap().logs = observed_path(&config.logs_dir);
+                let mut paths = paths.write().unwrap();
+                paths.logs = observed_path(&config.logs_dir);
+                let sources = crate::logs::accounts::discover(&config)
+                    .logs
+                    .into_iter()
+                    .skip(1)
+                    .map(|source| observed_path(&source.root))
+                    .collect::<Vec<_>>();
+                if paths.other_logs != sources {
+                    paths.other_logs = sources;
+                    source_changes.commands();
+                }
             }
             reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
             reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
@@ -344,8 +371,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, &alias).unwrap();
         let root = alias.join(".thirdshift");
         std::fs::create_dir(&root).unwrap();
-        // The log root need not exist yet. FSEvents reports canonical paths,
-        // including /private/var for a HOME supplied under macOS's /var alias.
+        // The log root need not exist yet. Canonical events must still match
+        // paths beneath the symlinked home.
         let paths = Paths::new(root.clone(), root.join("logs"), alias.join("thirdshift"));
         let canonical = real.canonicalize().unwrap().join(".thirdshift");
         let mut revision = Revision::default();

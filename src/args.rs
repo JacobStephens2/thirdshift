@@ -20,27 +20,57 @@ use crate::run::Goal;
 /// What `thirdshift process` was asked to do.
 pub enum ProcessAction {
     List,
+    Show(String),
     Check(ProcessRun),
     Run(ProcessRun),
+}
+
+pub struct ReviewArgs {
+    pub target: crate::review::Target,
+    pub flags: Flags,
+    pub mode: crate::review::Mode,
+}
+
+pub struct FixArgs {
+    pub target: crate::fix::Target,
+    pub flags: Flags,
 }
 
 /// A Custom process to check or run, with the Command's explicit choices.
 pub struct ProcessRun {
     pub name: String,
     pub issue: Option<IssueInput>,
+    pub pull_request: Option<crate::review::PullRequestUrl>,
     pub asked: harness::Asked,
     /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
     pub email: Option<NotificationAsk>,
     /// `merge` or `no-merge`. Absent leaves the choice to the User config.
     pub goal: Option<Goal>,
+    /// Whether this Process's Security review Step is requested.
+    pub security_review: Option<crate::security::review::Ask>,
+    /// Whether Security finding Steps are allowed to fix findings.
+    pub security_fix: Option<crate::security::FixAsk>,
+    pub security_close: Option<crate::security::CloseAsk>,
+    /// Stop architecture-review after publishing a plan, without dispatch.
+    pub plan_only: bool,
 }
 
 /// What thirdshift was asked to do.
 pub enum Command {
+    FleetControl(crate::console::fleet_control::Cli),
+    Fix(FixArgs),
     Help,
     Version,
-    Update,
+    Update {
+        check: bool,
+        json: bool,
+    },
     Setup,
+    Config {
+        key: Option<String>,
+        value: Option<String>,
+        json: bool,
+    },
     Score,
     Scores {
         pull_request: Option<String>,
@@ -53,6 +83,9 @@ pub enum Command {
     Experiments(Vec<String>),
     Recheck(Vec<String>),
     CronJobs {
+        json: bool,
+    },
+    LaunchDirectories {
         json: bool,
     },
     Resources {
@@ -72,11 +105,22 @@ pub enum Command {
     ConsoleLog {
         json: bool,
     },
+    ConsoleToken(crate::console::tokens::Action),
+    ConsoleFleet(crate::console::fleet::Action),
+    ConsoleScopes(crate::console::Scopes),
+    ConsoleWhoami {
+        json: bool,
+    },
+    ConsoleOpenApi,
     ConsoleTheme {
         name: Option<String>,
         json: bool,
     },
     ConsoleThemeImport(String),
+    ConsoleOtherAccounts {
+        value: Option<String>,
+        json: bool,
+    },
     ConsoleThemeExport(String),
     ConsoleSections {
         hide: Vec<String>,
@@ -86,10 +130,16 @@ pub enum Command {
     Status {
         json: bool,
         all: bool,
+        machine: Option<String>,
+        local: bool,
     },
     Show {
         command: String,
         json: bool,
+    },
+    RemoteDetails {
+        machine: String,
+        route: String,
     },
     Metrics(MetricsArgs),
     Spans {
@@ -99,11 +149,13 @@ pub enum Command {
     },
     Stop {
         command: String,
+        machine: Option<String>,
         requeue: bool,
         json: bool,
     },
     Dismiss {
         command: String,
+        machine: Option<String>,
         undo: bool,
         json: bool,
     },
@@ -111,6 +163,8 @@ pub enum Command {
         command: String,
         session: Option<String>,
         follow: bool,
+        json: bool,
+        tail: bool,
     },
     LogsList {
         json: bool,
@@ -123,6 +177,7 @@ pub enum Command {
     LogFile {
         id: String,
         follow: bool,
+        json: bool,
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
@@ -131,6 +186,7 @@ pub enum Command {
         issue: Option<IssueInput>,
     },
     Process(ProcessAction),
+    Review(ReviewArgs),
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
     /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
@@ -145,6 +201,7 @@ pub enum Command {
     Architect(ArchitectArgs),
     Pickup(PassArgs),
     Secure(PassArgs),
+    Triage(TriageArgs),
     Run(Box<RunArgs>),
 }
 
@@ -268,7 +325,7 @@ pub fn retry_with_security_fix(base: Option<&str>, flags: &Flags) -> String {
 }
 
 /// Serialize public asks, never computed retry text or hidden child Run facts.
-fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
+pub(crate) fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
     match flags.goal {
         Some(Goal::Merged) => words.push("merge".into()),
         Some(Goal::ReadyForReview) => words.push("--no-merge".into()),
@@ -356,6 +413,17 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
+    if args.first().is_some_and(|word| word == "start")
+        || (matches!(args.first().map(String::as_str), Some("config" | "update"))
+            && args.iter().any(|word| word == "--machine"))
+    {
+        return crate::console::fleet_control::Cli::parse(args).map(Command::FleetControl);
+    }
+    if matches!(args.first().map(String::as_str), Some("show" | "logs"))
+        && args.iter().any(|arg| arg == "--machine")
+    {
+        return parse_remote_details(args);
+    }
     match args.first().map(String::as_str) {
         Some("--trial") => {
             let [_, request] = args else {
@@ -374,7 +442,41 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
-        Some("update") => return Ok(Command::Update),
+        Some("update") => {
+            let mut check = false;
+            let mut json = false;
+            for arg in &args[1..] {
+                match arg.as_str() {
+                    "--check" if !check => check = true,
+                    "--json" if !json => json = true,
+                    _ => bail!("usage: thirdshift update [--check] [--json]"),
+                }
+            }
+            return Ok(Command::Update { check, json });
+        }
+        Some("config") => {
+            let mut words = Vec::new();
+            let mut json = false;
+            for word in &args[1..] {
+                if word == "--json" {
+                    anyhow::ensure!(!json, "repeated argument: --json");
+                    json = true;
+                } else {
+                    words.push(word.clone());
+                }
+            }
+            anyhow::ensure!(
+                words.len() <= 2,
+                "usage: thirdshift config [<key> [<value>]] [--json]"
+            );
+            return Ok(Command::Config {
+                key: words.first().cloned(),
+                value: words.get(1).cloned(),
+                json,
+            });
+        }
+        Some("review") => return parse_review(&args[1..]).map(Command::Review),
+        Some("fix") => return parse_fix(&args[1..]).map(Command::Fix),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
         Some("bug-origins") => {
             return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
@@ -385,6 +487,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "fleet") {
+                return crate::console::fleet::Action::parse(&args[2..]).map(Command::ConsoleFleet);
+            }
+            if args.get(1).is_some_and(|action| action == "scopes") {
+                return crate::console::Scopes::parse(&args[2..]).map(Command::ConsoleScopes);
+            }
+            if args.get(1).is_some_and(|action| action == "token") {
+                return crate::console::tokens::parse(&args[2..]).map(Command::ConsoleToken);
+            }
+            if args.get(1).is_some_and(|action| action == "other-accounts") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                let value = match &args[2..end] {
+                    [] => None,
+                    [value] if !value.starts_with('-') => Some(value.clone()),
+                    _ => bail!(
+                        "usage: thirdshift console other-accounts [none|readable|name,name] [--json]"
+                    ),
+                };
+                return Ok(Command::ConsoleOtherAccounts { value, json });
+            }
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");
                 let end = args.len() - usize::from(json);
@@ -454,6 +577,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 return Ok(Command::ConsoleSignOut { email, json });
             }
             return match &args[1..] {
+                [action] if action == "whoami" => Ok(Command::ConsoleWhoami { json: false }),
+                [action, flag] if action == "whoami" && flag == "--json" => {
+                    Ok(Command::ConsoleWhoami { json: true })
+                }
                 [] => Ok(Command::Console { no_sign_in: false }),
                 [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
                 [action] if action == "install" => Ok(Command::ConsoleInstall { output: None }),
@@ -471,16 +598,17 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Ok(Command::ConsolePassword(Some(email.clone())))
                 }
                 [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action] if action == "openapi" => Ok(Command::ConsoleOpenApi),
                 [action, flag] if action == "log" && flag == "--json" => {
                     Ok(Command::ConsoleLog { json: true })
                 }
                 _ => bail!(
-                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | scopes [--email <address>] [--scopes <scopes>] [--json] | log [--json] | token <create|list|revoke> | whoami [--json] | openapi"
                 ),
             };
         }
         Some("stop") => {
-            let usage = "usage: thirdshift stop <command> [--requeue] [--json]";
+            let usage = "usage: thirdshift stop <command> [--machine <name>] [--requeue] [--json]";
             let Some((command, options)) = args[1..].split_first() else {
                 bail!(usage)
             };
@@ -488,8 +616,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 bail!(usage);
             }
             let (mut requeue, mut json) = (false, false);
-            for option in options {
+            let mut machine = None;
+            let mut options = options.iter();
+            while let Some(option) = options.next() {
                 match option.as_str() {
+                    "--machine" if machine.is_none() => {
+                        machine = Some(
+                            options
+                                .next()
+                                .filter(|name| !name.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
                     "--requeue" if !requeue => requeue = true,
                     "--json" if !json => json = true,
                     _ => bail!(usage),
@@ -497,6 +636,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             return Ok(Command::Stop {
                 command: command.clone(),
+                machine,
                 requeue,
                 json,
             });
@@ -505,7 +645,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return metrics(&args[1..]).map(Command::Metrics);
         }
         Some("dismiss") => {
-            let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
+            let usage = "usage: thirdshift dismiss <command> [--machine <name>] [--undo] [--json]";
             let Some((command, options)) = args[1..].split_first() else {
                 bail!(usage)
             };
@@ -513,8 +653,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 bail!(usage);
             }
             let (mut undo, mut json) = (false, false);
-            for option in options {
+            let mut machine = None;
+            let mut options = options.iter();
+            while let Some(option) = options.next() {
                 match option.as_str() {
+                    "--machine" if machine.is_none() => {
+                        machine = Some(
+                            options
+                                .next()
+                                .filter(|name| !name.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
                     "--undo" if !undo => undo = true,
                     "--json" if !json => json = true,
                     _ => bail!(usage),
@@ -522,6 +673,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             return Ok(Command::Dismiss {
                 command: command.clone(),
+                machine,
                 undo,
                 json,
             });
@@ -603,6 +755,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     return Ok(Command::LogFile {
                         id: id.clone(),
                         follow: false,
+                        json: false,
                     });
                 }
                 [flag, id, follow]
@@ -611,11 +764,21 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     return Ok(Command::LogFile {
                         id: id.clone(),
                         follow: true,
+                        json: false,
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--file" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: false,
+                        json: true,
                     });
                 }
                 _ => {}
             }
-            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow] | thirdshift logs <command> --export <dir>";
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--tail] [--follow | --json] | thirdshift logs <command> --export <dir>";
             let command = args
                 .get(1)
                 .filter(|name| !name.starts_with('-'))
@@ -631,10 +794,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
             }
             let mut session = None;
             let mut follow = false;
+            let mut json = false;
+            let mut tail = false;
             let mut flags = args[2..].iter();
             while let Some(flag) = flags.next() {
                 match flag.as_str() {
                     "--follow" if !follow => follow = true,
+                    "--json" if !json => json = true,
+                    "--tail" if !tail => tail = true,
                     "--session" if session.is_none() => {
                         session = Some(
                             flags
@@ -647,10 +814,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     _ => bail!(usage),
                 }
             }
+            anyhow::ensure!(!(follow && json), "--json cannot be combined with --follow");
+            anyhow::ensure!(!(follow && tail), "--tail cannot be combined with --follow");
             return Ok(Command::Logs {
                 command: command.clone(),
                 session,
                 follow,
+                json,
+                tail,
             });
         }
         Some("cronjobs") => {
@@ -658,6 +829,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [] => Ok(Command::CronJobs { json: false }),
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
+        }
+        Some("launch-directories") => {
+            return match &args[1..] {
+                [] => Ok(Command::LaunchDirectories { json: false }),
+                [flag] if flag == "--json" => Ok(Command::LaunchDirectories { json: true }),
+                _ => bail!("usage: thirdshift launch-directories [--json]"),
             };
         }
         Some("score") => {
@@ -697,27 +875,30 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("status") => {
-            return match &args[1..] {
-                [] => Ok(Command::Status {
-                    json: false,
-                    all: false,
-                }),
-                [flag] if flag == "--json" => Ok(Command::Status {
-                    json: true,
-                    all: false,
-                }),
-                [flag] if flag == "--all" => Ok(Command::Status {
-                    json: false,
-                    all: true,
-                }),
-                [a, b] if (a == "--all" && b == "--json") || (a == "--json" && b == "--all") => {
-                    Ok(Command::Status {
-                        json: true,
-                        all: true,
-                    })
+            let usage = "usage: thirdshift status [--all] [--json] [--machine <name> | --local]";
+            let (mut json, mut all, mut machine, mut local) = (false, false, None, false);
+            let mut words = args[1..].iter();
+            while let Some(word) = words.next() {
+                match word.as_str() {
+                    "--json" if !json => json = true,
+                    "--all" if !all => all = true,
+                    "--local" if !local && machine.is_none() => local = true,
+                    "--machine" if machine.is_none() && !local => {
+                        let name = words
+                            .next()
+                            .filter(|name| !name.starts_with('-') && !name.is_empty())
+                            .context(usage)?;
+                        machine = Some(name.clone());
+                    }
+                    _ => bail!(usage),
                 }
-                _ => bail!("usage: thirdshift status [--all] [--json]"),
-            };
+            }
+            return Ok(Command::Status {
+                json,
+                all,
+                machine,
+                local,
+            });
         }
         Some("--release-summary") => {
             return match &args[1..] {
@@ -738,7 +919,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
             };
         }
-        Some("process") => return parse_process(&args[1..]).map(Command::Process),
+        Some("process" | "processes") => return parse_process(&args[1..]).map(Command::Process),
         Some("setup") => {
             return match &args[1..] {
                 [] => Ok(Command::Setup),
@@ -753,6 +934,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("architect") => return parse_architect(&args[1..]).map(Command::Architect),
+        Some("triage") => return parse_triage(&args[1..]).map(Command::Triage),
         Some("pickup") => return parse_pass(&args[1..], "pickup").map(Command::Pickup),
         Some("secure") => return parse_pass(&args[1..], "secure").map(Command::Secure),
         _ => {}
@@ -843,21 +1025,193 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]";
+fn parse_remote_details(args: &[String]) -> Result<Command> {
+    let mut local_args = Vec::new();
+    let mut machine = None;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if word == "--machine" {
+            anyhow::ensure!(machine.is_none(), "--machine may be given only once");
+            machine = Some(
+                words
+                    .next()
+                    .filter(|name| !name.starts_with('-'))
+                    .context("--machine needs a Fleet name")?
+                    .clone(),
+            );
+        } else {
+            local_args.push(word.clone());
+        }
+    }
+    let machine = machine.expect("machine flag present");
+    let details = parse(&local_args)?;
+    if crate::host::name().is_some_and(|hostname| hostname == machine) {
+        return Ok(details);
+    }
+    use crate::logs::status::inspect::url;
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "only details reads have a remote JSON twin; other Commands, follow and export are refused"
+    )]
+    let route = match details {
+        Command::Show { command, .. } => url("/peek", &command, None),
+        Command::Spans { command, span, .. } => {
+            let mut route =
+                reqwest::Url::parse("http://localhost")?.join(&url("/spans", &command, None))?;
+            if let Some(span) = span {
+                route.query_pairs_mut().append_pair("span", &span);
+            }
+            format!("{}?{}", route.path(), route.query().unwrap_or_default())
+        }
+        Command::Logs {
+            command,
+            session,
+            follow: false,
+            tail,
+            ..
+        } => {
+            let route = url(
+                "/log",
+                &command,
+                session.as_deref().map(std::path::Path::new),
+            );
+            if tail {
+                format!("{route}&tail=true")
+            } else {
+                route
+            }
+        }
+        Command::LogsList { owner, .. } => {
+            owner.map_or_else(|| "/logs".into(), |id| format!("/logs/command/{id}"))
+        }
+        Command::LogFile {
+            id, follow: false, ..
+        } => format!("/logs/{id}"),
+        _ => bail!(
+            "remote details return JSON snapshots; follow logs or export a Trace on the owning machine"
+        ),
+    };
+    Ok(Command::RemoteDetails { machine, route })
+}
+
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue> | pull-request <PR URL>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review] [security-fix | no-security-fix] [security-close | no-security-close] [--plan-only]";
+
+fn parse_review(args: &[String]) -> Result<ReviewArgs> {
+    let mut pull_request = None;
+    let mut author = None;
+    let mut recommend_only = false;
+    let mut flags = Flags::default();
+    let mut words = args.iter().peekable();
+    while let Some(arg) = words.next() {
+        if arg == "--recommend-only" && !recommend_only {
+            recommend_only = true;
+        } else if arg == "--author" && author.is_none() {
+            let login = words.next().context("--author requires a login")?;
+            anyhow::ensure!(
+                !login.is_empty() && !login.starts_with('-'),
+                "--author requires a login"
+            );
+            author = Some(login.clone());
+        } else if take_harness_flag(&mut flags.harness, arg, &mut words)?
+            || take_email_flag(&mut flags.email, arg, &mut words)?
+            || take_security_review_flag(&mut flags, arg)?
+        {
+        } else if pull_request.is_none() {
+            pull_request = Some(crate::review::PullRequestUrl::parse(arg)?);
+        } else {
+            bail!("unexpected review argument: {arg}");
+        }
+    }
+    let target = match (pull_request, author) {
+        (Some(pr), None) => crate::review::Target::PullRequest(pr),
+        (None, Some(login)) => crate::review::Target::Author(login),
+        _ => bail!("usage: thirdshift review <PR URL> | --author <login> [--recommend-only]"),
+    };
+    Ok(ReviewArgs {
+        target,
+        flags,
+        mode: if recommend_only {
+            crate::review::Mode::RecommendOnly
+        } else {
+            crate::review::Mode::Address
+        },
+    })
+}
+
+fn parse_fix(args: &[String]) -> Result<FixArgs> {
+    let mut pull_request = None;
+    let mut base = None;
+    let mut author = None;
+    let mut flags = Flags::default();
+    let mut words = args.iter().peekable();
+    while let Some(arg) = words.next() {
+        if matches!(arg.as_str(), "author" | "--author") {
+            ask_word(&mut author, arg, words.next(), "a login")?;
+        } else if take_pass_flag(&mut base, &mut flags, arg, &mut words)? {
+        } else if pull_request.is_none() {
+            pull_request = Some(crate::review::PullRequestInput::parse(arg)?);
+        } else {
+            bail!("unexpected fix argument: {arg}");
+        }
+    }
+    if flags.parallel.is_some()
+        || flags.security_review.is_some()
+        || flags.security_fix.is_some()
+        || flags.security_close.is_some()
+    {
+        bail!("parallel and security flags do not apply to Fix runs");
+    }
+    anyhow::ensure!(
+        pull_request.is_none() || (base.is_none() && author.is_none()),
+        "base and author apply only to a Fix Pass, not a targeted pull request"
+    );
+    Ok(FixArgs {
+        target: match pull_request {
+            Some(pr) => crate::fix::Target::PullRequest(pr),
+            None => crate::fix::Target::Pass { base, author },
+        },
+        flags,
+    })
+}
+
+pub(crate) fn fix_retry(pr_url: &str, flags: &Flags) -> String {
+    let mut words = vec!["thirdshift".into(), "fix".into(), pr_url.into()];
+    public_flag_words(flags, &mut words);
+    shell_command(words)
+}
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
-    if args.is_empty() {
+    if args.is_empty() || matches!(args, [word] if word == "list") {
         return Ok(ProcessAction::List);
+    }
+    if args[0] == "list" {
+        bail!(PROCESS_USAGE);
+    }
+    if args[0] == "show" {
+        let [_, name] = args else {
+            bail!(PROCESS_USAGE);
+        };
+        return Ok(ProcessAction::Show(process_name(name)?));
     }
     let mut name = None;
     let mut issue = None;
     let mut email = None;
     let mut goal = None;
+    let mut review_flags = Flags::default();
+    let mut plan_only = false;
     let mut asked = harness::Asked::default();
     let mut check = false;
     let mut expect_issue = false;
+    let mut pull_request = None;
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
+        if arg == PLAN_ONLY {
+            if plan_only {
+                bail!("repeated argument: {arg}");
+            }
+            plan_only = true;
+            continue;
+        }
         if take_harness_flag(&mut asked, arg, &mut words)? {
             continue;
         }
@@ -865,6 +1219,25 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             continue;
         }
         if take_merge_flag(&mut goal, arg)? {
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "security-review"
+                | "--security-review"
+                | "no-security-review"
+                | "--no-security-review"
+                | "security-fix"
+                | "--security-fix"
+                | "no-security-fix"
+                | "--no-security-fix"
+                | "security-close"
+                | "--security-close"
+                | "no-security-close"
+                | "--no-security-close"
+        ) && (name.is_some() || arg.starts_with("--"))
+        {
+            take_flag(&mut review_flags, arg, &mut words)?;
             continue;
         }
         // `check` is the subcommand only before the name. A later `check` is
@@ -879,8 +1252,17 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             check = true;
             continue;
         }
+        if arg == "pull-request" {
+            if name.is_none() || issue.is_some() || expect_issue || pull_request.is_some() {
+                bail!(PROCESS_USAGE);
+            }
+            pull_request = Some(crate::review::PullRequestUrl::parse(
+                words.next().context(PROCESS_USAGE)?,
+            )?);
+            continue;
+        }
         if arg == "issue" {
-            if name.is_none() || expect_issue || issue.is_some() {
+            if name.is_none() || expect_issue || issue.is_some() || pull_request.is_some() {
                 bail!(PROCESS_USAGE);
             }
             expect_issue = true;
@@ -896,7 +1278,15 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         }
         name = Some(process_name(arg)?);
     }
-    if expect_issue || ((email.is_some() || goal.is_some()) && (check || name.is_none())) {
+    if expect_issue
+        || ((email.is_some()
+            || goal.is_some()
+            || review_flags.security_review.is_some()
+            || review_flags.security_fix.is_some()
+            || review_flags.security_close.is_some()
+            || plan_only)
+            && (check || name.is_none()))
+    {
         bail!(PROCESS_USAGE);
     }
     let Some(name) = name else {
@@ -905,9 +1295,14 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let command = ProcessRun {
         name,
         issue,
+        pull_request,
         asked,
         email,
         goal,
+        security_review: review_flags.security_review,
+        security_fix: review_flags.security_fix,
+        security_close: review_flags.security_close,
+        plan_only,
     };
     Ok(if check {
         ProcessAction::Check(command)
@@ -1008,6 +1403,42 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
+/// A Report to investigate, with only the choices a Triage session uses.
+pub struct TriageArgs {
+    pub file: Option<String>,
+    pub read_machine: bool,
+    pub recommend_only: bool,
+    pub allow_ready_for_agent: bool,
+    pub harness: harness::Asked,
+    pub email: Option<NotificationAsk>,
+}
+
+fn parse_triage(args: &[String]) -> Result<TriageArgs> {
+    let mut parsed = TriageArgs {
+        file: None,
+        read_machine: false,
+        recommend_only: false,
+        allow_ready_for_agent: false,
+        harness: harness::Asked::default(),
+        email: None,
+    };
+    let mut rest = args.iter().peekable();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--read-machine" if !parsed.read_machine => parsed.read_machine = true,
+            "--recommend-only" if !parsed.recommend_only => parsed.recommend_only = true,
+            "--allow-ready-for-agent" if !parsed.allow_ready_for_agent => {
+                parsed.allow_ready_for_agent = true
+            }
+            "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
+            _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
+            _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}
+            _ => bail!("unexpected argument after triage: {arg}"),
+        }
+    }
+    Ok(parsed)
+}
+
 /// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
 /// `lowest-first` and `highest-first` are a Pickup run's only: they say
@@ -1077,6 +1508,9 @@ fn take_flag<'a>(
     if take_merge_flag(&mut flags.goal, arg)? {
         return Ok(true);
     }
+    if take_security_review_flag(flags, arg)? {
+        return Ok(true);
+    }
     match arg {
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
@@ -1109,6 +1543,14 @@ fn take_flag<'a>(
             arg,
             SECURITY_CLOSE_FLAGS,
         )?,
+        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+    }
+    Ok(true)
+}
+
+/// The same Security review ask applies to Ticket and Review runs.
+fn take_security_review_flag(flags: &mut Flags, arg: &str) -> Result<bool> {
+    match arg {
         "security-review" | "--security-review" => ask_once(
             &mut flags.security_review,
             crate::security::review::Ask::Allow,
@@ -1121,7 +1563,7 @@ fn take_flag<'a>(
             arg,
             SECURITY_REVIEW_FLAGS,
         )?,
-        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+        _ => return Ok(false),
     }
     Ok(true)
 }
@@ -1223,7 +1665,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
 /// Is `arg`, after `email` or `email-unless-merged`, the address to send to? Only if it looks like
 /// one, so the Issue URL is never taken for it, nor is an Architect run's
 /// focus unless it has an `@`.
-fn is_address(arg: &str) -> bool {
+pub(crate) fn is_address(arg: &str) -> bool {
     arg.contains('@') && !arg.starts_with("https://")
 }
 
@@ -1258,6 +1700,7 @@ mod tests {
                         tickets_at_once: NonZeroUsize::new(5).unwrap(),
                         parallel_asked: false,
                         security_fix: true,
+                        security_close: true,
                         security_review: true,
                         launch_pull: false,
                         notification: NotificationAsk::Skip,

@@ -20,9 +20,10 @@ snapshot read such as `isVisible()` races the page's handlers. The waits use
 Playwright's default timeout, and the runner adds no retries.
 
 The page tests also consume the site without JavaScript to check canonical URLs,
-distinct search metadata, homepage site-name structured data and sitemap discovery
-through `robots.txt`. When adding a public page, give it a canonical URL and unique
-title and description, then include it in `site/sitemap.xml` and the page tests.
+distinct search metadata, homepage structured data, sitemap discovery through
+`robots.txt` and the agents' index in `site/llms.txt`. When adding a public page,
+give it a canonical URL and unique title and description, then include it in
+`site/sitemap.xml`, `site/llms.txt` and the page tests.
 
 The user manual's source is `docs/guide.md` at the repository root. After editing
 it or `site/generate-docs.mjs`, run `cd site && npm run docs` and commit the generated

@@ -4,7 +4,6 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use serde::Serialize;
 
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
@@ -14,7 +13,7 @@ pub(crate) fn log_path(
     input: &str,
     session: Option<&str>,
 ) -> Result<std::path::PathBuf> {
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(config, Local::now())?;
     let command = snapshot.resolve(input)?.observation;
     selected_log(command, session)
 }
@@ -40,6 +39,13 @@ pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>)
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
+pub(crate) fn machine_url(route: &str, machine: &str) -> String {
+    let mut url = reqwest::Url::parse("http://localhost").expect("fixed URL");
+    url = url.join(route).expect("Console route");
+    url.query_pairs_mut().append_pair("machine", machine);
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
 fn shown_heading(command: &Command) -> String {
     if let Some(name) = command.record.process_label() {
         return format!("Process {name}");
@@ -58,8 +64,16 @@ pub(crate) struct ShownStep {
 }
 
 /// Each Process Step's Command log line, and the result file when the Step wrote one.
-pub(crate) fn process_steps(command_log: &std::path::Path) -> Vec<ShownStep> {
-    let Ok(log) = std::fs::read_to_string(command_log) else {
+/// An Other-account Command log is read only when its canonical path stays under
+/// `accepted`. The serving account passes no directory.
+pub(crate) fn process_steps(
+    command_log: &std::path::Path,
+    accepted: Option<&std::path::Path>,
+) -> Vec<ShownStep> {
+    let Some(path) = crate::logs::reading::steps_command_log(command_log, accepted) else {
+        return Vec::new();
+    };
+    let Ok(log) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
     let results = command_log.with_extension("steps");
@@ -81,7 +95,7 @@ fn print_steps(command: &Command, indent: &str) {
     if command.record.kind != "Process" {
         return;
     }
-    for step in process_steps(&command.command_log) {
+    for step in process_steps(&command.command_log, command.accepted_log_directory()) {
         println!("{indent}{}", step.message);
         if let Some(path) = &step.result {
             println!("{indent}result: {}", path.display());
@@ -90,9 +104,10 @@ fn print_steps(command: &Command, indent: &str) {
 }
 
 fn step_message(line: &str) -> Option<&str> {
-    match crate::progress::ChildLine::of(line) {
-        crate::progress::ChildLine::Own(message) if message.starts_with("step ") => Some(message),
-        _ => None,
+    use crate::progress::ChildLine;
+    match ChildLine::of(line) {
+        ChildLine::Own(message) if message.starts_with("step ") => Some(message),
+        ChildLine::Own(_) | ChildLine::Relayed | ChildLine::Continuation => None,
     }
 }
 
@@ -168,6 +183,9 @@ fn print(command: Observation<'_>) -> Result<()> {
 }
 
 fn print_details(command: &Command, indent: &str) -> Result<()> {
+    if let Some(account) = &command.account {
+        println!("{indent}[{account}]");
+    }
     println!(
         "{indent}{} · {}",
         shown_heading(command),
@@ -198,6 +216,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
         println!("{indent}{event}");
     }
     print_steps(command, indent);
+    super::print_pause(&command.record, indent);
     super::print_tickets(&command.record, &format!("{indent}  "));
     for child in command.dispatched.iter().chain(&command.children) {
         print_details(child, &format!("{indent}  "))?;
@@ -207,27 +226,12 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_details(
-        &config.logs_dir,
-        Local::now(),
-        config.silent_interval,
-        input,
-    )?;
+    let snapshot = Snapshot::details_for_user(&config, Local::now(), input)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
-        #[derive(Serialize)]
-        struct Show {
-            version: u32,
-            hostname: String,
-            command: serde_json::Value,
-        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&Show {
-                version: 1,
-                hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: crate::logs::metrics::details(&snapshot, command)?,
-            })?
+            serde_json::to_string_pretty(&envelope(details(&config, &snapshot, command)?))?
         );
     } else {
         print(command)?;
@@ -235,9 +239,86 @@ pub fn show(input: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
+pub(in crate::logs) fn details(
+    config: &UserConfig,
+    snapshot: &Snapshot,
+    command: Observation<'_>,
+) -> Result<serde_json::Value> {
+    let kept = crate::logs::github::load(&config.logs_dir);
+    let github = if let Observation::Record(record) = command
+        && let Some(row) = command.selector()
+    {
+        let record = &record.record;
+        let urls = record
+            .pull_request
+            .as_deref()
+            .into_iter()
+            .chain(record.issue.as_ref().map(|issue| issue.url.as_str()))
+            .collect();
+        kept.command_answer(&row, record.pull_request.as_deref(), urls)
+    } else {
+        Default::default()
+    };
+    let mut value = crate::logs::metrics::details(snapshot, command)?;
+    value
+        .as_object_mut()
+        .expect("Command details object")
+        .extend(
+            serde_json::to_value(github)?
+                .as_object()
+                .expect("GitHub answer object")
+                .clone(),
+        );
+    Ok(value)
+}
+
+pub(crate) fn envelope(command: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"version": 1, "hostname": crate::host::name().unwrap_or_else(|| "unknown".into()), "command": command})
+}
+
+pub(crate) fn read_log(
+    config: &UserConfig,
+    input: &str,
+    session: Option<&str>,
+    tail: bool,
+) -> Result<serde_json::Value> {
+    let snapshot = Snapshot::for_user(config, Local::now())?;
+    let selection = snapshot.resolve(input)?;
+    let path = selected_log(selection.observation, session)?;
+    let reader = selection.reader(path);
+    if tail {
+        let bytes = reader.tail(4 * 1024)?;
+        return Ok(serde_json::json!({"version": 1, "contents": String::from_utf8_lossy(&bytes)}));
+    }
+    super::super::catalog::contents(&reader)
+}
+
+pub fn logs(
+    input: &str,
+    session: Option<&str>,
+    follow: bool,
+    json: bool,
+    tail: bool,
+) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    if tail {
+        let value = read_log(&config, input, session, true)?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            std::io::stdout()
+                .write_all(value["contents"].as_str().unwrap_or_default().as_bytes())?;
+        }
+        return Ok(());
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&read_log(&config, input, session, false)?)?
+        );
+        return Ok(());
+    }
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;
     let path = selected_log(command, session)?;

@@ -1280,6 +1280,8 @@ fn a_required_review_refuses_the_merge_without_another_round_and_names_the_outco
         assert_eq!(gh["prs"][0]["state"], "OPEN");
         assert_eq!(gh["prs"][0]["isDraft"], false);
         assert_eq!(gh["issues"]["7"], "OPEN");
+        // A hold that leaves the pull request ready adds no agent-failed: it
+        // waits on review, not on a fix.
         assert_eq!(scenario.issue_labels(7), ["in-progress"]);
         assert_eq!(
             scenario.origin_log("issue-7").unwrap(),

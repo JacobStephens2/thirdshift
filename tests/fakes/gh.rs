@@ -106,7 +106,10 @@
 //! "conclusion"}`, for its current attempt.
 //!
 //! `gh release view <tag> --json url` answers with the GitHub Release's URL
-//! for a tag on origin.
+//! for a tag on origin. A recorded release workflow must have succeeded,
+//! unless its explicit `published` field says publication already happened.
+//! Release workflow runs may provide `rerun` fields for their next attempt,
+//! including `stale_polls` reads of the previous attempt before it appears.
 //!
 //! `gh api graphql` answers the one query thirdshift reads a Spec's Tickets
 //! with: the sub-issues of issue `$number` (its `sub_issues`, in order), each
@@ -254,6 +257,8 @@ use std::sync::Mutex;
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
 use crate::{die, git, python_list};
 
+#[path = "gh/review.rs"]
+mod review;
 #[path = "gh/scoring.rs"]
 mod scoring;
 
@@ -547,10 +552,12 @@ const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRep
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
 const COMMIT_PR_LINES: &str = r#".[] | "\(.merge_commit_sha) \(.number)""#;
+const COMMIT_PR_HEAD_LINES: &str = r#".[] | [(.merge_commit_sha // "none"), .head.sha, .head.ref, (.head.repo.full_name // "none"), (.base.repo.full_name // "none"), (.number | tostring)] | join(" ")"#;
 
 const LATEST_RUN_LINE: &str = r#".[] | "\(.headSha) \(.status) \(.conclusion)""#;
 
-const RELEASE_RUN_LINE: &str = r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)""#;
+const RELEASE_RUN_LINE: &str =
+    r#".[] | "\(.databaseId) \(.url) \(.status) \(.conclusion) \(.attempt)""#;
 
 const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | .name] | join(", ")"#;
 
@@ -610,6 +617,16 @@ fn pr_ready(state: &mut Json, positional: &[String], flags: &Flags) {
     let pr = &mut state.at_mut("prs").items_mut()[at];
     ensure_open(pr);
     pr.set("isDraft", Bool(flags.contains_key("undo")));
+    save(state);
+}
+
+/// The release script updates an open bump PR with a regenerated body.
+fn pr_edit(state: &mut Json, positional: &[String], flags: &Flags) {
+    let at = selected_pr(state, &positional[0]);
+    let pr = &mut state.at_mut("prs").items_mut()[at];
+    ensure_open(pr);
+    let body = fs::read_to_string(flag(flags, "body-file").expect("no --body-file")).unwrap();
+    pr.set("body", string(body));
     save(state);
 }
 
@@ -807,6 +824,9 @@ fn now() -> String {
 /// `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 /// labels[]=<label> ...`: set the issue's labels to exactly those given.
 fn issue_labels_put(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, false) {
+        return;
+    }
     let (positional, _) = parse(args);
     let issue = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -943,6 +963,9 @@ fn api_add_blocked_by(state: &mut Json, args: &[&str]) {
 /// `gh api --method DELETE repos/<repo>/issues/<number>/labels/<label>`: take
 /// the label, whatever its case, off the issue.
 fn issue_label_delete(state: &mut Json, args: &[&str]) {
+    if review::edit_labels(state, args, true) {
+        return;
+    }
     let (positional, _) = parse(args);
     let label = positional.first().and_then(|path| {
         let (repo, rest) = repo_prefix(path)?;
@@ -1342,10 +1365,16 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
     let body = parse_json(&input);
+    if let Some(body) = body.get("body") {
+        state.entry("bodies", object([])).set(n, body.clone());
+    }
+    if let Some(issue_state) = body.get("state") {
+        assert!(matches!(issue_state.str(), "open" | "closed"));
+        state
+            .entry("issues", object([]))
+            .set(n, string(issue_state.str().to_uppercase()));
+    }
     let issue_state = state.at("issues").at(n).clone();
-    state
-        .entry("bodies", object([]))
-        .set(n, body.at("body").clone());
     save(state);
     println!("{}", issue_fields(state, n, &issue_state));
 }
@@ -1372,6 +1401,9 @@ fn membership_response(state: &Json, key: &str, login: &str) {
 }
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
+    if review::api(state, positional, flags) {
+        return;
+    }
     let path = &positional[0];
     if path == "rate_limit" {
         let reset = std::time::SystemTime::now()
@@ -1477,6 +1509,35 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(n) = rest
+            .strip_prefix("issues/")
+            .and_then(|rest| rest.strip_suffix("/comments?per_page=100"))
+    {
+        check_repo_is(state, Some(repo));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".[]"));
+        for comment in listed(state, "comments", n) {
+            // A bare body is a comment this repo's owner posted. An object
+            // carries the association the test stored, which the CI-red
+            // dedup reads the way GitHub's issue-comment API does.
+            let (body, association) = match comment.get("body") {
+                Some(body) => (
+                    body.clone(),
+                    comment
+                        .get("association")
+                        .cloned()
+                        .unwrap_or_else(|| string("OWNER")),
+                ),
+                None => (comment.clone(), string("OWNER")),
+            };
+            println!(
+                "{}",
+                object([("body", body), ("author_association", association),])
+            );
+        }
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
         && rest.starts_with("issues?")
     {
         check_repo_is(state, Some(repo));
@@ -1497,6 +1558,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
         }
+        review::closed_issues(state, &wanted_state, query.get("labels").copied());
         return;
     }
     if path.contains("/security-advisories") {
@@ -1535,6 +1597,40 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 Array(latest.cloned().into_iter().collect())
             )])
         );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some((id, attempt)) = rest
+            .strip_prefix("actions/runs/")
+            .and_then(|rest| rest.split_once("/attempts/"))
+    {
+        check_repo_is(state, Some(repo));
+        let (attempt, jobs) = match attempt.strip_suffix("/jobs?per_page=100") {
+            Some(attempt) => (attempt, true),
+            None => (attempt, false),
+        };
+        let run = state
+            .at("runs")
+            .items()
+            .iter()
+            .find(|run| run.at("id").python() == id)
+            .unwrap();
+        let run = if run.at("run_attempt").python() == attempt {
+            run
+        } else {
+            let previous = run.at("previous_attempt");
+            assert_eq!(previous.at("run_attempt").python(), attempt);
+            previous
+        };
+        if jobs {
+            assert!(flags.contains_key("paginate"));
+            assert_eq!(flag(flags, "jq"), Some(".jobs[]"));
+            for job in run.at("jobs").items() {
+                println!("{job}");
+            }
+        } else {
+            println!("{run}");
+        }
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
@@ -1618,7 +1714,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 }
                 return;
             }
-            if jq != Some(COMMIT_PR_LINES) {
+            if jq != Some(COMMIT_PR_LINES) && jq != Some(COMMIT_PR_HEAD_LINES) {
                 unsupported_jq(jq);
             }
             for pr in commit_prs(state, sha) {
@@ -1626,7 +1722,30 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                     Some(commit) if commit.truthy() => commit.python(),
                     _ => "null".to_owned(),
                 };
-                println!("{merge} {}", pr.at("number").python());
+                if jq == Some(COMMIT_PR_HEAD_LINES) {
+                    let head = pr_fields(pr, &["headRefOid".to_owned()]);
+                    let repo = state.at("repo").str();
+                    let head_repo = if pr.get("isCrossRepository").is_some_and(Json::truthy) {
+                        pr.get("headRepo")
+                            .and_then(Json::as_str)
+                            .unwrap_or("fork/thirdshift")
+                    } else {
+                        repo
+                    };
+                    let merge = if merge == "null" {
+                        "none".to_owned()
+                    } else {
+                        merge
+                    };
+                    println!(
+                        "{merge} {} {} {head_repo} {repo} {}",
+                        head.at("headRefOid").python(),
+                        pr.at("head").python(),
+                        pr.at("number").python()
+                    );
+                } else {
+                    println!("{merge} {}", pr.at("number").python());
+                }
             }
             return;
         }
@@ -1817,6 +1936,48 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
         );
     }
     let run = &positional[0];
+    let mut runs = state.get("runs").cloned().unwrap_or(Array(Vec::new()));
+    if let Some(release) = runs.items_mut().iter_mut().find(|candidate| {
+        candidate
+            .get("databaseId")
+            .is_some_and(|id| id.python() == *run)
+            && candidate.get("workflow").and_then(Json::as_str) == Some("release.yml")
+    }) {
+        if release.at("status").str() != "completed" || !is_failure(release.at("conclusion").str())
+        {
+            die("run cannot be rerun", 1);
+        }
+        let previous = release.clone();
+        let attempt = release.get("attempt").and_then(Json::as_i64).unwrap_or(1);
+        if let Some(Json::Object(fields)) = release.get("rerun").cloned() {
+            for (key, value) in fields {
+                release.set(&key, value);
+            }
+        }
+        release.set("attempt", number(attempt + 1));
+        release.set("previous_attempt", previous);
+        release.set("rerun", Null);
+        state.set("runs", runs);
+        save(state);
+        return;
+    }
+    if let Some(push) = runs.items_mut().iter_mut().find(|push| {
+        push.get("id").is_some_and(|id| id.python() == *run)
+            && push.get("event").and_then(Json::as_str) == Some("push")
+    }) {
+        if push.at("status").str() != "completed" || push.at("jobs").items().is_empty() {
+            die("run cannot be rerun; its workflow file may be broken", 1);
+        }
+        let previous = push.clone();
+        let attempt = push.get("run_attempt").and_then(Json::as_i64).unwrap_or(1);
+        push.set("previous_attempt", previous);
+        push.set("run_attempt", number(attempt + 1));
+        push.set("status", string("in_progress"));
+        push.set("conclusion", Null);
+        state.set("runs", runs);
+        save(state);
+        return;
+    }
     let of_run = format!("/actions/runs/{run}/job/");
     let mut checks = state.get("checks").cloned().unwrap_or(object([]));
     let Json::Object(commits) = &mut checks else {
@@ -1989,7 +2150,7 @@ fn run_list(state: &mut Json, flags: &Flags) {
     }
     let fields: &[&str] = match flag(flags, "jq") {
         Some(LATEST_RUN_LINE) => &["headSha", "status", "conclusion"],
-        Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion"],
+        Some(RELEASE_RUN_LINE) => &["databaseId", "url", "status", "conclusion", "attempt"],
         jq => unsupported_jq(jq),
     };
     let filters = [
@@ -2012,6 +2173,12 @@ fn run_list(state: &mut Json, flags: &Flags) {
         let hidden_polls = polls(run, "hidden_polls");
         if hidden_polls > 0 {
             run.set("hidden_polls", number(hidden_polls - 1));
+            continue;
+        }
+        let stale_polls = polls(run, "stale_polls");
+        if stale_polls > 0 {
+            run.set("stale_polls", number(stale_polls - 1));
+            listed.push(run.at("previous_attempt").clone());
             continue;
         }
         let pending_polls = polls(run, "pending_polls");
@@ -2060,6 +2227,25 @@ fn release_view(state: &Json, positional: &[String], flags: &Flags) {
         );
     }
     let tag = &positional[0];
+    if let Some(run) = state
+        .get("runs")
+        .map(Json::items)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find(|run| {
+            run.get("workflow").and_then(Json::as_str) == Some("release.yml")
+                && run.get("branch").and_then(Json::as_str) == Some(tag)
+        })
+    {
+        let published = run.get("published").map(Json::truthy).unwrap_or_else(|| {
+            run.at("conclusion").str() == "success"
+                && run.get("pending_polls").and_then(Json::as_i64).unwrap_or(0) == 0
+        });
+        if !published {
+            die("release not found", 1);
+        }
+    }
     let tagged = git(
         &origin_repo(),
         &[
@@ -2105,6 +2291,9 @@ fn record_run(state: &mut Json, mut run: Json) {
             .unwrap_or(0);
         run.set("databaseId", number(newest + 1));
     }
+    if !run.has("attempt") {
+        run.set("attempt", number(1));
+    }
     if !run.has("url") {
         let url = format!(
             "https://github.com/{repo}/actions/runs/{}",
@@ -2128,6 +2317,9 @@ fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
     if scoring::packet(state, &query, &variables) {
+        return;
+    }
+    if review::linked_issues(state, &query, &variables) {
         return;
     }
     if query.contains("ScoringPullRequests") {
@@ -2340,9 +2532,33 @@ fn inbox_states(state: &Json, query: &str) {
                         let at = |field: &str| pr.get(field).cloned().unwrap_or(Null);
                         object([
                             ("url", pr.at("url").clone()),
+                            (
+                                "title",
+                                if subject.contains("title") {
+                                    at("title")
+                                } else {
+                                    Null
+                                },
+                            ),
                             ("state", pr.at("state").clone()),
                             ("mergedAt", at("mergedAt")),
                             ("closedAt", at("closedAt")),
+                            (
+                                "mergeable",
+                                if subject.contains("mergeable") {
+                                    at("mergeable")
+                                } else {
+                                    Null
+                                },
+                            ),
+                            (
+                                "commits",
+                                if subject.contains("statusCheckRollup") {
+                                    at("commits")
+                                } else {
+                                    Null
+                                },
+                            ),
                         ])
                     })
             })
@@ -2475,6 +2691,10 @@ fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&s
         .into_iter()
         .filter(|edit| edit.at("kind").str() == kind)
         .map(|edit| {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake edit's author is null or, whatever else the fake stores, a login"
+            )]
             let actor = match edit.at("by") {
                 Null => Null,
                 login => object([("login", login.clone())]),
@@ -2506,6 +2726,10 @@ fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
     let comments: Vec<Json> = listed(state, "comments", n)
         .into_iter()
         .map(|comment| {
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake comment is an object of fields or, any other value, its body alone"
+            )]
             let (body, by, association) = match &comment {
                 Json::Object(_) => (
                     comment.at("body").clone(),
@@ -2514,6 +2738,10 @@ fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
                 ),
                 _ => (comment.clone(), string(owner.clone()), string("OWNER")),
             };
+            #[expect(
+                clippy::wildcard_enum_match_arm,
+                reason = "a fake comment's author is null or, whatever else the fake stores, a login"
+            )]
             let author = match by {
                 Null => Null,
                 login => object([("login", login)]),
@@ -2829,6 +3057,10 @@ pub fn main(args: Vec<String>) {
             let (positional, flags) = parsed(rest);
             pr_view(&mut state, &positional, &flags);
         }
+        ["pr", "comment", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            review::comment(&mut state, &positional, &flags);
+        }
         ["pr", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);
             pr_list(&state, &flags);
@@ -2836,6 +3068,10 @@ pub fn main(args: Vec<String>) {
         ["pr", "ready", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             pr_ready(&mut state, &positional, &flags);
+        }
+        ["pr", "edit", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            pr_edit(&mut state, &positional, &flags);
         }
         ["pr", "merge", rest @ ..] => {
             let (positional, flags) = parsed(rest);

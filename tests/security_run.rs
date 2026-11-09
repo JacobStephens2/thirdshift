@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 
 use serde_json::{Value, json};
+use support::concurrency::{release, reservations, waits_on};
 use support::resend::ResendStandIn;
 use support::{REPO, Scenario, write_executable};
 
@@ -1919,9 +1920,10 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
         "{}",
         result.stderr
     );
+    // A failed Security fix keeps its Claim, so it counts as a failure.
     assert_eq!(
         scenario.gh_state()["labels"]["8"],
-        json!(["security-fix", "in-progress"])
+        json!(["security-fix", "in-progress", "agent-failed"])
     );
     let (subject, body) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
@@ -1960,9 +1962,14 @@ fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
             assert_eq!(
                 scenario.issue_labels(issue),
                 if private {
-                    vec!["security-finding", "security-fix", "in-progress"]
+                    vec![
+                        "security-finding",
+                        "security-fix",
+                        "in-progress",
+                        "agent-failed",
+                    ]
                 } else {
-                    vec!["security-fix", "in-progress"]
+                    vec!["security-fix", "in-progress", "agent-failed"]
                 }
             );
             // Even contradictory ready labelling cannot make Pickup retry a Claim.
@@ -2076,9 +2083,14 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
         assert_eq!(
             scenario.issue_labels(spec),
             if private {
-                vec!["security-finding", "security-fix", "in-progress"]
+                vec![
+                    "security-finding",
+                    "security-fix",
+                    "in-progress",
+                    "agent-failed",
+                ]
             } else {
-                vec!["security-fix", "in-progress"]
+                vec!["security-fix", "in-progress", "agent-failed"]
             }
         );
         let state = scenario.gh_state();
@@ -3252,13 +3264,15 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     let first = first.finish();
     assert!(resend.requests().is_empty());
     assert_eq!(first.code, Some(0), "{}", first.stderr);
-    for skipped in [second, pickup] {
+    for (skipped, reason) in [
+        (second, "a Security run is already running on acme/widgets"),
+        (
+            pickup,
+            "at the Command limit on acme/widgets: 1 Command is running, pass.command_limit is 1",
+        ),
+    ] {
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
-        assert!(
-            skipped.stderr.contains("another Pass is already running"),
-            "{}",
-            skipped.stderr
-        );
+        assert!(skipped.stderr.contains(reason), "{}", skipped.stderr);
         assert!(
             !skipped.stderr.contains("Ready issue"),
             "{}",
@@ -3274,7 +3288,7 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     );
     let log = fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
         .unwrap();
-    assert!(log.contains("Security run skipped: another Pass is already running"));
+    assert!(log.contains("Security run skipped: a Security run is already running"));
 }
 
 /// Link the git on `PATH` into the scenario's `bin`, for a test that runs
@@ -4968,7 +4982,7 @@ fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
     assert_eq!(
         scenario.issue_labels(8),
-        vec!["security-fix", "in-progress"]
+        vec!["security-fix", "in-progress", "agent-failed"]
     );
 
     let mut state = scenario.gh_state();
@@ -5128,9 +5142,9 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
 #[test]
 fn review_acquisition_failure_is_pre_audit() {
     let scenario = Scenario::new();
-    fs::create_dir(scenario.path("work/widgets-architect")).unwrap();
+    fs::create_dir(scenario.path("work/widgets-security")).unwrap();
     fs::write(
-        scenario.path("work/widgets-architect/keep.txt"),
+        scenario.path("work/widgets-security/keep.txt"),
         "unowned user work",
     )
     .unwrap();
@@ -5251,4 +5265,171 @@ fn an_audit_only_security_run_does_not_check_the_security_review_harness() {
         "{}",
         result.stderr
     );
+}
+
+/// A User config that lets `limit` Commands run on a repository at once,
+/// with no settling, so a Pickup run takes an issue as soon as it is Ready.
+fn command_limit(limit: usize) -> String {
+    format!("[pass]\ncommand_limit = {limit}\n[pickup]\nwait_minutes = 0\n")
+}
+
+/// `stderr` after the line saying the Security run is starting.
+fn after_start(stderr: &str) -> &str {
+    support::after_start(stderr, "Security run starting")
+}
+
+#[test]
+fn at_a_command_limit_of_3_a_security_run_audits_beside_a_pickup_run_and_an_architect_run_in_a_worktree_of_its_own()
+ {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.user_config_is(&command_limit(3));
+    scenario.issue_is(7, "OPEN");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for(
+        7,
+        &format!(
+            "{}{}",
+            waits_on("7"),
+            r#"
+echo 7 > issue-7.txt
+git add issue-7.txt
+git commit -q -m "Work on 7"
+gh pr create --base main --head issue-7 --title "Work on 7" --body "Closes #7"
+"#
+        ),
+    );
+    // The Security audit records what it found; the Architecture review
+    // waits, then publishes its plan.
+    scenario.agent_does(&format!(
+        r#"
+case "$FAKE_CLAUDE_PROMPT" in
+*"Output directory: "*)
+{audit}
+;;
+*)
+pwd > "$(dirname "$FAKE_CLAUDE_RECORD")/architect-cwd"
+{waits}
+url=$(gh issue create --title "Deepen the session module" --body "The plan" --label needs-triage)
+printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+;;
+esac
+"#,
+        audit = audit_script("[]"),
+        waits = waits_on("architect"),
+    ));
+    let pickup = scenario.run_until(&["pickup"], &[], "started-7");
+    let architect = scenario.run_until(&["architect", "--plan-only"], &[], "started-architect");
+    let reviewing = fs::read_to_string(scenario.path("architect-cwd")).unwrap();
+
+    let audited = scenario.run(&["secure"]);
+
+    assert_eq!(audited.code, Some(0), "{}", audited.stderr);
+    assert!(
+        audited
+            .stderr
+            .contains("Security audit recorded 0 new finding(s), 0 already recorded"),
+        "{}",
+        audited.stderr
+    );
+    let audit = scenario
+        .claude_calls()
+        .into_iter()
+        .find(|call| {
+            call["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Output directory: ")
+        })
+        .unwrap();
+    assert!(
+        audit["cwd"]
+            .as_str()
+            .unwrap()
+            .ends_with("/work/widgets-security"),
+        "{audit}"
+    );
+    assert!(
+        reviewing.trim_end().ends_with("/work/widgets-architect"),
+        "{reviewing}"
+    );
+    assert!(
+        scenario
+            .entries("work")
+            .contains(&"widgets-architect".to_string()),
+        "the Security run removed the live Architecture review's worktree"
+    );
+    release(&scenario, "architect");
+    let architect = architect.finish();
+    assert_eq!(architect.code, Some(0), "{}", architect.stderr);
+    assert!(
+        architect
+            .stdout
+            .starts_with("https://github.com/acme/widgets/issues/"),
+        "{}",
+        architect.stdout
+    );
+    release(&scenario, "7");
+    let pickup = pickup.finish();
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert_eq!(scenario.entries("work"), [REPO]);
+}
+
+#[test]
+fn a_second_security_run_is_skipped_while_one_dispatches_a_fix_it_reserved_and_never_reads_it_as_failed()
+ {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.user_config_is(&command_limit(2));
+    scenario.agent_does(&stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, &format!("{}{}", waits_on("8"), implement_fix()));
+    // Once the fix, #8, is marked ready, and before its Ticket run Claims
+    // it, a Pickup run starts. The Ready search passes a Security fix over
+    // in any case; the reservation keeps it from any Pickup run all the
+    // same.
+    let mut state = scenario.gh_state();
+    state["on_issue_view"]["8"] = json!({
+        "fields": "labels",
+        "script": format!(
+            "cd \"{}\" && {{ \"{}\" pickup > \"$FAKE_GH_STATE.next.out\" 2> \"$FAKE_GH_STATE.next.err\" || true; }}",
+            scenario.launch_dir().display(),
+            env!("CARGO_BIN_EXE_thirdshift"),
+        ),
+    });
+    scenario.write_gh_state(&state);
+    let fixing = scenario.run_until(&["secure", "security-fix"], &[], "started-8");
+    let next = fs::read_to_string(scenario.path("gh-state.json.next.err")).unwrap();
+    assert!(
+        next.contains(" #8 a Security fix: its Security run owns it\n"),
+        "{next}"
+    );
+    assert!(
+        next.ends_with(" no Ready issue on acme/widgets\n"),
+        "{next}"
+    );
+    assert_eq!(reservations(&scenario), "refs/heads/thirdshift/pickup/8");
+    let description = scenario.gh_state()["advisories"][0]["description"].clone();
+    assert!(
+        description
+            .as_str()
+            .unwrap()
+            .ends_with("Fix Run: pending\n"),
+        "{description}"
+    );
+    let (github, calls) = (scenario.gh_state(), scenario.claude_calls().len());
+
+    let skipped = scenario.run(&["secure", "security-fix"]);
+
+    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    assert_eq!(
+        after_start(&skipped.stderr),
+        "thirdshift: a Security run is already running on acme/widgets\n"
+    );
+    assert_eq!(skipped.stdout, "");
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.claude_calls().len(), calls);
+    release(&scenario, "8");
+    let fixing = fixing.finish();
+    assert_eq!(fixing.code, Some(0), "{}", fixing.stderr);
+    assert_eq!(fixing.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(reservations(&scenario), "");
 }

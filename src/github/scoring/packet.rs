@@ -72,9 +72,10 @@ impl GitHub {
             .collect::<Result<_>>()?;
         let commit = format!("repos/{}/commits/{}", pr.repository, metadata.head_ref_oid);
         let mut ci = Vec::new();
-        for check in
-            self.gh_api_items(&format!("{commit}/check-runs?per_page=100"), "check_runs")?
-        {
+        let checks = self.retry_read("Scoring CI checks", || {
+            self.check_runs_on(&identity, &metadata.head_ref_oid)
+        })?;
+        for check in checks.records {
             ci.push(Check {
                 name: text(&check, "name")?.into(),
                 conclusion: check["conclusion"].as_str().map(str::to_owned),

@@ -26,8 +26,11 @@ impl Runs {
         kind: Kind,
         base_fix: BaseFixAsk,
         asks: &ChildAsks,
+        process: &str,
     ) -> Result<()> {
-        self.start_using(issue.number, || super::start(issue, kind, base_fix, asks))
+        self.start_using(issue.number, || {
+            super::start_process(issue, kind, base_fix, asks, process)
+        })
     }
 
     /// Launch and retain ownership before returning to the caller.

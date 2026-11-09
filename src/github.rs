@@ -22,8 +22,11 @@ pub(crate) use quota::{Quota, Quotas};
 
 mod advisories;
 mod base_ci;
+pub(crate) use base_ci::{BaseCiAction, TipCi};
+pub(crate) mod review;
 mod session_issue;
 mod trust;
+pub(crate) use advisories::is_finding_label as is_security_finding_label;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
@@ -300,7 +303,7 @@ impl GitHub {
         ])
     }
 
-    /// Comment on `issue`, which is already closed.
+    /// Comment on `issue`, leaving its state and labels unchanged.
     pub fn comment_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[
             "issue",
@@ -372,7 +375,8 @@ impl GitHub {
     }
 
     /// Every closed issue labelled `label` in the repository `repo`, an
-    /// `owner/repo`, newest first.
+    /// `owner/repo`, newest first. For `in-progress`, include closed pull
+    /// requests so the Sweep also clears abandoned Review-run labels.
     pub fn closed_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "closed")
     }
@@ -389,7 +393,10 @@ impl GitHub {
         )?;
         issues
             .iter()
-            .filter(|listed| listed.get("pull_request").is_none())
+            .filter(|listed| {
+                listed.get("pull_request").is_none()
+                    || (state == "closed" && label == crate::claim::IN_PROGRESS)
+            })
             .map(|listed| {
                 let field = |name: &str| {
                     listed[name].as_str().with_context(|| {
@@ -397,11 +404,14 @@ impl GitHub {
                     })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("html_url")?).context(
-                        CommandFailure::InvalidResponse(
-                            "gh api output has an invalid issue URL".into(),
-                        ),
-                    )?,
+                    issue: if listed.get("pull_request").is_some() {
+                        crate::review::PullRequestUrl::parse(field("html_url")?).map(|pr| pr.issue)
+                    } else {
+                        IssueUrl::parse(field("html_url")?)
+                    }
+                    .context(CommandFailure::InvalidResponse(
+                        "gh api output has an invalid issue URL".into(),
+                    ))?,
                     title: field("title")?.to_string(),
                     labels: labels_of(listed)?,
                 })
@@ -555,12 +565,7 @@ impl GitHub {
     /// Add each of `labels` to the repository `repo`, an `owner/repo`, with its
     /// description, unless the repository has it already.
     pub fn ensure_labels(&self, repo: &str, labels: &[Label]) -> Result<()> {
-        let known = self.gh_json(&[
-            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
-        ])?;
-        let known = named(known.as_array().context(CommandFailure::InvalidResponse(
-            "gh label list did not return a list".into(),
-        ))?);
+        let known = self.repository_labels(repo)?;
         for label in labels {
             if !known.has(*label) {
                 self.gh(&[
@@ -575,6 +580,16 @@ impl GitHub {
             }
         }
         Ok(())
+    }
+
+    /// The category names available to a Triage run, as the repository spells them.
+    pub fn repository_labels(&self, repo: &str) -> Result<Labels> {
+        let known = self.gh_json(&[
+            "label", "list", "--repo", repo, "--json", "name", "--limit", "1000",
+        ])?;
+        Ok(named(known.as_array().context(
+            CommandFailure::InvalidResponse("gh label list did not return a list".into()),
+        )?))
     }
 
     /// Open an issue titled `title`, with `body` and `labels`, in the repository
@@ -603,11 +618,36 @@ impl GitHub {
         let repo = repo.slug();
         self.ensure_labels(&repo, labels)?;
         let names: Vec<&str> = labels.iter().map(|label| label.name()).collect();
+        self.create_issue_with_labels(&repo, title, body, &names)
+    }
+
+    /// File with a repository-owned category and a factory-owned triage state.
+    /// The caller validates the category against `repository_labels` first.
+    pub fn create_triaged_issue(
+        &self,
+        repo: &Repo,
+        title: &str,
+        body: &str,
+        category: &str,
+        state: Label,
+    ) -> Result<IssueUrl> {
+        let repo = repo.slug();
+        self.ensure_labels(&repo, &[state])?;
+        self.create_issue_with_labels(&repo, title, body, &[category, state.name()])
+    }
+
+    fn create_issue_with_labels(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        names: &[&str],
+    ) -> Result<IssueUrl> {
         let url = self.gh_stdout(&[
             "issue",
             "create",
             "--repo",
-            &repo,
+            repo,
             "--title",
             title,
             "--body",
@@ -743,6 +783,11 @@ impl GitHub {
             let Some((owner, repo, number, subject)) = subject else {
                 continue;
             };
+            // A record from another account reaches this query unchanged.
+            // Reject anything that is not a GitHub name before interpolating it.
+            if !github_name(&owner) || !github_name(&repo) {
+                continue;
+            }
             let alias = format!("pr{index}");
             let (field, fields) = subject.selection();
             query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
@@ -901,8 +946,7 @@ impl GitHub {
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
         // CI retries the complete observation, not its individual requests.
-        let runs =
-            self.gh_api_items_once(&format!("{commit}/check-runs?per_page=100"), "check_runs")?;
+        let runs = self.check_runs_on(issue, sha)?;
         let statuses =
             self.gh_api_items_once(&format!("{commit}/status?per_page=100"), "statuses")?;
         let url = |value: &Value| {
@@ -913,7 +957,7 @@ impl GitHub {
         };
 
         let mut checks = Vec::new();
-        for run in &runs {
+        for run in &runs.records {
             let conclusion = match run["status"].as_str() {
                 Some("completed") => Conclusion::of_check_run(run["conclusion"].as_str()),
                 _ => Conclusion::Unfinished,
@@ -946,55 +990,65 @@ impl GitHub {
                 workflow_run: None,
             });
         }
-        if checks.iter().any(|check| check.job.is_some()) {
-            self.exclude_superseded_runs(issue, sha, &mut checks)?;
+        let workflows = match runs.workflows {
+            Some(workflows) => Some(workflows),
+            None if checks.iter().any(|check| check.job.is_some()) => {
+                Some(self.workflow_runs_on(issue, sha)?)
+            }
+            None => None,
+        };
+        if let Some(workflows) = workflows {
+            Self::exclude_superseded_runs(&workflows, &mut checks);
         }
         Ok(checks)
+    }
+
+    /// Check-run shaped records, using Actions jobs when Checks is forbidden.
+    /// Both CI watch and Score packets use this read and supersession rule.
+    fn check_runs_on(&self, issue: &IssueUrl, sha: &str) -> Result<CheckRuns> {
+        let path = format!(
+            "repos/{}/commits/{sha}/check-runs?per_page=100",
+            issue.repo_slug()
+        );
+        match self.gh_api_items_once(&path, "check_runs") {
+            Ok(records) => {
+                return Ok(CheckRuns {
+                    records,
+                    workflows: None,
+                });
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<check_read::ReadFailure>()
+                    .is_some_and(|failure| failure.http_status() == Some(403)) => {}
+            Err(error) => return Err(error),
+        }
+        let workflows = self.workflow_runs_on(issue, sha)?;
+        let mut checks = Vec::new();
+        for run in workflows.iter().filter(|run| !run.superseded) {
+            let path = format!(
+                "repos/{}/actions/runs/{}/jobs?per_page=100",
+                issue.repo_slug(),
+                run.id
+            );
+            for mut job in self.gh_api_items_once(&path, "jobs")? {
+                job["details_url"] = job["html_url"].clone();
+                checks.push(job);
+            }
+        }
+        Ok(CheckRuns {
+            records: checks,
+            workflows: Some(workflows),
+        })
     }
 
     /// Ignore checks of earlier workflow runs on this same commit, including
     /// jobs whose names the newest run no longer uses. A re-run keeps its run
     /// id and creation time, so its attempts are never superseded here.
-    fn exclude_superseded_runs(
-        &self,
-        issue: &IssueUrl,
-        sha: &str,
-        checks: &mut Vec<Check>,
-    ) -> Result<()> {
-        #[derive(serde::Deserialize)]
-        struct ListedRun {
-            id: u64,
-            workflow_id: u64,
-            created_at: String,
-            status: Option<String>,
-            conclusion: Option<String>,
-            name: Option<String>,
-            html_url: Option<String>,
-        }
-        let path = format!(
-            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
-            issue.repo_slug()
-        );
-        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
-        let runs: Vec<ListedRun> = runs
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<Result<_, _>>()
-            .context(CommandFailure::InvalidResponse(
-                "unreadable workflow run".into(),
-            ))?;
-        let mut latest = HashMap::new();
-        for run in &runs {
-            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
-                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
-            )?;
-            let candidate = (created, run.id);
-            let selected = latest.entry(run.workflow_id).or_insert(candidate);
-            *selected = (*selected).max(candidate);
-        }
+    fn exclude_superseded_runs(runs: &[ListedRun], checks: &mut Vec<Check>) {
         let superseded: HashSet<_> = runs
             .iter()
-            .filter(|run| latest[&run.workflow_id].1 != run.id)
+            .filter(|run| run.superseded)
             .map(|run| run.id)
             .collect();
         checks.retain(|check| {
@@ -1013,13 +1067,45 @@ impl GitHub {
                         });
             }
         }
+        Self::include_unobserved_workflows(runs, checks);
+    }
+
+    fn workflow_runs_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<ListedRun>> {
+        let path = format!(
+            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
+            issue.repo_slug()
+        );
+        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
+        let mut runs: Vec<ListedRun> = runs
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .context(CommandFailure::InvalidResponse(
+                "unreadable workflow run".into(),
+            ))?;
+        let mut latest = HashMap::new();
+        for run in &runs {
+            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
+                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
+            )?;
+            let candidate = (created, run.id);
+            let selected = latest.entry(run.workflow_id).or_insert(candidate);
+            *selected = (*selected).max(candidate);
+        }
+        for run in &mut runs {
+            run.superseded = latest[&run.workflow_id].1 != run.id;
+        }
+        Ok(runs)
+    }
+
+    fn include_unobserved_workflows(runs: &[ListedRun], checks: &mut Vec<Check>) {
         // The two reads are separate observations. A new run may have none of
         // its jobs yet, or only jobs that already finished while a later one
         // has not been created. Until the run has completed, that gap must
         // stay pending: the older run's checks are already gone, and a
         // listing of only finished successes is CI passed.
-        for run in &runs {
-            if latest[&run.workflow_id].1 != run.id {
+        for run in runs {
+            if run.superseded {
                 continue;
             }
             let mut saw_job = false;
@@ -1057,7 +1143,6 @@ impl GitHub {
                 }),
             });
         }
-        Ok(())
     }
 
     /// The GitHub Actions job whose check run is `check_run`, as the jobs
@@ -1582,7 +1667,10 @@ impl InboxSubject {
                 "issue",
                 "state closedAt labels(first: 100) { nodes { name } }",
             ),
-            Self::PullRequest => ("pullRequest", "url state mergedAt closedAt"),
+            Self::PullRequest => (
+                "pullRequest",
+                "url title state mergedAt closedAt mergeable commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+            ),
         }
     }
 
@@ -1638,16 +1726,82 @@ impl IssueState {
     }
 }
 
-/// What GitHub last showed for one pull request: its state and its merge
-/// or close time, each as GitHub wrote them.
+/// What GitHub last showed for one pull request, including head CI and mergeability.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
+    #[serde(default)]
+    pub title: Option<String>,
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
+    #[serde(default)]
+    pub ci: InboxCi,
+    #[serde(default)]
+    pub mergeable: InboxMergeable,
+}
+
+/// Mergeability is independent of head CI. Old or computing answers imply no conflict.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxMergeable {
+    Mergeable,
+    Conflicting,
+    #[default]
+    Unknown,
+}
+
+impl InboxMergeable {
+    fn from_json(pr: &Value) -> Self {
+        match pr["mergeable"].as_str() {
+            Some("MERGEABLE") => Self::Mergeable,
+            Some("CONFLICTING") => Self::Conflicting,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// The combined checks and commit status on the latest pull-request commit.
+/// Old caches and missing or unfamiliar answers must never imply passing CI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InboxCi {
+    Green,
+    Red,
+    Pending,
+    NoChecks,
+    #[default]
+    Unknown,
+}
+
+impl InboxCi {
+    fn from_json(pr: &Value) -> Self {
+        let commit = &pr["commits"]["nodes"][0]["commit"];
+        match commit["statusCheckRollup"]["state"].as_str() {
+            Some("SUCCESS") => Self::Green,
+            Some("FAILURE" | "ERROR") => Self::Red,
+            Some("PENDING" | "EXPECTED") => Self::Pending,
+            None if commit.get("statusCheckRollup").is_some_and(Value::is_null) => Self::NoChecks,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Green => "CI green",
+            Self::Red => "CI red",
+            Self::Pending => "CI pending",
+            Self::NoChecks => "No CI checks",
+            Self::Unknown => "CI unknown",
+        }
+    }
 }
 
 impl PullRequestState {
+    /// The pull request's merge or close time, as GitHub wrote it.
+    pub fn event_time(&self) -> Option<&str> {
+        self.merged_at.as_deref().or(self.closed_at.as_deref())
+    }
+
     fn from_json(url: &str, json: &Value) -> Result<Self> {
         let state = match json["state"].as_str() {
             Some("OPEN") => PrState::Open,
@@ -1660,10 +1814,34 @@ impl PullRequestState {
         let at = |name: &str| json[name].as_str().map(String::from);
         Ok(PullRequestState {
             state,
+            title: at("title"),
             merged_at: at("mergedAt"),
             closed_at: at("closedAt"),
+            ci: InboxCi::from_json(json),
+            mergeable: InboxMergeable::from_json(json),
         })
     }
+}
+
+/// A GitHub owner or repository name safe to interpolate into GraphQL or a
+/// `gh api` path: one letter or digit, then only letters, digits, `.`, `_`
+/// and `-`, at most 100 bytes.
+pub(crate) fn github_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && name.len() <= 100
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// `owner/repo`, with both sides a [`github_name`] and no extra slash.
+pub(crate) fn valid_repo_slug(slug: &str) -> bool {
+    let Some((owner, repo)) = slug.split_once('/') else {
+        return false;
+    };
+    !repo.contains('/') && github_name(owner) && github_name(repo)
 }
 
 /// The owner, repository and pull request number of a
@@ -1762,6 +1940,24 @@ pub struct Check {
 pub struct WorkflowRun {
     pub id: u64,
     pub workflow_id: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct ListedRun {
+    id: u64,
+    workflow_id: u64,
+    created_at: String,
+    status: Option<String>,
+    conclusion: Option<String>,
+    name: Option<String>,
+    html_url: Option<String>,
+    #[serde(skip)]
+    superseded: bool,
+}
+
+struct CheckRuns {
+    records: Vec<Value>,
+    workflows: Option<Vec<ListedRun>>,
 }
 
 /// A job of a GitHub Actions workflow run, as one of its attempts ran it.

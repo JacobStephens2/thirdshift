@@ -14,9 +14,11 @@ mod inventory_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
 
-#[cfg(target_os = "linux")]
 #[path = "metrics_tests.rs"]
 mod metrics_tests;
+
+#[path = "run_kinds_tests.rs"]
+mod run_kinds_tests;
 
 fn now() -> DateTime<Local> {
     DateTime::parse_from_rfc3339("2026-10-19T12:00:00-04:00")
@@ -745,10 +747,10 @@ fn inbox_evaluation_keeps_history_and_current_rows_independent_on_a_shared_url()
             assert!(evaluation.refresh_work().freezes.is_empty());
             let rows = evaluation.into_rows(true);
             assert!(rows[0].group == Group::ReadyForReview);
-            assert_eq!(rows[0].github_state.as_deref(), Some("open"));
+            assert_eq!(rows[0].github.state.as_deref(), Some("open"));
             assert!(rows[1].group == Group::History);
             assert_eq!(
-                rows[1].github_state.as_deref(),
+                rows[1].github.state.as_deref(),
                 old_answer.is_object().then_some("merged")
             );
             let value = serde_json::to_value(&rows[1]).unwrap();

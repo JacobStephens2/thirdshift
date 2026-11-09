@@ -93,6 +93,24 @@ pub(super) struct RowAnswer {
     findings: Option<FindingAnswer>,
 }
 
+/// The cached GitHub fields shared by Inbox rows and `show --json`.
+#[derive(Default, Serialize)]
+pub(super) struct CommandAnswer {
+    /// The row's own pull request, absent when none has been resolved.
+    #[serde(rename = "github_state", skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(rename = "github_ci", skip_serializing_if = "Option::is_none")]
+    pub ci: Option<crate::github::InboxCi>,
+    #[serde(rename = "github_mergeable", skip_serializing_if = "Option::is_none")]
+    pub mergeable: Option<crate::github::InboxMergeable>,
+    /// Merge or close time, when the pull request stopped waiting.
+    #[serde(rename = "github_at", skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// Row-specific facts and observation times, including frozen History.
+    #[serde(rename = "github", skip_serializing_if = "Option::is_none")]
+    observation: Option<RowAnswer>,
+}
+
 #[derive(Serialize)]
 struct SubjectAnswer {
     facts: Option<InboxState>,
@@ -107,6 +125,24 @@ struct FindingAnswer {
 }
 
 impl Kept {
+    pub(super) fn command_answer(
+        &self,
+        row: &str,
+        pull_request: Option<&str>,
+        urls: Vec<&str>,
+    ) -> CommandAnswer {
+        let state = pull_request.and_then(|url| self.pull_request(row, url));
+        CommandAnswer {
+            state: state.map(|state| state.state.to_string()),
+            ci: state.map(|state| state.ci),
+            mergeable: state.map(|state| state.mergeable),
+            at: state
+                .and_then(PullRequestState::event_time)
+                .map(str::to_owned),
+            observation: self.row_answer(row, urls),
+        }
+    }
+
     pub(super) fn row_answer(&self, row: &str, urls: Vec<&str>) -> Option<RowAnswer> {
         let subjects: BTreeMap<_, _> = urls
             .into_iter()
@@ -281,11 +317,7 @@ pub fn load(logs_dir: &Path) -> Kept {
 /// including the blocking GitHub adapter, belongs off the Console's async thread.
 pub fn poll() -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     refresh(&snapshot, &config, Duration::ZERO)?;
     Ok(())
 }
@@ -308,6 +340,7 @@ pub(super) fn refresh(
     }
     // Serialize readers across status and Console processes. A busy reader
     // already owns the refresh; status can show the kept answer immediately.
+    std::fs::create_dir_all(&config.logs_dir)?;
     let lock = std::fs::File::create(config.logs_dir.join(".github-inbox-lock"))?;
     match lock.try_lock() {
         Ok(()) => {}
@@ -396,6 +429,10 @@ pub(super) fn refresh(
     for (repository, subjects) in repositories {
         if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
             break;
+        }
+        // One record must not choose the request path or fail every other read.
+        if !crate::github::valid_repo_slug(&repository) {
+            continue;
         }
         match github.inbox_findings(&repository) {
             Ok(waits) => {

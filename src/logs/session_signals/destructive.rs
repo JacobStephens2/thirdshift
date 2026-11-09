@@ -302,7 +302,9 @@ fn resolve(path: &str, directory: Option<&Path>) -> Option<PathBuf> {
                 normalized.pop();
             }
             Component::CurDir => {}
-            component => normalized.push(component.as_os_str()),
+            component @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
+                normalized.push(component.as_os_str());
+            }
         }
     }
     Some(normalized)

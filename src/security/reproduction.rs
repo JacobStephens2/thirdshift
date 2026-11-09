@@ -131,6 +131,27 @@ pub fn run(
     number: usize,
     harness: &Choice,
 ) -> (Result<Reproduction>, Option<PathBuf>) {
+    run_with_session(
+        launch,
+        repo,
+        record,
+        number,
+        harness,
+        super::findings::Session {
+            logs: &Logs::of_security_run(repo),
+            before_each: &|_| Ok(()),
+        },
+    )
+}
+
+pub(crate) fn run_with_session(
+    launch: &Git,
+    repo: &Repo,
+    record: &SecurityRecord,
+    number: usize,
+    harness: &Choice,
+    session: super::findings::Session<'_>,
+) -> (Result<Reproduction>, Option<PathBuf>) {
     let prepared = (|| -> Result<_> {
         let commit = record.audited_commit()?;
         let worktree = ReviewWorktree::at_commit(launch, &repo.name, commit)?;
@@ -147,37 +168,47 @@ pub fn run(
         Ok(prepared) => prepared,
         Err(error) => return (Err(error), None),
     };
-    let logs = Logs::of_security_run(repo);
-    Sessions::within(&logs, worktree.path(), harness, |sessions| {
-        let message = sessions.run_to_final_message(
-            Purpose::Security,
-            Kind::SecurityReproduction(number),
-            &prompt,
-        )?;
-        let message = message.as_deref().unwrap_or_default().trim_end();
-        let (notes, line) = message.rsplit_once('\n').unwrap_or(("", message));
-        let outcome = match line.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["Security", "reproduction:", "not", "reproduced"] => Outcome::NotReproduced,
-            ["Security", "reproduction:", "reproduced", severity, size] => {
-                let severity = Severity::parse(severity)
-                    .context("the Security reproduction ended with an invalid severity")?;
-                let size = FixSize::parse(size)
-                    .context("the Security reproduction ended with an invalid fix size")?;
-                Outcome::Reproduced { severity, size }
+    let before_each = || (session.before_each)(worktree.path());
+    Sessions::checked_within(
+        session.logs,
+        worktree.path(),
+        harness,
+        None,
+        None,
+        &before_each,
+        |sessions| {
+            let message = sessions.run_to_final_message(
+                Purpose::Security,
+                Kind::SecurityReproduction(number),
+                &prompt,
+            )?;
+            let message = message.as_deref().unwrap_or_default().trim_end();
+            let (notes, line) = message.rsplit_once('\n').unwrap_or(("", message));
+            let outcome = match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+                ["Security", "reproduction:", "not", "reproduced"] => Outcome::NotReproduced,
+                ["Security", "reproduction:", "reproduced", severity, size] => {
+                    let severity = Severity::parse(severity)
+                        .context("the Security reproduction ended with an invalid severity")?;
+                    let size = FixSize::parse(size)
+                        .context("the Security reproduction ended with an invalid fix size")?;
+                    Outcome::Reproduced { severity, size }
+                }
+                _ => {
+                    bail!(
+                        "the Security reproduction ended without the final line its prompt asks for"
+                    )
+                }
+            };
+            let test = fs::read_to_string(test)
+                .context("could not read the Security reproduction's test file")?;
+            if notes.trim().is_empty() || test.trim().is_empty() {
+                bail!("the Security reproduction ended without reproduction notes or test text");
             }
-            _ => {
-                bail!("the Security reproduction ended without the final line its prompt asks for")
-            }
-        };
-        let test = fs::read_to_string(test)
-            .context("could not read the Security reproduction's test file")?;
-        if notes.trim().is_empty() || test.trim().is_empty() {
-            bail!("the Security reproduction ended without reproduction notes or test text");
-        }
-        Ok(Reproduction {
-            outcome,
-            notes: notes.trim().to_string(),
-            test,
-        })
-    })
+            Ok(Reproduction {
+                outcome,
+                notes: notes.trim().to_string(),
+                test,
+            })
+        },
+    )
 }

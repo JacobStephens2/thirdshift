@@ -1,10 +1,8 @@
 //! Real setup children must end with their PTY fixture. Linux's subreaper
 //! lets this test reap an orphan without relying on the machine's PID 1.
 
-#[cfg(target_os = "linux")]
 mod support;
 
-#[cfg(target_os = "linux")]
 mod linux {
     use std::fs;
     use std::os::unix::process::ExitStatusExt;
@@ -231,6 +229,7 @@ mod linux {
                 TerminalStep::line("Self-merges?", ""),
                 TerminalStep::line("Every Ticket run may start a Base fix", ""),
                 TerminalStep::line("fast-forward", ""),
+                TerminalStep::line("Triage runs may file ready-for-agent", ""),
                 TerminalStep::line("Security runs may fix", ""),
                 TerminalStep::line("Ticket runs review their change", ""),
                 TerminalStep::line("Run notifications, an email", "n"),
@@ -253,8 +252,3 @@ mod linux {
         assert!(result.user_config.is_some());
     }
 }
-
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "Linux-only parent-death guarantee with retained PTY master and PR_SET_CHILD_SUBREAPER reaping"]
-fn setup_child_lifetime_after_fixture_death() {}

@@ -20,8 +20,11 @@ order handles same-second changes without comparing the hosts' clocks, and
 still works with settling disabled. A new later pass can select Ready again.
 Selection also rejects an active Claim in that history, even when an older
 issue listing still showed Ready; it cannot adopt the winner's active generation.
-A busy or stale selection skips with exit 0 and no
-notification. A remote error without evidence of another owner fails closed.
+A busy or stale selection is passed over, a stale one's reservation
+released, and Pickup moves on to the next Ready issue in its order,
+reserving each it tries the same way (amended 2026-10-28, #1570). Only with none left that it can reserve does it
+skip, with exit 0 and no notification. A remote error without evidence of
+another owner fails closed.
 
 The reservation spans the Run or Spec run, including failed-work preservation
 and Claim ending. Release uses a lease expecting exactly the owner's commit,
@@ -40,8 +43,13 @@ uncertain push result or failed release names the ref and token for recovery.
 ## Consequences
 
 - All Pickup hosts must run a version that honors reservations. Direct Issue URL
-  commands and other Pass kinds keep their existing behavior; this decision
-  arbitrates competing Pickup runs, not every possible writer.
+  commands keep their existing behavior; this decision arbitrates competing
+  Pickup runs, not every possible writer. Since Passes of different kinds
+  share a repository up to its Command limit, an Architect run takes the same
+  reservation for the plan it dispatches, and a Security run for its fix,
+  before marking it `ready-for-agent`, and releases it the same way, so an
+  overlapping Pickup run passes it over (amended 2026-10-28, #1572). One that
+  finds the ref already held fails, changing no label.
 - A crashed host can block an otherwise Ready issue until the Day shift confirms
   it stopped and deletes its reservation with the observed commit as the lease.
   Read the commit message for host, launch path, process, start time and token.
