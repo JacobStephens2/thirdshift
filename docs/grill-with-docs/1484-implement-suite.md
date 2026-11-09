@@ -307,14 +307,48 @@ The options:
 
 *Recommended:* (a). It gives the flexibility you want, and it lets you test the claims. The default stays where the evidence points until your own Experiments say otherwise. Research on how independent same-family Graders are is pending, and if it changes the picture, the default can move without a format change.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q6.2 - Same quality, but cheaper: how does that show?** Your Q5.2 answer is about a Candidate whose merge-ready calls match the Baseline's but which costs less. A tie rule on each side's merge call doesn't get you there. That tie happens inside one pair's call, and counting it as ready would raise *both* Arms equally, so it never favours the cheaper one. What you want is already partly there: under ADR 0025, a Candidate no worse than the Baseline beyond the margin already **passes**, and Q3.5 reports paired cost and time ratios beside the Verdict. The options:
 - (a) **Keep Q5.2 (a) for a tied merge call (not ready), and leave cost beside the Verdict.** You read "pass" next to "0.6× cost" and decide.
 - (b) (a), plus a **combined line in the Verdict**: when quality passes and the Candidate's paired cost (or time) ratio is credibly below 1, the Verdict reads "pass: no worse, and cheaper" (or "faster"). When quality passes but the Candidate costs more, it says that too. The quality decision itself stays unchanged.
 - (c) Make cost part of the quality decision, so that a cheaper Candidate can pass with a wider quality margin.
 
-*Recommended:* (b). It puts "same quality, cheaper" on the Verdict's first line without mixing cost into the quality statistics. That mixing is what (c) would do, and it would need an ADR of its own. A tied merge call stays "not ready", the same for both Arms.
+*Recommended:* (b). It puts "same quality, cheaper" on the Verdict's first line without mixing cost into the quality statistics.
+ That mixing is what (c) would do, and it would need an ADR of its own. A tied merge call stays "not ready", the same for both Arms.
+
+*Answer:* 
+
+**Q6.3 - One vote per Model, or one per family?** (Added after the research returned.) [`docs/research/eval-grader-panel.md`](../research/eval-grader-panel.md) §2–3 checks your impression that Models within one family have different strengths:
+- On errors, two Models from one family are only slightly more correlated than two from different families (0.437 against 0.389), and among frontier Models no more so. So a second Model from a family does add signal.
+- Family preference, a Grader favouring work from its own family, is real and points one way. A five-family panel shrank it on code but didn't remove it.
+- Accuracy stops improving at about five judges, and a plain majority is enough.
+
+The options:
+- (a) **One vote per family.** Each family first takes the majority of its own Models, and the panel then takes the majority of families. Several Models per family still help, by steadying that family's vote, and each Model's calls are reported.
+- (b) **One vote per Model.** A family with four Models outvotes one with one.
+- (c) A Bar setting, defaulting to (a).
+
+*Recommended:* (c). Per-family voting keeps a well-stocked family's shared preference from deciding the result. That's the one bias the evidence says is real, and it points one way. As a Bar setting, like Q6.1's family rules, it can still be switched to (b) for an Experiment that tests whether it matters. The research leaned further, toward requiring *three* voting families before the panel decides for the human. That's a stricter version of Q6.1's two-family rule, and the number can be a Bar setting too, defaulting to two.
+
+*Answer:* 
+
+**Q6.4 - Which Harness runs Kimi on Fireworks and DeepSeek on Baseten?** You're open to adding Harnesses (research note §1). What the research found:
+- OpenCode, already a thirdshift Harness, lists both providers with tool calling for these exact Models (`fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro`, `baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017`).
+- To use them, thirdshift needs three changes:
+  - add `api.fireworks.ai` and `inference.baseten.co` to the proxy's allowed provider hosts (`src/proxy.rs`), since a Grader naming either provider fails today as "unknown provider";
+  - let OpenCode hold one API key per provider instead of a single `opencode.api_key`;
+  - build the panel itself, since `model_grader.rs` picks one Grader, and its exclusion rule compares exact Model names, not families.
+- A new Harness for either Model isn't worth it yet:
+  - Kimi CLI can run headless (`--print`, `stream-json`), but its docs say nothing about usage output.
+  - DeepSeek's own agent is a preview desktop and web app with no headless mode.
+  - An adapter is about 1,000 lines, and a short Grader session gains little from the vendor's own agent loop.
+
+The options:
+- (a) **OpenCode for both**, with the three changes above, and Kimi CLI looked at again if Kimi ever becomes an Arm.
+- (b) A new Kimi CLI Harness now, with OpenCode for DeepSeek.
+
+*Recommended:* (a).
 
 *Answer:* 
 
@@ -400,7 +434,12 @@ The options:
   - Every runner treats the agent scaffold as a black box: a repository at its base commit and an instruction go in, and a patch, a trajectory and usage per model and sub-agent come out.
   - thirdshift's `/scores` form already holds back the model Grader's Scores until the human's are saved, but it shows which Harness, Model and Effort made the work. Nothing grades two Trials as a pair.
 - #1531 (split the code review out of the implement Step) and #429 (multi-family review) are open, and #1533's Built-in process files are merged (`processes/ticket-run.toml`), confirmed by `gh` and the repository.
+- **The model Grader panel**, in [`docs/research/eval-grader-panel.md`](../research/eval-grader-panel.md), from primary sources:
+  - OpenCode runs both API-served Models. Three thirdshift changes are needed: allowed proxy hosts, an API key per provider, and the panel.
+  - Same-family Graders are only slightly more correlated in their errors than cross-family ones, but family preference is real and points one way.
+  - Accuracy stops improving at about five judges.
+  - At API rates, an 11-Model panel over 60 pairs in both orders costs about $900. That rests on an assumed session size, to be checked on one pilot pair.
 
 ## Waiting on research
 
-- How to run Kimi on Fireworks and DeepSeek on Baseten through a thirdshift Harness, whether Models from one family make independent or correlated judgments, and how panel size and aggregation affect accuracy. Going to `docs/research/eval-grader-panel.md`, for a later question on the vote unit (one vote per Model or per family) and the Harness choices.
+- Nothing.
