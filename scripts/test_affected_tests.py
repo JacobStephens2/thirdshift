@@ -553,13 +553,33 @@ class AffectedTests(unittest.TestCase):
             + "".join(f"    {line}\n" for line in message)
             + "  code: 'ERR_TEST_FAILURE'\n  ...\n"
         )
-        self.env.update(RUNNER_STDOUT=tap, RUNNER_EXIT="1")
+        spec = (
+            "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n✖ long failure (1ms)\n"
+            + "".join(f"  {line}\n" for line in message)
+            + "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+        )
+        for reporter, output in [("tap", tap), ("spec", spec)]:
+            with self.subTest(reporter=reporter):
+                self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                lines = result.stdout.splitlines()
+                self.assertIn("message line 15", lines)
+                self.assertNotIn("message line 16", result.stdout)
+                self.assertIn("(5 more lines left out; see the log)", lines)
+
+    def test_spec_error_lines_starting_with_at_are_not_taken_for_stack_frames(self):
+        self.change("site/index.html")
+        output = (
+            "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n"
+            "✖ bad one (1ms)\n  Error: expected\n  at least 3 items\n  but got 2\n"
+            "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+        )
+        self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
         result, _ = self.run_selector()
-        self.assertNotEqual(result.returncode, 0)
-        lines = result.stdout.splitlines()
-        self.assertIn("message line 15", lines)
-        self.assertNotIn("message line 16", result.stdout)
-        self.assertIn("(5 more lines left out; see the log)", lines)
+        self.assertIn("at least 3 items", result.stdout.splitlines())
+        self.assertIn("but got 2", result.stdout.splitlines())
+        self.assertNotIn("TestContext", result.stdout)
 
     def test_command_that_cannot_start_still_reports_failure_and_keeps_a_log(self):
         self.change("site/index.html")
