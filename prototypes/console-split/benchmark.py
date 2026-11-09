@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from prepare import BASE, REPO, prepare
+from prepare import BASE, REPO, export_base, prepare
 
 
 EDITS = {"console": "src/console/commands.rs", "ticket": "src/run.rs", "logs": "src/logs.rs"}
@@ -135,15 +135,7 @@ def main():
                 if layout == "split":
                     prepare(tree)
                 else:
-                    # prepare's archive extraction without applying its split.
-                    tree.mkdir()
-                    archive = scratch / "base.tar"
-                    with archive.open("wb") as stream:
-                        subprocess.run(["git", "archive", "--format=tar", BASE], cwd=REPO, stdout=stream, check=True)
-                    import tarfile
-                    with tarfile.open(archive) as contents:
-                        contents.extractall(tree, filter="data")
-                    archive.unlink()
+                    export_base(tree)
                 # Download and registry setup are excluded from the timed regions.
                 runner.command(tree, scratch / "fetch-target", f"{sample}-{layout}-fetch", ["cargo", "fetch", "--locked"])
                 runner.sample(tree, scratch, sample, layout)

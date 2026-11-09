@@ -139,7 +139,8 @@ const BASE_FIX: &str = "base-fix";
     subprocess.run(["cargo", "fmt", "--all"], cwd=tree, check=True)
 
 
-def prepare(destination):
+def export_base(destination):
+    """Export only committed Base sources into a new or empty directory."""
     destination = Path(destination).resolve()
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise ValueError("destination must be empty")
@@ -150,6 +151,11 @@ def prepare(destination):
         archive.seek(0)
         with tarfile.open(fileobj=archive) as contents:
             contents.extractall(destination, filter="data")
+    return destination
+
+
+def prepare(destination):
+    destination = export_base(destination)
     split(destination)
     print(destination)
 

@@ -62,7 +62,7 @@ enables core's `test-support` feature. Integration tests remain byte for byte
 unchanged. Core preserves the package version and repository metadata used by
 runtime behavior. Dependency versions, linker and build profiles are unchanged.
 
-The script's output contract has a small independent check:
+The export contract and the report's top-level suite count have independent checks:
 
 ```sh
 python3 -m unittest discover -s prototypes/console-split -p 'test_*.py'

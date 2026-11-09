@@ -142,11 +142,13 @@ after validation. All commands exited 0:
 | `cargo clippy --all-targets -- -D warnings` | 77.708 | Pass |
 | `cargo test --test evals replay_import_completes_trial_inputs_and_preserves_local_edits -- --exact` | 68.399 | 1 passed |
 | `cargo test --test packaging non_linux_compilation_reports_only_the_platform_error -- --exact` | 0.871 | 1 passed |
-| `cargo test --no-fail-fast` | 2352.408 | 3930 passed, 0 failed, 91 ignored |
+| `cargo test --no-fail-fast` | 2352.408 | 3927 passed, 0 failed, 91 ignored |
 
 The full-suite time includes remaining compilation. It covers both packages,
 all integration tests, Pickup's model checks and the library's doctest target
 (zero doctests). Ignored tests retain their original annotations.
+Counts use the 97 top-level suite summaries; three nested fixture re-execution
+summaries are excluded rather than counted again.
 `--no-fail-fast` changes failure reporting, not test selection.
 It allowed a complete view of all test targets in one run.
 
