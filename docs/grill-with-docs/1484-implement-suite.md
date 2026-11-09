@@ -392,7 +392,7 @@ On 2, For the human grading, I I would like let's say in that example where we h
 
 We could just leave it not not graded and just take the humans sample set as their grade and contribution. 
 
-## Round 8 (open)
+## Round 8 (answered)
 
 **Q8.1 - Is "a Trial is not a Command" a real distinction?** (Q7.3's answer.) First, yes: a Trial keeps a full log. Its record holds each Step, every session's traces, the outcome, the usage and the times, and the Experiment's pages show it. What it doesn't get is a Command record of its own. The distinction isn't arbitrary. The glossary already draws it the same way for a **Command**: "A child Ticket run, whether for a Spec's Ticket or a Base fix, and a Ticket run or Spec run a Custom process starts, are part of the command that started them, not commands of their own." An **Experiment** is itself a Command, so its Trials are its parts, as a Spec run's child Ticket runs are the Spec run's parts. What being a Command of its own would bring with it:
 - a Claim, issue labels and a pull request, none of which a Trial has;
@@ -406,15 +406,46 @@ The options:
 
 *Recommended:* (a). (b) puts a filter in every place that counts Commands, and one missed filter skews a factory figure. Reusing the record's shape gets you the views without that risk. The ADR is still worth writing, because a process Trial is the first part of a Command that runs a whole Process on its own.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q8.2 - The second ADR?** Q7.3's answer covered only the first ADR. The second records that a Grader panel can stand in for the Day shift on unread pairs, guarded by agreement on a seeded sample and by the family rules.
 
 *Recommended:* write it.
 
-*Answer:* 
+*Answer:* I want to think more about whether or not well, I'm imagining a setup where, for example, we have maybe a greater panel of five models and then a human greater or maybe two human greaters for example and each of the five models grades fifty pairs, but the humans only grade ten of the pairs.
+
+Can that be enough without the a model grading those unred pairs? 
 
 **Q8.3 - Shared understanding?** Every other branch is settled (see the list below). If Q8.1 and Q8.2 are agreed, is the design understood well enough to write the ADRs and publish the two Specs, the Kimi CLI Harness issue, the host Ticket and #1468's narrowing?
+
+*Answer:* Let's clarify 8.2 first
+
+## Round 9 (open)
+
+**Q9.1 - With humans reading only a sample, who decides the Verdict?** (Q8.2's answer.) Your example: a panel of five Models reads all 50 pairs, and one or two people read 10. "Can that be enough without the models grading the unread pairs?" Yes, if what's counted is chosen to match. Treat the panel and the people as two separate switches in the Bar, each set to *off*, *beside* the Verdict, or *counted*. The human switch also takes a sample size. The combinations cover every setup you've described:
+
+| Panel | People (sample) | What the Verdict rests on |
+|---|---|---|
+| counted | beside, 10 of 50 | Code Grader plus the panel's merge calls on all 50 pairs. People's calls on their 10 are reported beside, with people–panel agreement. The people calibrate and don't decide. |
+| beside | counted, 10 of 50 | Code Grader plus people's merge calls on **only the 10** pairs they read. The panel is reported beside. |
+| counted | counted, 10 of 50 | Q4.1's stand-in: people's calls on their 10, the panel's on the other 40, and an inconclusive Verdict if agreement on the 10 falls below the Bar's level. |
+| off / beside | counted, all 50 | People on every pair (Q3.6). |
+
+Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run comparison's 8–0–3 preference over 11 pairs would come out decisive. A modest difference would give a wide interval and an **inconclusive** Verdict, but not a wrong one, since the Verdict already reports how many more pairs it would need. The options:
+- (a) **The two switches, with all four rows allowed**, the Bar recording which.
+- (b) Only rows 1 and 4: people either calibrate or read everything.
+- (c) Only Q4.1's stand-in (row 3), as agreed.
+
+*Recommended:* (a). It's the flexibility you've asked for throughout, each row is a clear statement of what decided the Verdict, and the Bar fixes the row before the Experiment starts.
+
+*Answer:* 
+
+**Q9.2 - How do two or more people grade?** Your example has two human Graders. The options:
+- (a) **Each person gets a seeded sample, with a set overlap.** For example, both read 4 of the same pairs, and each reads 3 more alone. On a shared pair, they must both call it ready for it to count as ready, and a disagreement counts as not ready, as a tied panel does (Q6.2). People–people agreement on the overlap is reported beside people–panel agreement.
+- (b) Both read the same pairs, with a majority across people.
+- (c) Their samples are split, with no overlap.
+
+*Recommended:* (a). The overlap is what tells you how much two careful people disagree, which is the ceiling for how well any panel can agree with them. The rest of each sample widens coverage. The overlap size is a Bar setting, and 0 gives (c).
 
 *Answer:* 
 
@@ -469,6 +500,9 @@ The options:
 
 - The Kimi CLI Harness work starts by checking the CLI's real output. If it doesn't report usage, the Harness estimates usage from the transcript, priced from the frozen table and labelled *estimated*, and the panel's spending limit counts the estimate (Q7.1).
 - The Kimi CLI Harness is its own issue, outside both Specs. Spec 2's panel blocks on it only for Kimi seats (Q7.2).
+
+- A Trial is part of its Experiment Command, as a Spec run's child Ticket runs are part of it. It keeps a full log: a record shaped like a Command record, with Steps, session traces, outcome, usage and times, filed under the Experiment and shown by the Console's run-detail and trace views. It is counted nowhere else. An ADR records this, citing the child-Ticket-run precedent (Q8.1).
+- The second ADR (the panel standing in for people) and the shared-understanding check wait on Q9.1 and Q9.2 (Q8.2, Q8.3).
 
 ## Research results (2026-11-09)
 
