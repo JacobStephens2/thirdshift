@@ -1,10 +1,10 @@
 # Grilling: #1516, Grow the code-review suite to 20 discriminating Eval tasks
 
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1516
-Related: #1434 (closed; its A/A `83721fbb…`), #1477, #1478, #1480, #1481, #1494, #1498
+Related: #1434 (closed; its A/A `83721fbb…`), #1477, #1478, #1480, #1481, #1494, #1498, #1484 and its host Ticket #1887 (a process-task suite mined from the same thirdshift pull requests), #1876, #1531
 Research: the private pool survey at `~/.thirdshift/evals/notes/1516-pool-survey.md` on the `thirdshift` host (it names private repositories, so only counts appear here)
 
-The triage comment on #1516 left nine open questions. Round 1 asks them, adjusted by what the three other hosts showed (see "Research results"). Q8 of the triage comment is answered by a fact and is not asked: voice-agent is personal work.
+The triage comment on #1516 left nine open questions. Round 1 asks them (Q1.10 and Q1.11 were added on 2026-11-09 from newer issues), adjusted by what the three other hosts showed (see "Research results"). Q8 of the triage comment is answered by a fact and is not asked: voice-agent is personal work.
 
 ## Round 1 (open)
 
@@ -41,12 +41,12 @@ The triage comment on #1516 left nine open questions. Round 1 asks them, adjuste
 
 *Answer:* 
 
-**Q1.5 - Write the host procedure into the issue's steps?** Two open bugs can spoil an A/A on the same host: #1494 (scheduled Passes start Runs during an Experiment, so Trials time out) and #1498 (`thirdshift update` mid-Experiment stops it). And #1434 found that `experiment` refuses a PR URL in `[trial] issue_url` that `prepare` accepts. The steps would say:
-- lower `pickup.limit` for the A/A (#1494);
+**Q1.5 - Write the host procedure into the issue's steps?** Two open bugs can spoil an A/A on a host that also runs the factory: #1494 (scheduled Passes start Runs during an Experiment, so Trials time out) and #1498 (`thirdshift update` mid-Experiment stops it). And #1434 found that `experiment` refuses a PR URL in `[trial] issue_url` that `prepare` accepts. *Revised 2026-11-09:* #1494's stopgap, `pickup.limit = 1`, no longer works. 0.24.0 ignores `pickup.limit` with a warning, and its replacement, `pickup.failure_limit`, counts issues the factory failed on, not Runs at once. If Q1.10 keeps the A/A on a factory host, the steps would say:
+- pause scheduled Passes for the A/A by disabling their crontab lines, and restore them after (#1494);
 - no `thirdshift update` while it runs (#1498);
 - `[trial] issue_url` is an `/issues/N` URL.
 
-*Recommended:* yes, all three, each removable once its bug is fixed.
+*Recommended:* yes, all three, each removable once its bug is fixed. On a dedicated Experiment host (Q1.10 (a)), only the last two apply.
 
 *Answer:* 
 
@@ -84,6 +84,24 @@ The triage comment on #1516 left nine open questions. Round 1 asks them, adjuste
 
 *Answer:* 
 
+**Q1.10 - Which host runs this suite's A/A?** *Added 2026-11-09.* #1484's grill (Q1.8) settled that a new, bigger host runs the process suite's Experiments, so they don't compete with the factory, and that the Lima VM builds and screens its first tasks until that host exists. #1887 then moves that suite to the new host. `code-review` still lives on `thirdshift.app`, the shared factory host where #1494's contention spoiled Trials in #1434's A/A. The options:
+- (a) Move `code-review` (and its staging suite) to the new Experiment host with the process suite, after a backup, and run this A/A there. Proposing and screening can start on `thirdshift.app` now.
+- (b) Keep it on `thirdshift.app`, with Q1.5's procedure.
+- (c) Run it on the Lima VM until the new host exists.
+
+*Recommended:* (a), and (b) only if the new host is weeks away. One Experiment host keeps every suite's Difficulty measured under the same conditions, and it makes Q1.5's crontab step unnecessary. The Lima VM is 4 CPUs and 8 GiB, no bigger than `thirdshift.app`, and is already earmarked for screening process tasks.
+
+*Answer:* 
+
+**Q1.11 - Mine thirdshift's fixes once, for both this suite and #1887's?** #1887 proposes process tasks from recent merged thirdshift pull requests, and #1876 adds a command that drafts them. This issue proposes code-review tasks from the Bug origins of the same fixes. One fix can feed both: its own pull request becomes a process task (implement the fix), and the pull request that introduced the bug becomes a code-review task (catch it in review). The two screens differ: a process task needs tests in separate files that fail at the base, and a code-review task needs a Spec line or standard that covers the bug. The options:
+- (a) Keep the two mining passes separate, but record in each suite's notes which fixes the other already used, so screening work isn't repeated.
+- (b) One pass that screens each fix for both suites at once.
+- (c) Fully independent.
+
+*Recommended:* (a). The two suites are built at different times and on different hosts, and their screens share little, so a joint pass would only slow the first suite to reach 20. A shared list costs nothing and stops two people reading the same fix twice.
+
+*Answer:* 
+
 ## Settled by earlier answers (shout if any is wrong)
 
 - Nothing yet: this is Round 1. Already settled outside this grill: the band 0.15–0.95, at least 6 Trials, the threshold of 20 (#1434 grill Q1.1–Q1.5), and the scope rule (a Spec line or documented standard covers the target bug).
@@ -111,3 +129,10 @@ Details, with repository names, are appended to the private survey file on the `
 ## Waiting on research
 
 - Nothing yet.
+
+## Research results (2026-11-09, newer issues)
+
+- `pickup.limit` is ignored in 0.24.0, with a User config warning; `pickup.failure_limit` (default 3) counts open issues the factory failed on. Confirmed by source (`src/config.rs`) and the warning in a host's `activity.log`.
+- #1484's grill (Q1.8, Q4.3) put process-suite Experiments on a new, bigger host, with the Lima VM building and screening first; #1887 (opened today) is its host Ticket and mines recent merged thirdshift pull requests. #1876 adds a command that drafts process tasks from merged pull requests. Confirmed by `docs/grill-with-docs/done/1484-implement-suite.md` on `main` and `gh issue view`.
+- The new Experiment host isn't in `scripts/update-hosts.conf` yet, so it may not exist. Not confirmed further.
+- #1531 (open) would split the code review out of the implement Step. It changes the Ticket run, not the code-review session this suite runs, so it doesn't change this issue. Confirmed by reading #1531.
