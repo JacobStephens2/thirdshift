@@ -8,8 +8,9 @@
 {% if admin %}<p>Edit one setting at a time. Strings can be bare text; arrays and maps use TOML. Each save is recorded in the Console log.</p>{% else %}<p>Read-only. The admin scope is required to change settings.</p>{% endif %}
 <p>Credentials are kept separately. Export endpoints are redacted; enter a replacement URL or leave blank to disable export.</p>
 {% for setting in settings.settings %}
-<section class="config-setting" aria-labelledby="setting-{{ loop.index }}">
+<section class="config-setting" id="config-{{ setting.key }}" aria-labelledby="setting-{{ loop.index }}">
 <h2 id="setting-{{ loop.index }}"><code>{{ setting.key }}</code></h2>
+{% if saved == setting.key %}<p role="status">Saved <code>{{ setting.key }} = {{ setting.value }}</code> on {{ machine }}.</p>{% endif %}
 <p>Default: <code>{{ setting.default }}</code></p>
 {% if let Some(reason) = setting.reason %}<p>{{ reason }}</p>
 {% else %}
