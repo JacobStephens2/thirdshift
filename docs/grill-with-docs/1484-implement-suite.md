@@ -420,7 +420,7 @@ Can that be enough without the a model grading those unred pairs?
 
 *Answer:* Let's clarify 8.2 first
 
-## Round 9 (open)
+## Round 9 (answered)
 
 **Q9.1 - With humans reading only a sample, who decides the Verdict?** (Q8.2's answer.) Your example: a panel of five Models reads all 50 pairs, and one or two people read 10. "Can that be enough without the models grading the unread pairs?" Yes, if what's counted is chosen to match. Treat the panel and the people as two separate switches in the Bar, each set to *off*, *beside* the Verdict, or *counted*. The human switch also takes a sample size. The combinations cover every setup you've described:
 
@@ -438,7 +438,7 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 
 *Recommended:* (a). It's the flexibility you've asked for throughout, each row is a clear statement of what decided the Verdict, and the Bar fixes the row before the Experiment starts.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q9.2 - How do two or more people grade?** Your example has two human Graders. The options:
 - (a) **Each person gets a seeded sample, with a set overlap.** For example, both read 4 of the same pairs, and each reads 3 more alone. On a shared pair, they must both call it ready for it to count as ready, and a disagreement counts as not ready, as a tied panel does (Q6.2). People–people agreement on the overlap is reported beside people–panel agreement.
@@ -446,6 +446,22 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 - (c) Their samples are split, with no overlap.
 
 *Recommended:* (a). The overlap is what tells you how much two careful people disagree, which is the ceiling for how well any panel can agree with them. The rest of each sample widens coverage. The overlap size is a Bar setting, and 0 gives (c).
+
+*Answer:* agree
+
+## Round 10 (open)
+
+**Q10.1 - The second ADR, as now settled?** It would record that the Bar fixes two switches before an Experiment starts: the Grader panel and the people, each *off*, *beside* or *counted*, with the people's sample size and overlap. When both are counted, the panel stands in on unread pairs, guarded by agreement on the seeded sample and by the family rules. It would also record the options turned down: people on every pair always, and the panel alone with no human check.
+
+*Recommended:* write it.
+
+*Answer:* 
+
+**Q10.2 - Shared understanding?** Every branch is now settled. Is the design understood well enough to write the two ADRs and publish the following, following `docs/agents/triage-labels.md`'s publication procedure?
+- Spec 1: process Trials and the code-graded suite, with a `ready-for-human` host Ticket.
+- Spec 2: the blind human page, the Grader panel and the two switches. It's blocked by Spec 1.
+- The Kimi CLI Harness issue.
+- Narrowing #1468 to the external-runner Arm.
 
 *Answer:* 
 
@@ -503,6 +519,9 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 
 - A Trial is part of its Experiment Command, as a Spec run's child Ticket runs are part of it. It keeps a full log: a record shaped like a Command record, with Steps, session traces, outcome, usage and times, filed under the Experiment and shown by the Console's run-detail and trace views. It is counted nowhere else. An ADR records this, citing the child-Ticket-run precedent (Q8.1).
 - The second ADR (the panel standing in for people) and the shared-understanding check wait on Q9.1 and Q9.2 (Q8.2, Q8.3).
+
+- The Bar has two separate switches, the Grader panel and the people, each *off*, *beside* or *counted*, and the people's switch takes a sample size. All four combinations are allowed. With people counted on a sample and the panel only beside, the Verdict rests on the sampled pairs alone, and a small sample usually comes out inconclusive rather than wrong. With both counted, Q4.1's stand-in applies (Q9.1).
+- Two or more people each get a seeded sample with an overlap the Bar sets. On a shared pair, it counts as ready only if every person calls it ready. People–people agreement on the overlap is reported beside people–panel agreement (Q9.2). The blind page therefore needs to know which person is reading.
 
 ## Research results (2026-11-09)
 
