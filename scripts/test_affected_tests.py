@@ -500,9 +500,66 @@ class AffectedTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("FAIL npm test --prefix site (", result.stdout)
                 self.assertIn("navigation opens the manual", result.stdout)
+                self.assertIn("wrong page", result.stdout)
                 self.assertNotIn("homepage loads", result.stdout)
                 self.assertNotIn("duration_ms", result.stdout)
                 self.assertNotIn("failureType", result.stdout)
+
+    def test_failed_browser_cases_print_multiline_error_messages(self):
+        self.change("site/index.html")
+        message = [
+            "locator.waitFor: Timeout 30000ms exceeded.",
+            "Call log:",
+            "  - waiting for getByRole('button', { name: 'Copy' }) to be visible",
+        ]
+        tap = (
+            "TAP version 13\n# Subtest: copies its show command\n"
+            "ok 1 - homepage loads\n  ---\n  duration_ms: 3.2\n  ...\n"
+            "not ok 2 - copies its show command\n  ---\n  duration_ms: 30012.4\n"
+            "  failureType: 'testCodeFailure'\n  error: |-\n"
+            + "".join(f"    {line}\n" for line in message)
+            + "  code: 'ERR_TEST_FAILURE'\n  stack: |-\n"
+            "    TestContext.<anonymous> (tests/console.test.cjs:4:33)\n  ...\n"
+        )
+        spec = (
+            "✔ homepage loads (3.2ms)\n✖ copies its show command (30012.4ms)\n"
+            "ℹ tests 2\nℹ fail 1\n\n✖ failing tests:\n\n"
+            "test at tests/console.test.cjs:4:1\n"
+            "✖ copies its show command (30012.4ms)\n"
+            "  Error: " + message[0] + "\n"
+            + "".join(f"  {line}\n" for line in message[1:])
+            + "      at TestContext.<anonymous> (tests/console.test.cjs:4:33)\n"
+            "      at Test.run (node:internal/test_runner/test:1047:25)\n"
+        )
+        for reporter, output in [("tap", tap), ("spec", spec)]:
+            with self.subTest(reporter=reporter):
+                self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                lines = result.stdout.splitlines()
+                for line in message[1:]:
+                    self.assertIn(line, lines)
+                self.assertIn(("Error: " if reporter == "spec" else "") + message[0], lines)
+                self.assertNotIn("homepage loads", result.stdout)
+                self.assertNotIn("error: |-", result.stdout)
+                for diagnostic in ["duration_ms", "failureType", "code:", "stack", "TestContext"]:
+                    self.assertNotIn(diagnostic, result.stdout)
+
+    def test_long_browser_error_messages_are_cut_at_the_cap(self):
+        self.change("site/index.html")
+        message = [f"message line {number}" for number in range(1, 21)]
+        tap = (
+            "not ok 1 - long failure\n  ---\n  error: |-\n"
+            + "".join(f"    {line}\n" for line in message)
+            + "  code: 'ERR_TEST_FAILURE'\n  ...\n"
+        )
+        self.env.update(RUNNER_STDOUT=tap, RUNNER_EXIT="1")
+        result, _ = self.run_selector()
+        self.assertNotEqual(result.returncode, 0)
+        lines = result.stdout.splitlines()
+        self.assertIn("message line 15", lines)
+        self.assertNotIn("message line 16", result.stdout)
+        self.assertIn("(5 more lines left out; see the log)", lines)
 
     def test_command_that_cannot_start_still_reports_failure_and_keeps_a_log(self):
         self.change("site/index.html")

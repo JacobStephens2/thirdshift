@@ -8,8 +8,9 @@ diff prints that no tests are affected. Before each selected command starts,
 the script prints its full-output log path. After it finishes, one summary line
 shows the command, `PASS` or `FAIL`, wall time in seconds and the log path. Raw
 check output stays in the log. Failures also print failing Rust test names and
-panic messages, or failing `node --test` cases for the browser suites, so the
-summary is enough to start investigating. Any failed command fails the entry
+panic messages, or failing `node --test` cases for the browser suites with
+their error messages (up to 15 lines each, without stack frames or other
+diagnostic keys), so the summary is enough to start investigating. Any failed command fails the entry
 point and stops the remaining checks.
 
 Logs live in `.affected-tests/` at the checkout root, which Git ignores. Each
