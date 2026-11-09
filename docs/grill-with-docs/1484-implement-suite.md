@@ -82,6 +82,62 @@ That's its its primary purpose is outward, not inward. And so I I think that A, 
 
 *Answer:* agree
 
+## Round 2 (open)
+
+**Q2.1 - What is an Arm, and how far does a Trial run? (Q1.1, asked again)** Your Q1.1 answer sets the goal as process Experiments, and the next one you want to run is an edit to the Ticket run itself. The candidate edits from the hand-run comparison are a deterministic check that the new tests fail on the base, one bounded review pass by a different model family, and new rules in the review prompts. All of them live *outside* the implement session: in Steps, in review stages, in review prompts. So an implement-session-only suite (Q1.1's old option (a)) can't test them. The options:
+- (a) **The implement session alone**, as recommended in Round 1. It's the cheapest, but it can't test the edit you want next.
+- (b) **A process Arm.** An Arm is a thirdshift build plus a process file, Built-in or Custom, with its skills and process file pinned by content hash. A Trial runs that process end to end on the Ticket, through its review stages and Repairs, and stops where it would push. The Grader grades the final commit.
+- (c) (b), plus an **external-runner Arm**: a pinned command that takes the repository at its base commit and the Ticket, and returns a branch, its session traces and its usage. thirdshift treats the command as a black box, as Harbor's agent interface does (research note §2). This is the only way to hold a process whose orchestrator is itself an agent choosing what to run next (#1468's triage note).
+
+*Recommended:* (b) now, with (c) recorded as the later step. Comparing the Ticket run with an edited Ticket run needs only process Arms, and #1533's Built-in process files plus #1531 (which splits the code review out of the implement Step) give a Custom process room to change the reviews. An external runner matters only once the next Experiment pits thirdshift against an outside process, so it can wait for that need. Each Trial then costs several sessions instead of one, so the cost estimate shown before Trials (#1434 Q1.6) has to come per Arm.
+
+*Answer:* 
+
+**Q2.2 - Build the review and grading tooling into thirdshift, or adopt Langfuse or a similar tool?** The research note (§1) checked Langfuse, Braintrust, LangSmith, Phoenix, promptfoo, Inspect/Scout and Harbor against a process comparison:
+- Langfuse "expects exactly one trace per experiment item", while its Claude Code and Codex integrations write one trace per turn. A process Trial can run 4–72 sessions.
+- None of the tools shows code diffs side by side, hides which Arm made an output from a *human* reviewer, or randomises which side each Arm appears on. LangSmith's pairwise queue still puts "Run A on the left".
+- None computes a Verdict.
+
+The options:
+- (a) **Build it in.** thirdshift keeps the runner, the Bar and the Verdict, and adds a blind pairwise review page to the Console. That page records a Day-shift Grader's call as a paired Score. thirdshift exports Trial traces over its existing OTLP output to any outside viewer, opened only *after* the human calls are recorded, so it can't break the blinding.
+- (b) **Adopt Langfuse**, or a similar tool, as the experiment store and review UI. The blind page and the Verdict would still have to be built, and there would be two places holding the results.
+- (c) **Use Harbor as the runner**, with thirdshift grading. This means a Python dependency and a Docker image per repository, and subscription login works only for Claude and Codex.
+
+*Recommended:* (a). Every outside tool would still need the blind page and the Verdict built. thirdshift already has a Day-shift Grader on `/scores`, a shuffle for its model Graders and a packet stripper to reuse. Harbor's interface is the shape to copy for Q2.1's external runner later, not a dependency to take.
+
+*Answer:* 
+
+**Q2.3 - Does the suite include the blind pairwise human review page?** This depends on Q2.2 being (a). If not, it moves to a later round. The hand-run comparison's page worked like this:
+- one page per task pair, showing the Ticket, a numbered acceptance checklist, the two diffs side by side (code before tests) and the execution evidence;
+- no Arm identity and no model Scores;
+- the reviewer first makes a sealed, unaided merge call per side, then optionally fills the model Graders' rubric.
+
+Arena practice adds a choice of A, B, tie or both bad, with the Arms revealed only after the vote. Copilot Arena also found that people picked the first option 86% of the time even with randomised order, so each pair needs its own random sides. The options:
+- (a) **In this suite's Spec**, as a Day-shift Grader whose call is reported *beside* the Verdict and doesn't count toward it at first.
+- (b) **In this suite's Spec**, with the human call counting in the Verdict.
+- (c) **A separate issue**, after the code-graded suite works.
+
+*Recommended:* (c). The code-graded suite (Q1.5) is the minimum that works on its own, and it is what #1526's Experiment needs. The page is wanted, but it's a Console feature of its own. File it now as an issue blocked by this suite, with the hand-run page and the arena rules as its starting design. Once some Experiments have shown how the human calls compare with the code Graders, decide then whether the human call counts.
+
+*Answer:* 
+
+**Q2.4 - Per-repository toolchains: bwrap on the host, or containers?** Q1.2 says the suite must serve other repositories, and in #1434, 4 of 6 cross-repository candidates were discriminating. Today a Trial runs in bwrap with the host's Rust, Cargo and nvm mounted read-only, and nothing else is provisioned. The new host has room for images (#1484's comment). The options:
+- (a) **bwrap on the host**, with each repository's toolchain installed on the host and declared in the suite. Containers come only when a repository needs services or a pinned system image (#698 Q6.7's trigger).
+- (b) **A container image per repository**, built at task preparation, with every Trial and code Grader run inside it. This also answers the "a commit stops building on the host" problem.
+- (c) (a) for thirdshift's own tasks now, and (b) designed in from the start for the first task from another repository.
+
+*Recommended:* (c). thirdshift's own tasks run in bwrap today, so the first Experiment needn't wait for containers. But the outward goal means the task format should name its environment, `host` or an image, from day one, so another repository's tasks don't need a format change later.
+
+*Answer:* 
+
+**Q2.5 - Check Trial traces for the real fix?** Every real task's fix is public (Q1.2), and #1468's triage note says implement tasks need a leak check, since the hand-run comparison searched every Trial's traces for the shipped fix. The time-safe clone stops the repository from leaking it, but a session could still fetch the pull request or recall it from training data. The options:
+- (a) **Yes.** After each Trial, search its transcripts for the fix's identifiers: the pull-request and issue numbers, the merge commit, the branch and the title. Hits go to the Day shift, with an auditable list of dismissed false positives. A confirmed leak voids the Trial.
+- (b) **No.** Rely on the time-safe clone and the Trial sandbox's network allowlist.
+
+*Recommended:* (a). It's cheap and mechanical. Note that the Trial sandbox already reaches only the provider, so a leak would most likely come from the Model's memory, which a search for identifiers catches only partly. The free time-split probe (scaling note §3.3) covers the rest.
+
+*Answer:* 
+
 ## Settled by earlier answers (shout if any is wrong)
 
 - thirdshift keeps its own runner, its blind Graders, the Bar and the Verdict. Disk was never why a runner swap was declined (build-vs-buy §8.1).
@@ -132,6 +188,13 @@ That's its its primary purpose is outward, not inward. And so I I think that A, 
 - That comparison's tooling was about 6,200 lines of Python, bash and PHP outside thirdshift. thirdshift already covers blind packets, bwrap Graders, the Bar and Verdict, and token reconciliation. It has only part of, or none of: process Arms, per-role pricing, cross-tests, both-order panel grading, the human review page and the leak check.
 - The comparison's write-up proposes three Ticket-run edits to test next: a deterministic check that the new tests fail on the base, one bounded cross-family review pass, and test-proportionality and stop-the-loop rules in the review prompts.
 
+- **Process Arms, outside tools and blind human review**, written up in [`docs/research/eval-process-arms-and-human-review.md`](../research/eval-process-arms-and-human-review.md) from primary sources:
+  - Langfuse takes outside experiment items but expects one trace per item. It has no diff view, no blind or pairwise human review, and no significance test.
+  - No tool checked hides the Arm from a human reviewer or randomises the sides.
+  - Every runner treats the agent scaffold as a black box: a repository at its base commit and an instruction go in, and a patch, a trajectory and usage per model and sub-agent come out.
+  - thirdshift's `/scores` form already holds back the model Grader's Scores until the human's are saved, but it shows which Harness, Model and Effort made the work. Nothing grades two Trials as a pair.
+- #1531 (split the code review out of the implement Step) and #429 (multi-family review) are open, and #1533's Built-in process files are merged (`processes/ticket-run.toml`), confirmed by `gh` and the repository.
+
 ## Waiting on research
 
-- Process Arms (including an external-runner Arm), blind human pairwise review, and adopting Langfuse or similar tools against building in thirdshift. This goes to `docs/research/eval-process-arms-and-human-review.md`, from public sources only, for Q1.1's re-ask in Round 2.
+- Nothing.
