@@ -36,6 +36,7 @@ test('editor saves, chooses and round-trips Themes without uploading files', asy
     assert.equal(document.base, 'garden-dark');
     document.name = 'my-garden';
     document.tokens.bg = '#123456';
+    document.tokens.text = '#fedcba';
     document.tokens['font-body'] = 'mine.woff2, serif';
     await page.locator('#theme-document').fill(JSON.stringify(document));
     await page.locator('#save-theme').click();
@@ -44,6 +45,8 @@ test('editor saves, chooses and round-trips Themes without uploading files', asy
     await page.locator('#theme-name').selectOption('my-garden');
     await page.locator('#theme-form button').click();
     await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)');
+    assert.equal(await page.locator('header h1 a').evaluate(el => getComputedStyle(el).color), 'rgb(254, 220, 186)');
+    assert.equal(await page.locator('header h1 a').evaluate(el => getComputedStyle(el).textDecorationLine), 'none');
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.evaluate(() => document.fonts.check('14px "user-mine.woff2"')), true);
     assert.match(await page.locator('body').evaluate(el => getComputedStyle(el).fontFamily), /user-mine.woff2/);
