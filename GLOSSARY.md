@@ -390,11 +390,11 @@ An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict**
 _Avoid_: non-gating suite, informational suite
 
 **Arm**:
-One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, the **Process** its **Trials** carry out where its **Eval suite** runs one, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, in an agent session of its own, within an **Experiment**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
+One attempt at an **Eval task** by one **Arm**, within an **Experiment**: an agent session of its own, or every session of the **Process** the Arm carries out, up to its first publishing **Step**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
 
 **Void Trial**:
@@ -405,6 +405,10 @@ _Avoid_: errored Trial, infrastructure failure
 What judges a **Trial** against its **Eval task**'s success criteria, or a **Ticket run** in a **Scoring run**'s sample against the criteria merged work is held to: a check in code, an agent session, or the **Day shift**.
 _Avoid_: judge, evaluator, scorer
 
+**Grader panel**:
+The model **Graders** an **Experiment**'s **Bar** names to judge each pair of **Trials**, from one **Model** up, each reading the pair in both orders. The panel's call is a majority by family or by Model, as the Bar says, and may stand in for the **Day shift**'s on pairs it doesn't read.
+_Avoid_: jury, committee, judges
+
 **Score**:
 What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Ticket run** on one criterion: whether it passed, and why.
 _Avoid_: grade, rating, feedback
@@ -414,7 +418,7 @@ The **Command** that compares a **Baseline arm** with a **Candidate arm** on the
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
-The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, and the rules for **Void Trials**.
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, whether the **Day shift** grades and whether that counts in the Verdict, and any cost or time ceiling.
 _Avoid_: threshold, gate, acceptance criteria
 
 **Verdict**:
