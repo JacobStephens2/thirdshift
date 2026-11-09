@@ -1,7 +1,7 @@
 # Grilling: #1484, an implement Eval suite
 
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1484
-Research: [`docs/research/eval-suite-scaling.md`](../research/eval-suite-scaling.md) §2 and Recommendations 13–18; [`docs/research/eval-build-vs-buy.md`](../research/eval-build-vs-buy.md) §8.1; [`done/698-evals/settled.md`](done/698-evals/settled.md) Q6.7; [`1434-eval-follow-ups.md`](1434-eval-follow-ups.md) Q1.9
+Research: [`docs/research/eval-suite-scaling.md`](../../research/eval-suite-scaling.md) §2 and Recommendations 13–18; [`docs/research/eval-build-vs-buy.md`](../../research/eval-build-vs-buy.md) §8.1; [`done/698-evals/settled.md`](698-evals/settled.md) Q6.7; [`1434-eval-follow-ups.md`](../1434-eval-follow-ups.md) Q1.9
 
 ## Round 1 (answered)
 
@@ -319,7 +319,7 @@ The options:
 
 *Answer:* agreed
 
-**Q6.3 - One vote per Model, or one per family?** (Added after the research returned.) [`docs/research/eval-grader-panel.md`](../research/eval-grader-panel.md) §2–3 checks your impression that Models within one family have different strengths:
+**Q6.3 - One vote per Model, or one per family?** (Added after the research returned.) [`docs/research/eval-grader-panel.md`](../../research/eval-grader-panel.md) §2–3 checks your impression that Models within one family have different strengths:
 - On errors, two Models from one family are only slightly more correlated than two from different families (0.437 against 0.389), and among frontier Models no more so. So a second Model from a family does add signal.
 - Family preference, a Grader favouring work from its own family, is real and points one way. A five-family panel shrank it on code but didn't remove it.
 - Accuracy stops improving at about five judges, and a plain majority is enough.
@@ -523,7 +523,7 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 - The Bar has two separate switches, the Grader panel and the people, each *off*, *beside* or *counted*, and the people's switch takes a sample size. All four combinations are allowed. With people counted on a sample and the panel only beside, the Verdict rests on the sampled pairs alone, and a small sample usually comes out inconclusive rather than wrong. With both counted, Q4.1's stand-in applies (Q9.1).
 - Two or more people each get a seeded sample with an overlap the Bar sets. On a shared pair, it counts as ready only if every person calls it ready. People–people agreement on the overlap is reported beside people–panel agreement (Q9.2). The blind page therefore needs to know which person is reading.
 
-- Both ADRs are written: [0027](../adr/0027-a-trial-carries-out-a-process-but-is-not-a-command.md) and [0028](../adr/0028-who-decides-a-verdict-is-fixed-in-the-bar.md) (Q10.1).
+- Both ADRs are written: [0027](../../adr/0027-a-trial-carries-out-a-process-but-is-not-a-command.md) and [0028](../../adr/0028-who-decides-a-verdict-is-fixed-in-the-bar.md) (Q10.1).
 - Shared understanding is confirmed (Q10.2). Publication uses the `to-spec` and `to-tickets` skills, following `docs/agents/triage-labels.md`. The host Ticket needs a release of Spec 1's code, so under "Split a Spec at a release" it becomes a standalone `ready-for-human` release-and-measure issue blocked by Spec 1, not a Ticket inside it.
 
 ## Research results (2026-11-09)
@@ -559,13 +559,13 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 - That comparison's tooling was about 6,200 lines of Python, bash and PHP outside thirdshift. thirdshift already covers blind packets, bwrap Graders, the Bar and Verdict, and token reconciliation. It has only part of, or none of: process Arms, per-role pricing, cross-tests, both-order panel grading, the human review page and the leak check.
 - The comparison's write-up proposes three Ticket-run edits to test next: a deterministic check that the new tests fail on the base, one bounded cross-family review pass, and test-proportionality and stop-the-loop rules in the review prompts.
 
-- **Process Arms, outside tools and blind human review**, written up in [`docs/research/eval-process-arms-and-human-review.md`](../research/eval-process-arms-and-human-review.md) from primary sources:
+- **Process Arms, outside tools and blind human review**, written up in [`docs/research/eval-process-arms-and-human-review.md`](../../research/eval-process-arms-and-human-review.md) from primary sources:
   - Langfuse takes outside experiment items but expects one trace per item. It has no diff view, no blind or pairwise human review, and no significance test.
   - No tool checked hides the Arm from a human reviewer or randomises the sides.
   - Every runner treats the agent scaffold as a black box: a repository at its base commit and an instruction go in, and a patch, a trajectory and usage per model and sub-agent come out.
   - thirdshift's `/scores` form already holds back the model Grader's Scores until the human's are saved, but it shows which Harness, Model and Effort made the work. Nothing grades two Trials as a pair.
 - #1531 (split the code review out of the implement Step) and #429 (multi-family review) are open, and #1533's Built-in process files are merged (`processes/ticket-run.toml`), confirmed by `gh` and the repository.
-- **The model Grader panel**, in [`docs/research/eval-grader-panel.md`](../research/eval-grader-panel.md), from primary sources:
+- **The model Grader panel**, in [`docs/research/eval-grader-panel.md`](../../research/eval-grader-panel.md), from primary sources:
   - OpenCode runs both API-served Models. Three thirdshift changes are needed: allowed proxy hosts, an API key per provider, and the panel.
   - Same-family Graders are only slightly more correlated in their errors than cross-family ones, but family preference is real and points one way.
   - Accuracy stops improving at about five judges.
@@ -574,3 +574,11 @@ Is 10 pairs enough on its own (row 2)? Only for a large difference. The hand-run
 ## Waiting on research
 
 - Nothing.
+
+## Published (2026-11-09)
+
+- Spec #1484 (rewritten): process Trials and a code-graded implement Eval suite. Tickets #1873–#1880.
+- Spec #1872: blind pairwise grading by a Grader panel and people. Tickets #1881–#1886. Blocked by #1484.
+- #1887 (`ready-for-human`): release #1484 and build the first 20 discriminating process tasks. Blocked by #1484.
+- #1888 (`needs-triage`): a Kimi CLI Harness.
+- #1468: narrowed to the external-runner Arm.
