@@ -405,6 +405,10 @@ _Avoid_: errored Trial, infrastructure failure
 What judges a **Trial** against its **Eval task**'s success criteria, or a **Ticket run** in a **Scoring run**'s sample against the criteria merged work is held to: a check in code, an agent session, or the **Day shift**.
 _Avoid_: judge, evaluator, scorer
 
+**Grader panel**:
+The model **Graders** an **Experiment**'s **Bar** names to judge each pair of **Trials**, from one **Model** up, each reading the pair in both orders. The panel's call is a majority by family or by Model, as the Bar says, and may stand in for the **Day shift**'s on pairs it doesn't read.
+_Avoid_: jury, committee, judges
+
 **Score**:
 What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Ticket run** on one criterion: whether it passed, and why.
 _Avoid_: grade, rating, feedback

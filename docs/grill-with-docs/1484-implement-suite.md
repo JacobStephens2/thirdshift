@@ -294,7 +294,7 @@ I might even want to be able to run a few models from a given family, as differe
 
 *Answer:* agreed
 
-## Round 6 (open)
+## Round 6 (answered)
 
 **Q6.1 - Family rules as Bar settings?** Q5.1 leans toward (c), no family rule, so that an Experiment can test the very claims the rules rest on. Q4.2 agreed one family rule, and Q5.1 (a) proposed a second:
 - a Grader from either Arm's family doesn't vote while another family is available;
@@ -317,7 +317,7 @@ The options:
 *Recommended:* (b). It puts "same quality, cheaper" on the Verdict's first line without mixing cost into the quality statistics.
  That mixing is what (c) would do, and it would need an ADR of its own. A tied merge call stays "not ready", the same for both Arms.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q6.3 - One vote per Model, or one per family?** (Added after the research returned.) [`docs/research/eval-grader-panel.md`](../research/eval-grader-panel.md) §2–3 checks your impression that Models within one family have different strengths:
 - On errors, two Models from one family are only slightly more correlated than two from different families (0.437 against 0.389), and among frontier Models no more so. So a second Model from a family does add signal.
@@ -331,7 +331,7 @@ The options:
 
 *Recommended:* (c). Per-family voting keeps a well-stocked family's shared preference from deciding the result. That's the one bias the evidence says is real, and it points one way. As a Bar setting, like Q6.1's family rules, it can still be switched to (b) for an Experiment that tests whether it matters. The research leaned further, toward requiring *three* voting families before the panel decides for the human. That's a stricter version of Q6.1's two-family rule, and the number can be a Bar setting too, defaulting to two.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q6.4 - Which Harness runs Kimi on Fireworks and DeepSeek on Baseten?** You're open to adding Harnesses (research note §1). What the research found:
 - OpenCode, already a thirdshift Harness, lists both providers with tool calling for these exact Models (`fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro`, `baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017`).
@@ -347,6 +347,40 @@ The options:
 The options:
 - (a) **OpenCode for both**, with the three changes above, and Kimi CLI looked at again if Kimi ever becomes an Arm.
 - (b) A new Kimi CLI Harness now, with OpenCode for DeepSeek.
+
+*Recommended:* (a).
+
+*Answer:* b
+
+## Round 7 (open)
+
+This round should empty the frontier. When it's answered, confirm whether the design is understood well enough to publish the two Specs.
+
+**Q7.1 - What if Kimi CLI can't report usage?** Q6.4 (b) adds a Kimi CLI Harness. The research found Kimi CLI's docs say nothing about token usage in its output. The panel's cost estimate and spending limit (Q5.3) need usage per Grader session. The options:
+- (a) **The Harness Ticket starts by checking Kimi CLI's real output.** If it reports usage, use that. If not, the Harness estimates from the transcript's characters, priced from the frozen table and marked *estimated* in every report, and the panel's spending limit counts the estimate.
+- (b) If it can't report usage, fall back to OpenCode for Kimi.
+- (c) Leave Kimi's spend unreported.
+
+*Recommended:* (a). It keeps your choice of Harness, and an honest "estimated" label is better than a gap. An estimate that's wrong by a factor would show up against Fireworks' billing in the first pilot.
+
+*Answer:* 
+
+**Q7.2 - Where does the Kimi CLI Harness go?** A Harness isn't just for Graders: once it exists, an Arm can use it too, and so can Ticket runs. The options:
+- (a) **Its own issue**, outside both Specs, so the Harness is built and tested like the other six (setup, sandbox hosts, sign-in, usage, session traces). Spec 2's panel Ticket is blocked by it only for Kimi seats.
+- (b) A Ticket inside Spec 2.
+
+*Recommended:* (a). A Harness is used across thirdshift, and earlier Harnesses each came as their own piece of work. Spec 2 can start with OpenCode, claude, codex, agy, grok and muse seats while it's built.
+
+*Answer:* 
+
+**Q7.3 - Record two decisions as ADRs?** Two decisions are hard to reverse, surprising without context, and the result of a real trade-off:
+1. **A Trial carries out a Process but is not a Command** (Q3.2). A future reader will wonder why a process Trial, which runs a whole Ticket run's Steps, writes no Command record and never shows in the Console's run lists.
+2. **A Grader panel can stand in for the Day shift on unread pairs, guarded by agreement on a seeded sample** (Q4.1, Q5.1, Q6.1, Q6.3). The Verdict may then rest mostly on model calls, which is surprising for a gate, and the agreement level and family rules are its safeguards.
+
+The options:
+- (a) Both ADRs, written now beside this file and linked from the Specs.
+- (b) Only the second.
+- (c) Neither.
 
 *Recommended:* (a).
 
@@ -394,6 +428,12 @@ The options:
 - A panel can be any size from one Model up, and its family make-up is always reported. Whether family rules apply is asked again as Q6.1 (Q5.1).
 - The pre-Experiment estimate includes the panel, per Model, priced from the frozen price table. Panel spend is reported apart from the Arms, and the panel has its own spending limit that pauses grading when reached. The Bar's cost ceiling covers only the Arms (Q5.3).
 - Q5.2's answer was really about Verdicts, not ties, so it's asked again as Q6.2.
+
+- Both family rules are Bar settings, on by default: a Grader from either Arm's family doesn't vote while another family is available, and model calls stand in for the human only when the voting panel spans enough families (Q6.1). Each Grader's own calls are always reported.
+- A tied merge call counts as not ready, for both Arms. When quality passes and the Candidate's paired cost or time ratio is credibly below 1, the Verdict says "pass: no worse, and cheaper" (or "faster"). When quality passes and the Candidate costs more, it says that too. The quality decision itself is unchanged (Q6.2).
+- The vote unit is a Bar setting, defaulting to one vote per family, where each family first takes the majority of its own Models. How many families the panel must span before it stands in for the human is a Bar setting too, defaulting to two (Q6.3).
+- DeepSeek on Baseten runs through OpenCode. Kimi on Fireworks gets a new Kimi CLI Harness now (Q6.4 (b), against the recommendation). thirdshift adds `api.fireworks.ai` and `inference.baseten.co` to the proxy's provider hosts, and an API key per OpenCode provider.
+- The glossary gains **Grader panel**.
 
 ## Research results (2026-11-09)
 
