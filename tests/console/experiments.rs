@@ -748,13 +748,8 @@ fn experiment_pages_and_the_cli_show_the_name_or_its_default() {
 
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let list = console.get("/experiments").text().unwrap();
-    let host = list
-        .split_once("<h1>")
-        .unwrap()
-        .1
-        .split_once("</h1>")
-        .unwrap()
-        .0;
+    let identity = api::json(console.get("/api/v1/whoami"));
+    let host = identity["hostname"].as_str().unwrap();
     for (id, _, _, html) in expected {
         assert!(
             list.contains(&format!(

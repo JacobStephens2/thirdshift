@@ -22,6 +22,8 @@ header::after { grid-column: 1 / -1; }
 h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; text-transform: var(--head-case); text-shadow: var(--title-shadow); }
 nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; }
 a { color: var(--link); overflow-wrap: anywhere; }
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover, header h1 a:focus-visible { text-decoration: underline; }
 p[role="alert"] { overflow-wrap: anywhere; }
 .page-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 8px; }
 .start-controls { margin: 16px 0; padding: 12px; border: 1px solid var(--rule); border-radius: var(--radius); }
