@@ -104,9 +104,16 @@ pub(crate) struct OutcomeCounts {
 }
 
 impl Outcomes {
-    pub fn of(results: &[TrialResult]) -> Self {
+    pub(super) fn of(results: &[TrialResult], tasks: &[Task]) -> Self {
         let mut counts = Self::default();
         for result in results {
+            if !tasks.iter().any(|task| {
+                task.suite == result.suite
+                    && task.name == result.task
+                    && task.manifest.session == crate::evals::format::Session::Process
+            }) {
+                continue;
+            }
             let arm = match result.arm {
                 Arm::Baseline => &mut counts.baseline,
                 Arm::Candidate => &mut counts.candidate,

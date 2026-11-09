@@ -89,10 +89,13 @@ impl std::error::Error for StoppedToAsk {}
 /// A final question leaves an unattended Step unfinished even when its turn
 /// completed successfully. Preserve the question as the Trial's cause.
 pub(crate) fn check_question(message: Option<&str>) -> Result<()> {
-    if let Some(message) = message
-        && message.trim_end().ends_with('?')
-    {
-        return Err(StoppedToAsk(message.to_owned()).into());
+    if let Some(message) = message {
+        let ending = message.trim_end_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '*' | '_' | '`' | '"' | '\'' | ')' | ']')
+        });
+        if ending.ends_with('?') {
+            return Err(StoppedToAsk(message.to_owned()).into());
+        }
     }
     Ok(())
 }

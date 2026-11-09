@@ -175,3 +175,86 @@ fi
         );
     }
 }
+
+#[test]
+fn spec_process_outcome_counts_exclude_failed_review_trials() {
+    let fixture = fixture();
+    let suites = fixture.scenario.path("home/.thirdshift/evals/suites");
+    let process = suites.join("process");
+    let review = suites.join("spec-review");
+    fs::create_dir_all(review.join("tasks/fixture")).unwrap();
+    fs::copy(process.join("suite.toml"), review.join("suite.toml")).unwrap();
+    fs::copy(
+        process.join("tasks/fixture/spec.md"),
+        review.join("tasks/fixture/spec.md"),
+    )
+    .unwrap();
+    let manifest = fs::read_to_string(process.join("tasks/fixture/task.toml")).unwrap();
+    fs::write(
+        review.join("tasks/fixture/task.toml"),
+        manifest.replace("session = \"process\"", "session = \"spec-review\""),
+    )
+    .unwrap();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'Every Ticket of the Spec'; then
+    exit 17
+fi
+{script}
+"#
+    ));
+    let run = fixture.run(&["--suite", "process", "--suite", "spec-review"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for arm in ["baseline", "candidate"] {
+        let results: Vec<_> = view["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|result| result["arm"] == arm)
+            .collect();
+        assert!(
+            results
+                .iter()
+                .any(|r| r["suite"] == "process" && r["outcome"] == "delivered"),
+            "{view}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r["suite"] == "spec-review" && r["outcome"] == "failed"),
+            "{view}"
+        );
+        assert_eq!(view["outcomes"][arm]["delivered"], 1, "{view}");
+        assert_eq!(
+            view["outcomes"][arm]["failed"], 0,
+            "failed review Trial contaminated Process Trial outcomes: {view}"
+        );
+    }
+}
+
+#[test]
+fn spec_a_markdown_final_question_is_stopped_to_ask() {
+    let fixture = fixture();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"{script}
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q '^/thirdshift-implement'; then
+    printf '%s\n' '**Which option should I use?**' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+fi
+"#
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"], "stopped_to_ask",
+            "a final Markdown question was scored as completed: {result}"
+        );
+        assert_eq!(result["score"]["passed"], false, "{result}");
+    }
+    assert_eq!(view["outcomes"]["baseline"]["stopped_to_ask"], 1);
+    assert_eq!(view["outcomes"]["candidate"]["stopped_to_ask"], 1);
+}

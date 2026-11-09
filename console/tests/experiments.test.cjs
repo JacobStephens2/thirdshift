@@ -12,6 +12,9 @@ const fixture = require('./fixtures/experiments.cjs');
 test('process Trial Peeks show Steps and outcome counts beside the Verdict', async t => {
   const value = fixture.finish(fixture.record());
   value.baseline.process = value.candidate.process = 'ticket-run';
+  value.tasks[0].manifest.session = 'process';
+  value.tasks[0].manifest.provenance = 'real';
+  value.tasks[0].manifest.environment = 'host';
   const folder = await fixture.save(home, value);
   await fixture.results(home);
   const result = fixture.result('alpha', 'candidate', 0);

@@ -50,7 +50,8 @@ required by version 1 and is unused for a local Process.
 
 Process results end `delivered`, `stopped_to_ask`, `failed` or `void`.
 `delivered` means every local Step finished up to the first publishing Step;
-it publishes nothing. A final message ending in a question mark is
+it publishes nothing. A final message ending in a question mark, including
+ordinary Markdown emphasis or quotation around the question, is
 `stopped_to_ask`, counted as failed in the Verdict. The existing external Void
 causes still apply. The result's `steps` array retains each completed Step's
 name, outcome, start/end times and elapsed milliseconds. Sessions and Step
