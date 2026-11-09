@@ -3,7 +3,7 @@
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1165
 Research: [proposed direction](https://github.com/JacobStephens2/thirdshift/issues/1165#issuecomment-6369972244), #585, #710, #833, #1583, #1695, [#1532 grill](1532-keep-working-the-backlog.md)
 
-Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. Rounds 1 and 2 answered 2026-11-09. `GLOSSARY.md` now has the new **Claim**, **Failure limit**, **Ready issue**, **Recovery** and **Sweep** entries.
+Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. Rounds 1–3 answered 2026-11-09; the frontier is empty and the grill is done. `GLOSSARY.md` now has the new **Claim**, **Failure limit**, **Ready issue**, **Recovery** and **Sweep** entries.
 
 Agreed in chat on 2026-10-23, before Round 1, and where each stands now:
 
@@ -109,7 +109,7 @@ The options:
 
 *Answer:* agreed
 
-## Round 3 (open)
+## Round 3 (answered)
 
 Round 2 settles the last design branch. What's left is how to publish it.
 
@@ -125,7 +125,7 @@ Each Ticket updates the guide and the hand-written site pages that its change ma
 
 *Recommended:* (a). It matches #1564 and keeps #1165's history readable. The split follows the dependencies: 1 is the label meaning, 2 and 3 build on it.
 
-*Answer:* 
+*Answer:* agreed, using the to-spec and to-tickets skills
 
 **Q3.2 - What happens to the related open issues?** This grill answers part of three of them:
 - **#585**, waiting Spec runs. The labels and the comment are settled here. The outcome name, exit code, notification wording and mixed results are not.
@@ -138,7 +138,7 @@ The options:
 
 *Recommended:* (a). #585's remaining questions are about outcomes and notifications, not labels. Folding them in would make the Spec wait on a grill of its own.
 
-*Answer:* 
+*Answer:* agreed
 
 **Q3.3 - Record an ADR?** A decision earns one when it is hard to reverse, surprising without context, and a real trade-off. "`in-progress` marks only a live Run: a pull request waiting for review gets no label, and a failure gets `agent-failed` instead" passes all three. It changes what both hosts and every reader of GitHub rely on. A future reader will wonder why a Claimed issue with an open pull request has no label. And `in-review` was a real alternative, rejected once #1532 stopped counting reviews.
 - (a) Yes, one short ADR covering Q1.2 and Q1.5.
@@ -146,7 +146,9 @@ The options:
 
 *Recommended:* (a). The glossary says what the labels mean but not why the alternatives lost, and this file isn't where a future reader would look.
 
-*Answer:* 
+*Answer:* agreed
+
+*Checked:* written as `docs/adr/0027-in-progress-marks-only-a-live-run.md`, amending ADR 0026's take-over rule.
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -162,6 +164,9 @@ The options:
 - **Interrupted runs** are treated like any other Failed run. A Stop still leaves `needs-triage`, and a bug that can't be reproduced still leaves `needs-info`.
 - **Label upkeep:** a new Claim takes `agent-failed` off, and the Sweep takes both labels off closed issues. Both already ship.
 - **Tickets:** a Ticket run inside a Spec run makes no Claim, so its Spec carries the outcome.
+- **Publication:** a new Spec, published `needs-triage` with the to-spec and to-tickets skills, and three Tickets: Claim endings; waiting Spec runs (blocked by 1); Recovery comments (blocked by 1 and 2). A standalone `ready-for-human` issue, blocked by the Spec, clears the old ready-for-review labels after release. The Spec closes #1165 (Q3.1).
+- **Related issues:** #585 and #833 get a comment on what the Spec settles and stay open (Q3.2).
+- **ADR 0027** records Q1.2 and Q1.5 (Q3.3).
 - **Out of scope:** a Run killed outright never ends its Claim (#710).
 - **One take-over rule for every failure,** Triage runs included: `agent-failed` comes off when the Day shift puts `ready-for-agent` back, takes `agent-failed` off, or closes the issue (Q2.1). A failed Triage run still also gets `ready-for-human`, which is #1695's business.
 - **Custom processes** count toward the Failure limit and swap `in-progress` for `agent-failed` like any other failure (Q2.2).
