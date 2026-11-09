@@ -157,6 +157,9 @@ pub(super) struct Local {
     issue_text: String,
     issue: IssueUrl,
     base: String,
+    /// Base commit sampled before any session. Later moves of the base ref
+    /// must not shrink the Security review diff.
+    base_commit: String,
     branch: String,
     output: PathBuf,
     sandbox: Option<crate::sandbox::Launch>,
@@ -291,7 +294,7 @@ impl TicketSource {
                             sessions,
                             &local.repository,
                             &local.issue,
-                            &local.base,
+                            &local.base_commit,
                             &local.output,
                             &text,
                         );
@@ -405,12 +408,16 @@ pub(crate) fn run_local(
         let reports = output.join("security-reviews");
         fs::create_dir_all(&reports)?;
         let sandbox = sandbox.map(|sandbox| sandbox.with_writable_directory(&reports));
+        // Sample before any session. The Security review diffs against this
+        // commit, not against whatever the base ref names afterwards.
+        let commit = git.run(&["rev-parse", &inputs.base])?;
         let source = Local {
             choice: choice.clone(),
             repository: repository.to_path_buf(),
             issue_text: read_regular_issue(repository)?,
             issue: IssueUrl::parse(&inputs.issue_url)?,
             base: inputs.base.clone(),
+            base_commit: commit.clone(),
             branch: inputs.branch.clone(),
             output: output.to_path_buf(),
             sandbox,
@@ -435,7 +442,6 @@ pub(crate) fn run_local(
             .context("Ticket Process has no publishing Step")?;
         let publishing = file.steps[stop].name.clone();
         file.steps.truncate(stop);
-        let commit = git.run(&["rev-parse", &inputs.base])?;
         let prepared = prepare_from(
             path,
             &UserConfig::load()?,

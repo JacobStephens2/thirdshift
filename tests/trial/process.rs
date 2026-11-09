@@ -149,3 +149,43 @@ git commit -q -m 'Implement local Ticket'
         "# Fixture Spec\n\nReview the fixture change.\n"
     );
 }
+
+#[test]
+fn local_security_review_pins_the_base_commit_sampled_before_sessions() {
+    let scenario = Scenario::new();
+    let request = prepare_local_process(&scenario);
+    let base = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+echo implemented > feature.txt
+git add feature.txt
+git commit -q -m 'Implement local Ticket'
+git update-ref refs/heads/main HEAD
+"#,
+    );
+    scenario.agent_does_in_session(2, security_review_succeeds());
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = trial_calls(&scenario, "claude-calls.json");
+    assert_eq!(calls.len(), 2, "{}", result.stderr);
+    let prompt = calls[1]["prompt"].as_str().unwrap();
+    let head = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    assert_ne!(base, head);
+    assert!(
+        prompt.contains(&format!("git diff {base}...HEAD")),
+        "security review did not pin the pre-session base {base}; head is {head}\n{prompt}"
+    );
+    assert!(
+        !prompt.contains(&format!("Merge base commit: `{head}`")),
+        "security review used the moved base ref {head}\n{prompt}"
+    );
+}

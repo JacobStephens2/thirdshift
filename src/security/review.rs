@@ -49,7 +49,8 @@ pub(crate) fn run_on_pull_request(
 }
 
 /// Local review keeps validated private reports in the Trial, with no GitHub
-/// recording. The supplied Base branch pins the Issue branch's review diff.
+/// recording. `base` is the Base commit sampled before sessions, so a later
+/// move of the base ref cannot shrink the review diff.
 pub(crate) fn run_local(
     sessions: &Sessions<'_>,
     repository: &Path,
