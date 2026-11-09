@@ -3,7 +3,7 @@
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1165
 Research: [proposed direction](https://github.com/JacobStephens2/thirdshift/issues/1165#issuecomment-6369972244), #585, #710, #833, #1583, #1695, [#1532 grill](1532-keep-working-the-backlog.md)
 
-Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. Round 1 answered 2026-11-09. `GLOSSARY.md` now has the new **Claim**, **Failure limit**, **Ready issue** and **Recovery** entries.
+Paused 2026-10-23 with Round 1 unanswered. Revised in place on 2026-10-27, and twice on 2026-11-09: after the #1532 grill and Spec #1564 shipped the `agent-failed` label and the **Failure limit** in place of the **Claim limit**, and for Spec #1695, which gives Triage runs a Claim. Q1.1 is withdrawn, Q1.2–Q1.4 are rewritten for the new labels, and Q1.5 is new. Rounds 1 and 2 answered 2026-11-09. `GLOSSARY.md` now has the new **Claim**, **Failure limit**, **Ready issue**, **Recovery** and **Sweep** entries.
 
 Agreed in chat on 2026-10-23, before Round 1, and where each stands now:
 
@@ -201,4 +201,4 @@ The options:
 
 ## Waiting on research
 
-- Posting to GitHub was blocked by a permission check, so these wait for you: the comments on #1891 and #1695 (Q2.1), the answer to #1583 and closing it (Q2.2), and a new  issue for the release-retry gap (Q2.5). The drafts are in the session scratchpad, `github-drafts.md`.
+- Posting to GitHub was blocked by a permission check, so these wait for you: the comments on #1891 and #1695 (Q2.1), the answer to #1583 and closing it (Q2.2), and a new `needs-triage` issue for the release-retry gap (Q2.5). The drafts are in `/private/tmp/claude-501/-Users-jacob--herdr-worktrees-thirdshift-1165-triage/eb97d8f7-9a68-4adc-a09b-d3d2898f4fce/scratchpad/github-drafts.md`.
