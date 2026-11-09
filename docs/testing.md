@@ -1,8 +1,12 @@
 # Local test selection
 
 Run `scripts/affected-tests main` from anywhere in this checkout. It requires
-Python 3 and Git, compares the working tree with the merge-base of the supplied
-ref and `HEAD`, and includes staged, unstaged and untracked non-ignored files.
+Python 3.11 or later and Git, compares the working tree with the merge-base of
+the supplied ref and `HEAD`, and includes staged, unstaged and untracked
+non-ignored files. Python 3.11 is the minimum for the tests and the release
+generator, which import `tomllib`; on an older `python3` the selector, the
+release generator and the Rust tests' `tomllib` helpers exit at once with one
+line naming the version found, the version needed and the interpreter's path.
 Renames include both paths. An invalid ref fails before running checks; an empty
 diff prints that no tests are affected. Before each selected command starts,
 the script prints its full-output log path. After it finishes, one summary line

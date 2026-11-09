@@ -110,6 +110,21 @@ class AffectedTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return result, calls
 
+    def run_selector_as(self, version):
+        """Run the selector with sys.version_info reporting an interpreter of `version`."""
+        wrapper = (
+            "import runpy, sys\n"
+            f"sys.version_info = {(*version, 'final', 0)!r}\n"
+            f"sys.argv = [{str(SELECTOR)!r}, 'base']\n"
+            f"runpy.run_path({str(SELECTOR)!r}, run_name='__main__')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", wrapper],
+            cwd=self.root, env=self.env, capture_output=True, text=True,
+        )
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return result, calls
+
     def select_for_only(self, path):
         self.git("branch", "-f", "base", "HEAD")
         self.change(path)
@@ -127,6 +142,26 @@ class AffectedTests(unittest.TestCase):
             ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
             ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
         ])
+
+    def test_python_older_than_3_11_is_rejected_before_any_check(self):
+        self.change("src/main.rs")
+        for version in [(3, 9, 18), (3, 10, 14)]:
+            with self.subTest(version=version):
+                result, calls = self.run_selector_as(version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+                self.assertEqual(result.stdout, "")
+                found = ".".join(map(str, version))
+                self.assertEqual(
+                    result.stderr,
+                    f"Python 3.11 or later is required; found Python {found} at {sys.executable}\n",
+                )
+
+    def test_python_3_11_selects_as_before(self):
+        self.change("src/main.rs")
+        result, calls = self.run_selector_as((3, 11, 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["cargo", "nextest", "run"]])
 
     def test_go_prototype_only_runs_go_in_its_module(self):
         self.change("prototype/go/main.go")
