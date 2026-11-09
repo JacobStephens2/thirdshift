@@ -4,25 +4,6 @@
 use super::*;
 use crate::claim::{self, Claim};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_source_refuses_publishing_steps() {
-        for (kind, name) in [
-            (StepKind::Delivery, "delivery"),
-            (StepKind::SelfMerge, "self-merge"),
-        ] {
-            let error = Local::allow_step(&kind).unwrap_err();
-            assert_eq!(
-                error.to_string(),
-                format!("local Ticket source refuses publishing Step {name}")
-            );
-        }
-    }
-}
-
 /// Preserve unfinished Issue-branch work consistently for direct and
 /// dispatched Custom processes.
 pub(super) fn execute_issue_steps(
@@ -164,7 +145,7 @@ pub(super) fn require_issue(
 /// The local adapter borrows a prepared repository; it never owns its cleanup.
 pub(super) enum TicketSource {
     Factory,
-    Local(Local),
+    Local(Box<Local>),
 }
 
 pub(super) struct Local {
@@ -337,7 +318,15 @@ impl Local {
             | StepKind::Command(_) => Ok(()),
             StepKind::Delivery => bail!("local Ticket source refuses publishing Step delivery"),
             StepKind::SelfMerge => bail!("local Ticket source refuses publishing Step self-merge"),
-            _ => bail!("this Step requires the factory Ticket source"),
+            StepKind::ReviewAndAddress
+            | StepKind::ArchitectureReview
+            | StepKind::SpecReview
+            | StepKind::SecurityAudit
+            | StepKind::ReproduceFindings
+            | StepKind::RunPublishedIssue { .. }
+            | StepKind::LandTickets { .. }
+            | StepKind::FixFindings { .. }
+            | StepKind::CloseFindings => bail!("this Step requires the factory Ticket source"),
         }
     }
 }
@@ -458,7 +447,7 @@ pub(crate) fn run_local(
             Some(source.issue.clone()),
             Utc::now(),
             WorktreeSource {
-                ticket: TicketSource::Local(source),
+                ticket: TicketSource::Local(Box::new(source)),
                 git: &git,
                 commit: &commit,
                 issue_checkout: Some(repository),
@@ -889,4 +878,23 @@ pub(super) fn run_implement(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_source_refuses_publishing_steps() {
+        for (kind, name) in [
+            (StepKind::Delivery, "delivery"),
+            (StepKind::SelfMerge, "self-merge"),
+        ] {
+            let error = Local::allow_step(&kind).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("local Ticket source refuses publishing Step {name}")
+            );
+        }
+    }
 }
