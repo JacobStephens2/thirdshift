@@ -159,6 +159,7 @@ The options:
 - **Failure:** a Failed run with work on `origin`, and a failed Security fix even with nothing, swaps `in-progress` for `agent-failed`. The #1532 take-over rule "neither `in-progress` nor `needs-triage`" is replaced by "`agent-failed` taken off" (Q1.5, at `src/pickup.rs:423`).
 - **A waiting Spec run** puts `ready-for-agent` back on its Spec, takes `in-progress` off and adds no `agent-failed`. It does so only if no untrusted edit has happened since the last Trusted `ready-for-agent` labelling, and labels the Spec `needs-triage` otherwise. Waiting means every undone Ticket is an Unready Ticket, blocked, waiting on other running work, or outside the Spec's repository (Q1.3).
 - **A Spec run with any failed or interrupted Ticket** gets `agent-failed` (Q1.3).
+- **A blocking cycle** among undone Tickets is a failure, not waiting: nothing unblocks it until someone reshapes the Tickets. Decided in chat on 2026-11-09, while checking the Spec's test seams.
 - **#585** keeps the outcome name, exit code, notification wording and mixed results. This grill settles only the labels (Q1.3).
 - **The Recovery comment** is marked as generated, names the machine and how to retry, and leaves out local paths and the continue command. A Run that fails again posts again (Q1.4). Its boundary is Q2.3.
 - **Interrupted runs** are treated like any other Failed run. A Stop still leaves `needs-triage`, and a bug that can't be reproduced still leaves `needs-info`.
