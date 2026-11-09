@@ -66,6 +66,67 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('the header machine name returns to the full Overview from filtered and secondary pages', async t => {
+  for (const javaScriptEnabled of [true, false]) {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await t.test(`${viewport.width}px, JavaScript ${javaScriptEnabled}`, async t => {
+        const page = await pageFor(t, { javaScriptEnabled, viewport });
+        await page.goto(origin);
+        const hostname = await page.locator('header h1').textContent();
+        for (const path of [
+          `/?machine=${encodeURIComponent(hostname)}`,
+          '/?section=done',
+          `/?section=done&machine=${encodeURIComponent(hostname)}`,
+          `/cronjobs?machine=${encodeURIComponent(hostname)}`,
+          '/logs',
+          '/?page=stages',
+        ]) {
+          await page.goto(`${origin}${path}`);
+          const link = page.locator('header h1').getByRole('link', { name: hostname, exact: true });
+          assert.equal(await link.getAttribute('href'), '/?section=overview', path);
+          await link.click();
+          await page.waitForURL(`${origin}/?section=overview`);
+          assert.equal(await page.locator('select[name="machine"]').inputValue(), '', path);
+          await page.locator('#inbox [data-group="needs you"] .command').first().waitFor();
+        }
+        await page.goto(`${origin}/?section=done`);
+        await page.keyboard.press('Tab');
+        assert.equal(await page.locator('header h1 a').evaluate(el => el === document.activeElement), true);
+        await page.keyboard.press('Enter');
+        await page.waitForURL(`${origin}/?section=overview`);
+      });
+    }
+  }
+});
+
+test('the header link keeps each Theme heading colour and underlines on hover and keyboard focus', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const link = page.locator('header h1 a');
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['auto', 'light', 'dark']) {
+        const theme = `${family}-${mode}`;
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        const style = await link.evaluate(el => ({
+          colour: getComputedStyle(el).color,
+          heading: getComputedStyle(el.parentElement).color,
+          decoration: getComputedStyle(el).textDecorationLine,
+        }));
+        assert.equal(style.colour, style.heading, `${theme} on ${colorScheme}`);
+        assert.equal(style.decoration, 'none', `${theme} at rest`);
+      }
+    }
+  }
+  await link.hover();
+  assert.equal(await link.evaluate(el => getComputedStyle(el).textDecorationLine), 'underline');
+  await page.mouse.move(0, 0);
+  await page.keyboard.press('Tab');
+  assert.equal(await link.evaluate(el => el.matches(':focus-visible')), true);
+  assert.equal(await link.evaluate(el => getComputedStyle(el).textDecorationLine), 'underline');
+});
+
 test('Paused rows and Command details copy the saved resume command', async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const original = await readFile(path, 'utf8');
