@@ -9,6 +9,17 @@ import tempfile
 import time
 
 
+# Markdown read by builds or tests must retain its consumers' checks.
+# scripts/test_affected_tests.py guards this list against new code references.
+DOC_CHECKS = {
+    b"docs/guide.md": "site",
+    b"GLOSSARY.md": "site",
+    b"docs/experiment-results.md": "full",
+    b"docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md": "full",
+    b"docs/research/go-vs-rust-prototype.md": "full",
+}
+
+
 def git(*arguments):
     return subprocess.check_output(["git", *arguments])
 
@@ -83,7 +94,13 @@ def main():
         elif path.startswith(b"console/"):
             areas.add("console")
             print(f"Console browser tests for {os.fsdecode(path)!r}.", flush=True)
-        elif path.startswith(b"site/") or path == b"docs/guide.md":
+        elif path in DOC_CHECKS:
+            areas.add(DOC_CHECKS[path])
+        elif (path.startswith(b"docs/") and path.endswith(b".md")) or path in {
+            b"GLOSSARY.md", b"CODING_STANDARDS.md",
+        }:
+            print(f"No checks for docs-only {os.fsdecode(path)!r}.", flush=True)
+        elif path.startswith(b"site/"):
             areas.add("site")
         elif path.startswith(b"scripts/release") or path in {
             b"scripts/generate-release.py", b"scripts/test_generate_release.py",

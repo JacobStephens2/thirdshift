@@ -40,11 +40,11 @@ An open **Ticket** labelled with a triage role that says it is not agent work: `
 An open **Ticket** in its **Spec**'s repository, with no sub-issues of its own, no open blocker, and not an **Unready Ticket**: one a **Spec run** could start if no Ticket were running. A Spec run starts only these, and a **Spec** with none is not a **Ready issue**.
 
 **Claim**:
-The mark that a Run is live on an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Ticket run**, a **Spec run** or a **Custom process** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket run** in a Spec run and a **Base fix** make none. It lasts only while the Run is live, and ending it leaves the issue marked with how the Run ended. A Run whose pull request is ready for review, or whose **Self-merge** was held with its pull request ready, takes it off and puts nothing back: the open pull request stands for the work. A Self-merge that closed the issue takes it off; one that merged without closing the issue leaves it until the issue is closed. A Failed run with work on `origin` swaps it for `agent-failed` (see **Failure limit**), as does a failed Security fix even with nothing on `origin`, so it stays with the Day shift. A Ticket run that fails with nothing on `origin` to take over, no **Issue branch** and no pull request, releases it, putting `ready-for-agent` back. A Spec run whose undone **Tickets** are all only waiting, on a person or on other work, puts `ready-for-agent` back on its Spec without `agent-failed` (see **Ready issue**). A **Stop** leaves `needs-triage`, and a bug Ticket run that cannot reproduce the bug leaves `needs-info`. Ending a Claim finishes even after Command interruption.
+The mark that a Run is live on an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Ticket run**, a **Spec run** or a **Custom process** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**, or in place of its triage role when a **Triage run** starts on an existing issue. A **Ticket run** in a Spec run and a **Base fix** make none. It lasts only while the Run is live, and ending it leaves the issue marked with how the Run ended. A Run whose pull request is ready for review, or whose **Self-merge** was held with its pull request ready, takes it off and puts nothing back: the open pull request stands for the work. A Self-merge that closed the issue takes it off; one that merged without closing the issue leaves it until the issue is closed. A Failed run with work on `origin` swaps it for `agent-failed` (see **Failure limit**), as does a failed Security fix even with nothing on `origin`, so it stays with the Day shift. A Ticket run that fails with nothing on `origin` to take over, no **Issue branch** and no pull request, releases it, putting `ready-for-agent` back. A Spec run whose undone **Tickets** are all only waiting, on a person or on other work, puts `ready-for-agent` back on its Spec without `agent-failed` (see **Ready issue**). A **Stop** leaves `needs-triage`, and a bug Ticket run that cannot reproduce the bug leaves `needs-info`. A Triage run on an existing issue replaces its Claim with the resulting triage role when it finishes, with `needs-triage` on a Stop asked to requeue, with `ready-for-human` on any other Stop, and with `ready-for-human` and `agent-failed` when the Triage run fails. Ending a Claim finishes even after Command interruption.
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Failure limit**:
-The number of open issues the factory failed on, labelled `agent-failed`, at which a **Pickup run** takes no more, set in the **User config**. thirdshift puts the label on in place of the **Claim** when a **Failed ticket run**, a **Failed spec run** or a failed **Custom process** on an issue leaves work on `origin`, whatever started it. A held **Self-merge** that leaves its pull request ready gets none, and neither does a **Stop** or a Spec run that is only waiting. The label comes off when the **Day shift** acts on the failure: by putting `ready-for-agent` back, by taking `agent-failed` off to take the issue over, or by closing it, which the **Sweep** clears. The next Claim also takes it off. It keeps a broken **Base branch** or **Harness** from failing every **Ready issue** in turn. A pull request that is ready for review or merged never counts, so the factory keeps working while reviews wait.
+The number of open issues the factory failed on, labelled `agent-failed`, at which a **Pickup run** or a **Triage run** started as a **Pass** takes no more, set in the **User config**. thirdshift puts the label on in place of the **Claim** when a **Failed ticket run**, a **Failed spec run** or a failed **Custom process** on an issue leaves work on `origin`, or when a Triage run on an existing issue fails, whatever started it. A held **Self-merge** that leaves its pull request ready gets none, and neither does a **Stop** or a Spec run that is only waiting. The label comes off when the **Day shift** acts on the failure: by putting `ready-for-agent` back, by taking `agent-failed` off to take the issue over, or by closing it, which the **Sweep** clears. The next Claim also takes it off. It keeps a broken **Base branch** or **Harness** from failing every **Ready issue** or `needs-triage` issue in turn. A pull request that is ready for review or merged never counts, so the factory keeps working while reviews wait.
 _Avoid_: Claim limit (former name), WIP limit, concurrency (it counts issues waiting on the **Day shift**, not Commands in flight)
 
 **Command limit**:
@@ -52,7 +52,7 @@ The number of live **Commands** on one repository on one machine at which a **Pa
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
-A **Pickup run**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, of `in-progress` from every open issue that also has `agent-failed`, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
+A **Pickup run**'s or a **Triage run** **Pass**'s removal of `in-progress` and `agent-failed` from every closed issue in the repository that still has them, of `in-progress` from every open issue that also has `agent-failed`, and of `in-progress` from closed pull requests, with other labels kept. Each Pickup run or Triage run Pass that is not skipped for its **Command limit** makes one, before it holds the repository against its **Failure limit**. A Sweep that fails is a warning, never a failure.
 _Avoid_: cleanup, garbage collection
 
 ### Repository and branches
@@ -140,11 +140,11 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Triage run**:
-One **Command** that investigates a **Report** against its repository, read-only and without waiting for a person, and files shaped issues, or only recommends them when asked. Its investigation and issue links reach the **Day shift** through standard output and its **Run notification**; it is never a **Pass**.
+One **Command** that investigates a **Report** or an open issue against its repository, read-only and without waiting for a person, including any images attached by **Trusted accounts**, and files shaped issues for a Report or updates the issue in place with its category, triage role and brief, questionnaire or `wontfix` closure, or only recommends them when asked. When readiness permission is not granted, a recommended `ready-for-agent` on an existing issue is labelled `ready-for-human` so a **Pass** does not take it again. Started with neither a Report nor an **Issue URL**, it is a Pass that takes the next eligible open `needs-triage` issue by a Trusted account in the Pickup order, reserving it across machines and holding a **Claim** while it runs; a skipped Pass sends no **Run notification**. Its investigation and issue links reach the **Day shift** through standard output and its Run notification.
 _Avoid_: intake
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
+An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 **Process**:
@@ -390,11 +390,11 @@ An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict**
 _Avoid_: non-gating suite, informational suite
 
 **Arm**:
-One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, the **Process** its **Trials** carry out where its **Eval suite** runs one, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, in an agent session of its own, within an **Experiment**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
+One attempt at an **Eval task** by one **Arm**, within an **Experiment**: an agent session of its own, or every session of the **Process** the Arm carries out, up to its first publishing **Step**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
 
 **Void Trial**:
@@ -405,6 +405,10 @@ _Avoid_: errored Trial, infrastructure failure
 What judges a **Trial** against its **Eval task**'s success criteria, or a **Ticket run** in a **Scoring run**'s sample against the criteria merged work is held to: a check in code, an agent session, or the **Day shift**.
 _Avoid_: judge, evaluator, scorer
 
+**Grader panel**:
+The model **Graders** an **Experiment**'s **Bar** names to judge each pair of **Trials**, from one **Model** up, each reading the pair in both orders. The panel's call is a majority by family or by Model, as the Bar says, and may stand in for the **Day shift**'s on pairs it doesn't read.
+_Avoid_: jury, committee, judges
+
 **Score**:
 What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Ticket run** on one criterion: whether it passed, and why.
 _Avoid_: grade, rating, feedback
@@ -414,7 +418,7 @@ The **Command** that compares a **Baseline arm** with a **Candidate arm** on the
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
-The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, and the rules for **Void Trials**.
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, whether the **Day shift** grades and whether that counts in the Verdict, and any cost or time ceiling.
 _Avoid_: threshold, gate, acceptance criteria
 
 **Verdict**:

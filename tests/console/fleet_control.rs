@@ -114,6 +114,18 @@ fn fleet_config_uses_owners_admin_scope_and_refusals_survive_forwarding() {
         .unwrap();
     assert_eq!(response.status(), 303, "{}", response.text().unwrap());
     assert_eq!(
+        response.headers()["location"],
+        "/config?machine=owner&saved=spec.parallel#config-spec.parallel"
+    );
+    let saved = get(
+        &console,
+        response.headers()["location"].to_str().unwrap(),
+        &session,
+    )
+    .text()
+    .unwrap();
+    assert!(saved.contains("role=\"status\">Saved <code>spec.parallel = 5</code> on owner."));
+    assert_eq!(
         api::cli(owner.path(), &["config", "spec.parallel", "--json"])["value"],
         5
     );

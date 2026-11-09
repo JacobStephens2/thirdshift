@@ -124,7 +124,7 @@ pub(super) async fn read(
 /// Page actions keep their redirects; API actions return the shared CLI value.
 pub(super) async fn action<T: Serialize + Send + 'static>(
     format: Format,
-    location: &'static str,
+    location: &str,
     work: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Response {
     let result = tokio::task::spawn_blocking(work).await;

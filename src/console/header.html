@@ -1,4 +1,4 @@
-<header>{% include "console/brand.html" %}<h1>{{ page.hostname }}</h1>
+<header>{% include "console/brand.html" %}<h1><a href="/?section=overview">{{ page.hostname }}</a></h1>
   {% if !page.consoles.is_empty() %}<nav aria-label="Other Consoles">{% for entry in page.consoles %}<a href="{{ entry.address }}">{{ entry.name }}</a>{% endfor %}</nav>{% endif %}
   {% let status = page.resources %}{% include "console/header-status.html" %}
 </header>

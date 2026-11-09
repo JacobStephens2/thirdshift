@@ -28,6 +28,7 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 | `prototype/go/**` only | `go test ./...` from `prototype/go/`; no Rust suite |
 | `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires Python 3 and `bun install --frozen-lockfile` in that directory first; Chromium setup is in the prototype README |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
+| `docs/**/*.md`, `GLOSSARY.md`, `CODING_STANDARDS.md` | No checks; prints `No checks for docs-only '<path>'.` Exceptions: `docs/guide.md` and `GLOSSARY.md` select the site checks; `docs/experiment-results.md`, `docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md` and `docs/research/go-vs-rust-prototype.md` retain the full Rust suite. Non-Markdown files under `docs/` retain the full suite. |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
 | `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
@@ -40,6 +41,17 @@ directory do not select its checks. Mixed changes add each prototype's checks
 independently, without broadening the existing areas' Rust selection. See the
 [Go README](../prototype/go/README.md) and
 [TypeScript README](../prototypes/typescript/README.md).
+
+Docs without consumers add no checks when mixed with other areas. The selector's
+`DOC_CHECKS` exception list preserves checks for Markdown read by code: the
+manual and glossary by the site tests, the experiment result format and Console
+API ADR by Rust tests, and the Go comparison by the prototype's benchmark test.
+`scripts/test_affected_tests.py` scans repository code for literal references to
+existing Markdown inputs and fails with the referencing file and doc path when
+an exception is missing. Add new inputs to `DOC_CHECKS` with their checks. The
+guard ignores URLs, comment-only lines, target-repository paths that don't exist
+here, and the selector/test inventories themselves. Constructed paths still need
+review when adding a consumer.
 
 Unknown paths print the reason for selecting the full Rust suite, and Console
 paths print the reason for selecting the Console browser tests. The mappings
