@@ -17,11 +17,11 @@ The triage comment on #1516 left nine open questions. Round 1 asks them, adjuste
 
 *Answer:* 
 
-**Q1.2 - Start before #1481 is done?** #1477, #1478, #1480 and #1481 are all still open, and the host runs 0.17.3. Only recording Difficulty (`--record-difficulty`, #1478) and parking out-of-band tasks need #1477's release. Proposing, dry-running with `evals prepare`, approving and running the A/A all work on 0.17.3 today, and the pooled A/A results can have their Difficulty recorded once #1478 ships. The options:
-- (a) Start now. #1481 blocks only recording Difficulty and parking, and the A/A's results are kept so Difficulty can be recorded from them later.
-- (b) Wait for #1481, as the issue body says.
+**Q1.2 - Start before #1481 is done?** *Revised 2026-11-09:* #1477, #1478 and #1480 have shipped, and every host runs 0.24.0, which has `thirdshift experiments <id> --record-difficulty`. So #1481 is no longer waiting on a release, only on someone doing it, and no code-review task has a recorded Difficulty yet. #1481's own steps are short for code review: record Difficulty from `83721fbb…` and park 13 tasks. Proposing, dry-running with `evals prepare`, approving and the new A/A don't touch those 20 tasks. The options:
+- (a) Start now, in parallel with #1481. Do #1481's code-review half (record and park) first, since it takes minutes, and its Spec-review A/A independently.
+- (b) Wait until all of #1481 is done, Spec review's ~180-Trial A/A included, as the issue body says.
 
-*Recommended:* (a). It takes the ~6-hour A/A off the critical path. The risk is that #1478's recording can't read an Experiment that ran before it shipped; Q2 would ask what to do if research shows that.
+*Recommended:* (a). Only the Spec-review A/A in #1481 takes hours, and #1516 doesn't depend on it. The two A/As must not run on the host at the same time (Q1.5's load concern).
 
 *Answer:* 
 
@@ -58,9 +58,9 @@ The triage comment on #1516 left nine open questions. Round 1 asks them, adjuste
 
 *Answer:* 
 
-**Q1.7 - Leave employer repositories out of the first round?** What the hosts show (see "Research results"): `orchestrate` and `dev` have no Eval data and no Bug origins at all, because no Scoring run has ever run there, so there is no ready pool on the employer side. tourbot has about 108 fix-like merged PRs out of 985, so its pool is real but would have to be mined from scratch. Putting employer code on `thirdshift.app`, a personal host, is a data question for your employer, not just an Eval question. The options:
+**Q1.7 - Leave employer repositories out of the first round?** What the hosts show (see "Research results"): the three employer hosts have no Eval data and no Bug origins at all, because no Scoring run has ever run there, so there is no ready pool on the employer side. But it is the busiest source of Ticket runs outside thirdshift: about 180 Runs that opened a PR on the employer's main repository since mid-October, and about 47 of its 300+ PRs merged since then have fix-like titles. Its pool is real but would have to be mined from scratch. Putting employer code on `thirdshift.app`, a personal host, is a data question for your employer, not just an Eval question. The options:
 - (a) Not in round 1. Mine the personal pool first; decide on employer code only if round 1 leaves a gap.
-- (b) Allow it now, cloning tourbot onto `thirdshift.app`.
+- (b) Allow it now, cloning the employer repositories onto `thirdshift.app`.
 - (c) Allow it, but build and run employer tasks on an employer host (`dev` or `orchestrate`) in a suite there, never copying the code to `thirdshift.app`.
 - (d) Never.
 
@@ -92,10 +92,21 @@ The triage comment on #1516 left nine open questions. Round 1 asks them, adjuste
 
 - `thirdshift.app`: 121 Bug origins, all `proposed`; 99 unused as Eval tasks, 59 of those naming an introducing PR. `code-review` holds 21 task directories. Suites were backed up on 2026-10-26 and 2026-10-27 (three `suites.bak-*` folders). Confirmed by reading `~/.thirdshift/evals/` and the survey file.
 - voice-agent is `JacobStephens2/voice-agent`, public, "Personal voice-first coding and operations agent"; it is not cloned on `thirdshift.app` or `stephens.page` (which has only `voice-agent-scheduling`). Confirmed by `gh repo view` and `ls ~/repos` on both.
-- `orchestrate` and `dev` (employer hosts, 0.17.3) have no `~/.thirdshift/evals`, so no suites, Scoring runs or Bug origins; both have Run logs for tourbot and orchestration. `stephens.page` has no evals either. Confirmed by `ls` on each.
-- tourbot: 985 merged PRs, about 108 with "fix", "bug" or "regress" in the title; orchestration: 405 and 9. Confirmed by `gh pr list`.
+- `orchestrate` and `dev` (employer hosts) have no `~/.thirdshift/evals`, so no suites, Scoring runs or Bug origins; both have Run logs for the employer's repositories. `stephens.page` has no evals either. Confirmed by `ls` on each.
+- The employer's main repository: 985 merged PRs, about 108 with "fix", "bug" or "regress" in the title; its second: 405 and 9. Confirmed by `gh pr list`.
 - A suite is picked by release mode only when a changed path matches its `[dependencies]` (`src/evals/suite.rs`, `touched`), so a suite without dependencies isn't picked. Confirmed by source.
-- #1477, #1478, #1480, #1481, #1494 and #1498 are all open. Confirmed by `gh issue view`.
+
+## Research results (2026-11-09, every host in `scripts/update-hosts.conf`)
+
+Details, with repository names, are appended to the private survey file on the `thirdshift` host. Counts only here.
+
+- **Hosts checked:** `thirdshift.app`, `stephens.page`, the three employer hosts and the Mac, all on 0.24.0 except the Mac (0.18.7). The `lima:thirdshift` VM was stopped and not checked. Only `thirdshift.app` has any Eval data. Confirmed by `ls ~/.thirdshift` on each.
+- **The suite hasn't changed:** `code-review` still has 21 tasks, 20 `approved` and 1 `proposed`, and none has a recorded Difficulty. #1477, #1478 and #1480 are closed; #1481, #1494 and #1498 are open. Confirmed by reading the task manifests and `gh issue view`.
+- **Bug origins: 148, up from 121**, all `proposed`. The W45 Scoring run added 27. Those not yet used as an Eval task and naming an introducing PR: **82, up from 59** (thirdshift 60, voice-agent 14, five other personal repositories 9). About 5 of W45's 16 thirdshift ones are test flakes, so likely out of scope. A packets folder dated today suggests the W46 run is under way. Confirmed by reading `~/.thirdshift/evals/scoring/*.json` and the suite, `parked` and `dropped` folders.
+- **Scoring already reaches repositories beyond `thirdshift.app`:** Bug origins exist for personal repositories that only `stephens.page` works on. But four of those repositories have about 85 Runs with a PR between them and almost no fix-like merges, so they add little. Confirmed by `activity.log` on each host and `gh search prs`.
+- **thirdshift since the W45 window (2026-11-02):** 86 merged PRs, 11 with fix-like titles, not yet mined. Confirmed by `gh search prs`.
+- **Ticket runs that opened a PR, by host, since mid-October:** `thirdshift.app` about 380 (thirdshift 207), `stephens.page` about 270 (thirdshift 103), the employer hosts about 300 (about 180 on the employer's main repository), the Mac a handful. Confirmed by `activity.log`.
+- **Revised yield:** at the survey's scope rate (about 5 in 12) and #1434's discriminating rate (7 in 20), 82 PR-backed Bug origins give roughly 34 in scope and about **12 discriminating**, against 13 needed. Thirdshift fixes since 2026-11-02 and the W46 run could close the gap without employer code, but only just.
 
 ## Waiting on research
 
