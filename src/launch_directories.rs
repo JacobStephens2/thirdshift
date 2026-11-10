@@ -89,6 +89,13 @@ fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
     }
     let thirdshift = rest
         .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
+        // A later directory change makes the initial cd unreliable. Leave
+        // these compounds display-only rather than infer the wrong checkout.
+        .take_while(|part| {
+            !part
+                .first()
+                .is_some_and(|word| matches!(word.as_str(), "cd" | "pushd" | "popd"))
+        })
         .find(|part| {
             let executable = if part.first().is_some_and(|word| {
                 Path::new(word)

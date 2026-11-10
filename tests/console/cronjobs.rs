@@ -105,6 +105,62 @@ fn cronjobs_remote_and_legacy_inventories_use_the_owning_machines_metadata() {
 }
 
 #[test]
+fn cronjobs_keeps_directory_changing_compounds_under_other() {
+    let home = fixture();
+    let first = checkout(home.path(), "first", "https://github.com/acme/first.git");
+    let second = checkout(home.path(), "second", "https://github.com/acme/second.git");
+    let commands = [
+        format!(
+            "cd '{}' && cd '{}' && thirdshift pickup base main",
+            first.display(),
+            second.display()
+        ),
+        format!(
+            "cd '{}' && cd ../second && thirdshift pickup base main",
+            first.display()
+        ),
+        format!(
+            "cd '{}' && pushd '{}' && thirdshift pickup base main",
+            first.display(),
+            second.display()
+        ),
+        format!(
+            "cd '{}' && popd && thirdshift pickup base main",
+            first.display()
+        ),
+    ];
+    fs::write(
+        home.path().join("crontab"),
+        commands
+            .iter()
+            .map(|command| format!("@daily {command}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let output = command(home.path())
+        .args(["cronjobs", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let inventory: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let jobs = inventory["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), commands.len());
+    for (job, expected) in jobs.iter().zip(commands) {
+        assert_eq!(
+            job,
+            &json!({"repository": null, "schedule": "@daily", "command": expected})
+        );
+    }
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    assert_eq!(api::json(console.get("/api/v1/cronjobs")), inventory);
+    let html = console.get("/cronjobs").text().unwrap();
+    assert!(html.contains("<h2>Other</h2>"));
+    assert!(!html.contains("<h2>acme/"));
+}
+
+#[test]
 fn cronjobs_keeps_unresolved_entries_and_never_evaluates_shell_text() {
     let home = fixture();
     checkout(
