@@ -172,3 +172,31 @@ supervisor handshake use the shared 120-second readiness bound.
 
 Release-script tests run on Linux. These deadlines belong to tests;
 production release polling still has no overall timeout and resumes on rerun.
+
+## Scenario Run lifetime
+
+Every thirdshift a `Scenario` starts through `run`, `run_with_input`, `run_from`,
+`run_with_env`, `run_until`, `run_from_until`, `run_and_signal`, `read_to_file`
+and `run_copy_replaced_midway` belongs to that scenario, as does everything it
+starts. A Linux guardian from the shared child-lifetime helper (`OwnedRuns`)
+starts each Run. It is a subreaper in a process group of its own that ignores
+INT, TERM, HUP and QUIT, so it adopts descendants that start new process groups
+or sessions, such as fake Harnesses, held `git` and `gh` wrappers and detached
+commands.
+
+The guardian keeps a Run unreaped until the test has read its status, as a
+`Child` does, so `HeldRun::signal` never reaches a reused process id.
+Descendants outlive their Run as they do in production until the `Scenario` is
+dropped, by normal completion or assertion unwinding. Dropping it closes the
+lease every guardian polls; each guardian then SIGKILLs and reaps what it owns,
+including commands that trap INT and TERM, and the drop waits for them before
+the temp root is removed. The lease also closes when the harness dies by any
+signal, so after SIGKILL of the harness alone or of its whole process group,
+the Run and its descendants end within milliseconds. Commands the tests build
+with `Scenario::command` themselves, such as the Console's, are not covered.
+
+`cargo test --test scenario_lifetime` holds a Run on a fake agent, with a
+detached command that ignores INT and TERM, and on a held fake `git`. It kills
+the fixture harness alone and with its process group, and also covers normal
+completion and assertion unwinding. A subreaping supervisor waits five seconds
+for each recorded process to be gone and names any survivor.

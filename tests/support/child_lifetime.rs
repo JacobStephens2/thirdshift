@@ -3,8 +3,12 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{
+    Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -223,5 +227,351 @@ fn fixture_guardian() {
     drop(descendants);
     if let Some(status) = status {
         fs::write(root.join("status"), status.into_raw().to_string()).unwrap();
+    }
+}
+
+/// Owns every process a `Scenario`'s Runs start, through success, assertion
+/// unwinding and the death of the fixture harness. Each Run gets a guardian:
+/// a Linux subreaper forked outside the harness's process group, which
+/// starts thirdshift and adopts each descendant whose parent ends, even one
+/// in a process group or session of its own. Dropping the owner, or the
+/// harness dying for any reason, closes the lease every guardian polls; the
+/// guardian then kills and reaps everything it owns.
+pub struct OwnedRuns {
+    /// Write end of the lease; only this process holds it outside an exec.
+    lease: Option<OwnedFd>,
+    lease_reader: OwnedFd,
+    /// Write end each guardian inherits and holds until it exits, so drop
+    /// can wait for cleanup to finish.
+    done: Option<OwnedFd>,
+    done_reader: File,
+}
+
+/// A thirdshift process started by [`OwnedRuns::spawn`]. Its guardian keeps
+/// it unreaped until its status is read, as for a [`Child`], so its process
+/// id stays its own until then.
+pub struct OwnedRun {
+    pid: u32,
+    report: Option<UnixStream>,
+    status: Option<ExitStatus>,
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+impl OwnedRuns {
+    pub fn new() -> Self {
+        let (lease_reader, lease) = pipe();
+        let (done_reader, done) = pipe();
+        Self {
+            lease: Some(lease),
+            lease_reader,
+            done: Some(done),
+            done_reader: File::from(done_reader),
+        }
+    }
+
+    /// Spawn `command` with its stdio as configured, under a new guardian.
+    pub fn spawn(&self, command: &mut Command) -> OwnedRun {
+        let (report, guardian_report) = UnixStream::pair().unwrap();
+        let fds = [
+            self.lease_reader.as_raw_fd(),
+            guardian_report.as_raw_fd(),
+            self.done.as_ref().unwrap().as_raw_fd(),
+        ];
+        // SAFETY: the post-fork closure calls only async-signal-safe
+        // functions, and the processes that do not exec never return.
+        unsafe { command.pre_exec(move || start_guarded(fds)) };
+        let mut launcher = command.spawn().expect("could not start thirdshift");
+        drop(guardian_report);
+        // The launcher only forks the guardian, which outlives it.
+        assert!(launcher.wait().unwrap().success());
+        let mut run = OwnedRun {
+            pid: 0,
+            report: Some(report),
+            status: None,
+            stdin: launcher.stdin.take(),
+            stdout: launcher.stdout.take(),
+            stderr: launcher.stderr.take(),
+        };
+        run.pid = run
+            .read_report()
+            .flatten()
+            .expect("the Run's guardian ended at once") as u32;
+        run
+    }
+}
+
+impl Drop for OwnedRuns {
+    fn drop(&mut self) {
+        drop(self.lease.take());
+        drop(self.done.take());
+        // EOF once every guardian has reaped what it owned and exited.
+        let _ = std::io::Read::read_to_end(&mut self.done_reader, &mut Vec::new());
+    }
+}
+
+impl OwnedRun {
+    pub fn id(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn try_wait(&mut self) -> Option<ExitStatus> {
+        if self.status.is_none() {
+            let report = self.report.as_ref().unwrap();
+            report.set_nonblocking(true).unwrap();
+            let status = self.read_report();
+            self.report
+                .as_ref()
+                .unwrap()
+                .set_nonblocking(false)
+                .unwrap();
+            self.record(status.expect("the Run's guardian ended first"));
+        }
+        self.status
+    }
+
+    pub fn wait(&mut self) -> ExitStatus {
+        if self.status.is_none() {
+            let status = self.read_report();
+            self.record(status.expect("the Run's guardian ended first"));
+        }
+        self.status.unwrap()
+    }
+
+    /// Like [`Child::wait_with_output`]: close stdin, read stdout and stderr
+    /// until everything holding them lets go, then wait.
+    pub fn wait_with_output(mut self) -> Output {
+        drop(self.stdin.take());
+        let stderr = self.stderr.take().map(|mut stderr| {
+            thread::spawn(move || {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut stderr, &mut bytes).unwrap();
+                bytes
+            })
+        });
+        let mut stdout = Vec::new();
+        if let Some(mut out) = self.stdout.take() {
+            std::io::Read::read_to_end(&mut out, &mut stdout).unwrap();
+        }
+        let stderr = stderr.map_or_else(Vec::new, |reader| reader.join().unwrap());
+        Output {
+            status: self.wait(),
+            stdout,
+            stderr,
+        }
+    }
+
+    /// The next raw value the guardian reports, `None` at EOF, or
+    /// `Some(None)` when nonblocking and none has arrived.
+    fn read_report(&mut self) -> Option<Option<i32>> {
+        let mut bytes = [0; 4];
+        let mut read = 0;
+        while read < bytes.len() {
+            match std::io::Read::read(self.report.as_mut().unwrap(), &mut bytes[read..]) {
+                Ok(0) => return None,
+                Ok(n) => read += n,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && read == 0 => {
+                    return Some(None);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => panic!("could not read the Run's guardian: {error}"),
+            }
+        }
+        Some(Some(i32::from_ne_bytes(bytes)))
+    }
+
+    fn record(&mut self, status: Option<i32>) {
+        if let Some(status) = status {
+            self.status = Some(ExitStatus::from_raw(status));
+            // Lets the guardian reap the Run, as waiting on a Child would.
+            self.report = None;
+        }
+    }
+}
+
+fn pipe() -> (OwnedFd, OwnedFd) {
+    let mut fds = [0; 2];
+    // SAFETY: pipe2 writes two new descriptors that nothing else owns.
+    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    // SAFETY: as above, ownership passes to these OwnedFds.
+    unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+}
+
+/// Runs in the forked launcher before exec. The launcher forks the guardian
+/// and exits; the guardian forks the process that returns here to exec.
+fn start_guarded([lease, report, done]: [libc::c_int; 3]) -> std::io::Result<()> {
+    // SAFETY: fork, prctl and _exit are async-signal-safe.
+    unsafe {
+        match libc::fork() {
+            -1 => return Err(std::io::Error::last_os_error()),
+            0 => {}
+            _ => libc::_exit(0),
+        }
+        if libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) == -1 {
+            libc::_exit(1);
+        }
+        match libc::fork() {
+            -1 => libc::_exit(1),
+            0 => Ok(()),
+            run => guard(run, lease, report, done),
+        }
+    }
+}
+
+/// The guardian's loop. It allocates nothing and takes no locks: it is a
+/// fork of a multithreaded process that never execs.
+unsafe fn guard(run: libc::pid_t, lease: libc::c_int, report: libc::c_int, done: libc::c_int) -> ! {
+    unsafe {
+        // Outside the harness's process group, a signal to that group or
+        // terminal leaves the guardian to clean up after it.
+        libc::setpgid(0, 0);
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+            libc::signal(signal, libc::SIG_IGN);
+        }
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        for stdio in 0..3 {
+            libc::dup2(null, stdio);
+        }
+        // Holding nothing else, the guardian keeps no pipe of the Run's or
+        // of the harness's open, nor another Scenario's lease.
+        let mut keep = [lease, report, done];
+        keep.sort_unstable();
+        let mut first = 3;
+        for fd in keep {
+            if fd > first {
+                libc::close_range(first as libc::c_uint, (fd - 1) as libc::c_uint, 0);
+            }
+            first = fd + 1;
+        }
+        libc::close_range(first as libc::c_uint, libc::c_uint::MAX, 0);
+        send(report, run);
+
+        let mut reported = false;
+        let mut released = false;
+        loop {
+            let mut owned = false;
+            for_each_child(|child| {
+                owned = true;
+                if child != run {
+                    libc::waitpid(child, std::ptr::null_mut(), libc::WNOHANG);
+                    return;
+                }
+                if !reported && let Some(status) = exit_status(run) {
+                    send(report, status);
+                    reported = true;
+                }
+                if reported && released {
+                    libc::waitpid(run, std::ptr::null_mut(), libc::WNOHANG);
+                }
+            });
+            if !owned {
+                libc::_exit(0);
+            }
+            let mut fds = [
+                libc::pollfd {
+                    fd: lease,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: if released { -1 } else { report },
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            if libc::poll(fds.as_mut_ptr(), 2, 10) > 0 {
+                if fds[0].revents != 0 {
+                    break;
+                }
+                // The harness writes nothing; it closes its end once it has
+                // read the Run's status, or drops it.
+                released |= fds[1].revents != 0;
+            }
+        }
+        loop {
+            for_each_child(|child| {
+                libc::kill(child, libc::SIGKILL);
+            });
+            match libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) {
+                -1 if *libc::__errno_location() == libc::ECHILD => libc::_exit(0),
+                0 | -1 => {
+                    let pause = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 10_000_000,
+                    };
+                    libc::nanosleep(&pause, std::ptr::null_mut());
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `run`'s raw wait status once it has exited, leaving it unreaped.
+unsafe fn exit_status(run: libc::pid_t) -> Option<i32> {
+    unsafe {
+        let mut info: libc::siginfo_t = std::mem::zeroed();
+        let flags = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+        if libc::waitid(libc::P_PID, run as libc::id_t, &mut info, flags) != 0
+            || info.si_pid() != run
+        {
+            return None;
+        }
+        Some(match info.si_code {
+            libc::CLD_EXITED => (info.si_status() & 0xff) << 8,
+            libc::CLD_DUMPED => info.si_status() | 0x80,
+            _ => info.si_status(),
+        })
+    }
+}
+
+unsafe fn send(report: libc::c_int, value: i32) {
+    let bytes = value.to_ne_bytes();
+    // The harness may have gone; MSG_NOSIGNAL turns SIGPIPE into an error.
+    unsafe {
+        libc::send(
+            report,
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            libc::MSG_NOSIGNAL,
+        )
+    };
+}
+
+/// Call `f` with each child of this single-threaded process, zombies too,
+/// reading `/proc` into a buffer on the stack.
+unsafe fn for_each_child(mut f: impl FnMut(libc::pid_t)) {
+    unsafe {
+        let file = libc::open(
+            c"/proc/thread-self/children".as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC,
+        );
+        if file == -1 {
+            return;
+        }
+        let mut buffer = [0u8; 512];
+        let mut pid: libc::pid_t = 0;
+        loop {
+            let read = libc::read(file, buffer.as_mut_ptr().cast(), buffer.len());
+            if read <= 0 {
+                break;
+            }
+            for &byte in &buffer[..read as usize] {
+                if byte.is_ascii_digit() {
+                    pid = pid * 10 + libc::pid_t::from(byte - b'0');
+                } else if pid != 0 {
+                    f(pid);
+                    pid = 0;
+                }
+            }
+        }
+        if pid != 0 {
+            f(pid);
+        }
+        libc::close(file);
     }
 }
