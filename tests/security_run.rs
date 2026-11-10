@@ -823,7 +823,7 @@ fn a_bigger_public_fix_publishes_tickets_and_ends_as_the_spec_run() {
             json!(["ready-for-agent", "security-fix"])
         );
     }
-    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    assert_eq!(state["labels"]["8"], json!(["security-fix"]));
     // thirdshift created the Spec's native links from the staged text.
     assert_eq!(state["sub_issues"]["8"], json!([9, 10]));
     assert_eq!(state["blocked_by"]["10"], json!([9]));
@@ -1068,7 +1068,7 @@ fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_audit
         result.stderr
     );
     let state = scenario.gh_state();
-    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    assert_eq!(state["labels"]["8"], json!(["security-fix"]));
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2);
     let prompt = calls[0]["prompt"].as_str().unwrap();
@@ -1373,7 +1373,7 @@ fn a_staged_proposal_is_created_by_thirdshift_not_the_session() {
     assert!(ticket.contains("Reject oversized input."), "{ticket}");
     assert!(ticket.contains("GHSA-finding-0"), "{ticket}");
     assert!(!ticket.contains("Private candidate write-up"), "{ticket}");
-    assert_eq!(state["labels"]["8"], json!(["security-fix", "in-progress"]));
+    assert_eq!(state["labels"]["8"], json!(["security-fix"]));
     assert!(
         state["advisories"][0]["description"]
             .as_str()
@@ -1500,7 +1500,7 @@ fn a_private_one_session_fix_reuses_the_findings_issue_and_preserves_its_evidenc
     );
     assert_eq!(
         state["labels"]["7"],
-        json!(["security-finding", "bug", "security-fix", "in-progress"])
+        json!(["security-finding", "bug", "security-fix"])
     );
     assert_eq!(state["prs"][0]["head"], "issue-7");
     assert_eq!(scenario.claude_calls().len(), 1);
@@ -1920,10 +1920,11 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
         "{}",
         result.stderr
     );
-    // A failed Security fix keeps its Claim, so it counts as a failure.
+    // A failed Security fix swaps its Claim for agent-failed, so it counts
+    // as a failure.
     assert_eq!(
         scenario.gh_state()["labels"]["8"],
-        json!(["security-fix", "in-progress", "agent-failed"])
+        json!(["security-fix", "agent-failed"])
     );
     let (subject, body) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
@@ -1934,7 +1935,7 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
 }
 
 #[test]
-fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
+fn a_failed_fix_is_labelled_agent_failed_and_pauses_security_and_pickup_until_closed() {
     for private in [false, true] {
         for pushed in [false, true] {
             let scenario = with_reproduced_findings(&["critical"]);
@@ -1962,14 +1963,9 @@ fn a_failed_fix_keeps_its_claim_and_pauses_security_and_pickup_until_closed() {
             assert_eq!(
                 scenario.issue_labels(issue),
                 if private {
-                    vec![
-                        "security-finding",
-                        "security-fix",
-                        "in-progress",
-                        "agent-failed",
-                    ]
+                    vec!["security-finding", "security-fix", "agent-failed"]
                 } else {
-                    vec!["security-fix", "in-progress", "agent-failed"]
+                    vec!["security-fix", "agent-failed"]
                 }
             );
             // Even contradictory ready labelling cannot make Pickup retry a Claim.
@@ -2083,14 +2079,9 @@ printf '%s\n' 'Security fix Spec: https://github.com/acme/widgets/issues/7' > "$
         assert_eq!(
             scenario.issue_labels(spec),
             if private {
-                vec![
-                    "security-finding",
-                    "security-fix",
-                    "in-progress",
-                    "agent-failed",
-                ]
+                vec!["security-finding", "security-fix", "agent-failed"]
             } else {
-                vec!["security-fix", "in-progress", "agent-failed"]
+                vec!["security-fix", "agent-failed"]
             }
         );
         let state = scenario.gh_state();
@@ -4982,7 +4973,7 @@ fn assert_a_failed_fix_record_outage_pauses_security(severity: &str) {
     assert_eq!(scenario.gh_state()["issues"]["8"], "OPEN");
     assert_eq!(
         scenario.issue_labels(8),
-        vec!["security-fix", "in-progress", "agent-failed"]
+        vec!["security-fix", "agent-failed"]
     );
 
     let mut state = scenario.gh_state();

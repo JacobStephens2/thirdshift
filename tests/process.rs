@@ -5084,8 +5084,8 @@ exit 1
         scenario.origin_file("issue-7", "left.txt").as_deref(),
         Some("left\n")
     );
-    // The work on origin keeps the Claim, so the failure is labelled.
-    assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
+    // The work on origin swaps the Claim for agent-failed.
+    assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
     scenario.assert_cleaned_up("issue-7");
 }
 
