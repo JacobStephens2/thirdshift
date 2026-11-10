@@ -9,6 +9,48 @@ const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
 
+test('leak decisions retain the reviewer and false positives, and confirmation voids the Trial', async t => {
+  const value = fixture.finish(fixture.record());
+  value.verdict.verdict = 'waiting_on_leaks';
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  const result = fixture.result('alpha', 'candidate', 0);
+  const trial = fixture.key('alpha', 'candidate', 0);
+  const hit = id => ({ id: id.repeat(64), trial_id: trial, attempt: 0, session: 'e'.repeat(64), kind: 'title', identifier: 'Fix <script>unsafe()</script>', line: 3, decision: null });
+  result.leaks = [hit('d'), hit('f')];
+  await writeFile(join(folder, 'results', `${trial}.json`), JSON.stringify(result));
+  t.after(async () => { await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+  const dismissed = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--leak', 'd'.repeat(64), 'dismiss', '--reason', 'Unrelated title', '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }));
+  assert.equal(dismissed.leak_hits[0].decision.decision, 'dismiss');
+  assert.ok(dismissed.leak_hits[0].decision.reviewer.who);
+  assert.equal(dismissed.leak_hits[0].decision.reviewer.from_console, false);
+  assert.equal(dismissed.results.find(result => result.arm === 'candidate' && result.task === 'alpha' && result.trial === 0).outcome, 'succeeded');
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  const leaks = page.getByRole('region', { name: 'Transcript leak check', exact: true });
+  await leaks.getByText('Dismissed false positive', { exact: false }).waitFor();
+  assert.match(await leaks.textContent(), /Fix <script>unsafe\(\)<\/script>/);
+  await leaks.getByLabel('Reason').fill('The Session saw the real fix');
+  await leaks.getByRole('button', { name: 'Confirm leak', exact: true }).click();
+  await leaks.getByText('Confirmed leak', { exact: false }).waitFor();
+  const shown = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }));
+  const confirmed = shown.leak_hits.find(hit => hit.id === 'f'.repeat(64));
+  assert.equal(confirmed.decision.reviewer.from_console, true);
+  assert.match(confirmed.decision.reviewer.who, /localhost/);
+  const voided = shown.results.find(result => result.arm === 'candidate' && result.task === 'alpha' && result.trial === 0);
+  assert.equal(voided.outcome, 'void');
+  assert.equal(voided.attempts[0].void_cause, 'fix_leaked');
+  assert.equal(shown.voids.candidate.causes.fix_leaked, 1);
+  assert.throws(() => execFileSync(binary, ['experiments', fixture.id, '--leak', 'd'.repeat(64), 'confirm', '--reason', 'Overwrite', '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }), /already decided/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.deepEqual(errors, []);
+});
+
 test('process Trial Peeks show Steps and outcome counts beside the Verdict', async t => {
   const value = fixture.finish(fixture.record());
   value.baseline.process = value.candidate.process = 'ticket-run';

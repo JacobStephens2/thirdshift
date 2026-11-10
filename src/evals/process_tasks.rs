@@ -62,6 +62,7 @@ impl TestSelection {
 impl From<&TestSelection> for ProcessGrading {
     fn from(selection: &TestSelection) -> Self {
         Self {
+            real_fix: None,
             test_files: selection.overlay_files.clone(),
             test_fakes: selection.shared_fakes.clone(),
             fail_to_pass: selection.fail_to_pass.clone(),

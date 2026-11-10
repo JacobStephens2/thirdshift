@@ -133,6 +133,7 @@ pub(crate) enum VoidCause {
     SandboxUnavailable,
     HostKilled,
     MemoryCap,
+    FixLeaked,
 }
 
 impl std::fmt::Display for VoidCause {
@@ -146,6 +147,7 @@ impl std::fmt::Display for VoidCause {
             Self::SandboxUnavailable => "sandbox_unavailable",
             Self::HostKilled => "host_killed",
             Self::MemoryCap => "memory_cap",
+            Self::FixLeaked => "fix_leaked",
         })
     }
 }

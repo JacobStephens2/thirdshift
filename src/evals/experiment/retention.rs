@@ -44,10 +44,12 @@ impl Drop for Caches {
 pub(super) fn repositories(experiment: &Stored) {
     if experiment.state != State::Completed
         || !experiment.pending_rechecks.is_empty()
-        || experiment
-            .verdict
-            .as_ref()
-            .is_none_or(|verdict| matches!(verdict.verdict, Conclusion::WaitingOnRechecks))
+        || experiment.verdict.as_ref().is_none_or(|verdict| {
+            matches!(
+                verdict.verdict,
+                Conclusion::WaitingOnRechecks | Conclusion::WaitingOnLeaks
+            )
+        })
     {
         return;
     }

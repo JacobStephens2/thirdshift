@@ -1312,6 +1312,25 @@ and their failures name the selector in
 the Score's reason. The task's required `process_grading` table declares the
 files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
 
+After each process Trial, thirdshift searches its Session transcripts for the
+real fix's merge commit (including abbreviations of at least seven characters),
+pull-request and issue references, branch and title. Matches appear as leak hits
+on the Console's Experiment page and in `thirdshift experiments <id> --json`.
+The Verdict waits on these hits, including hits from measurement-only tasks.
+Review the linked Session evidence, then dismiss a false positive or confirm a
+leak in the Console, or use:
+
+```sh
+thirdshift experiments <id> --leak <hit-id> dismiss --reason 'False positive'
+thirdshift experiments <id> --leak <hit-id> confirm --reason 'Saw the real fix'
+```
+
+Each decision retains the reviewer, time and reason. Dismissals keep the Trial
+and remain on the auditable list; confirmation makes the Trial Void and drops
+its paired Eval task from the Verdict. Original results and transcripts remain
+unchanged. Decisions require the Experiment to have stopped and cannot be
+overwritten. A confirmed leak is excluded when the Experiment resumes.
+
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
@@ -1526,7 +1545,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 4`.
+[Experiment results format](experiment-results.md), identified by `format: 5`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

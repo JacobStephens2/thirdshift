@@ -25,6 +25,11 @@ struct Status {
 
 fn status(view: &View) -> Status {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => Status {
+            label: "Waiting on leak decisions",
+            tone: "look",
+            group: 1,
+        },
         Some(Conclusion::Pass) => Status {
             label: "Pass",
             tone: "done",
@@ -87,6 +92,14 @@ fn now(view: &View) -> String {
         );
     };
     let mut reasons = Vec::new();
+    let pending_leaks = view
+        .leak_hits
+        .iter()
+        .filter(|hit| hit.decision.is_none())
+        .count();
+    if pending_leaks > 0 {
+        reasons.push(format!("{pending_leaks} leak decisions waiting"));
+    }
     if !view.pending_rechecks.is_empty() {
         reasons.push(format!(
             "{} rechecks waiting, provisionally {}",
@@ -235,7 +248,7 @@ fn question(view: &View) -> String {
     )
 }
 
-pub(super) fn detail(view: &View) -> String {
+pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     let id = esc(&view.description.id);
     let command_log = view.details.command_log.as_ref().map_or_else(
         || "Command log unavailable".into(),
@@ -279,6 +292,7 @@ pub(super) fn detail(view: &View) -> String {
             html.push_str("<p>Trials fill in as they finish. Model Graders then score review tasks' blind packets; process tasks are scored on their outcome.</p>");
         }
     }
+    html.push_str(&leaks(view, csrf, can_act));
     html.push_str(&verdict(view));
     if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
         html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
@@ -313,6 +327,9 @@ pub(super) fn detail(view: &View) -> String {
 
 fn lead(view: &View) -> String {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => {
+            "Review the pending transcript leak hits before the Verdict is final.".into()
+        }
         Some(Conclusion::WaitingOnRechecks) => format!(
             "Provisionally {}, until you recheck {} Scores.",
             decision(
@@ -336,6 +353,33 @@ fn lead(view: &View) -> String {
         }
         None => now(view),
     }
+}
+
+fn leaks(view: &View, csrf: &str, can_act: bool) -> String {
+    if view.leak_hits.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(
+        "<section class=\"experiment-callout\" id=\"experiment-leaks\" aria-label=\"Transcript leak check\"><h2>Transcript leak check</h2><p>Review each match to the real fix. Dismiss false positives to keep the Trial; confirm a leak to make it Void. Decisions retain the reviewer and reason.</p><ul>",
+    );
+    for hit in &view.leak_hits {
+        html.push_str(&format!("<li><p><strong>{}</strong> · {} · <code>{}</code></p><p>Trial <code>{}</code> · attempt {} · <a href=\"/experiments/{}/sessions/{}\">Session evidence</a> · transcript line {}</p>", hit.status(), esc(&hit.kind), esc(&hit.identifier), esc(&hit.trial_id), hit.attempt + 1, esc(&view.description.id), esc(&hit.session), hit.line));
+        if let Some(decision) = &hit.decision {
+            html.push_str(&format!(
+                "<p>{} · {} · {}</p>",
+                esc(&decision.reviewer.to_string()),
+                when(&decision.recorded_at),
+                esc(&decision.reason)
+            ));
+        } else if can_act && !active(view) {
+            html.push_str(&format!("<form method=\"post\" action=\"/experiments/{}/leaks/{}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><label>Reason <input name=\"reason\" required></label><button name=\"decision\" value=\"dismiss\">Dismiss false positive</button><button name=\"decision\" value=\"confirm\">Confirm leak</button></form>", esc(&view.description.id), esc(&hit.id), esc(csrf)));
+        } else if active(view) {
+            html.push_str("<p>Decide after the Experiment stops.</p>");
+        }
+        html.push_str("</li>");
+    }
+    html.push_str("</ul></section>");
+    html
 }
 
 fn points(value: f64) -> String {

@@ -489,6 +489,15 @@ proposals for its suites. Approve one there or with
 state and start no work. Approval affects future Experiments; an existing
 Experiment keeps its fixed Eval tasks on resume.
 
+Process Trial transcripts are checked for the real fix's identifiers. Pending
+hits appear on the Experiment page with a Session evidence link and hold the
+Verdict. Dismiss a false positive or confirm a leak with a reason there, or use
+`thirdshift experiments <id> --leak <hit-id> confirm|dismiss --reason '…'`.
+Both retain the reviewer and time; dismissals stay auditable, and confirmations
+make the Trial Void. Decisions require a stopped Experiment and `act` scope;
+the API twin is `POST /api/v1/experiments/{id}/leaks/{hit}` with form fields
+`decision` and `reason`.
+
 `j` / `k` select headings and visible rows, wrapping at either end; on the
 Inbox, open Command details follow the selection. `Space` toggles a row's
 peek, or folds a heading; `Enter` opens that row's full Command log. `d` dismisses

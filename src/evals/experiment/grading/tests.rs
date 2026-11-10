@@ -30,6 +30,7 @@ fn result(task: &Task, arm: Arm, passed: bool, wrong_finding: bool) -> TrialResu
             rechecks: Vec::new(),
         }),
         attempts: Vec::new(),
+        leaks: Vec::new(),
     }
 }
 

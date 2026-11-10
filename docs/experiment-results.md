@@ -1,4 +1,4 @@
-# Experiment results (format 4)
+# Experiment results (format 5)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 4` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 4.
+`format: 5` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 5.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -38,6 +38,16 @@ rechecks; every suite advisory gives inconclusive. Saved Experiments without
 the minimum keep their original Bar, Verdict and aggregation policy.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
+
+Format 5 adds process Trial `leaks`, the `leak_hits` decision list,
+`waiting_on_leaks` Verdict and `fix_leaked` Void cause. Each hit retains its
+opaque ID, Trial ID, attempt index, Session ID, identifier kind and value, and
+one-based transcript line. `decision` is null while pending; otherwise it keeps
+`decision` (`confirm` or `dismiss`), `reason`, `reviewer` (the shared action
+Actor) and `recorded_at`. Dismissed hits form the auditable false-positive list.
+Confirmed hits overlay the Trial and matching attempt as Void in the view;
+original Trial files remain intact. Pending hits hold the whole Verdict,
+including hits from Advisory or measurement-only tasks.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -231,7 +241,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 4,
+    "format": 5,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -257,6 +267,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "unfinished_trials": ["TrialResult"],
     "verdict": "Verdict?",
     "pending_rechecks": ["Pending"],
+    "leak_hits": ["LeakHit"],
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -278,10 +289,18 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "min_discriminating_tasks?": "integer",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
-  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|fix_leaked",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
-    "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"]
+    "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"], "leaks?": ["LeakHit"]
+  },
+  "LeakHit": {
+    "id": "string", "trial_id": "string", "attempt": "integer", "session": "string",
+    "kind": "string", "identifier": "string", "line": "integer", "decision": "LeakDecision?"
+  },
+  "LeakDecision": {
+    "decision": "confirm|dismiss", "reason": "string", "recorded_at": "string",
+    "reviewer": {"who": "string", "from_console": "boolean", "console_holder?": "string"}
   },
   "Attempt": {
     "version": 1, "outcome": "succeeded|delivered|stopped_to_ask|failed|void",
@@ -309,7 +328,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
   },
   "Verdict": {
-    "verdict": "pass|fail|inconclusive|waiting_on_rechecks",
+    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks",
     "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
   },
   "Decision": "pass|fail|inconclusive",

@@ -93,6 +93,56 @@ fn api_experiment_changes_and_rechecks_match_cli_views() {
 }
 
 #[test]
+fn api_leak_decisions_require_act_scope_and_retain_the_token_reviewer() {
+    use sha2::{Digest, Sha256};
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    let hit = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["state"] = json!("completed");
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let key = format!("{:x}--baseline--0", Sha256::digest(b"code-review\0fixture"));
+    fs::create_dir_all(directory.join("results")).unwrap();
+    fs::write(directory.join("results").join(format!("{key}.json")), serde_json::to_vec(&json!({
+        "suite":"code-review", "task":"fixture", "arm":"baseline", "trial":0,
+        "outcome":"delivered", "score":{"passed":true,"wrong_finding":false,"checks":[]}, "attempts":[],
+        "leaks":[{"id":hit,"trial_id":key,"attempt":0,"session":"f".repeat(64),"kind":"merge_commit","identifier":"abcdef123456","line":1}]
+    })).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let actor = tokens::create(home.path(), "reviewer", &["--scopes", "act"]);
+    let post = |token: &str| {
+        reqwest::blocking::Client::new()
+            .post(format!(
+                "{}/api/v1/experiments/{id}/leaks/{hit}",
+                console.address
+            ))
+            .bearer_auth(token)
+            .form(&[("decision", "dismiss"), ("reason", "Unrelated reference")])
+            .send()
+            .unwrap()
+    };
+    assert_eq!(post(&reader).status(), 403);
+    let shown = api::json(post(&actor));
+    assert_eq!(
+        shown["leak_hits"][0]["decision"]["reviewer"]["who"],
+        "token reviewer"
+    );
+    assert_eq!(
+        shown["leak_hits"][0]["decision"]["reviewer"]["from_console"],
+        true
+    );
+    assert_eq!(
+        shown,
+        api::cli(home.path(), &["experiments", &id, "--json"])
+    );
+    assert_eq!(post(&actor).status(), 422);
+}
+
+#[test]
 fn legacy_paused_experiment_advertises_a_supported_resume_command() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

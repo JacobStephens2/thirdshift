@@ -9,6 +9,7 @@ use crate::issue::Repo;
 pub(crate) struct Candidate {
     pub number: u64,
     pub url: String,
+    pub title: String,
     pub base_ref_name: String,
     pub head_ref_name: String,
     pub merge: String,
@@ -42,6 +43,8 @@ pub(crate) struct Ticket {
 struct Metadata {
     number: u64,
     url: String,
+    #[serde(default)]
+    title: String,
     base_ref_name: String,
     head_ref_name: String,
     merge_commit: Commit,
@@ -140,6 +143,7 @@ impl Metadata {
         Candidate {
             number: self.number,
             url: self.url,
+            title: self.title,
             base_ref_name: self.base_ref_name,
             head_ref_name: self.head_ref_name,
             merge: self.merge_commit.oid,
@@ -224,7 +228,7 @@ const QUERY: &str = r#"query ProcessCandidates($owner: String!, $repo: String!, 
   repository(owner: $owner, name: $repo) {
     pullRequests(first: $limit, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number url baseRefName headRefName headRefOid mergeCommit { oid }
+        number url title baseRefName headRefName headRefOid mergeCommit { oid }
         commits(first: 1) { totalCount nodes { commit { parents(first: 1) { nodes { oid } } } } }
         closingIssuesReferences(first: 100) {
           pageInfo { hasNextPage }

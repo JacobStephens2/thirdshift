@@ -1,6 +1,122 @@
 use super::*;
 
 #[test]
+fn fix_commit_in_process_transcript_waits_for_a_leak_decision() {
+    let fixture = fixture();
+    let fix = fixture.scenario.launch_git(&["rev-parse", "reference-fix"]);
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        "{script}\nprintf '%s' '{}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        fix.trim()
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let hits = view["leak_hits"].as_array().expect("leak hits are listed");
+    assert!(
+        hits.iter().any(|hit| hit["identifier"] == fix.trim()
+            && hit["kind"] == "merge_commit"
+            && hit["decision"].is_null()),
+        "{view}"
+    );
+    assert_eq!(view["verdict"]["verdict"], "waiting_on_leaks");
+    let hit = hits
+        .iter()
+        .find(|hit| hit["kind"] == "merge_commit")
+        .unwrap();
+    assert!(
+        view["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|session| session["id"] == hit["session"])
+    );
+    let evidence = fixture.scenario.run(&[
+        "experiments",
+        view["id"].as_str().unwrap(),
+        "--session",
+        hit["session"].as_str().unwrap(),
+    ]);
+    assert_eq!(evidence.code, Some(0), "{}", evidence.stderr);
+    assert!(evidence.stdout.contains(fix.trim()));
+}
+
+#[test]
+fn process_transcripts_without_fix_identifiers_have_no_leak_hits() {
+    let fixture = fixture();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(view["leak_hits"], json!([]));
+    assert!(
+        view["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|result| result["outcome"] == "delivered")
+    );
+}
+
+#[test]
+fn process_transcripts_check_all_private_fix_identifiers_and_abbreviated_commits() {
+    let fixture = fixture();
+    let fix = fixture.scenario.launch_git(&["rev-parse", "reference-fix"]);
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
+    let mut text = fs::read_to_string(&task).unwrap();
+    text.push_str(
+        r#"
+[process_grading.real_fix]
+pull_request = "https://github.com/acme/widgets/pull/421"
+issue = "https://github.com/acme/widgets/issues/422"
+branch = "fix/the-counter"
+title = 'Repair "quoted" counter'
+issue_title = "Counter fails twice"
+"#,
+    );
+    fs::write(task, text).unwrap();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(r#"{script}
+printf '%s' 'PR 421; issue 422; fix/the-counter; Repair "quoted" counter; {}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#, &fix.trim()[..8]));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for kind in ["pull_request", "issue", "branch", "title", "merge_commit"] {
+        assert!(
+            view["leak_hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["kind"] == kind),
+            "{kind}: {view}"
+        );
+    }
+    let id = view["id"].as_str().unwrap();
+    for trial in fs::read_dir(
+        fixture
+            .scenario
+            .path(&format!("home/.thirdshift/evals/experiments/{id}/trials")),
+    )
+    .unwrap()
+    {
+        for attempt in fs::read_dir(trial.unwrap().path()).unwrap() {
+            let request = attempt.unwrap().path().join("request.json");
+            if request.is_file() {
+                let document = fs::read_to_string(request).unwrap();
+                assert!(
+                    !document.contains("421")
+                        && !document.contains("quoted")
+                        && !document.contains(fix.trim()),
+                    "{document}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn process_grader_export_obeys_the_bar_timeout() {
     let fixture = fixture();
     let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();

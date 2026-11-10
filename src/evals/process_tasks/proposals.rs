@@ -184,7 +184,17 @@ fn publish(
         checks: Vec::new(), inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(crate::trial::Inputs { issue_url: ticket.url.clone(), base: pr.base_ref_name.clone(), branch: pr.head_ref_name.clone(), pr_url: String::new() }),
         difficulty: None,
-        process_grading: Some(tests.into()),
+        process_grading: Some({
+            let mut grading: super::super::format::ProcessGrading = tests.into();
+            grading.real_fix = Some(super::super::format::RealFix {
+                pull_request: pr.url.clone(),
+                issue: ticket.url.clone(),
+                branch: pr.head_ref_name.clone(),
+                title: pr.title.clone(),
+                issue_title: ticket.title.clone(),
+            });
+            grading
+        }),
     };
     fs::write(
         staging.path().join("task.toml"),
