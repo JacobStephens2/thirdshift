@@ -939,7 +939,7 @@ pub(crate) fn recording_interpretation(
     match retained_harness {
         Harness::Muse => muse::log::recording_interpretation(root, decoder),
         Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
-        Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok => {
+        Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok | Harness::Kimi => {
             panic!("recording fixtures support only retained Harnesses")
         }
     }

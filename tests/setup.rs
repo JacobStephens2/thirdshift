@@ -244,6 +244,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[harness.kimi]",
             "[triage]",
             "[security]",
             "[scoring]",
@@ -310,7 +311,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["trial"]["memory_max"].as_str(), Some("2G"));
     assert_eq!(config["trial"]["memory_swap_max"].as_str(), Some("1G"));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         for key in ["model", "effort"] {
             assert_eq!(config["harness"][harness][key].as_str(), Some(""), "{text}");
         }
@@ -398,6 +399,7 @@ effort = 'high' # my Effort
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[harness.kimi]",
             "[triage]",
             "[security]",
             "[scoring]",
@@ -655,6 +657,50 @@ fn a_claude_setup_token_is_saved_with_hidden_input_even_without_notifications() 
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn setup_offers_an_installed_kimi_and_checks_its_model_against_kimis_config() {
+    let scenario = Scenario::new();
+    let steps: Vec<_> = [
+        (HARNESS, "kimi"),
+        ("Model for kimi", "kimi-k9"),
+        ("Model for kimi", "kimi-k3.1-pro"),
+        (MERGE, ""),
+        (BASE_FIX, ""),
+        (PULL, ""),
+        (TRIAGE_READY, ""),
+        (SECURITY_FIX, ""),
+        (SECURITY_REVIEW, ""),
+        (NOTIFY, "n"),
+        (CLAUDE_TOKEN, ""),
+        (CONSOLE, "n"),
+    ]
+    .into_iter()
+    .map(TerminalStep::from)
+    .collect();
+    let result =
+        scenario.run_terminal_bounded(&["setup"], &[], &steps, std::time::Duration::from_secs(10));
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    for said in [
+        "or opencode or kimi [claude]",
+        "Kimi Code's Models: kimi-code/kimi-for-coding, kimi-k3.1-pro",
+        "the Model kimi-k9 is not in Kimi Code's config",
+    ] {
+        assert!(
+            result.stderr.contains(said),
+            "missing {said:?}: {}",
+            result.stderr
+        );
+    }
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["harness"]["default"].as_str(), Some("kimi"));
+    assert_eq!(
+        config["harness"]["kimi"]["model"].as_str(),
+        Some("kimi-k3.1-pro")
+    );
+    assert_eq!(config["harness"]["kimi"]["effort"].as_str(), Some(""));
 }
 
 #[test]
@@ -1088,6 +1134,7 @@ fn cancelling_the_other_setup_checks_neither_retries_nor_keeps_settings() {
         ("grok", None, libc::SIGINT),
         ("muse", Some("muse-spark-1.3"), libc::SIGTERM),
         ("opencode", Some("provider/model"), libc::SIGHUP),
+        ("kimi", None, libc::SIGTERM),
     ] {
         let scenario = Scenario::new();
         let saved = "# keep my answers\n[harness]\ndefault = \"claude\"\n";

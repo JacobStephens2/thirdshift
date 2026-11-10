@@ -195,6 +195,7 @@ fn cancelling_offered_setup_catalogs_and_minimal_calls_stops_before_factory_work
         ("grok", None, libc::SIGINT),
         ("muse", Some("muse-spark-1.3"), libc::SIGTERM),
         ("opencode", Some("provider/model"), libc::SIGHUP),
+        ("kimi", None, libc::SIGTERM),
     ] {
         let scenario = Scenario::new();
         let credentials = "[resend]\nkey = \"re_saved\"\n";

@@ -1,13 +1,15 @@
 //! Everything that varies between Harnesses, behind one interface.
 
 use std::path::Path;
-use std::process::Child;
+use std::process::{Child, Command};
 
 use anyhow::Result;
 
 use super::interpretation::Interpretation;
 use super::settings::Terminal;
-use super::{Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, grok, muse, opencode};
+use super::{
+    Choice, Harness, ModelAndEffort, Settings, agy, claude, codex, grok, kimi, muse, opencode,
+};
 
 /// One Harness's session protocol and its Model and Effort rules. Callers
 /// select it once, then use the same adapter for a session and its Resume.
@@ -95,6 +97,10 @@ pub trait Adapter: Sync {
         &[]
     }
 
+    /// Point the CLI at the state its retained reader reads back, on every
+    /// launch: sessions, checks and catalogs alike.
+    fn prepare(&self, _command: &mut Command) {}
+
     /// Make and exclude an instruction-file fallback link where the CLI
     /// needs one. Native and config-based fallbacks stay in the adapter.
     fn link_instruction_fallback(&self, _worktree: &Path) -> Result<()> {
@@ -153,11 +159,12 @@ impl SkillLoading {
 }
 
 /// Registration comes from the adapters, including Setup's order.
-pub const REGISTERED: [(Harness, &dyn Adapter); 6] = [
+pub const REGISTERED: [(Harness, &dyn Adapter); 7] = [
     claude::REGISTRATION,
     codex::REGISTRATION,
     agy::REGISTRATION,
     grok::REGISTRATION,
     muse::REGISTRATION,
     opencode::REGISTRATION,
+    kimi::REGISTRATION,
 ];

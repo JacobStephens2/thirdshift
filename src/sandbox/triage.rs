@@ -184,6 +184,17 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
             )?;
             copy_files(&data, &home.join(".local/share"), &["opencode/auth.json"])?;
         }
+        Harness::Kimi => {
+            use crate::harness::kimi::{HOME_ENV, HOME_NAME};
+            let source = from_environment(HOME_ENV, original.join(HOME_NAME));
+            let dest = home.join(HOME_NAME);
+            copy_files(
+                &source,
+                &dest,
+                &["config.toml", "credentials/kimi-code.json", "AGENTS.md"],
+            )?;
+            launch.set_env(HOME_ENV, &dest);
+        }
     }
     Ok(())
 }

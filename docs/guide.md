@@ -22,7 +22,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 
 Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
-Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
+Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code. See [Harness, Model and Effort](#harness-model-and-effort).
 
 ## What a Ticket run does
 
@@ -1006,7 +1006,7 @@ Native macOS (including Intel macOS) and native Windows have no binary. Apple Si
 
 The user account that runs thirdshift needs:
 
-- The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), or **`opencode`** (OpenCode, with a configured Model provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
+- The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), **`opencode`** (OpenCode, with a configured Model provider), or **`kimi`** (Kimi Code CLI, signed in or with a configured provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
 - **`gh`** (GitHub CLI), logged in. For a fine-grained personal access token, grant repository permissions **Contents**, **Issues** and **Pull requests** read and write, plus **Actions** and **Commit statuses** read. If `check-runs` returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **`node`** (Node.js) on `PATH`, for a [Security run](#security-runs) only: the Security audit's report validators run on it.
@@ -2400,7 +2400,7 @@ wait_minutes = 5   # minutes since the latest shaping event before an issue is R
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
-default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse, opencode or kimi; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -2425,6 +2425,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[harness.kimi]
+model = ""    # the Model alias in Kimi Code's config its sessions run on; default blank, for Kimi Code's default_model
+effort = ""   # leave blank: Kimi Code takes its thinking from its own config; default blank
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
@@ -2501,7 +2505,7 @@ A Ticket run reads the file before any work. One that isn't valid TOML, or that 
 
 ### Harness, Model and Effort
 
-The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) and OpenCode (`opencode`).
+The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`), OpenCode (`opencode`) and Kimi Code (`kimi`).
 
 Every session of a command, its implement session, each Repair and Resume, a Spec review, an Architecture review, each Ticket run and a Base fix, runs on one **Harness**, with one **Model** and one **Effort**. The one exception is a [Security review](#security-review): with `security.harness` set in the User config, it runs on that Harness ([ADR-0021](adr/0021-a-command-may-run-its-security-review-on-another-harness.md)). `harness <name>`, `model <name>` and `effort <level>` (or `--harness`, `--model` and `--effort`) choose them for one command, before or after the Issue URL, and on `architect` (but not with `--plan-only`) and `pickup` too:
 
@@ -2538,6 +2542,26 @@ With `harness opencode`, every session, Resume and preflight check runs `opencod
 OpenCode takes the Model id from your provider config, as `<provider>/<model>`, including MiMo-V2.6-Pro when your provider routes it. Model and Effort are passed together as `-m <provider>/<model>#<effort>`; an explicit Effort replaces a variant already in the Model id, and needs a Model set too. Before any work, thirdshift makes a minimal standalone test call with the same stdin, flags and environment. `provider.no-route` identifies a bad Model or Effort without a model turn; a successful check uses a model call because OpenCode has no free catalog without its service. Setup checks its answers the same way, proposing no default Model.
 
 The session id comes from `sessionID` in the stream, and a Resume uses `-s <id>` with every flag and environment override again. OpenCode creates a new session for an unknown id, so thirdshift only resumes an id it read from the stream. Progress comes from `step_start`, `tool_use`, `step_finish` and `error`. After exit, thirdshift reads `opencode session export --standalone <id>`: an exported `failed` outcome fails the Ticket run even with exit 0, the final message is the last assistant message's last text part, and usage and cost are summed over assistant messages to exclude the automatic title call. Input totals include cache reads and writes, output totals include reasoning, and each subtotal is shown. If export fails or is unreadable, the last stream `text` supplies the final message and no usage is shown. A stream error or nonzero exit also fails the Ticket run with OpenCode's error. An interrupt sends SIGTERM through the whole process tree, then SIGKILL after the grace period if needed.
+
+With `harness kimi`, every session runs **Kimi Code CLI** (`@moonshot-ai/kimi-code`, which installs `kimi`) as `kimi --output-format stream-json -p <prompt>`, with `-m <model>` when set, stdin null, `KIMI_CODE_TRUST_WORKSPACE=1`, `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_TELEMETRY=1`. Print mode approves every action itself and refuses `--yolo` and `--auto` beside `-p`; the trust override lets the worktree's project MCP servers start, which an untrusted folder skips ([ADR-0013](adr/0013-every-harness-runs-unattended-and-fully-trusted.md)). Each session also gets `KIMI_CODE_HOME` set: yours when you set it, else `~/.kimi-code`, or the private home's `.kimi-code` where a sandbox gives the session its own `HOME`. Kimi Code reads `AGENTS.md` (and `.kimi-code/AGENTS.md`) from the project root down to the working directory, and `~/.kimi-code/AGENTS.md`; it does not read `CLAUDE.md` or `~/.claude/`. It loads skills from the project's `.kimi-code/skills/` and `.agents/skills/` and the user's `~/.kimi-code/skills/` and `~/.agents/skills/`. The Factory skills are linked into `.agents/skills/` and kept out of git, and the prompt tells the model to load its skill with its `Skill` tool; a session whose stream shows no successful load gets a warning, without failing or retrying.
+
+A Kimi Model is a model alias in Kimi Code's own config, as `kimi provider list --json` prints it, and reaches Kimi as `-m <alias>`. Before any work, and in Setup, the Model is checked against that list, which costs no tokens; an unknown alias fails naming the configured ones. No Model leaves the choice to Kimi Code's `default_model`. Kimi Code has no Effort flag, so any Effort fails before work: set thinking in Kimi Code's config instead. To run Kimi K3.1 Pro on Fireworks, add Fireworks to Kimi Code's `config.toml` as an OpenAI-compatible provider whose key comes from an environment variable, never written into a repository, and an alias for its Model:
+
+```toml
+[providers.fireworks]
+type = "openai"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "FIREWORKS_API_KEY"
+
+[models."kimi-k3.1-pro"]
+provider = "fireworks"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
+max_context_size = 262144
+```
+
+Then `harness kimi model kimi-k3.1-pro`, with `FIREWORKS_API_KEY` exported. Signing in with `kimi login` instead adds the managed Kimi Code provider's aliases.
+
+Kimi's stream carries assistant and tool messages, which supply the progress lines and the final message, and after a completed turn a `session.resume_hint` with the session id; a Resume runs `kimi --session <id>` with the same flags. The stream carries no usage. After exit, thirdshift reads the session's own record, `wire.jsonl` under `<KIMI_CODE_HOME>/sessions/<workspace>/<id>/agents/<agent>/`, and totals the usage of every `step.end` event, for the main agent and its subagents, by the Model alias each agent was bound to. Input totals include cache reads and writes, which are each shown, as Kimi's own `vis` sums them. A session with no `step.end` usage, or no record, shows no usage rather than zero. An `error` line or a nonzero exit fails the Ticket run. An interrupt sends SIGTERM through the whole process tree, then SIGKILL after the grace period if needed.
 
 The Command log's opening lines (`sessions run on claude · claude-opus-5-5 · high`), the Activity log's start line, the pull request's body and the Run notification each name the Harness, Model and Effort, `default model` or `default effort` where the Harness's own is used. In the pull request's body, the Spec PR's included, thirdshift writes the line itself once the opening session has ended, such as `Built with claude 2.1.11 · claude-opus-5-5 · high`, replacing any it wrote there before. The Harness version comes from the same detection as its Session trace: stream metadata when available, otherwise its version command, shared across the Command's sessions and child Runs. An unavailable version is `unknown`. Older Built-with lines without a version still read.
 
@@ -3832,7 +3856,7 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 
 The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` and `codex` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](../prompts), with a [`README.md`](../prompts/README.md) that lists them with the `claude` and `codex` command lines. `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that it doesn't generate.
 
-The integration tests swap in a fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode`, from [`tests/fakes.rs`](../tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
+The integration tests swap in a fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` and `kimi`, from [`tests/fakes.rs`](../tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
 
 ### The Rust version
 

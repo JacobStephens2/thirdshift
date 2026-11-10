@@ -2,7 +2,7 @@
 
 A factory that turns GitHub issues into ready-for-review pull requests with unattended coding agents. The humans are the day shift; the agents work the third shift while you do something else.
 
-Use **Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode**, logged in as you. Runs use the selected agent's plan or account; thirdshift itself is free and open source.
+Use **Claude Code, Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code**, logged in as you. Runs use the selected agent's plan or account; thirdshift itself is free and open source.
 
 Each Ticket run implements the issue, reviews the change against the issue and your repository's standards, and keeps the pull request mergeable and passing CI. It leaves the pull request for your review, or merges it when asked. If a run fails, it reports what work was preserved and how to continue.
 
