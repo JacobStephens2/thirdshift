@@ -30,6 +30,7 @@ pub(in crate::console) fn properties() -> Value {
         "prior",
         "cost_ceiling",
         "time_ceiling",
+        "panel_spending_limit",
     ] {
         properties.insert(key.into(), json!({"type":"number"}));
     }

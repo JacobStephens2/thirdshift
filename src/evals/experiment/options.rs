@@ -103,6 +103,18 @@ pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> O
     Some(crate::args::shell_command(updated))
 }
 
+/// `value` of `flag` as a positive finite number, such as a ratio or amount.
+pub(super) fn positive(flag: &str, value: &str, what: &str) -> Result<f64> {
+    let number: f64 = value
+        .parse()
+        .with_context(|| format!("invalid {flag}: {value}"))?;
+    ensure!(
+        number.is_finite() && number > 0.0,
+        "{flag} must be a positive finite {what}"
+    );
+    Ok(number)
+}
+
 pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();
@@ -215,20 +227,14 @@ pub fn parse(args: &[String]) -> Result<Options> {
         ("--time-ceiling", &mut bar.time_ceiling),
     ] {
         if let Some(value) = flags.remove(flag) {
-            let ratio: f64 = value
-                .parse()
-                .with_context(|| format!("invalid {flag}: {value}"))?;
-            ensure!(
-                ratio.is_finite() && ratio > 0.0,
-                "{flag} must be a positive finite Candidate/Baseline ratio"
-            );
-            *target = Some(ratio);
+            *target = Some(positive(flag, value, "Candidate/Baseline ratio")?);
         }
     }
     bar.panel = super::panel::Panel::parse(
         seats,
         flags.remove("--panel-vote"),
         flags.remove("--panel-arm-family-rule"),
+        flags.remove("--panel-spending-limit"),
     )?;
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
