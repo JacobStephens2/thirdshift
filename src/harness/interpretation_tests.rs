@@ -940,7 +940,7 @@ pub(crate) fn recording_interpretation(
         Harness::Muse => muse::log::recording_interpretation(root, decoder),
         Harness::OpenCode => opencode::export::recording_interpretation(root, decoder),
         Harness::Claude | Harness::Codex | Harness::Agy | Harness::Grok | Harness::Kimi => {
-            panic!("recording fixtures support only retained Harnesses")
+            panic!("recording fixtures support only Muse and OpenCode")
         }
     }
 }

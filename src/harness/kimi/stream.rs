@@ -178,7 +178,7 @@ mod tests {
         let mut stream = stream(Harness::Kimi, PROMPT);
         let mut progress = Vec::new();
         let mut events = Vec::new();
-        for line in include_str!("../../../tests/fixtures/kimi-stream.jsonl").lines() {
+        for line in include_str!("../../../tests/fixtures/normalized-kimi.jsonl").lines() {
             let decoded = stream.decode(line);
             progress.extend(decoded.progress);
             events.extend(decoded.events);

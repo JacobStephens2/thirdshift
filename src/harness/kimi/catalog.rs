@@ -17,7 +17,7 @@ const MANAGED_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 
 #[derive(Debug)]
 pub struct Catalog {
-    /// Each alias's entry, by alias, in Kimi's own order of ids.
+    /// Each alias's entry, sorted by alias.
     models: BTreeMap<String, Value>,
     providers: BTreeMap<String, Value>,
 }

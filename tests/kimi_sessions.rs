@@ -195,13 +195,22 @@ fn a_bad_model_or_any_effort_fails_before_any_work_and_names_the_valid_choices()
 }
 
 #[test]
-fn a_failed_turn_fails_with_kimis_exit_and_leaves_no_session_to_resume() {
+fn a_failed_turn_fails_with_kimis_exit_and_still_reports_its_usage() {
     let scenario = Scenario::new();
     scenario.agent_does_for(7, "exit 1");
     let result = scenario.run(&["harness", "kimi", &scenario.issue_url(7)]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(result.stderr.contains("kimi exited 1"), "{}", result.stderr);
     assert_eq!(kimi_calls(&scenario).len(), 2);
+    // Kimi printed no session id, but the session folder holding the prompt
+    // still supplies the failed turn's usage.
+    assert!(
+        result
+            .stderr
+            .contains("input tokens (14592 cache read, 576 cache write)"),
+        "{}",
+        result.stderr
+    );
 }
 
 #[test]

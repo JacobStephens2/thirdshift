@@ -1093,8 +1093,8 @@ fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result
 /// from an environment variable gets that variable from this process, never
 /// from a file; one that is unset fails before the session starts.
 fn kimi_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
-    use crate::harness::kimi::{Catalog, HOME_ENV, HOME_NAME};
-    for file in ["config.toml", "credentials/kimi-code.json", "AGENTS.md"] {
+    use crate::harness::kimi::{Catalog, HOME_ENV, HOME_FILES, HOME_NAME};
+    for file in HOME_FILES {
         login_into(request, environment, Some(HOME_ENV), HOME_NAME, file)?;
     }
     let Some(model) = request.model else {

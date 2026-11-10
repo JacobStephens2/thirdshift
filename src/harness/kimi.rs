@@ -25,6 +25,9 @@ pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Kimi, &Kimi);
 pub(crate) const HOME_ENV: &str = "KIMI_CODE_HOME";
 /// Kimi Code's home relative to the user's, when `KIMI_CODE_HOME` is unset.
 pub(crate) const HOME_NAME: &str = ".kimi-code";
+/// What a private or sandboxed home copies from Kimi Code's home: its config,
+/// the managed provider's sign-in and the user's instructions.
+pub(crate) const HOME_FILES: [&str; 3] = ["config.toml", "credentials/kimi-code.json", "AGENTS.md"];
 
 /// Kimi Code's home for a process launched with `launched` as its `HOME`, or
 /// with this process's environment when the launch keeps it: the one each
@@ -167,12 +170,18 @@ impl Adapter for Kimi {
             self.name(),
             Box::new(stream::KimiProgress::for_prompt(prompt)),
         )
-        .with_retained(Box::new(wire::Completion::new()))
+        .with_retained(Box::new(wire::Completion::new(
+            self.skill_loading().prompt(prompt),
+        )))
     }
     fn stream_version<'a>(&self, event: &'a serde_json::Value) -> Option<&'a str> {
         (event["role"] == "meta" && event["type"] == "system.version")
             .then(|| event["version"].as_str())
             .flatten()
+    }
+    /// Kimi Code reads `AGENTS.md`, never `CLAUDE.md`.
+    fn link_instruction_fallback(&self, worktree: &Path) -> Result<()> {
+        super::instructions::link_fallback(worktree, "AGENTS.md", &[])
     }
     /// Point Kimi at the home its `wire.jsonl` is read back from: under the
     /// launch's own `HOME` when it sets one, as a private home does.
@@ -284,6 +293,46 @@ mod tests {
                 .find(|(name, _)| *name == HOME_ENV)
                 .and_then(|(_, value)| value),
             Some(Path::new("/private/home/.kimi-code").as_os_str())
+        );
+    }
+
+    #[test]
+    fn claude_only_instructions_are_linked_as_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(dir.path().join("CLAUDE.md"), "rules\n").unwrap();
+        Kimi.link_instruction_fallback(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_link(dir.path().join("AGENTS.md")).unwrap(),
+            Path::new("CLAUDE.md")
+        );
+    }
+
+    #[test]
+    fn a_turn_without_the_resume_hint_still_reports_its_wire_usage() {
+        let home = tempfile::tempdir().unwrap();
+        let agent = home.path().join(".kimi-code/sessions/ws/ses_1/agents/main");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join("wire.jsonl"),
+            include_str!("../../tests/fixtures/kimi-wire.jsonl"),
+        )
+        .unwrap();
+        // The record's user message is this prompt as Kimi was given it.
+        let mut progress = Kimi.interpretation(Path::new("/repo"), "/thirdshift-implement");
+        progress.set_home(home.path());
+        progress.condense(r#"{"role":"assistant","content":"partial"}"#);
+        let finished = crate::harness::interpretation_tests::finish(progress);
+        assert!(
+            finished.report.unwrap().summary.is_some(),
+            "a turn that ended without session.resume_hint lost its wire.jsonl usage"
         );
     }
 

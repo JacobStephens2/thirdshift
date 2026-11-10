@@ -49,6 +49,7 @@ fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
         "openai" => Some(OPENAI_HOSTS),
         "xai" => Some(XAI_HOSTS),
         "meta" => Some(META_HOSTS),
+        "fireworks-ai" => Some(FIREWORKS_HOSTS),
         _ => None,
     }
 }
@@ -737,6 +738,11 @@ mod tests {
                 Harness::OpenCode,
                 Some("anthropic/claude"),
                 vec!["opencode.ai", "models.opencode.ai", "api.anthropic.com"],
+            ),
+            (
+                Harness::OpenCode,
+                Some("fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro"),
+                vec!["api.fireworks.ai"],
             ),
             (
                 Harness::Kimi,

@@ -98,7 +98,8 @@ pub trait Adapter: Sync {
     }
 
     /// Point the CLI at the state its retained reader reads back, on every
-    /// launch: sessions, checks and catalogs alike.
+    /// launch through this module's process helpers: sessions, checks and
+    /// catalogs alike. A sandbox that clears the environment sets its own.
     fn prepare(&self, _command: &mut Command) {}
 
     /// Make and exclude an instruction-file fallback link where the CLI

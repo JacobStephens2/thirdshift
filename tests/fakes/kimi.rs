@@ -160,7 +160,7 @@ pub fn main(argv: Vec<String>) {
         .status()
         .unwrap();
     let code = exit_code(status);
-    write_wire(&id, after(&argv, "-m").map(String::as_str));
+    write_wire(&id, after(&argv, "-m").map(String::as_str), &prompt);
     if let Ok(message) = fs::read_to_string(&final_message) {
         line(object([
             ("role", string("assistant")),
@@ -179,9 +179,9 @@ pub fn main(argv: Vec<String>) {
 }
 
 /// Append the session's main-agent record: the Model alias it is bound to,
-/// then a `step.end` with usage for each step, or without usage under
+/// the user message carrying the prompt, then a `step.end` with usage for each step, or without usage under
 /// `FAKE_KIMI_NO_USAGE`. A Resume appends to the same record, as Kimi does.
-fn write_wire(id: &str, model: Option<&str>) {
+fn write_wire(id: &str, model: Option<&str>, prompt: &str) {
     let home =
         PathBuf::from(std::env::var_os("KIMI_CODE_HOME").expect("KIMI_CODE_HOME is not set"));
     let dir = home.join("sessions/wd-fake").join(id).join("agents/main");
@@ -192,11 +192,30 @@ fn write_wire(id: &str, model: Option<&str>) {
         .open(dir.join("wire.jsonl"))
         .unwrap();
     let alias = model.unwrap_or("kimi-code/kimi-for-coding");
-    let mut lines = vec![object([
-        ("type", string("profile.bind")),
-        ("agentId", string("main")),
-        ("modelAlias", string(alias)),
-    ])];
+    let mut lines = vec![
+        object([
+            ("type", string("profile.bind")),
+            ("agentId", string("main")),
+            ("modelAlias", string(alias)),
+        ]),
+        object([
+            ("type", string("context.append_message")),
+            ("agentId", string("main")),
+            (
+                "message",
+                object([
+                    ("role", string("user")),
+                    (
+                        "content",
+                        Array(vec![object([
+                            ("type", string("text")),
+                            ("text", string(prompt)),
+                        ])]),
+                    ),
+                ]),
+            ),
+        ]),
+    ];
     let without_usage = std::env::var_os("FAKE_KIMI_NO_USAGE").is_some();
     for (step, [other, output, read, write]) in STEPS.into_iter().enumerate() {
         let mut event = object([
