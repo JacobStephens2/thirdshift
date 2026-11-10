@@ -467,6 +467,7 @@ fn land_tickets(
         };
         Err(TicketsNotDone {
             not_done,
+            in_public: board.not_done_in_public(),
             only_waiting: board.only_waiting() && untrusted.is_none(),
             untrusted,
         }
@@ -594,6 +595,8 @@ fn untrusted_ticket(outside: &mut impl Outside, board: &TicketBoard) -> Option<S
 #[derive(Debug)]
 pub(crate) struct TicketsNotDone {
     not_done: Vec<String>,
+    /// `not_done` without a failed Ticket's cause, for GitHub.
+    in_public: Vec<String>,
     pub(crate) only_waiting: bool,
     untrusted: Option<String>,
 }
@@ -613,6 +616,18 @@ impl TicketsNotDone {
         text += "\nWhile the Spec is labelled `ready-for-agent`, Pickup continues it once a \
                  Ticket can start.\n";
         text
+    }
+
+    /// As it is displayed, without a failed Ticket's cause: the Recovery
+    /// comment's cause.
+    pub(crate) fn in_public(&self) -> String {
+        Self {
+            not_done: self.in_public.clone(),
+            in_public: Vec::new(),
+            only_waiting: self.only_waiting,
+            untrusted: self.untrusted.clone(),
+        }
+        .to_string()
     }
 }
 

@@ -240,6 +240,27 @@ impl TicketBoard {
             .collect()
     }
 
+    /// [`Self::not_done`] for GitHub: a failed Ticket's cause is left out, as
+    /// its child Run relayed it and the Ticket's session's agent can write it.
+    pub(super) fn not_done_in_public(&self) -> Vec<String> {
+        self.tickets
+            .iter()
+            .filter(|ticket| ticket.is_open)
+            .map(
+                |ticket| match self.standings.get(&ticket.issue.identity()) {
+                    Some(Standing::Ended(Ended::Failed { .. })) => {
+                        format!("{} (failed)", self.name(&ticket.issue))
+                    }
+                    _ => {
+                        let standing = self.standing(ticket);
+                        let reason = standing.strip_prefix("unready: ").unwrap_or(&standing);
+                        format!("{} ({reason})", self.name(&ticket.issue))
+                    }
+                },
+            )
+            .collect()
+    }
+
     /// A line on each Ticket that landed in this Spec run, with its PR, and
     /// on each Ticket not done, with why, lowest number first.
     pub(super) fn lines(&self) -> Vec<String> {

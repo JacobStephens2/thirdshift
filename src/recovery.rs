@@ -339,14 +339,20 @@ pub fn comment(
 }
 
 /// `error` as a Recovery comment's cause, built only from factory-owned
-/// facts: a failed session's Harness diagnostic is left out, since the
-/// session's agent can write it.
+/// facts: a failed session's Harness diagnostic, and a Spec run's failed
+/// Ticket's relayed cause, are left out, since a session's agent can write
+/// them.
 pub fn cause(error: &anyhow::Error) -> String {
     error
         .chain()
-        .map(|layer| match layer.downcast_ref::<SessionFailure>() {
-            Some(failure) => failure.without_diagnostic(),
-            None => layer.to_string(),
+        .map(|layer| {
+            if let Some(failure) = layer.downcast_ref::<SessionFailure>() {
+                failure.without_diagnostic()
+            } else if let Some(not_done) = layer.downcast_ref::<crate::spec_run::TicketsNotDone>() {
+                not_done.in_public()
+            } else {
+                layer.to_string()
+            }
         })
         .collect::<Vec<_>>()
         .join(": ")
