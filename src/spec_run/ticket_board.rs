@@ -186,6 +186,15 @@ impl TicketBoard {
                 .all(|ticket| self.waits(ticket))
     }
 
+    /// The open Tickets in the Spec's repository, the ones a later Spec run
+    /// may start.
+    pub(super) fn open_here(&self) -> impl Iterator<Item = &IssueUrl> {
+        self.tickets
+            .iter()
+            .filter(|ticket| ticket.is_open && self.spec.in_same_repo(&ticket.issue))
+            .map(|ticket| &ticket.issue)
+    }
+
     /// Whether open `ticket` waits on a person or on other work: it is an
     /// Unready Ticket or outside the Spec's repository, or it is blocked only
     /// by issues outside the Spec and by Tickets that wait themselves. One in

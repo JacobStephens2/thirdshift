@@ -3811,3 +3811,41 @@ gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23
     assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
     assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_none());
 }
+
+#[test]
+fn a_waiting_spec_runs_handback_does_not_let_an_earlier_untrusted_ticket_edit_start() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    scenario.issue_labelled(21, &["needs-info"]);
+    let mut state = scenario.gh_state();
+    state["edits"] = serde_json::json!({"21": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-02T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    scenario.run(&[&spec_url(&scenario)]);
+    // GitHub records any ready-for-agent thirdshift put back on the Spec as a
+    // labelling by its own account, the repository's owner.
+    if scenario
+        .issue_labels(SPEC)
+        .contains(&"ready-for-agent".to_string())
+    {
+        let mut state = scenario.gh_state();
+        state["trust_events"] = serde_json::json!({"20": [
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled",
+             "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+            {"created_at": "2020-01-03T00:00:00Z", "event": "labeled",
+             "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}}
+        ]});
+        scenario.write_gh_state(&state);
+    }
+    // The Day shift answers #21's question, so it can start.
+    scenario.issue_labelled(21, &[]);
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert!(
+        !sessions_by_issue(&scenario).contains(&"21".to_string()),
+        "stderr: {}",
+        result.stderr
+    );
+}

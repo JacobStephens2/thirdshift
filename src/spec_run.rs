@@ -250,6 +250,8 @@ pub(crate) trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
     fn step(&mut self, line: String);
+    /// The first Trusted-account check for Tickets `ticket` fails, if any.
+    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>>;
 }
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
@@ -321,7 +323,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
             spec_branch: self.worktree().branch().to_string(),
             spec_pr: self.spec_pr.captured_spec_pr(),
         };
-        if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
+        if let Some(check) = self.ticket_trust(ticket)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
         self.children.start(
@@ -398,6 +400,10 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
+
+    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
+        trust::ticket_trust(&GitHub::new(), ticket, self.spec)
+    }
 }
 
 /// Push the Spec branch, then keep up to `parallel` of the Tickets, last
@@ -456,7 +462,7 @@ fn land_tickets(
         }
         Err(TicketsNotDone {
             not_done,
-            only_waiting: board.only_waiting(),
+            only_waiting: board.only_waiting() && tickets_trusted(outside, &board),
         }
         .into())
     });
@@ -544,6 +550,30 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         bail!("interrupted");
     }
     Ok(())
+}
+
+/// Whether every open Ticket in the Spec's repository passes the
+/// Trusted-account check for Tickets, through `outside`. Handing a waiting
+/// Spec back labels it `ready-for-agent` again, which would excuse an untrusted
+/// edit of a Ticket made before then, so a Ticket that fails the check, or
+/// cannot be checked, fails the Spec run instead.
+fn tickets_trusted(outside: &mut impl Outside, board: &TicketBoard) -> bool {
+    board
+        .open_here()
+        .all(|ticket| match outside.ticket_trust(ticket) {
+            Ok(None) => true,
+            Ok(Some(check)) => {
+                outside.step(format!("Ticket #{}: {check}", ticket.number));
+                false
+            }
+            Err(error) => {
+                outside.step(format!(
+                    "could not check Ticket #{} against the Trusted account rule: {error:#}",
+                    ticket.number
+                ));
+                false
+            }
+        })
 }
 
 /// A Spec run's Tickets not done, `not_done`, and whether the Spec run is
@@ -891,6 +921,10 @@ mod tests {
                     ticket_lines: Vec::new(),
                 }),
             }
+        }
+
+        fn ticket_trust(&mut self, _: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
+            Ok(None)
         }
 
         fn interrupted(&mut self) -> bool {
