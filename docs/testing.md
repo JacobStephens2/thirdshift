@@ -1,8 +1,13 @@
 # Local test selection
 
 Run `scripts/affected-tests main` from anywhere in this checkout. It requires
-Python 3 and Git, compares the working tree with the merge-base of the supplied
-ref and `HEAD`, and includes staged, unstaged and untracked non-ignored files.
+Python 3.11 or later and Git, compares the working tree with the merge-base of
+the supplied ref and `HEAD`, and includes staged, unstaged and untracked
+non-ignored files. Python 3.11 is the minimum for the tests and the release
+generator, which import `tomllib`; on an older `python3` the selector, the
+release generator and the Bug origin regressions helper that the Rust tests
+start exit at once with one line naming the version found, the version needed
+and the interpreter's path.
 Renames include both paths. An invalid ref fails before running checks; an empty
 diff prints that no tests are affected. Before each selected command starts,
 the script prints its full-output log path. After it finishes, one summary line
@@ -26,7 +31,7 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 | Changed paths | Checks |
 | --- | --- |
 | `prototype/go/**` only | `go test ./...` from `prototype/go/`; no Rust suite |
-| `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires Python 3 and `bun install --frozen-lockfile` in that directory first; Chromium setup is in the prototype README |
+| `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires Python 3.11 and `bun install --frozen-lockfile` in that directory first; Chromium setup is in the prototype README |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
 | `docs/**/*.md`, `GLOSSARY.md`, `CODING_STANDARDS.md` | No checks; prints `No checks for docs-only '<path>'.` Exceptions: `docs/guide.md` and `GLOSSARY.md` select the site checks; `docs/experiment-results.md`, `docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md` and `docs/research/go-vs-rust-prototype.md` retain the full Rust suite. Non-Markdown files under `docs/` retain the full suite. |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
