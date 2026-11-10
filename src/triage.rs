@@ -303,6 +303,21 @@ pub struct IncompletePublication {
     pub published: Vec<IssueUrl>,
 }
 
+/// Marks private Triage failures so a notification cannot quote their cause.
+/// The full error chain remains available in local output and logs.
+#[derive(Debug)]
+pub(crate) struct PrivateFindingTriage {
+    pub notification: String,
+}
+
+impl std::fmt::Display for PrivateFindingTriage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("private Security finding triage failed; details retained locally")
+    }
+}
+
+impl std::error::Error for PrivateFindingTriage {}
+
 impl std::fmt::Display for IncompletePublication {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -506,7 +521,7 @@ pub fn run(
             existing::check_trust(issue, &GitHub::new())?;
             directory.prepare_base_branch(base)?
         }
-        None => launch::checked_out_base()?,
+        None => launch::selected_base(base)?,
     };
     let launch = Git::new(std::env::current_dir().context("could not read the Launch directory")?);
     let claim = target
@@ -529,6 +544,10 @@ fn investigate(
         Input::Issue(issue) => Some(issue),
         Input::Report(_) => None,
     };
+    let finding_notification = target
+        .map(|issue| existing::finding_notification(issue, &GitHub::new()))
+        .transpose()?
+        .flatten();
     harness.check_without_probe()?;
     let checkout = worktree::ReviewWorktree::for_triage(launch, &repo.name, base.origin_commit())?;
     let session_logs = session::Logs::of_triage_run(repo);
@@ -590,7 +609,9 @@ fn investigate(
             }
         });
         let json = serde_json::to_string(&recommendation)?;
-        let notification = recommendation.notification();
+        let notification = finding_notification
+            .clone()
+            .unwrap_or_else(|| recommendation.notification());
         publication.with_context(|| format!("Triage analysis retained:\n{notification}"))?;
         Ok(Ended {
             json,
@@ -620,6 +641,9 @@ fn investigate(
         let mut failed = FailedRun::from(error);
         if !published.is_empty() {
             failed.error = failed.error.context(IncompletePublication { published });
+        }
+        if let Some(notification) = finding_notification {
+            failed.error = failed.error.context(PrivateFindingTriage { notification });
         }
         failed.log = log;
         failed

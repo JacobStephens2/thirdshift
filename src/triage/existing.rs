@@ -8,7 +8,7 @@ use crate::claim::{AGENT_FAILED, IN_PROGRESS};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::IssueUrl;
-use crate::labels::{self, Edit, Label, Labels};
+use crate::labels::{self, Edit, Label};
 use crate::trust::{self, Reads};
 
 const STATES_AND_CLAIM: [Label; 7] = [
@@ -35,6 +35,23 @@ pub(super) fn check_trust(issue: &IssueUrl, github: &GitHub) -> Result<()> {
         anyhow::bail!("issue #{} {reason}", issue.number);
     }
     Ok(())
+}
+
+/// A private finding's notification carries only its recorded title and link,
+/// never the session's investigation, proposed issue text or questionnaire.
+pub(super) fn finding_notification(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {
+    let current = github.issue(issue)?;
+    Ok(current
+        .labels
+        .names()
+        .any(crate::github::is_security_finding_label)
+        .then(|| {
+            format!(
+                "Security finding: {}\nIssue: {}\nDetails remain on the private issue and in the Command log.\n",
+                super::one_line(current.title.as_deref().unwrap_or("Security finding")),
+                issue.url
+            )
+        }))
 }
 
 pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {
@@ -185,13 +202,12 @@ pub(super) fn publish(
     }
     github.comment_issue(target, &body)?;
     published.push(target.clone());
-    let next = current.swapped(&STATES_AND_CLAIM, &[filing.state]);
-    let next: Labels = next
-        .names()
-        .chain(categories.is_empty().then_some(filing.category.as_str()))
-        .collect();
-    github.ensure_labels(&target.repo_slug(), &[filing.state])?;
-    github.set_labels(target, &next)?;
+    let add_category = categories.is_empty();
+    let mut edit = Edit::of(target, current, &STATES_AND_CLAIM, &[filing.state]);
+    if add_category {
+        edit = edit.with_repository_label(&filing.category);
+    }
+    edit.apply(github)?;
     issue.body = body;
     issue.category = Some(category);
     issue.state = Some(filing.state.name().into());

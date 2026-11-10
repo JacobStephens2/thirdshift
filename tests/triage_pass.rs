@@ -105,24 +105,22 @@ fn a_failed_triage_counts_until_the_day_shift_relabels_or_closes_it() {
 }
 
 #[test]
-fn report_mode_still_rejects_a_base_branch_instead_of_ignoring_it() {
+fn report_mode_rejects_a_missing_base_branch_before_starting_a_session() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
     scenario.agent_does(RECOMMEND);
     let result = scenario.run_with_input(
-        &["triage", "base", "main", "--recommend-only"],
+        &["triage", "base", "missing", "--recommend-only"],
         "Investigate cache misses.",
     );
     assert_ne!(
         result.code,
         Some(0),
-        "base must not be silently ignored: {}",
+        "the selected base must be validated: {}",
         result.stderr
     );
     assert!(
-        result
-            .stderr
-            .contains("base <branch> requires an issue or a Pass"),
+        result.stderr.contains("base branch missing does not exist"),
         "{}",
         result.stderr
     );

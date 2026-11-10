@@ -599,11 +599,6 @@ fn triage(args: args::TriageArgs) -> ExitCode {
         Ok(input) => input,
         Err(error) => return failure(&error),
     };
-    if args.base.is_some() && matches!(input, Some(triage::Input::Report(_))) {
-        return failure(&anyhow::anyhow!(
-            "triage base <branch> requires an issue or a Pass"
-        ));
-    }
     let flags = asks::Flags {
         email: args.email,
         harness: args.harness,
