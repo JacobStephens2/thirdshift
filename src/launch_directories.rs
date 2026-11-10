@@ -92,9 +92,17 @@ fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
         // A later directory change makes the initial cd unreliable. Leave
         // these compounds display-only rather than infer the wrong checkout.
         .take_while(|part| {
-            !part
-                .first()
-                .is_some_and(|word| matches!(word.as_str(), "cd" | "pushd" | "popd"))
+            let executable = part
+                .iter()
+                .map(String::as_str)
+                .skip_while(|word| {
+                    word.contains('=') || matches!(*word, "command" | "builtin" | "--" | "-p" | "!")
+                })
+                .next();
+            !matches!(
+                executable,
+                Some("cd" | "pushd" | "popd" | "eval" | "source" | ".")
+            )
         })
         .find(|part| {
             let executable = if part.first().is_some_and(|word| {

@@ -109,26 +109,28 @@ fn cronjobs_keeps_directory_changing_compounds_under_other() {
     let home = fixture();
     let first = checkout(home.path(), "first", "https://github.com/acme/first.git");
     let second = checkout(home.path(), "second", "https://github.com/acme/second.git");
-    let commands = [
+    let commands: Vec<_> = [
+        format!("cd '{}'", second.display()),
+        "cd ../second".into(),
+        format!("pushd '{}'", second.display()),
+        "popd".into(),
+        format!("command cd '{}'", second.display()),
+        "command -p -- cd ../second".into(),
+        "builtin cd ../second".into(),
+        "CDPATH=.. cd second".into(),
+        "! cd ../second".into(),
+        "eval 'cd ../second'".into(),
+        "source ../change-directory.sh".into(),
+        ". ../change-directory.sh".into(),
+    ]
+    .iter()
+    .map(|change| {
         format!(
-            "cd '{}' && cd '{}' && thirdshift pickup base main",
-            first.display(),
-            second.display()
-        ),
-        format!(
-            "cd '{}' && cd ../second && thirdshift pickup base main",
+            "cd '{}' && {change} && thirdshift pickup base main",
             first.display()
-        ),
-        format!(
-            "cd '{}' && pushd '{}' && thirdshift pickup base main",
-            first.display(),
-            second.display()
-        ),
-        format!(
-            "cd '{}' && popd && thirdshift pickup base main",
-            first.display()
-        ),
-    ];
+        )
+    })
+    .collect();
     fs::write(
         home.path().join("crontab"),
         commands
