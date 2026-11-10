@@ -31,8 +31,10 @@
 //! Experiment's storage.
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -453,12 +455,29 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             request.harness_binary.display()
         )
     })?;
-    fs::create_dir_all(request.fresh_home).with_context(|| {
-        format!(
-            "sandbox failed to start: could not create {}",
+    match fs::symlink_metadata(request.fresh_home) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => bail!(
+            "sandbox failed to start: {} must be a real directory",
             request.fresh_home.display()
-        )
-    })?;
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(request.fresh_home).with_context(|| {
+                format!(
+                    "sandbox failed to start: could not create {}",
+                    request.fresh_home.display()
+                )
+            })?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "sandbox failed to start: could not inspect {}",
+                    request.fresh_home.display()
+                )
+            });
+        }
+    }
     if !Path::new(SHELL).exists() {
         return Err(anyhow::Error::new(Unavailable {
             diagnostic: format!("{SHELL} is missing"),
@@ -768,7 +787,8 @@ fn conceal_toolchain_credentials(request: &Request<'_>, binds: &mut Binds) -> Re
         return Ok(());
     }
     let blank = request.fresh_home.join(".toolchain-credential");
-    fs::write(&blank, "").with_context(|| {
+    reject_fresh_symlink(request.fresh_home, &blank)?;
+    write_without_following(&blank, b"").with_context(|| {
         format!(
             "sandbox failed to start: could not create {}",
             blank.display()
@@ -828,11 +848,11 @@ fn home_into(
 ) -> Result<Option<GrokGuard>> {
     binds.read_write(request.fresh_home, request.fresh_home);
     environment.set("HOME", request.fresh_home);
-    fn user_file(request: &Request<'_>, binds: &mut Binds, relative: &str) {
-        binds.read_only(
-            &request.home.join(relative),
-            &request.fresh_home.join(relative),
-        );
+    fn user_file(request: &Request<'_>, binds: &mut Binds, relative: &str) -> Result<()> {
+        let dest = request.fresh_home.join(relative);
+        reject_fresh_symlink(request.fresh_home, &dest)?;
+        binds.read_only(&request.home.join(relative), &dest);
+        Ok(())
     }
 
     // These Harnesses read the same production user instructions. Bind only
@@ -842,7 +862,7 @@ fn home_into(
         Harness::Claude | Harness::Grok | Harness::Muse
     ) {
         for path in [".claude/CLAUDE.md", ".claude/rules", ".claude/hooks"] {
-            user_file(request, binds, path);
+            user_file(request, binds, path)?;
         }
     }
     let mut guard = None;
@@ -853,8 +873,8 @@ fn home_into(
             if let Some(token) = &request.secrets.claude_setup_token {
                 environment.set_str(CLAUDE_TOKEN_ENV, token);
             }
-            user_file(request, binds, ".claude.json");
-            user_file(request, binds, ".claude/settings.json");
+            user_file(request, binds, ".claude.json")?;
+            user_file(request, binds, ".claude/settings.json")?;
         }
         Harness::Codex => {
             // Copy the login into the fresh home. A refresh stays in that
@@ -866,8 +886,8 @@ fn home_into(
                 ".codex",
                 "auth.json",
             )?;
-            user_file(request, binds, ".codex/config.toml");
-            user_file(request, binds, ".codex/AGENTS.md");
+            user_file(request, binds, ".codex/config.toml")?;
+            user_file(request, binds, ".codex/AGENTS.md")?;
         }
         Harness::Muse => {
             // Copy each login file. Muse writes its login in place (#1009);
@@ -881,7 +901,7 @@ fn home_into(
                     login,
                 )?;
             }
-            user_file(request, binds, ".config/muse/settings.json");
+            user_file(request, binds, ".config/muse/settings.json")?;
         }
         Harness::Agy => {
             // Copy the token file, never the D-Bus session bus, which would
@@ -893,19 +913,19 @@ fn home_into(
                 ".gemini/antigravity-cli",
                 "antigravity-oauth-token",
             )?;
-            user_file(request, binds, ".gemini/GEMINI.md");
-            user_file(request, binds, ".gemini/settings.json");
+            user_file(request, binds, ".gemini/GEMINI.md")?;
+            user_file(request, binds, ".gemini/settings.json")?;
         }
         Harness::Grok => {
             guard = Some(grok_into(request)?);
             for path in [".grok/settings.json", ".grok/rules", ".grok/hooks"] {
-                user_file(request, binds, path);
+                user_file(request, binds, path)?;
             }
         }
         Harness::OpenCode => {
             opencode_into(request, environment)?;
-            user_file(request, binds, ".config/opencode/opencode.json");
-            user_file(request, binds, ".config/opencode/AGENTS.md");
+            user_file(request, binds, ".config/opencode/opencode.json")?;
+            user_file(request, binds, ".config/opencode/AGENTS.md")?;
         }
     }
     Ok(guard)
@@ -940,6 +960,7 @@ fn login_into(
     } else {
         fresh_mirror(request, &source)
     };
+    reject_fresh_symlink(request.fresh_home, &dest)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -949,12 +970,10 @@ fn login_into(
         })?;
     }
     if source.is_file() {
-        fs::copy(&source, &dest).with_context(|| {
-            format!(
-                "sandbox failed to start: could not copy the login {}",
-                source.display()
-            )
-        })?;
+        // Check again after creating parents. The destination can be a symlink
+        // left by an earlier sandboxed Step in this same Trial home.
+        reject_fresh_symlink(request.fresh_home, &dest)?;
+        copy_without_following(&source, &dest)?;
     }
     if let Some(env) = override_env {
         // The override names the directory the file sits `depth` levels
@@ -965,6 +984,115 @@ fn login_into(
         environment.set(env, dir);
     }
     Ok(())
+}
+
+/// Refuse a symlink anywhere along `dest` inside `fresh_home`. A later Step
+/// prepares the same Trial home the previous sandbox could write, and a
+/// symlink there would turn a host copy or mount into a path outside it.
+fn reject_fresh_symlink(fresh_home: &Path, dest: &Path) -> Result<()> {
+    let relative = dest.strip_prefix(fresh_home).with_context(|| {
+        format!(
+            "sandbox failed to start: {} is outside {}",
+            dest.display(),
+            fresh_home.display()
+        )
+    })?;
+    let mut cursor = fresh_home.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!(
+                "sandbox failed to start: {} is not confined to the fresh home",
+                dest.display()
+            );
+        };
+        cursor.push(name);
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "sandbox failed to start: fresh home contains a symlink at {}",
+                    cursor.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "sandbox failed to start: could not inspect {}",
+                        cursor.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write `bytes` to `dest` without following a symlink at that path.
+fn write_without_following(dest: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(dest)
+        .map_err(|error| fresh_write_error(&error, dest))?;
+    file.write_all(bytes).with_context(|| {
+        format!(
+            "sandbox failed to start: could not write {}",
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Copy `source` onto `dest` without following a symlink at `dest`.
+fn copy_without_following(source: &Path, dest: &Path) -> Result<()> {
+    let metadata = fs::metadata(source).with_context(|| {
+        format!(
+            "sandbox failed to start: could not read {}",
+            source.display()
+        )
+    })?;
+    let bytes = fs::read(source).with_context(|| {
+        format!(
+            "sandbox failed to start: could not read {}",
+            source.display()
+        )
+    })?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(dest)
+        .map_err(|error| fresh_write_error(&error, dest))?;
+    file.write_all(&bytes).with_context(|| {
+        format!(
+            "sandbox failed to start: could not copy the login {}",
+            source.display()
+        )
+    })?;
+    file.set_permissions(metadata.permissions())
+        .with_context(|| {
+            format!(
+                "sandbox failed to start: could not copy the login {}",
+                source.display()
+            )
+        })?;
+    Ok(())
+}
+
+fn fresh_write_error(error: &std::io::Error, dest: &Path) -> anyhow::Error {
+    let message = if error.raw_os_error() == Some(libc::ELOOP) {
+        format!("sandbox failed to start: {} is a symlink", dest.display())
+    } else {
+        format!(
+            "sandbox failed to start: could not write {}",
+            dest.display()
+        )
+    };
+    anyhow::Error::new(std::io::Error::new(error.kind(), error.to_string())).context(message)
 }
 
 /// Mirror a home-relative `source` under the fresh home.
@@ -1001,6 +1129,7 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
         }));
     }
     let dest = request.fresh_home.join(GROK_HOME_NAME);
+    reject_fresh_symlink(request.fresh_home, &dest)?;
     fs::create_dir_all(&dest).with_context(|| {
         format!(
             "sandbox failed to start: could not create {}",
@@ -1010,12 +1139,9 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
     for name in GROK_KEPT {
         let source = home.join(name);
         if source.is_file() {
-            fs::copy(&source, dest.join(name)).with_context(|| {
-                format!(
-                    "sandbox failed to start: could not copy the login {}",
-                    source.display()
-                )
-            })?;
+            let copied = dest.join(name);
+            reject_fresh_symlink(request.fresh_home, &copied)?;
+            copy_without_following(&source, &copied)?;
         }
     }
     Ok(guard)
@@ -1173,6 +1299,36 @@ fn harness_into(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Restores process environment variables when dropped, including ones
+    /// the test removed.
+    struct SavedEnv {
+        values: Vec<(String, Option<std::ffi::OsString>)>,
+    }
+
+    impl SavedEnv {
+        fn capture(names: &[&str]) -> Self {
+            Self {
+                values: names
+                    .iter()
+                    .map(|name| ((*name).to_owned(), std::env::var_os(name)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for SavedEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.values {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
 
     /// The sandbox tests run where bwrap works; anywhere else they report
     /// themselves skipped rather than passing silently.
@@ -1559,6 +1715,54 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "{\"refresh\": \"renewed\"}\n"
+        );
+    }
+
+    /// A later Step prepares another sandbox in the same Trial home. That home
+    /// is writable by the earlier sandboxed Step, so a symlink there must not
+    /// become a host write when the login is copied again.
+    #[test]
+    fn trial_home_login_copy_does_not_follow_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let operator_home = root.path().join("operator-home");
+        let trial_home = root.path().join("trial-home");
+        let output = root.path().join("output");
+        let outside = root.path().join("outside");
+        let repository = root.path().join("repository");
+        fs::create_dir_all(operator_home.join(".codex")).unwrap();
+        fs::write(operator_home.join(".codex/auth.json"), "dummy-login\n").unwrap();
+        fs::create_dir_all(trial_home.join(".codex")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&repository).unwrap();
+        fs::write(outside.join("target"), "untouched\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("target"), trial_home.join(".codex/auth.json"))
+            .unwrap();
+        let saved = SavedEnv::capture(&[
+            "HOME",
+            "CODEX_HOME",
+            "THIRDSHIFT_TRIAL_HOME",
+            "THIRDSHIFT_TRIAL_NO_SANDBOX",
+        ]);
+        unsafe {
+            std::env::set_var("HOME", &operator_home);
+            std::env::set_var("THIRDSHIFT_TRIAL_HOME", &trial_home);
+            std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("THIRDSHIFT_TRIAL_NO_SANDBOX");
+        }
+        let binary = root.path().join("thirdshift");
+        fs::write(&binary, "").unwrap();
+        let choice = crate::harness::Choice {
+            harness: Harness::Codex,
+            model: None,
+            effort: None,
+            chosen_by: crate::harness::ChosenBy::Command,
+        };
+        let _prepared = for_session(&choice, &binary, &repository, &output);
+        drop(saved);
+        assert_eq!(
+            fs::read_to_string(outside.join("target")).unwrap(),
+            "untouched\n",
+            "login copy followed a symlink out of the Trial home"
         );
     }
 
