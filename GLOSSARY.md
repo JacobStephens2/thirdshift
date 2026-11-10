@@ -409,6 +409,14 @@ _Avoid_: judge, evaluator, scorer
 The model **Graders** an **Experiment**'s **Bar** names to judge each pair of **Trials**, from one **Model** up, each reading the pair in both orders. The panel's call is a majority by family or by Model, as the Bar says, and may stand in for the **Day shift**'s on pairs it doesn't read.
 _Avoid_: jury, committee, judges
 
+**Base-test**:
+Running one **Arm**'s new tests from a **Trial** on the unchanged repository its **Eval task** starts from, to see whether they check the change at all. Evidence beside the **Scores**, never a Score.
+_Avoid_: baseline test, pre-test
+
+**Cross-test**:
+Running one **Arm**'s new tests from a **Trial** against the final commit of the other Arm's Trial in the same pair. A failure is a disagreement to look into, not a defect, and changes no **Score**.
+_Avoid_: swap test, mutual test
+
 **Score**:
 What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Ticket run** on one criterion: whether it passed, and why.
 _Avoid_: grade, rating, feedback

@@ -57,6 +57,15 @@ impl TrialResult {
 }
 
 pub(crate) fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> String {
+    format!("{}--{}--{}", task_key(suite, name), arm.name(), index)
+}
+
+/// Baseline Trial `index` and Candidate Trial `index` of one Eval task.
+pub(super) fn pair_key(suite: &str, name: &str, index: usize) -> String {
+    format!("{}--pair--{index}", task_key(suite, name))
+}
+
+fn task_key(suite: &str, name: &str) -> String {
     // Names cannot contain NUL. Hash the delimited tuple so names with
     // `--` stay distinct and long names cannot exceed a filename limit.
     let task = Sha256::new()
@@ -64,7 +73,7 @@ pub(crate) fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> Stri
         .chain_update([0])
         .chain_update(name.as_bytes())
         .finalize();
-    format!("{task:x}--{}--{}", arm.name(), index)
+    format!("{task:x}")
 }
 
 pub(super) struct Terminal {

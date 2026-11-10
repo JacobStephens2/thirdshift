@@ -28,6 +28,14 @@ pub(crate) struct Check {
     pub reason: String,
 }
 
+/// A check and whether its command reached an exit status. A check that did
+/// not (it timed out, never started or could not be collected) failed without
+/// saying anything about the code.
+pub(crate) struct CheckRun {
+    pub check: Check,
+    pub exited: bool,
+}
+
 pub(crate) enum Timeout {
     PerCheck(Duration),
     Deadline(Instant),
@@ -82,6 +90,23 @@ pub(crate) fn execute(
     caps: &Caps,
     guard_imports: bool,
 ) -> Result<Vec<Check>> {
+    Ok(
+        execute_runs(repository, reports, commands, timeout, caps, guard_imports)?
+            .into_iter()
+            .map(|ran| ran.check)
+            .collect(),
+    )
+}
+
+/// [`execute`], keeping whether each check's command ran to an exit status.
+pub(crate) fn execute_runs(
+    repository: &Path,
+    reports: &Reports,
+    commands: &[Vec<String>],
+    timeout: Timeout,
+    caps: &Caps,
+    guard_imports: bool,
+) -> Result<Vec<CheckRun>> {
     let packet = tempfile::Builder::new()
         .prefix("grader-")
         .permissions(fs::Permissions::from_mode(0o700))
@@ -105,10 +130,13 @@ pub(crate) fn execute(
     let mut checks = Vec::new();
     for command in commands {
         if matches!(&timeout, Timeout::Deadline(deadline) if *deadline <= Instant::now()) {
-            checks.push(Check {
-                command: Some(command.clone()),
-                passed: false,
-                reason: "code Grader timed out before starting the next check".into(),
+            checks.push(CheckRun {
+                check: Check {
+                    command: Some(command.clone()),
+                    passed: false,
+                    reason: "code Grader timed out before starting the next check".into(),
+                },
+                exited: false,
             });
             break;
         }
@@ -131,7 +159,7 @@ pub(crate) fn execute(
             bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
         }
         child.check_started(&result)?;
-        let (passed, reason) = match result {
+        let (passed, reason, exited) = match result {
             Ok(result) => (
                 result.status.success(),
                 format!(
@@ -140,13 +168,17 @@ pub(crate) fn execute(
                     String::from_utf8_lossy(&result.stdout),
                     String::from_utf8_lossy(&result.stderr)
                 ),
+                true,
             ),
-            Err(error) => (false, format!("{error:#}")),
+            Err(error) => (false, format!("{error:#}"), false),
         };
-        checks.push(Check {
-            command: Some(command.clone()),
-            passed,
-            reason,
+        checks.push(CheckRun {
+            check: Check {
+                command: Some(command.clone()),
+                passed,
+                reason,
+            },
+            exited,
         });
     }
     Ok(checks)

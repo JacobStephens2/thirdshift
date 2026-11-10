@@ -13,6 +13,7 @@ mod leaks;
 mod model_grader;
 mod names;
 mod options;
+mod pairs;
 mod reading;
 mod rechecks;
 mod release;
@@ -449,6 +450,7 @@ pub fn run(options: Options) -> Result<()> {
         logs::stage(logs::Stage::EvalTasks);
         model_grader::prepare(&experiment, &config.harness)?;
         workers::run(&experiment)?;
+        pairs::run(&experiment)?;
         model_grader::run(&experiment)?;
         experiment.refresh_verdict()?;
         experiment.state = State::Completed;

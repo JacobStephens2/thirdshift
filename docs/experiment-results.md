@@ -1,4 +1,4 @@
-# Experiment results (format 8)
+# Experiment results (format 9)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 8` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 8.
+`format: 9` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 9.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -59,6 +59,25 @@ Format 8 adds optional `Setup.process_digest`, the content digest of a Custom
 process and its referenced home skills. It identifies the Arm for Experiment
 reuse and cost-estimate history. Built-in processes are identified by the build
 and omit this field. Older saved setups also omit it.
+
+Format 9 adds `pairs`: base-tests and cross-tests for process tasks whose
+`process_grading.new_tests` names how to find and run an Arm's own new tests
+([Eval task format](eval-tasks.md)). Baseline Trial *k* is paired with
+Candidate Trial *k*. Each `PairSide` lists the Arm's `test_files`, the files its
+final commit adds or changes since the base that match `new_tests.paths`. `base`
+holds their checks on the unchanged base and `cross` their checks on the other
+Arm's final commit, each with the code Grader's check shape. Only checks
+whose command ran to an exit status decide the results. `fails_on_base` is
+true when a base check failed that way and false when all passed;
+`passes_on_other` is true when every cross check passed and false when one
+failed. Each is null when the Arm has no new tests, when its run did not
+finish (a timeout or a snapshot that could not be prepared, named in its
+checks), or when `error` says why that run could not start. A base result
+already decided stays when only the other Arm's commit is missing.
+`disagreement` is true exactly when `passes_on_other` is false: something to
+look into, not a defect. Pairs are evidence,
+never Scores: they change no Score, Verdict or Void cause. Experiments
+without `new_tests`, and pairs not yet finished, have none.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -146,6 +165,7 @@ Private artifacts live under `~/.thirdshift/evals/experiments/<id>/`:
 experiment.json                  # fixed inputs, state, Verdict, recheck history
 results/<trial-id>.json           # one terminal TrialResult
 trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
+pairs/<pair-id>.json             # one pair's base-tests and cross-tests (evidence)
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
 ```
 
@@ -306,7 +326,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 8,
+    "format": 9,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -335,6 +355,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "verdict": "Verdict?",
     "pending_rechecks": ["Pending"],
     "leak_hits": ["LeakHit"],
+    "pairs": ["Pair"],
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -401,6 +422,11 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "ModelScore": {
     "label": "string", "passed": "boolean", "reason": "string",
     "wrong_finding": "boolean", "borderline": "boolean"
+  },
+  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide"},
+  "PairSide": {
+    "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
+    "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
   },
   "Command": ["string"],
   "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},

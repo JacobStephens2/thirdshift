@@ -1,7 +1,7 @@
 //! Read-only Experiment assessment: effective paired Scores, suite Verdicts and
 //! whole-Experiment decisive rechecks, kept with private Trial data.
 
-mod process;
+pub(super) mod process;
 
 use std::collections::BTreeMap;
 use std::path::Path;
