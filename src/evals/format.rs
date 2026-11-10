@@ -19,6 +19,19 @@ pub(super) enum State {
 pub(super) enum Session {
     CodeReview,
     SpecReview,
+    Process,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Provenance {
+    Real,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Environment {
+    Host,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -27,6 +40,10 @@ pub(super) struct Task {
     pub format: u32,
     pub state: State,
     pub session: Session,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
     pub repository: String,
     pub base: String,
     pub change: String,
@@ -69,6 +86,12 @@ impl Task {
         let path = directory.join("task.toml");
         let task: Self = read(&path)?;
         version(task.format)?;
+        if task.session == Session::Process {
+            anyhow::ensure!(
+                task.provenance.is_some() && task.environment.is_some(),
+                "process tasks require provenance and environment"
+            );
+        }
         commit_id(&task.base)?;
         commit_id(&task.change)?;
         if let Some(difficulty) = &task.difficulty {

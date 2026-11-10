@@ -132,6 +132,8 @@ pub(crate) struct Setup {
     pub harness: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
 }
 
 impl Setup {
@@ -226,8 +228,8 @@ pub fn run(options: Options) -> Result<()> {
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
     let config = UserConfig::load()?;
-    let baseline = options.baseline_setup.resolve(baseline, &config);
-    let candidate = options.candidate_setup.resolve(candidate, &config);
+    let mut baseline = options.baseline_setup.resolve(baseline, &config);
+    let mut candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
     // Keep the judged list and the retained manifest snapshots on one reading
     // of Difficulty, fenced against approval and Difficulty publication.
@@ -247,6 +249,12 @@ pub fn run(options: Options) -> Result<()> {
         let mut listed = Vec::new();
         for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
             let task = format::Task::load(&directory)?;
+            if task.state == format::State::Approved && task.session == format::Session::Process {
+                for setup in [&mut baseline, &mut candidate] {
+                    let process = setup.process.get_or_insert_with(|| "ticket-run".into());
+                    crate::processes::source::validate_local(process)?;
+                }
+            }
             if task.state == format::State::Approved
                 && task
                     .difficulty

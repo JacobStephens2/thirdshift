@@ -14,6 +14,8 @@ pub(in crate::console) fn properties() -> Value {
         "candidate_model",
         "baseline_effort",
         "candidate_effort",
+        "baseline_process",
+        "candidate_process",
         "name",
     ] {
         properties.insert(key.into(), json!({"type":"string"}));

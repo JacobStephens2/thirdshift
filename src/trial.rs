@@ -25,6 +25,8 @@ struct Request {
     version: u64,
     repository: PathBuf,
     session_kind: SessionKind,
+    #[serde(default)]
+    process: Option<String>,
     inputs: Inputs,
     harness: String,
     model: Option<String>,
@@ -60,12 +62,50 @@ pub(crate) struct Output {
     pub log: Option<PathBuf>,
     pub model_evidence: Option<PathBuf>,
     pub reports: Reports,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Step {
+    pub name: String,
+    pub outcome: Outcome,
+    pub started_at: String,
+    pub ended_at: String,
+    pub elapsed_ms: u128,
+}
+
+#[derive(Debug)]
+pub(crate) struct StoppedToAsk(String);
+
+impl std::fmt::Display for StoppedToAsk {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "session stopped to ask: {}", self.0)
+    }
+}
+
+impl std::error::Error for StoppedToAsk {}
+
+/// A final question leaves an unattended Step unfinished even when its turn
+/// completed successfully. Preserve the question as the Trial's cause.
+pub(crate) fn check_question(message: Option<&str>) -> Result<()> {
+    if let Some(message) = message {
+        let ending = message.trim_end_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '*' | '_' | '`' | '"' | '\'' | ')' | ']')
+        });
+        if ending.ends_with('?') {
+            return Err(StoppedToAsk(message.to_owned()).into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Succeeded,
+    Delivered,
+    StoppedToAsk,
     Failed,
     Void,
 }
@@ -74,6 +114,8 @@ impl std::fmt::Display for Outcome {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Succeeded => "succeeded",
+            Self::Delivered => "delivered",
+            Self::StoppedToAsk => "stopped-to-ask",
             Self::Failed => "failed",
             Self::Void => "void",
         })
@@ -132,6 +174,7 @@ impl Output {
                 standards: None,
                 spec: None,
             },
+            steps: Vec::new(),
         }
     }
 
@@ -160,6 +203,7 @@ impl Output {
                 standards: None,
                 spec: None,
             },
+            steps: Vec::new(),
         }
     }
 }
@@ -184,6 +228,11 @@ pub fn run(path: &Path) -> Result<String> {
         "unsupported Trial request version {version}; supported version: 1"
     );
     let request: Request = serde_json::from_value(document).context("invalid Trial request")?;
+    if matches!(request.session_kind, SessionKind::Process) {
+        crate::processes::source::validate_local(
+            request.process.as_deref().unwrap_or("ticket-run"),
+        )?;
+    }
     ensure!(
         request.repository.is_absolute(),
         "Trial repository path must be absolute"
@@ -228,14 +277,17 @@ pub fn run(path: &Path) -> Result<String> {
         }
     };
     let session_started = Instant::now();
+    let mut steps = Vec::new();
     let (ended, log) = if matches!(request.session_kind, SessionKind::Process) {
-        let (ended, log) = crate::processes::source::run_local(
+        let (ended, log, recorded_steps) = crate::processes::source::run_local(
+            request.process.as_deref().unwrap_or("ticket-run"),
             &repository,
             &request.inputs,
             &choice,
             &output_dir,
             sandbox.as_ref().map(|prepared| prepared.launch()),
         );
+        steps = recorded_steps;
         (ended.map(|_| None), log)
     } else {
         let logs = Logs::of_trial(&output_dir);
@@ -283,12 +335,23 @@ pub fn run(path: &Path) -> Result<String> {
         stream.into_session_id()
     };
     let (outcome, session_id, cause, void_cause) = match ended {
-        Ok(session_id) => (Outcome::Succeeded, session_id, None, None),
+        Ok(session_id) => (
+            if matches!(request.session_kind, SessionKind::Process) {
+                Outcome::Delivered
+            } else {
+                Outcome::Succeeded
+            },
+            session_id,
+            None,
+            None,
+        ),
         Err(error) => {
             let void_cause = void_cause(&error);
             (
                 if void_cause.is_some() {
                     Outcome::Void
+                } else if error.is::<StoppedToAsk>() {
+                    Outcome::StoppedToAsk
                 } else {
                     Outcome::Failed
                 },
@@ -317,6 +380,7 @@ pub fn run(path: &Path) -> Result<String> {
             spec: artifact("spec"),
         },
         log: log.as_deref().map(crate::logs::session::path),
+        steps,
     };
     serde_json::to_string(&output).context("could not serialize Trial result")
 }

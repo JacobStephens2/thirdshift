@@ -124,7 +124,9 @@ impl<'a> Execution<'a> {
         // the prepared state even when the review fixes and commits code.
         // The pass-through launcher can write this temp directory. Checks
         // run only when the copy still matches the pre-session digest.
-        let grading_snapshot = if task.manifest.checks.is_empty() {
+        let grading_snapshot = if task.manifest.checks.is_empty()
+            || task.manifest.session == crate::evals::format::Session::Process
+        {
             None
         } else {
             let directory = tempfile::Builder::new()
@@ -149,14 +151,15 @@ impl<'a> Execution<'a> {
             .as_ref()
             .context("missing Trial inputs")?;
         let request_path = attempt.join("request.json");
-        store::write(
-            &request_path,
-            &json!({
-                "version": 1, "repository": prepared_repo.repository, "session_kind": task.manifest.session,
-                "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
-                "output_dir": attempt.join("session")
-            }),
-        )?;
+        let mut document = json!({
+            "version": 1, "repository": prepared_repo.repository, "session_kind": task.manifest.session,
+            "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
+            "output_dir": attempt.join("session")
+        });
+        if task.manifest.session == crate::evals::format::Session::Process {
+            document["process"] = json!(setup.process.as_deref().unwrap_or("ticket-run"));
+        }
+        store::write(&request_path, &document)?;
         fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -249,16 +252,28 @@ impl<'a> Execution<'a> {
             protocol.void_cause = Some(VoidCause::MemoryCap);
             protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
         }
-        let unchanged = before.unchanged(&prepared_repo.repository);
+        if task.manifest.session == crate::evals::format::Session::Process
+            && protocol.steps.is_empty()
+        {
+            let path = attempt.join("session/steps.json");
+            if path.is_file() {
+                protocol.steps = serde_json::from_slice(&fs::read(path)?)?;
+            }
+        }
+        let unchanged = task.manifest.session == crate::evals::format::Session::Process
+            || before
+                .unchanged(&prepared_repo.repository)
+                .is_ok_and(|unchanged| unchanged);
         let snapshot_intact = grading_snapshot.as_ref().is_none_or(|snapshot| {
             integrity::tree_digest(&snapshot.repository)
                 .is_ok_and(|digest| digest == snapshot.digest)
         });
         interrupt::check()?;
         // Keep known failures and external Void causes, including limit
-        // stops. Repository changes invalidate an otherwise successful Trial.
-        if protocol.outcome == Outcome::Succeeded
-            && (!unchanged.is_ok_and(|unchanged| unchanged) || !snapshot_intact)
+        // stops. Repository changes invalidate an otherwise successful Trial,
+        // including a process-shaped delivered outcome on a review session.
+        if matches!(protocol.outcome, Outcome::Succeeded | Outcome::Delivered)
+            && (!unchanged || !snapshot_intact)
         {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
@@ -275,6 +290,7 @@ impl<'a> Execution<'a> {
                 score => score,
             }
         })?;
+        trace.steps(&protocol.steps)?;
         trace.outcome(protocol.outcome);
         complete(attempt, protocol, score)
     }

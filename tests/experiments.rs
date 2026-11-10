@@ -51,6 +51,9 @@ mod release;
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
 
+#[path = "experiments/process.rs"]
+mod process;
+
 #[test]
 fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
     let fixture = Fixture::new();

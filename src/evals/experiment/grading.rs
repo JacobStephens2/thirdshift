@@ -51,23 +51,26 @@ pub(super) fn score(
     output: &Output,
     timeout: Duration,
 ) -> Result<Score> {
-    let mut checks = vec![
-        Check {
-            command: None,
-            passed: output.outcome == Outcome::Succeeded,
-            reason: format!(
-                "Trial {}: {}",
-                output.outcome,
-                output.cause.as_deref().unwrap_or("session completed")
-            ),
-        },
-        Check {
+    let mut checks = vec![Check {
+        command: None,
+        passed: matches!(output.outcome, Outcome::Succeeded | Outcome::Delivered),
+        reason: format!(
+            "Trial {}: {}",
+            output.outcome,
+            output.cause.as_deref().unwrap_or("session completed")
+        ),
+    }];
+    if task.manifest.session != crate::evals::format::Session::Process {
+        checks.push(Check {
             command: None,
             passed: output.reports.standards.is_some() || output.reports.spec.is_some(),
             reason: "review must leave at least one report".into(),
-        },
-    ];
-    if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
+        });
+    }
+    if task.manifest.session != crate::evals::format::Session::Process
+        && output.outcome != Outcome::Void
+        && !task.manifest.checks.is_empty()
+    {
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
         checks.extend(code_grader::execute(
             repository,

@@ -390,11 +390,11 @@ An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict**
 _Avoid_: non-gating suite, informational suite
 
 **Arm**:
-One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, a **Harness**, **Model** and **Effort**, and, for process **Trials**, a named **Process**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, in an agent session of its own, within an **Experiment**. A Trial is not a **Ticket run**, and writes no **Command record** of its own.
+One attempt at an **Eval task** by one **Arm**, within an **Experiment**: a review session, or a **Process**'s **Steps** up to its first publishing Step. A Trial keeps its sessions, outcome, usage and times under the Experiment and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
 
 **Void Trial**:

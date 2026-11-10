@@ -164,6 +164,7 @@ pub(super) struct Local {
     output: PathBuf,
     sandbox: Option<crate::sandbox::Launch>,
     last_log: Mutex<Option<PathBuf>>,
+    steps: Mutex<Vec<crate::trial::Step>>,
 }
 
 impl TicketSource {
@@ -264,6 +265,7 @@ impl TicketSource {
                 let text = prompt::local_implement(&local.issue, &local.base, &local.branch);
                 run_session_step(run, worktree, step, |sessions, index| {
                     let message = sessions.run(session::Kind::ProcessStep(index), &text)?;
+                    crate::trial::check_question(message.as_deref())?;
                     local.ensure_actionable()?;
                     Ok(message.unwrap_or_default())
                 })
@@ -297,11 +299,11 @@ impl TicketSource {
                             &local.base_commit,
                             &local.output,
                             &text,
-                        );
+                        )?;
                         local.ensure_actionable()?;
                         retain_killed_work(&prepared.killed_work, index + 1, sessions);
                         let outcome = crate::security::review::Outcome::of(
-                            review,
+                            Ok(review),
                             sessions.last_log_of(session::Kind::SecurityReview),
                         );
                         if let Some(hold) = outcome.hold() {
@@ -355,7 +357,7 @@ impl Local {
         choice: &Choice,
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let logs = session::Logs::of_trial(&self.output.join(format!("step-{index}")));
+        let logs = session::Logs::of_trial(&self.output);
         let before_each = || {
             self.ensure_actionable()?;
             restore_issue_file(&self.repository, &self.issue_text)?;
@@ -391,14 +393,17 @@ impl Local {
 /// Execute the Built-in Ticket run's non-publishing prefix in a repository
 /// the Trial caller already prepared, with its local origin and issue file.
 pub(crate) fn run_local(
+    process: &str,
     repository: &Path,
     inputs: &crate::trial::Inputs,
     choice: &Choice,
     output: &Path,
     sandbox: Option<crate::sandbox::Launch>,
-) -> (Result<String>, Option<PathBuf>) {
+) -> (Result<String>, Option<PathBuf>, Vec<crate::trial::Step>) {
     let mut last_log = None;
+    let mut steps = Vec::new();
     let result = (|| {
+        validate_local(process)?;
         let git = Git::new(repository);
         let origin = git.run(&["remote", "get-url", "origin"])?;
         ensure!(
@@ -422,11 +427,12 @@ pub(crate) fn run_local(
             output: output.to_path_buf(),
             sandbox,
             last_log: Mutex::default(),
+            steps: Mutex::default(),
         };
         source.ensure_actionable()?;
         skills::exclude(&git, &format!("/{}", prompt::ISSUE_FILE))?;
         let path = Path::new("processes/ticket-run.toml");
-        let mut file = load_inherited_builtin("ticket-run")?;
+        let mut file = load_inherited_builtin(process)?;
         file.security_review = true;
         // Stopping is the caller's policy; the source still refuses a publishing
         // Step if another caller tries to execute one.
@@ -463,16 +469,92 @@ pub(crate) fn run_local(
                 base: &inputs.base,
             },
         )?;
-        let result = execute_steps("ticket-run", &prepared, None);
+        let result = execute_steps(process, &prepared, None);
         if let TicketSource::Local(local) = &prepared.source {
             last_log = local.last_log.lock().expect("local session log").clone();
+            steps = std::mem::take(&mut *local.steps.lock().expect("local Steps"));
         }
         if result.is_ok() {
             progress::step(format!("stopped before publishing Step {publishing}"));
         }
         result
     })();
-    (result, last_log)
+    (result, last_log, steps)
+}
+
+/// Only the Built-in Ticket prefix currently has a local source adapter.
+/// Reject factory acquisition before building Arms or starting sessions.
+pub(crate) fn validate_local(process: &str) -> Result<()> {
+    ensure!(
+        catalog::compiled(process).is_some(),
+        "unknown Built-in process: {process}"
+    );
+    ensure!(
+        process == "ticket-run",
+        "Process {process} requires GitHub before its first publishing Step"
+    );
+    let file = load_inherited_builtin(process)?;
+    let mut publishing = false;
+    for step in &file.steps {
+        match step.kind {
+            DraftKind::Delivery { .. } | DraftKind::SelfMerge { .. } => {
+                publishing = true;
+                break;
+            }
+            DraftKind::Implement { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::Skill { .. }
+            | DraftKind::Command { .. } => {}
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::RunPublishedIssue { .. }
+            | DraftKind::LandTickets { .. }
+            | DraftKind::FixFindings { .. }
+            | DraftKind::CloseFindings { .. } => bail!(
+                "Process {process} Step {} requires GitHub before its first publishing Step",
+                step.name
+            ),
+        }
+    }
+    ensure!(publishing, "Process {process} has no publishing Step");
+    Ok(())
+}
+
+impl TicketSource {
+    pub(super) fn record_step(
+        &self,
+        step: &ResolvedStep,
+        began_at: DateTime<Utc>,
+        elapsed: Duration,
+        result: &Result<String>,
+    ) -> Result<()> {
+        if let Self::Local(local) = self {
+            let mut steps = local.steps.lock().expect("local Steps");
+            steps.push(crate::trial::Step {
+                name: step.name.clone(),
+                outcome: if result.is_ok() {
+                    crate::trial::Outcome::Succeeded
+                } else if result
+                    .as_ref()
+                    .is_err_and(|e| e.is::<crate::trial::StoppedToAsk>())
+                {
+                    crate::trial::Outcome::StoppedToAsk
+                } else {
+                    crate::trial::Outcome::Failed
+                },
+                started_at: began_at.to_rfc3339(),
+                ended_at: Utc::now().to_rfc3339(),
+                elapsed_ms: elapsed.as_millis(),
+            });
+            let mut saved = tempfile::NamedTempFile::new_in(&local.output)?;
+            serde_json::to_writer(&mut saved, &*steps)?;
+            saved.persist(local.output.join("steps.json"))?;
+        }
+        Ok(())
+    }
 }
 
 /// The supplied issue file, read without following a symlink. A repository

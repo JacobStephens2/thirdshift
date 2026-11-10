@@ -276,10 +276,23 @@ pub(super) fn detail(view: &View) -> String {
                 ));
             }
         } else {
-            html.push_str("<p>Trials fill in as they finish. Model Graders then score each Eval task's blind packet before the Verdict appears.</p>");
+            html.push_str("<p>Trials fill in as they finish. Model Graders then score review tasks' blind packets; process tasks are scored on their outcome.</p>");
         }
     }
     html.push_str(&verdict(view));
+    if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
+        html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
+        for (label, counts) in [
+            ("Baseline", &view.outcomes.baseline),
+            ("Candidate", &view.outcomes.candidate),
+        ] {
+            html.push_str(&format!(
+                "<dt>{label}</dt><dd>{} delivered · {} stopped-to-ask · {} failed</dd>",
+                counts.delivered, counts.stopped_to_ask, counts.failed
+            ));
+        }
+        html.push_str("</dl></section>");
+    }
     for finding in &view.findings {
         html.push_str(&format!(
             "<p class=\"experiment-callout\">Finding: {}</p>",
@@ -708,9 +721,11 @@ impl<'a> Cell<'a> {
         self.terminal
             && self.result.is_some_and(|r| {
                 r.outcome != Outcome::Void
-                    && r.score
-                        .as_ref()
-                        .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
+                    && r.score.as_ref().is_some_and(|s| {
+                        r.outcome == Outcome::Delivered
+                            || s.model.is_some()
+                            || s.checks.iter().any(|c| !c.passed)
+                    })
             })
     }
     fn passed(&self) -> bool {
@@ -830,7 +845,7 @@ impl<'a> Cell<'a> {
                         esc(&model.label)
                     ));
                 } else {
-                    html.push_str("Not graded by the Model Grader yet.");
+                    html.push_str("No Model Grader assessment.");
                 }
                 html.push_str("</dd>");
                 for recheck in &score.rechecks {
@@ -871,7 +886,7 @@ impl<'a> Cell<'a> {
             html.push_str("<h3>Attempts</h3><ol>");
             for (index, attempt) in result.attempts.iter().enumerate() {
                 html.push_str(&format!(
-                    "<li>{}{}{} · {:.1} minutes · {}</li>",
+                    "<li>{}{}{} · {:.1} minutes · {}",
                     attempt.outcome,
                     attempt
                         .void_cause
@@ -885,6 +900,21 @@ impl<'a> Cell<'a> {
                     attempt.timings.total_ms as f64 / 60_000.0,
                     self.sessions(index)
                 ));
+                if !attempt.steps.is_empty() {
+                    html.push_str("<h4>Steps</h4><ol>");
+                    for step in &attempt.steps {
+                        html.push_str(&format!(
+                            "<li>{} · {} · {:.1}s · {} to {}</li>",
+                            esc(&step.name),
+                            step.outcome,
+                            step.elapsed_ms as f64 / 1000.0,
+                            when(&step.started_at),
+                            when(&step.ended_at)
+                        ));
+                    }
+                    html.push_str("</ol>");
+                }
+                html.push_str("</li>");
             }
             html.push_str("</ol>");
         }

@@ -54,6 +54,7 @@ fn observation(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Value {
 
 fn setup() -> Setup {
     Setup {
+        process: None,
         commit: "a".repeat(40),
         harness: "claude".into(),
         model: None,

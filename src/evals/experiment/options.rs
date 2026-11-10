@@ -27,6 +27,7 @@ pub(super) struct ArmOptions {
     harness: Option<Harness>,
     model: Option<String>,
     effort: Option<String>,
+    process: Option<String>,
 }
 
 impl ArmOptions {
@@ -46,6 +47,7 @@ impl ArmOptions {
             harness: choice.harness.name().into(),
             model: choice.model,
             effort: choice.effort,
+            process: self.process.clone(),
         }
     }
 }
@@ -150,6 +152,9 @@ pub fn parse(args: &[String]) -> Result<Options> {
             .transpose()?;
         Ok(ArmOptions {
             harness,
+            process: flags
+                .remove(format!("--{prefix}-process").as_str())
+                .map(String::from),
             model: flags
                 .remove(format!("--{prefix}-model").as_str())
                 .map(String::from),

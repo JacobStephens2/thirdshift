@@ -59,6 +59,7 @@ pub(crate) struct View {
     pub minutes: Minutes,
     pub usage: super::usage::Arms,
     pub voids: Voids,
+    pub outcomes: Outcomes,
     pub findings: Vec<String>,
 }
 
@@ -87,6 +88,45 @@ pub(crate) struct Details {
 pub(crate) struct TaskName {
     pub suite: String,
     pub name: String,
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct Outcomes {
+    pub baseline: OutcomeCounts,
+    pub candidate: OutcomeCounts,
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct OutcomeCounts {
+    pub delivered: usize,
+    pub stopped_to_ask: usize,
+    pub failed: usize,
+}
+
+impl Outcomes {
+    pub(super) fn of(results: &[TrialResult], tasks: &[Task]) -> Self {
+        let mut counts = Self::default();
+        for result in results {
+            if !tasks.iter().any(|task| {
+                task.suite == result.suite
+                    && task.name == result.task
+                    && task.manifest.session == crate::evals::format::Session::Process
+            }) {
+                continue;
+            }
+            let arm = match result.arm {
+                Arm::Baseline => &mut counts.baseline,
+                Arm::Candidate => &mut counts.candidate,
+            };
+            match result.outcome {
+                Outcome::Delivered => arm.delivered += 1,
+                Outcome::StoppedToAsk => arm.stopped_to_ask += 1,
+                Outcome::Failed => arm.failed += 1,
+                Outcome::Succeeded | Outcome::Void => {}
+            }
+        }
+        counts
+    }
 }
 
 #[derive(Default, Serialize)]
@@ -421,6 +461,15 @@ impl Stored {
         if json {
             Ok(serde_json::to_string(&view)?)
         } else {
+            let mut selection = self
+                .verdict
+                .as_ref()
+                .map_or(String::new(), |verdict| verdict.selection_report());
+            if self.description.baseline.process.is_some()
+                || self.description.candidate.process.is_some()
+            {
+                selection.push_str(&format!("\nProcess Trial outcomes (stopped-to-ask counts as failed):\nBaseline: {} delivered, {} stopped-to-ask, {} failed\nCandidate: {} delivered, {} stopped-to-ask, {} failed", view.outcomes.baseline.delivered, view.outcomes.baseline.stopped_to_ask, view.outcomes.baseline.failed, view.outcomes.candidate.delivered, view.outcomes.candidate.stopped_to_ask, view.outcomes.candidate.failed));
+            }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
 Baseline: {}
@@ -458,7 +507,7 @@ Candidate: {}{}{}",
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
                     .collect::<String>(),
-                self.verdict.as_ref().map_or(String::new(), |verdict| verdict.selection_report())
+                selection
             ))
         }
     }
