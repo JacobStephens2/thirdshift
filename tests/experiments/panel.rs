@@ -703,11 +703,13 @@ fn a_low_spending_limit_pauses_grading_and_a_resume_continues_from_completed_cal
 fn sparse_multi_seat_calls_resume_with_matching_estimates_and_reports() {
     let fixture = super::process::fixture();
     super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
-    panel_graders(&fixture, &["candidate", "candidate"]);
-    let seats = &SEATS[..4];
-    let run = fixture.run(seats);
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let before: Value = serde_json::from_str(&run.stdout).unwrap();
+    priced_panel_graders(&fixture, &["candidate", "candidate"]);
+    let mut args = SEATS[..4].to_vec();
+    args.extend(["--panel-spending-limit", "0.04"]);
+    let run = fixture.run(&args);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let before = fixture.experiment();
+    assert_eq!(before["state"], "paused");
     let directory = fixture.scenario.path(&format!(
         "home/.thirdshift/evals/experiments/{}",
         before["id"].as_str().unwrap()
@@ -718,19 +720,13 @@ fn sparse_multi_seat_calls_resume_with_matching_estimates_and_reports() {
         .unwrap()
         .unwrap()
         .path();
-    for name in [
-        "seat-1-order-1.json",
-        "seat-2-order-1.json",
-        "seat-2-order-2.json",
-    ] {
-        fs::remove_file(pair.join(name)).unwrap();
-    }
+    fs::remove_file(pair.join("seat-1-order-1.json")).unwrap();
     let retained = fs::read(pair.join("seat-1-order-2.json")).unwrap();
     let trials = fixture.trial_calls().len();
-    assert_eq!(fixture.grader_calls().len(), 4);
+    assert_eq!(fixture.grader_calls().len(), 2);
     assert_eq!(fixture.experiment()["panel"], json!([]));
-    let resumed = fixture.run(seats);
-    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let resumed = fixture.run(&args);
+    assert_eq!(resumed.code, Some(1), "{}", resumed.stderr);
     for expected in [
         "Grader panel seat 1 (claude/judge-one): 1 session,",
         "Grader panel seat 2 (claude/judge-two): 2 sessions (1 pair × 2 orders)",
@@ -741,12 +737,25 @@ fn sparse_multi_seat_calls_resume_with_matching_estimates_and_reports() {
             resumed.stderr
         );
     }
+    assert_eq!(fixture.grader_calls().len(), 4);
+    assert_eq!(fixture.experiment()["panel"], json!([]));
+    let completed = fixture.run(&args);
+    assert_eq!(completed.code, Some(0), "{}", completed.stderr);
+    assert!(
+        completed
+            .stderr
+            .contains("Grader panel seat 2 (claude/judge-two): 1 session,"),
+        "{}",
+        completed.stderr
+    );
     let calls = fixture.grader_calls();
-    assert_eq!(calls.len(), 7);
-    let resumed_names: Vec<_> = calls[4..]
+    assert_eq!(calls.len(), 5);
+    let resumed_names: Vec<_> = calls[2..]
         .iter()
         .map(|call| {
             Path::new(call["cwd"].as_str().unwrap())
+                .parent()
+                .unwrap()
                 .file_name()
                 .unwrap()
                 .to_str()
@@ -762,8 +771,22 @@ fn sparse_multi_seat_calls_resume_with_matching_estimates_and_reports() {
         fs::read(pair.join("seat-1-order-2.json")).unwrap(),
         retained
     );
-    let after: Value = serde_json::from_str(&resumed.stdout).unwrap();
-    assert_eq!(after["panel"], before["panel"]);
+    let after: Value = serde_json::from_str(&completed.stdout).unwrap();
+    let report = panel_pair(&after);
+    assert_eq!(
+        preferences(report),
+        vec![
+            (
+                "candidate".into(),
+                "candidate".into(),
+                "candidate".into(),
+                true
+            );
+            2
+        ]
+    );
+    let retained: Value = serde_json::from_slice(&retained).unwrap();
+    assert_eq!(report["graders"][0]["orders"][1], retained);
 }
 
 #[test]
