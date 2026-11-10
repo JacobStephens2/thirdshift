@@ -109,6 +109,13 @@ seat; `cost_usd` is null while any of those sessions can't be priced. It is
 null without a panel. Panel spend is never in `accounting`, an Arm's cost or
 the Bar's `cost_ceiling`.
 
+Estimates, resume and reports decode the complete expected set of saved panel
+calls. Only a missing file is pending; other read errors or malformed saved
+calls stop the operation with pair, seat and order context, even when an earlier
+order is missing. Resume checks these calls before cost confirmation and new
+paid work, including with `--yes`. The saved `Call` shape and filenames are
+unchanged; historical calls retain their structural decoding rules.
+
 Format 10 also adds each `PairSide`'s `diff`, the Grader panel's optional
 `panel` calls per `Pair`, and `people`. `diff` lists every file the Arm's
 final commit changes since the base, code files before tests (`test` is true for a file
