@@ -356,7 +356,12 @@ fn blind_calls_match_the_documented_contract(fixture: &Fixture, view: &Value) {
     let pairs = fixture
         .scenario
         .path(&format!("home/.thirdshift/evals/experiments/{id}/pairs"));
-    let path = fs::read_dir(&pairs).unwrap().next().unwrap().unwrap().path();
+    let path = fs::read_dir(&pairs)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let pair = path.file_stem().unwrap().to_str().unwrap().to_owned();
     let mut retained: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     retained["panel"] =
@@ -379,7 +384,10 @@ fn blind_calls_match_the_documented_contract(fixture: &Fixture, view: &Value) {
         .scenario
         .run_with_env(&["experiments", id, "--json"], &NO_SANDBOX);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    assert_eq!(shown["people"]["reviews"][0]["preference"], "both_bad", "{shown}");
+    assert_eq!(
+        shown["people"]["reviews"][0]["preference"], "both_bad",
+        "{shown}"
+    );
     assert_eq!(shown["people"]["agreement"]["compared"], 2, "{shown}");
     super::result_format::assert_documented("Experiment", &shown);
 }
