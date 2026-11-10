@@ -6,10 +6,11 @@
 //! machine is skipped, before any search. One that runs first makes the
 //! Sweep, of closed issues and of `in-progress` on open ones labelled
 //! `agent-failed`, takes `agent-failed` off each open issue the Day shift
-//! handed back, and is then skipped if it finds the repository at its Failure limit,
-//! or with no Ready issue it can reserve: one another run reserved, a Pickup
-//! run, or an Architect run or Security run dispatching its own plan or fix,
-//! or whose selection went stale, is passed over for the next.
+//! handed back, and is then skipped if it finds the repository at its
+//! Failure limit, or with no Ready issue it can reserve: one another run
+//! reserved, a Pickup run, or an Architect run or Security run dispatching
+//! its own plan or fix, or whose selection went stale, is passed over for
+//! the next.
 
 use std::fmt;
 use std::num::NonZeroUsize;

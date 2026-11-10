@@ -448,10 +448,10 @@ impl<'a> Claimed<'a> {
     /// only `in-progress` comes off. An issue that is no longer
     /// `in-progress` is left as it is: someone took the Claim off meanwhile.
     /// A Claim that changed no label has nothing to put back, and makes no
-    /// request. Returns whether the Claim was not released, so is left for
+    /// request. Returns true when the Claim was not released, so is left for
     /// the ending to end otherwise: the issue was started on origin, or was
-    /// Claimed before this Claim. One released, left as it is, or whose
-    /// release failed was.
+    /// Claimed before this Claim. It returns false for one released, left as
+    /// it is, or whose release failed.
     fn release_if_nothing_on_origin(&self, outside: &mut impl Outside) -> bool {
         if !self.changed_any() {
             return true;
