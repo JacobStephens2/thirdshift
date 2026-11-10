@@ -1469,9 +1469,54 @@ fn a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken() {
         "stderr: {}",
         result.stderr
     );
-    // Ticket #8 can't start, so the Spec run fails, swapping its Claim for agent-failed.
-    assert_eq!(scenario.issue_labels(7), [AGENT_FAILED]);
-    assert_eq!(sessions(&scenario).first().map(String::as_str), Some("9"));
+    // Ticket #8 only waits, so the Spec run hands its Spec back.
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(sessions(&scenario), ["9"]);
+}
+
+#[test]
+fn a_waiting_spec_is_passed_over_until_its_ticket_can_start_then_continued() {
+    let scenario = ready_spec("");
+    scenario.issue_labelled(8, &["needs-info"]);
+    let waited = scenario.run(&["pickup"]);
+    assert_eq!(waited.code, Some(1), "stderr: {}", waited.stderr);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    // The Claim and its hand-back, as thirdshift's label edits recorded them,
+    // moved an hour back so the Spec has settled.
+    let mut gh = scenario.gh_state();
+    let events = gh["timeline"]["7"].as_array_mut().unwrap();
+    let names: Vec<_> = events
+        .iter()
+        .map(|event| format!("{} {}", event["event"], event["label"]))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            r#""unlabeled" "ready-for-agent""#,
+            r#""labeled" "in-progress""#,
+            r#""unlabeled" "in-progress""#,
+            r#""labeled" "ready-for-agent""#
+        ]
+    );
+    for event in events {
+        let at = chrono::DateTime::parse_from_rfc3339(event["at"].as_str().unwrap()).unwrap();
+        let earlier = at - chrono::TimeDelta::hours(1);
+        event["at"] = earlier.format("%Y-%m-%dT%H:%M:%SZ").to_string().into();
+    }
+    scenario.write_gh_state(&gh);
+
+    let passed_over = scenario.run(&["pickup"]);
+    assert_eq!(
+        after_start(&passed_over.stderr),
+        no_ready_issue_after(&["#7 has no Ticket that can start: #8 labelled needs-info"])
+    );
+
+    scenario.issue_labelled(8, &[READY_FOR_AGENT]);
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
+    assert_eq!(sessions(&scenario), ["9", "8", "7"]);
 }
 
 #[test]

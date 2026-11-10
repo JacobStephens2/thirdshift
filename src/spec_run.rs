@@ -250,6 +250,8 @@ pub(crate) trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Write the progress line `line`.
     fn step(&mut self, line: String);
+    /// The first Trusted-account check for Tickets `ticket` fails, if any.
+    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>>;
 }
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
@@ -321,7 +323,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
             spec_branch: self.worktree().branch().to_string(),
             spec_pr: self.spec_pr.captured_spec_pr(),
         };
-        if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
+        if let Some(check) = self.ticket_trust(ticket)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
         self.children.start(
@@ -398,6 +400,10 @@ impl Outside for ChildRunsAndGitHub<'_> {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
+
+    fn ticket_trust(&mut self, ticket: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
+        trust::ticket_trust(&GitHub::new(), ticket, self.spec)
+    }
 }
 
 /// Push the Spec branch, then keep up to `parallel` of the Tickets, last
@@ -454,7 +460,11 @@ fn land_tickets(
         for line in &lines {
             outside.step(line.clone());
         }
-        bail!("Tickets not done: {}", not_done.join(", "));
+        Err(TicketsNotDone {
+            not_done,
+            only_waiting: board.only_waiting() && tickets_trusted(outside, &board),
+        }
+        .into())
     });
     Landing {
         lines,
@@ -540,6 +550,48 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         bail!("interrupted");
     }
     Ok(())
+}
+
+/// Whether every open Ticket in the Spec's repository passes the
+/// Trusted-account check for Tickets, through `outside`. Handing a waiting
+/// Spec back labels it `ready-for-agent` again, which would excuse an untrusted
+/// edit of a Ticket made before then, so a Ticket that fails the check, or
+/// cannot be checked, fails the Spec run instead.
+fn tickets_trusted(outside: &mut impl Outside, board: &TicketBoard) -> bool {
+    board
+        .open_here()
+        .all(|ticket| match outside.ticket_trust(ticket) {
+            Ok(None) => true,
+            Ok(Some(check)) => {
+                outside.step(format!("Ticket #{}: {check}", ticket.number));
+                false
+            }
+            Err(error) => {
+                outside.step(format!(
+                    "could not check Ticket #{} against the Trusted account rule: {error:#}",
+                    ticket.number
+                ));
+                false
+            }
+        })
+}
+
+/// A Spec run's Tickets not done, `not_done`, and whether the Spec run is
+/// `only_waiting`, on a person or on other work, with none failed or
+/// interrupted: its Claim then hands the Spec back instead of labelling it
+/// `agent-failed`. Both read alike.
+#[derive(Debug)]
+pub(crate) struct TicketsNotDone {
+    not_done: Vec<String>,
+    pub(crate) only_waiting: bool,
+}
+
+impl std::error::Error for TicketsNotDone {}
+
+impl std::fmt::Display for TicketsNotDone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Tickets not done: {}", self.not_done.join(", "))
+    }
 }
 
 /// Keep the first error as the Ticket loop's cause, unless `new` says the
@@ -869,6 +921,10 @@ mod tests {
                     ticket_lines: Vec::new(),
                 }),
             }
+        }
+
+        fn ticket_trust(&mut self, _: &IssueUrl) -> Result<Option<trust::UntrustedIssue>> {
+            Ok(None)
         }
 
         fn interrupted(&mut self) -> bool {
@@ -1308,6 +1364,117 @@ mod tests {
             ]
         );
         assert_eq!(outside.did_only(runs), [Did::Start(23), Did::Ended(23)]);
+    }
+
+    /// Whether the Spec run on `outside` ends only waiting, failed as it must.
+    fn ends_waiting(outside: &mut Scripted, parallel: usize) -> bool {
+        failed_of(spec_run(outside, parallel)).waiting()
+    }
+
+    #[test]
+    fn a_spec_run_whose_undone_tickets_are_unready_or_blocked_behind_them_is_only_waiting() {
+        for label in crate::labels::UNREADY {
+            let mut outside = Scripted::new(Script {
+                tickets: vec![
+                    labelled(21, label.name()),
+                    open(22, &[21]),
+                    open(23, &[22]),
+                    open(24, &[]),
+                ],
+                ..Script::default()
+            });
+
+            assert!(ends_waiting(&mut outside, 2), "{label}");
+            assert_eq!(outside.did_only(runs), [Did::Start(24), Did::Ended(24)]);
+        }
+    }
+
+    #[test]
+    fn a_spec_run_waiting_on_an_outside_blocker_or_a_foreign_ticket_is_only_waiting() {
+        let mut foreign = open(21, &[]);
+        foreign.issue = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        let mut outside = Scripted::new(Script {
+            tickets: vec![foreign, open(22, &[90]), open(23, &[22]), open(24, &[])],
+            open_outside: vec![issue(90)],
+            ..Script::default()
+        });
+
+        assert!(ends_waiting(&mut outside, 2));
+    }
+
+    #[test]
+    fn a_failed_or_interrupted_ticket_fails_the_spec_run_though_others_only_wait() {
+        let interrupted = || Ended::Interrupted {
+            local_work: Vec::new(),
+        };
+        for ending in [failed("claude exited 1"), interrupted()] {
+            let mut outside = Scripted::new(Script {
+                tickets: vec![
+                    labelled(21, "ready-for-human"),
+                    open(22, &[21]),
+                    open(23, &[]),
+                ],
+                endings: VecDeque::from([(23, Ok(ending))]),
+                ..Script::default()
+            });
+
+            assert!(!ends_waiting(&mut outside, 2));
+        }
+    }
+
+    #[test]
+    fn a_blocking_cycle_fails_the_spec_run_though_its_tickets_are_unready() {
+        for tickets in [
+            vec![open(21, &[22]), open(22, &[21])],
+            vec![labelled(21, "needs-info"), open(22, &[23]), open(23, &[22])],
+            vec![
+                Node {
+                    labels: vec!["needs-info"],
+                    ..open(21, &[22])
+                },
+                open(22, &[21]),
+            ],
+        ] {
+            let mut outside = Scripted::new(Script {
+                tickets,
+                ..Script::default()
+            });
+
+            assert!(!ends_waiting(&mut outside, 2));
+        }
+    }
+
+    #[test]
+    fn an_interrupted_spec_run_is_not_only_waiting() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![labelled(21, "needs-info"), open(22, &[])],
+            interrupted_after: Some(1),
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 2));
+
+        assert!(failed.interrupted);
+        assert!(!failed.waiting());
+    }
+
+    #[test]
+    fn a_ticket_whose_bug_was_not_reproduced_waits_once_it_is_labelled_needs_info() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[21])],
+            endings: VecDeque::from([(
+                21,
+                Ok(Ended::NotReproduced {
+                    comment_url: "https://github.com/acme/widgets/issues/21#c".to_string(),
+                }),
+            )]),
+            reads: VecDeque::from([Read::Changes(|tickets| {
+                tickets[0].labels = vec!["needs-info"]
+            })]),
+            ..Script::default()
+        });
+
+        assert!(ends_waiting(&mut outside, 2));
     }
 
     #[test]
