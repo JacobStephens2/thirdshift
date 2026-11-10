@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 let home, server, exited, browser, origin;
 const longTitle = 'Display retained issue titles with Unicode 界 and <script>unsafe()</script> ' + 'throughout the Waterfall '.repeat(10);
@@ -29,8 +30,8 @@ before(async () => {
     stages: [{ name: 'Tickets', began_at: '2026-10-01T12:00:00+00:00', session_log: null }]
   };
   const parent = join(folder, '7-fixture.command.json');
-  await writeFile(parent, JSON.stringify(record));
-  await writeFile(join(folder, '11-fixture.command.json'), JSON.stringify({
+  await replaceRecord(parent, JSON.stringify(record));
+  await replaceRecord(join(folder, '11-fixture.command.json'), JSON.stringify({
     ...record, name: 'run-11', issue: { ...record.issue, number: 11, title: longTitle }
   }));
   const session = join(folder, '99-20261001T120000+0000-implement.logs.jsonl');
@@ -49,7 +50,7 @@ before(async () => {
   }));
   await writeFile(session, '');
   await writeFile(session.replace('.logs.jsonl', '.spans.jsonl'), JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) + '\n');
-  await writeFile(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
+  await replaceRecord(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
     ...record, kind: 'Run', name: 'ticket-99', issue: { ...record.issue, number: 99 }, parent_record: parent,
     started_at: '2026-10-01T12:00:10+00:00', ended_at: '2026-10-01T12:00:40+00:00', session_log: session,
     stages: [{ name: 'implement', began_at: '2026-10-01T12:00:10+00:00', session_log: session }]
@@ -58,7 +59,7 @@ before(async () => {
   const traceSession = join(folder, '10-20261001T120000+0000-implement.logs.jsonl');
   await writeFile(traceSession, await readFile(resolve(__dirname, '../../tests/fixtures/waterfall-logs.jsonl')));
   await writeFile(traceSession.replace('.logs.jsonl', '.spans.jsonl'), await readFile(resolve(__dirname, '../../tests/fixtures/waterfall-spans.jsonl')));
-  await writeFile(join(folder, '10-fixture.command.json'), JSON.stringify({
+  await replaceRecord(join(folder, '10-fixture.command.json'), JSON.stringify({
     ...record, kind: 'Run', name: 'trace-10', harness: 'muse', issue: { ...record.issue, number: 10 },
     session_log: traceSession,
     stages: [{ name: 'implement', began_at: record.started_at, session_log: traceSession }]
@@ -72,7 +73,7 @@ before(async () => {
     ]) } }]
   }] }] }] }) + '\n');
   for (const number of [8, 9]) {
-    await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify({
+    await replaceRecord(join(folder, `${number}-fixture.command.json`), JSON.stringify({
       ...record, kind: 'Run', name: `run-${number}`, issue: { ...record.issue, number, title: number === 8 ? null : record.issue.title },
       process_id: number === 9 ? process.pid : 0, process_start: number === 9 ? processStart : 'gone',
       outcome: null, ended_at: null,
@@ -136,7 +137,7 @@ test('Waterfall draws overlapping Session-trace spans and running start records'
   const died = JSON.parse(await readFile(recordPath, 'utf8'));
   died.outcome = null;
   died.ended_at = null;
-  await writeFile(recordPath, JSON.stringify(died));
+  await replaceRecord(recordPath, JSON.stringify(died));
   for (const width of [1200, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`${origin}/waterfall?command=widgets%2310`);
@@ -247,7 +248,7 @@ test('Waterfall issue titles stay brief, selectable and current at desktop and 3
   const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/11-fixture.command.json');
   const record = JSON.parse(await readFile(recordPath, 'utf8'));
   record.issue.title = 'Updated retained title';
-  await writeFile(recordPath, JSON.stringify(record));
+  await replaceRecord(recordPath, JSON.stringify(record));
   await page.locator('.chosen .command-title', { hasText: 'Updated retained title' }).waitFor({ state: 'attached' });
   await page.locator('details.command-choices > summary').click();
   await page.getByRole('link', { name: 'acme/widgets#11 · Updated retained title · merged', exact: true }).waitFor();

@@ -168,7 +168,9 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
 
 When no Commands are running, each bullet in the Inbox's **Last recorded skipped Passes** and **Last fired Passes** starts with its recorded date and time. A skipped reason uses its Activity log time, which repeated skips do not advance; a last-fired entry uses the saved Pass start and keeps its relative age. An unreadable skip time shows **Time unknown**.
 
-`thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+`thirdshift cronjobs` and the Console's Cron jobs page group this account's thirdshift crontab entries alphabetically by full `owner/repo`, preserving crontab order and duplicate jobs within each group. A literal `cd <directory> && ... thirdshift ...` command is associated through that directory's GitHub `origin` remote on the owning machine, using the same quoted and home paths as Launch directory discovery. Unresolved entries stay visible in a trailing **Other** group. Cron command text is never executed. The page gives each group its own terminal-style block, with **Run Passes now** and **Last fired by repository** kept separately below.
+
+`cronjobs --json` and `/api/v1/cronjobs` retain the object with a flat `jobs` array in group order (each entry's `schedule`, `command` and nullable `repository`) and independent `pass_starts`. A selected Fleet machine supplies its own repository associations; older inventories without that metadata display under **Other**. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Both this inventory and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
 
 `thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
@@ -1474,6 +1476,13 @@ limit is set, since the limit can't count it; its call is kept. Resuming gets
 the limit afresh and continues from the calls already made; none is graded
 again. When every Trial has run and only panel calls remain, the estimate lists
 just the panel and a terminal asks `Run the remaining Grader panel sessions?`.
+
+Before that estimate or any new paid work, resume reads every expected saved
+panel call, including later seats and orders behind a missing call. An unreadable
+or malformed call stops the command with its pair, seat and order, even with
+`--yes`; only a missing file is pending work. Correct the retained-call problem
+before resuming. Reports use the same completion facts and show a pair only
+once every seat has both saved orders.
 
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
