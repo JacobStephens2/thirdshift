@@ -919,14 +919,14 @@ fn github_work_left(
 
 /// Outer Command trees with live work anywhere in them, whatever their group:
 /// a Spec run's Tickets, and the run a Pass dispatched, count within it.
-pub(in crate::logs) fn active_runs(entries: &[Entry]) -> usize {
+pub(super) fn active_runs(entries: &[Entry]) -> usize {
     entries
         .iter()
         .filter(|entry| matches!(entry, Entry::Record(command) if active(command)))
         .count()
 }
 
-fn active(command: &Command) -> bool {
+pub(super) fn active(command: &Command) -> bool {
     command.state == "live"
         || command
             .dispatched

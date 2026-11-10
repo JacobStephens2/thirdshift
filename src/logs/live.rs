@@ -2,8 +2,6 @@
 use anyhow::Result;
 use chrono::Local;
 
-use super::reading::{Entry, Snapshot};
-
 pub(crate) struct Command {
     pub name: String,
     pub experiment: Option<String>,
@@ -12,20 +10,13 @@ pub(crate) struct Command {
 }
 
 pub(super) fn read(root: &std::path::Path) -> Result<Vec<Command>> {
-    let snapshot = Snapshot::load(root, Local::now())?;
+    let commands = super::reading::live_commands(root, Local::now())?;
     let host = crate::host::name().unwrap_or_else(|| "unknown".into());
-    Ok(snapshot
-        .entries()
+    Ok(commands
         .iter()
-        .filter_map(|entry| {
-            let Entry::Record(command) = entry else {
-                return None;
-            };
+        .filter_map(|command| {
             let record = &command.record;
-            if record.hostname != host
-                || record.process_id == std::process::id()
-                || super::reading::active_runs(std::slice::from_ref(entry)) == 0
-            {
+            if record.hostname != host || record.process_id == std::process::id() {
                 return None;
             }
             Some(Command {
