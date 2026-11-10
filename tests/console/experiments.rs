@@ -967,3 +967,49 @@ fn an_experiment_whose_harness_versions_differ_is_not_named_a_slash_a() {
     );
     assert!(!detail.contains("<h1>A/A at 71c7a497</h1>"), "{detail}");
 }
+
+#[test]
+fn a_verdict_on_the_peoples_sample_alone_counts_pairs_not_eval_tasks() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "8".repeat(64);
+    let path = fixture(home.path(), &id, "2026-10-29T10:00:00Z").join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut statistics = saved["bar"].clone();
+    statistics["trials_per_task"] = json!(1);
+    statistics["prediction"] =
+        json!({"simulations": 200, "interval_draws": 512, "max_additional_tasks": 2000});
+    saved["state"] = json!("completed");
+    let metric = json!({"difference_counts": [0, 4, 0], "verdict": "inconclusive",
+        "more_tasks": {"target_probability": 0.8, "additional_tasks": 9, "clear_probabilities": []},
+        "interval": {"lower": -0.3, "upper": 0.3}});
+    saved["verdict"] = json!({
+        "verdict": "inconclusive", "provisional_verdict": "inconclusive", "borderline_trials": 0,
+        "suites": {"code-review": {
+            "bar": statistics, "thirdshift_version": "fixture", "method": "paired-dirichlet-v3",
+            "accuracy": metric, "wrong_findings": metric, "verdict": "inconclusive",
+            "retained_tasks": 4, "dropped_tasks": 0, "pass_cubed": null
+        }}
+    });
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    for (people, units) in [
+        (json!(null), "Eval tasks"),
+        (
+            json!({"role": "counted", "readers": ["ann@example.com"], "sample": 4, "overlap": 0}),
+            "pairs",
+        ),
+    ] {
+        saved["bar"]["people"] = people;
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+        assert!(
+            html.contains(&format!("About 9 more {units} would settle it")),
+            "{units}: {html}"
+        );
+        assert!(
+            html.contains(&format!("4 retained {units}; 0 dropped")),
+            "{units}: {html}"
+        );
+    }
+}

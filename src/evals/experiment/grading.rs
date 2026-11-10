@@ -3,13 +3,14 @@
 
 pub(super) mod process;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use super::deciders::{Call, Decided, Deciders};
 use super::{Arm, Bar, Setup, Task, TrialResult};
 use crate::sandbox::code_grader::{self, Check};
 use crate::trial::{Outcome, Output};
@@ -109,6 +110,9 @@ pub(crate) struct Verdict {
     pub suites: BTreeMap<String, SuiteVerdict>,
     #[serde(default)]
     borderline_trials: usize,
+    /// Absent unless the Bar counts the panel's or the people's calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deciders: Option<Deciders>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -206,6 +210,7 @@ pub(crate) enum Conclusion {
     Inconclusive,
     WaitingOnRechecks,
     WaitingOnLeaks,
+    WaitingOnPeople,
 }
 
 impl From<Decision> for Conclusion {
@@ -224,6 +229,14 @@ impl Verdict {
             return;
         };
         let mut line = self.outcome().replace('_', " ");
+        if matches!(self.verdict, Conclusion::Inconclusive)
+            && let Some(reason) = self
+                .deciders
+                .as_ref()
+                .and_then(|deciders| deciders.inconclusive.as_ref())
+        {
+            line.push_str(&format!(" ({reason})"));
+        }
         if matches!(self.verdict, Conclusion::Pass) {
             line.push_str(if self.worse_within_margin_metrics().is_empty() {
                 ": no worse"
@@ -302,6 +315,7 @@ impl Verdict {
             Conclusion::Inconclusive => "inconclusive",
             Conclusion::WaitingOnRechecks => "waiting_on_rechecks",
             Conclusion::WaitingOnLeaks => "waiting_on_leaks",
+            Conclusion::WaitingOnPeople => "waiting_on_people",
         }
     }
 }
@@ -358,8 +372,9 @@ pub(super) fn assess(
     results: &[TrialResult],
     bar: &Bar,
     baseline: &Setup,
+    decided: &Decided,
 ) -> Result<(Verdict, Vec<Pending>)> {
-    let mut verdict = evaluate(tasks, results, bar, baseline, None)?;
+    let mut verdict = evaluate(tasks, results, bar, baseline, decided, None)?;
     let original = verdict
         .provisional_verdict
         .decision()
@@ -380,7 +395,7 @@ pub(super) fn assess(
         let mut decisive_flips = Vec::new();
         let mut decisive_verdicts = BTreeMap::new();
         for flip in [Flip::Passed, Flip::WrongFinding] {
-            let flipped = evaluate(tasks, results, bar, baseline, Some((index, flip)))?
+            let flipped = evaluate(tasks, results, bar, baseline, decided, Some((index, flip)))?
                 .provisional_verdict
                 .decision()
                 .expect("computed Verdict");
@@ -413,6 +428,14 @@ pub(super) fn assess(
     if pending.is_empty() {
         verdict.verdict = decision.into();
     }
+    // Calls still to come from people change Scores, so they come first.
+    if verdict
+        .deciders
+        .as_ref()
+        .is_some_and(|deciders| deciders.waiting_pairs > 0)
+    {
+        verdict.verdict = Conclusion::WaitingOnPeople;
+    }
     verdict.efficiency = Some(efficiency);
     verdict.update_line();
     Ok((verdict, pending))
@@ -423,20 +446,24 @@ fn evaluate(
     results: &[TrialResult],
     bar: &Bar,
     baseline: &Setup,
+    decided: &Decided,
     flip: Option<(usize, Flip)>,
 ) -> Result<Verdict> {
     let mut suites = BTreeMap::new();
     let mut total = 0;
     let mut dropped = 0;
+    let mut deciders = decided.report.clone();
     for (suite, &trials) in &bar.trials_per_task {
         let advisory = bar.advisory(suite);
+        // A Verdict on the people's sample alone takes each pair as a unit.
+        let unit = if decided.sample_only { 1 } else { trials };
         let statistics = verdict::Bar {
             margin: bar.margin,
             levels: bar.levels,
             prior: bar.prior,
             seed: bar.seed,
             draws: bar.draws,
-            trials_per_task: trials,
+            trials_per_task: unit,
             ..verdict::Bar::default()
         };
         let mut scores = Vec::new();
@@ -444,18 +471,21 @@ fn evaluate(
         let mut measurement = Vec::new();
         for task in tasks.iter().filter(|task| &task.suite == suite) {
             let judged = bar.judges(suite, &task.name);
+            let process = task.manifest.session == crate::evals::format::Session::Process;
             let mut measured_trials = Vec::new();
-            let mut paired = TaskScores {
-                baseline: Vec::new(),
-                candidate: Vec::new(),
-                dropped_as_void: false,
-            };
+            let dropped_as_void = results.iter().any(|result| {
+                result.suite == task.suite
+                    && result.task == task.name
+                    && result.outcome == Outcome::Void
+            });
+            // Each Trial's Score by its index, Baseline then Candidate.
+            let mut by_trial: BTreeMap<usize, [Option<verdict::Score>; 2]> = BTreeMap::new();
+            let mut left_out = BTreeSet::new();
             for (index, result) in results
                 .iter()
                 .enumerate()
                 .filter(|(_, result)| result.suite == task.suite && result.task == task.name)
             {
-                paired.dropped_as_void |= result.outcome == Outcome::Void;
                 let mut score = result
                     .score
                     .as_ref()
@@ -479,26 +509,53 @@ fn evaluate(
                         Flip::WrongFinding => score.wrong_finding = !score.wrong_finding,
                     }
                 }
-                let arm = match result.arm {
-                    Arm::Baseline => &mut paired.baseline,
-                    Arm::Candidate => &mut paired.candidate,
-                };
-                arm.push(score);
+                if judged && process && decided.report.is_some() {
+                    let key = super::trial_results::pair_key(&task.suite, &task.name, result.trial);
+                    match decided.calls.get(&key) {
+                        // A Trial passes only if the code Grader passes and
+                        // whoever decides its pair calls it ready.
+                        Some(Call::Ready {
+                            baseline,
+                            candidate,
+                            ..
+                        }) => {
+                            score.passed &= match result.arm {
+                                Arm::Baseline => *baseline,
+                                Arm::Candidate => *candidate,
+                            };
+                        }
+                        // Provisionally on the code Grader alone.
+                        Some(Call::Waiting) => {}
+                        Some(Call::Unread) => ensure!(
+                            dropped_as_void,
+                            "the Grader panel has no call on pair {key}"
+                        ),
+                        None => {
+                            left_out.insert(result.trial);
+                        }
+                    }
+                }
+                let slot = &mut by_trial.entry(result.trial).or_default()
+                    [usize::from(result.arm == Arm::Candidate)];
+                ensure!(slot.replace(score).is_none(), "duplicate Trial result");
             }
             ensure!(
-                paired.baseline.len() == trials && paired.candidate.len() == trials,
+                by_trial.len() == trials
+                    && by_trial
+                        .values()
+                        .all(|pair| pair.iter().all(Option::is_some)),
                 "missing Trial results"
             );
-            counts.void_dropped += usize::from(paired.dropped_as_void);
+            counts.void_dropped += usize::from(dropped_as_void);
             if !judged {
-                counts.measurement_only += usize::from(!paired.dropped_as_void);
+                counts.measurement_only += usize::from(!dropped_as_void);
                 measurement.push(Measurement {
                     task: task.name.clone(),
                     trials: measured_trials,
                 });
                 continue;
             }
-            if !paired.dropped_as_void {
+            if !dropped_as_void {
                 counts.judged += 1;
                 counts.other_setup +=
                     usize::from(task.manifest.difficulty.as_ref().is_some_and(|difficulty| {
@@ -507,12 +564,50 @@ fn evaluate(
                             || difficulty.model != baseline.model
                             || difficulty.effort != baseline.effort
                     }));
+                if let Some(report) = deciders.as_mut().filter(|_| process) {
+                    for trial in 0..trials {
+                        let key = super::trial_results::pair_key(&task.suite, &task.name, trial);
+                        match decided.calls.get(&key) {
+                            Some(Call::Ready { people: true, .. }) => report.people_pairs += 1,
+                            Some(Call::Ready { people: false, .. }) => report.panel_pairs += 1,
+                            Some(Call::Waiting) => report.waiting_pairs += 1,
+                            Some(Call::Unread) => {}
+                            None => report.left_out_pairs += 1,
+                        }
+                    }
+                }
             }
             if advisory != Some(true) {
-                dropped += usize::from(paired.dropped_as_void);
+                dropped += usize::from(dropped_as_void);
                 total += 1;
             }
-            scores.push(paired);
+            let mut paired = TaskScores {
+                baseline: Vec::new(),
+                candidate: Vec::new(),
+                dropped_as_void,
+            };
+            for (trial, [baseline, candidate]) in by_trial {
+                if left_out.contains(&trial) {
+                    continue;
+                }
+                paired.baseline.push(baseline.expect("checked Trial pair"));
+                paired
+                    .candidate
+                    .push(candidate.expect("checked Trial pair"));
+                if decided.sample_only {
+                    scores.push(std::mem::replace(
+                        &mut paired,
+                        TaskScores {
+                            baseline: Vec::new(),
+                            candidate: Vec::new(),
+                            dropped_as_void,
+                        },
+                    ));
+                }
+            }
+            if !decided.sample_only {
+                scores.push(paired);
+            }
         }
         // Counterfactuals need the seeded interval decision, never forecasts.
         let mut assessment = if flip.is_none() {
@@ -538,7 +633,10 @@ fn evaluate(
         .values()
         .filter(|suite| suite.advisory != Some(true))
         .collect();
-    let verdict = if deciding.is_empty() || dropped > total / 10 {
+    let low_agreement = deciders
+        .as_ref()
+        .is_some_and(|deciders| deciders.inconclusive.is_some());
+    let verdict = if deciding.is_empty() || dropped > total / 10 || low_agreement {
         Decision::Inconclusive
     } else if deciding
         .iter()
@@ -564,6 +662,7 @@ fn evaluate(
         provisional_verdict: Provisional::Recorded(Some(verdict)),
         suites,
         borderline_trials,
+        deciders,
     })
 }
 

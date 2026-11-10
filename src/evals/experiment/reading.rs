@@ -109,6 +109,7 @@ impl Observation {
             &observation.pairs,
             stored.description.bar.seed,
         )?;
+        observation.people.queues = super::deciders::queues(&stored.description.bar, &stored.tasks);
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions

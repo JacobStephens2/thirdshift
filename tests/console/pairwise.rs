@@ -495,3 +495,92 @@ fn sealed_merge_calls_cannot_be_replaced_or_remade_after_the_reveal() {
         "{html}"
     );
 }
+
+/// Sets the retained Bar's people, as `--people` flags would before the run.
+fn set_people(home: &Path, id: &str, people: Value) {
+    let path = home
+        .join(".thirdshift/evals/experiments")
+        .join(id)
+        .join("experiment.json");
+    let mut experiment: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    experiment["bar"]["people"] = people;
+    fs::write(&path, serde_json::to_vec(&experiment).unwrap()).unwrap();
+}
+
+#[test]
+fn each_readers_queue_lists_their_pairs_and_what_they_have_called() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let (id, pair) = fixture(home.path());
+    set_people(
+        home.path(),
+        &id,
+        json!({"role": "counted", "readers": ["token grader", "bo@example.com"], "sample": null, "overlap": 0}),
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let token = tokens::create(home.path(), "grader", &["--scopes", "act"]);
+    post(
+        &console,
+        &token,
+        &format!("/api/v1/experiments/{id}/pairs/{pair}/merge"),
+        &[("a", "ready"), ("b", "not-ready")],
+    );
+    let view = api::json(console.get(&format!("/api/v1/experiments/{id}")));
+    assert_eq!(
+        view["people"]["queues"],
+        json!([{"reader": "token grader", "pairs": [pair]}, {"reader": "bo@example.com", "pairs": [pair]}])
+    );
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    let section = html
+        .split_once("<section aria-label=\"People's calls\">")
+        .unwrap()
+        .1
+        .split_once("</section>")
+        .unwrap()
+        .0;
+    assert!(section.contains("counted in the Verdict"), "{section}");
+    let link = format!("<a href=\"/experiments/{id}/pairs/{pair}\">process/fixture #1</a>");
+    assert!(
+        section.contains(&format!(
+            "<h4>token grader</h4><ul><li>{link} · called</li></ul>"
+        )),
+        "{section}"
+    );
+    assert!(
+        section.contains(&format!(
+            "<h4>bo@example.com</h4><ul><li>{link} · to read</li></ul>"
+        )),
+        "{section}"
+    );
+    assert!(
+        section.contains("People–people agreement: no pair read by two readers"),
+        "{section}"
+    );
+}
+
+#[test]
+fn with_people_off_no_merge_call_is_taken() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let (id, pair) = fixture(home.path());
+    set_people(
+        home.path(),
+        &id,
+        json!({"role": "off", "readers": [], "sample": null, "overlap": 0}),
+    );
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let token = tokens::create(home.path(), "grader", &["--scopes", "act"]);
+    let refused = post(
+        &console,
+        &token,
+        &format!("/api/v1/experiments/{id}/pairs/{pair}/merge"),
+        &[("a", "ready"), ("b", "ready")],
+    );
+    assert_eq!(refused.status(), 422);
+    assert!(refused.text().unwrap().contains("people off"));
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(
+        html.contains("The Bar has people off: no one grades these pairs."),
+        "{html}"
+    );
+}

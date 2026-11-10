@@ -161,22 +161,6 @@ pub(crate) fn record(args: &[String]) -> Result<String> {
         });
     }
     experiment.refresh_verdict()?;
-    experiment.save()?;
-    super::retention::repositories(&experiment);
-    if let Some(log) = &experiment.details.command_log
-        && let Err(error) = crate::logs::experiment_rechecked(
-            log,
-            &experiment.description.id,
-            experiment
-                .verdict
-                .as_ref()
-                .expect("rechecked Verdict")
-                .outcome(),
-        )
-    {
-        crate::progress::step(format!(
-            "warning: could not update the Command record: {error:#}"
-        ));
-    }
+    experiment.publish_decided()?;
     experiment.render(json)
 }

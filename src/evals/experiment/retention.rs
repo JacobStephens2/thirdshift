@@ -50,7 +50,9 @@ pub(super) fn repositories(experiment: &Stored) {
         || experiment.verdict.as_ref().is_none_or(|verdict| {
             matches!(
                 verdict.verdict,
-                Conclusion::WaitingOnRechecks | Conclusion::WaitingOnLeaks
+                Conclusion::WaitingOnRechecks
+                    | Conclusion::WaitingOnLeaks
+                    | Conclusion::WaitingOnPeople
             )
         })
     {

@@ -134,7 +134,45 @@ it then names the Arm on each side with its `Setup`, the panel's calls, and
 every reader's records. Each record is kept as
 `reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
 ever added, numbered from `000000`, beside a `lock` file.
-People's calls are reported beside the Verdict and change no Score.
+People's calls are reported beside the Verdict and change no Score, unless
+the Bar counts them.
+
+Format 10 also adds who decides a Verdict ([ADR 0028](adr/0028-who-decides-a-verdict-is-fixed-in-the-bar.md)).
+`bar.panel.role` is `beside` (the default) or `counted`; `families` (2 by
+default) is how many families the voting panel must span to stand in for
+people, and `agreement` (0.8 by default) the least people–panel agreement, as
+a share of merge calls on the people's sample, at which it may. `bar.people`,
+absent when anyone may read any pair beside the Verdict, sets the people's
+`role` (`off`, `beside` or `counted`), the `readers`, the `sample` of pairs per
+reader (null when every reader reads every pair) and the `overlap` every
+reader's sample shares. The sample is drawn from the judged pairs of process
+Trials by the Bar's seed: the first `overlap` pairs drawn go to every reader,
+then each reader takes the next pairs alone. `people.queues` lists each
+reader's pairs. Readers need every judged process Eval task to name
+`process_grading.new_tests`, since people read pairs on their pair page. With
+the people `off`, merge calls are refused.
+
+When either is counted, a Trial of a judged process Eval task passes only if
+its Score passes and whoever decides its pair calls it ready, and the Verdict
+gains `deciders`. The people's call on a pair is each reader's latest blind
+merge call; on a pair several readers share, an Arm is ready only if every
+reader calls it ready. With only the panel counted, the panel decides every
+pair. With only people counted on a sample, the Verdict rests on the sampled
+pairs alone, each pair a unit of the statistics (the suite's `bar` then has one
+Trial per Eval task), and `left_out_pairs` counts the rest. With people counted
+on every pair, they decide every pair. With both counted, people decide the
+pairs they read and the panel stands in on the others; the Bar is refused
+before the first Trial when the voting panel spans fewer than `families`
+families, and the Verdict is `inconclusive` when `sample_agreement`, people–panel
+agreement on the sample counted per reader and side over the readers given each
+pair once all have called it, is below the Bar's level,
+with `inconclusive` saying why. `people_pairs`, `panel_pairs` and
+`waiting_pairs` count the judged pairs, outside Void-dropped tasks, each
+decided. The Verdict is `waiting_on_people` while a reader has not called a
+pair given to them; its `provisional_verdict` counts such pairs on their
+Scores alone. A reader's call recalculates a completed Experiment's Verdict.
+`people.people_agreement` compares readers' latest blind merge calls per side,
+two readers at a time, on pairs more than one has read.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -416,7 +454,10 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pairs": ["Pair"],
     "panel": ["PanelPair"],
     "panel_spend": "PanelSpend?",
-    "people": {"reviews": ["PairReview"], "agreement": {"compared": "integer", "agreed": "integer"}},
+    "people": {
+      "reviews": ["PairReview"], "agreement": "Agreement", "people_agreement": "Agreement",
+      "queues": [{"reader": "string", "pairs": ["string"]}]
+    },
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -453,16 +494,21 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "min_discriminating_tasks?": "integer",
     "cost_ceiling?": "number", "time_ceiling?": "number",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]},
-    "panel?": "Panel"
+    "panel?": "Panel", "people?": "People"
   },
   "Panel": {
     "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
-    "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number"
+    "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number",
+    "role": "beside|counted", "families": "integer", "agreement": "number"
   },
   "PanelSpend": {"sessions": "integer", "cost_usd": "number?", "seats": ["PanelSeatSpend"]},
   "PanelSeatSpend": {
     "harness": "string", "model": "string", "effort": "string?", "sessions": "integer", "cost_usd": "number?"
   },
+  "People": {
+    "role": "off|beside|counted", "readers": ["string"], "sample": "integer?", "overlap": "integer"
+  },
+  "Agreement": {"compared": "integer", "agreed": "integer"},
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
@@ -552,9 +598,14 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
   },
   "Verdict": {
-    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks",
+    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks|waiting_on_people",
     "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer",
-    "efficiency?": "Efficiency", "line?": "string"
+    "efficiency?": "Efficiency", "line?": "string", "deciders?": "Deciders"
+  },
+  "Deciders": {
+    "panel": "off|beside|counted", "people": "off|beside|counted",
+    "people_pairs": "integer", "panel_pairs": "integer", "waiting_pairs": "integer", "left_out_pairs": "integer",
+    "sample_agreement?": "Agreement", "inconclusive?": "string"
   },
   "Efficiency": {
     "quality_verdict": "Decision", "method": "string", "cost": "Comparison", "time": "Comparison"
