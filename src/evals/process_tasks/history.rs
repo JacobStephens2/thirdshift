@@ -56,7 +56,10 @@ pub(super) fn base(
     if original.head == pr.merge {
         return Ok(original.base.clone());
     }
-    let expected = patch_id(repository, &original.base, &original.head)?;
+    // A PR can merge updated main before it is squashed. Compare only the PR
+    // changes after the shared target ancestry, excluding those main changes.
+    let original_base = git(repository, &["merge-base", first, &original.head])?;
+    let expected = patch_id(repository, &original_base, &original.head)?;
     if patch_id(repository, first, &pr.merge)? == expected {
         return Ok((*first).into());
     }

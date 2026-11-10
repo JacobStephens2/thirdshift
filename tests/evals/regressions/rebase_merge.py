@@ -65,3 +65,75 @@ with tempfile.TemporaryDirectory(prefix='spec-rebase-merge-') as temporary:
     name = report['proposals'][0]['task']
     manifest = home / '.thirdshift/evals/suites/process/tasks' / name / 'task.toml'
     assert f'base = "{base}"' in manifest.read_text(), manifest.read_text()
+
+# Squash merges must exclude unrelated main changes already merged into the PR.
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+binary = Path(os.environ.get('THIRDSHIFT_TEST_BINARY', 'target/debug/thirdshift')).resolve()
+with tempfile.TemporaryDirectory(prefix='spec-squash-updated-base-') as temporary:
+    root = Path(temporary)
+    source = root / 'source'
+    source.mkdir()
+    home = root / 'home'
+    env = dict(os.environ, HOME=str(home), GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null')
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'user.name=Fixture', '-c',
+            'user.email=fixture@example.invalid', *args], cwd=source, env=env, text=True).strip()
+    git('init', '-q', '-b', 'main')
+    git('remote', 'add', 'origin', 'https://github.com/acme/widgets.git')
+    (source / 'src').mkdir()
+    (source / 'src/counter.py').write_text('COUNT = 1\n')
+    (source / 'src/unrelated.py').write_text('ENABLED = False\n')
+    git('add', '.')
+    git('commit', '-qm', 'Common ancestor')
+    ancestor = git('rev-parse', 'HEAD')
+    git('checkout', '-q', '-b', 'issue-7')
+    (source / 'src/counter.py').write_text('COUNT = 2\n')
+    (source / 'tests').mkdir()
+    (source / 'tests/regression.py').write_text('from pathlib import Path\nassert Path("src/counter.py").read_text() == "COUNT = 2\\n"\n')
+    git('add', '.')
+    git('commit', '-qm', 'Fix counter and add separate regression')
+    first_pr_commit = git('rev-parse', 'HEAD')
+    git('checkout', '-q', 'main')
+    (source / 'src/unrelated.py').write_text('ENABLED = True\n')
+    git('commit', '-qam', 'Independent main change')
+    actual_base = git('rev-parse', 'HEAD')
+    git('checkout', '-q', 'issue-7')
+    git('merge', '--no-edit', 'main')
+    original_head = git('rev-parse', 'HEAD')
+    git('checkout', '-q', 'main')
+    git('merge', '--squash', 'issue-7')
+    git('commit', '-qm', 'Squash merge PR 17')
+    merge = git('rev-parse', 'HEAD')
+    ticket = {'url': 'https://github.com/acme/widgets/issues/7', 'title': 'Fix counter',
+        'body': 'Count twice.', 'labels': {'nodes': [{'name': 'bug'}],
+        'pageInfo': {'hasNextPage': False}}, 'subIssues': {'totalCount': 0}}
+    candidate = {'number': 17, 'url': 'https://github.com/acme/widgets/pull/17',
+        'baseRefName': 'main', 'headRefName': 'issue-7',
+        'headRefOid': original_head, 'mergeCommit': {'oid': merge},
+        'commits': {'totalCount': 2, 'nodes': [{'commit': {'oid': first_pr_commit,
+            'parents': {'nodes': [{'oid': ancestor}]}}}]},
+        'closingIssuesReferences': {'nodes': [ticket], 'pageInfo': {'hasNextPage': False}}}
+    response = root / 'github.json'
+    response.write_text(json.dumps({'data': {'repository': {'pullRequests': {'nodes': [candidate]}}}}))
+    bin_directory = root / 'bin'
+    bin_directory.mkdir()
+    gh = bin_directory / 'gh'
+    gh.write_text('#!/usr/bin/env python3\nimport os\nprint(open(os.environ["FIXTURE_GITHUB"]).read())\n')
+    gh.chmod(0o755)
+    env.update(PATH=str(bin_directory) + os.pathsep + os.environ['PATH'], FIXTURE_GITHUB=str(response))
+    result = subprocess.run([str(binary), 'evals', 'propose-process', str(source)],
+        env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert len(report['proposals']) == 1, report
+    assert report['proposals'][0]['non_test_lines'] == 2, report
+    name = report['proposals'][0]['task']
+    manifest = home / '.thirdshift/evals/suites/process/tasks' / name / 'task.toml'
+    text = manifest.read_text()
+    assert f'base = "{actual_base}"' in text, f'Expected pre-merge main {actual_base}; selected ancestor {ancestor}:\n{text}'
