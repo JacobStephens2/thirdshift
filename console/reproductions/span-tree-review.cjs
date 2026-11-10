@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { createInterface } = require('node:readline');
 const { chromium } = require('playwright');
+const { replaceRecord } = require('../tests/records.cjs');
 const repo = resolve(__dirname, '../..');
 const binary = process.env.THIRDSHIFT_BINARY || join(repo, 'target/debug/thirdshift');
 async function reproduce(mode) {
@@ -21,7 +22,7 @@ async function reproduce(mode) {
     const session = join(folder, '7-fixture-implement.jsonl');
     const path = join(folder, '7-fixture.command.json');
     const record = { version: 1, kind: 'Run', repository: 'acme/widgets', name: 'issue-7', hostname: 'fixture', issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Widgets' }, process_id: process.pid, process_start: identity, harness: 'codex', started_at: new Date(start).toISOString(), ended_at: null, outcome: null, session_log: ['totals', 'phone'].includes(mode) ? session : null, stages: [{ name: 'implement', began_at: new Date(start).toISOString(), session_log: ['totals', 'phone'].includes(mode) ? session : null }] };
-    if (mode !== 'empty') await writeFile(path, JSON.stringify(record));
+    if (mode !== 'empty') await replaceRecord(path, JSON.stringify(record));
     if (['totals', 'phone'].includes(mode)) {
       const attr = (key, value) => ({ key, value: { stringValue: String(value) } });
       const span = (id, parentSpanId, name, operation, attrs = []) => ({ status: mode === 'phone' && operation === 'execute_tool' ? { code: 2, message: 'tool failed' } : undefined, spanId: id, parentSpanId, name, startTimeUnixNano: String(BigInt(start) * 1000000n), endTimeUnixNano: String(BigInt(start + 20000) * 1000000n), attributes: [attr('gen_ai.operation.name', operation), ...attrs] });
@@ -39,13 +40,13 @@ async function reproduce(mode) {
     await page.goto(`${origin}/waterfall`);
     if (mode === 'empty') {
       assert.match(await page.locator('main').textContent(), /No Commands yet/);
-      await writeFile(path, JSON.stringify(record));
+      await replaceRecord(path, JSON.stringify(record));
       await page.waitForSelector('#span-tree', { state: 'attached', timeout: 10000 });
       await page.waitForFunction(() => document.querySelectorAll('#span-tree [role="treeitem"]').length > 0, null, { timeout: 5000 });
     } else if (mode === 'chips') {
       await page.locator('#span-tree [role="treeitem"]').first().waitFor();
       record.ended_at = new Date().toISOString(); record.outcome = 'merged';
-      await writeFile(path, JSON.stringify(record));
+      await replaceRecord(path, JSON.stringify(record));
       await page.waitForFunction(() => document.querySelector('#span-tree')?.textContent.includes('merged') || !document.querySelector('#span-tree .span-status-running'), null, { timeout: 10000 });
       const tree = await (await page.request.get(`${origin}/spans?command=widgets%237`)).json();
       assert.equal(tree.spans[0].status, 'merged');

@@ -8,6 +8,7 @@ const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("./playwright.cjs");
 const { record: traceRecord } = require("./session-trace.cjs");
+const { replaceRecord } = require("./records.cjs");
 
   describe('Session trace', { timeout: 120000 }, () => {
     let home, server, exited, browser, origin, folder, log, recordPath, record, writer, writerExited;
@@ -35,7 +36,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
         started_at: new Date().toISOString(), ended_at: null, stages: [], session_log: sessionLog,
         outcome: null, cause: null, issue_branch: null, pull_request: null
       };
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift"), ["console", "--no-sign-in"], { env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "inherit"] });
       exited = once(server, "exit");
       const lines = createInterface({ input: server.stdout });
@@ -55,7 +56,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
         record.process_start = `${(await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()}:${fields[19]}`;
         record.outcome = null;
         record.ended_at = null;
-        await writeFile(recordPath, JSON.stringify(record));
+        await replaceRecord(recordPath, JSON.stringify(record));
       }
     });
     after(async () => {
@@ -121,7 +122,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
       await appendFile(log, message("Final unterminated line").trimEnd());
       record.outcome = "ready for review";
       record.ended_at = new Date().toISOString();
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       await page.waitForTimeout(650);
       assert.equal(await page.getByText("Final unterminated line", { exact: true }).count(), 0);
       writer.kill();
@@ -136,7 +137,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
       await appendFile(log, '\n');
       record.outcome = null;
       record.ended_at = null;
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       await appendFile(log, encode({ type: 'item.completed', item: {
         id: 'patch-live', type: 'file_change', status: 'completed',
         changes: [{ path: 'widgets.rs', kind: 'update' }]
@@ -165,7 +166,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
       await appendFile(log, "\n"); // Finish the preceding test's unterminated final event.
       record.outcome = null;
       record.ended_at = null;
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       const context = await browser.newContext();
       t.after(() => context.close());
       const page = await context.newPage();
@@ -243,7 +244,7 @@ const { record: traceRecord } = require("./session-trace.cjs");
     test('stable normalized messages update across stream batches and reload', { skip: process.platform !== 'linux' }, async t => {
       record.outcome = null;
       record.ended_at = null;
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       const snapshot = text => JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{
         body: { stringValue: 'retained raw snapshot' },
         attributes: [{ key: 'thirdshift.events', value: { stringValue: JSON.stringify([
