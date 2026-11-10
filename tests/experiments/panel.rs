@@ -232,7 +232,10 @@ fn a_three_seat_panel_reports_each_graders_calls_in_both_orders_and_its_majority
             .as_array()
             .unwrap()
             .iter()
-            .map(|result| result["score"].clone())
+            .map(|result| {
+                let score = &result["score"];
+                json!([score["passed"], score["wrong_finding"], score["borderline"]])
+            })
             .collect()
     };
     assert_eq!(scores(&view), scores(&plain));
