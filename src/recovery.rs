@@ -246,6 +246,43 @@ impl Recovery {
             .then_some(line)
     }
 
+    /// The Recovery comment for the issue a Run left `agent-failed`, for the
+    /// Day shift reading GitHub: the cause, where it stopped, what was
+    /// preserved and the machine, without local paths or the continue
+    /// command. See [`comment`].
+    pub fn comment(&self, cause: &str, pr_url: Option<&str>, machine: Option<&str>) -> String {
+        let mut facts = vec![format!("{STOPPED}{}", self.stage.name())];
+        if let Some((TicketProgress { landed, total }, reviewed)) = self.tickets {
+            let review = if reviewed { "complete" } else { "incomplete" };
+            facts.push(format!(
+                "{PROGRESS}{landed}/{total} Tickets landed; final review {review}"
+            ));
+        }
+        let branch = self.continuation.as_ref().map(|context| &context.branch);
+        let on = machine.unwrap_or("the machine that ran it");
+        let mut preserved = match (self.preservation, branch) {
+            (Preservation::Remote, Some(branch)) => format!("Issue branch `{branch}` on origin"),
+            (Preservation::Local, Some(branch)) => format!(
+                "Issue branch `{branch}` may exist only locally on {on}; its push was not confirmed"
+            ),
+            (Preservation::None, Some(_)) | (_, None) => "no work".to_string(),
+        };
+        if let Some(pr_url) = pr_url {
+            preserved += &format!(", with pull request {pr_url}");
+        }
+        if !self.local_child_work.is_empty() {
+            preserved += &format!("; some child work may exist only locally on {on}");
+        }
+        facts.push(format!("{PRESERVED}{preserved}"));
+        let retry = if self.spec_pr_changed {
+            "The Spec PR changed under the Spec run: decide the Spec's Base branch and Spec branch \
+             before putting `ready-for-agent` back to retry."
+        } else {
+            RETRY_BY_LABEL
+        };
+        render(cause, facts, machine, retry)
+    }
+
     pub fn is_line(line: &str) -> bool {
         [
             STOPPED,
@@ -262,6 +299,95 @@ impl Recovery {
         .iter()
         .any(|prefix| line.starts_with(prefix))
     }
+}
+
+/// How the Day shift retries a failed Run from GitHub.
+const RETRY_BY_LABEL: &str = "Put `ready-for-agent` back to retry.";
+
+/// Where a Run that failed with no [`Recovery`] stopped: before its work began.
+const BEFORE_WORK: &str = "Start, before any work began";
+
+/// The Recovery comment for a Run that failed with `cause` on the Issue
+/// branch `branch`, if known: [`Recovery::comment`] when it has a
+/// `recovery`, else, since it stopped before its work began, one naming only
+/// the Issue branch and its pull request `pr_url` as preserved, if there are
+/// any.
+pub fn comment(
+    recovery: Option<&Recovery>,
+    branch: Option<&str>,
+    cause: &str,
+    pr_url: Option<&str>,
+    machine: Option<&str>,
+) -> String {
+    if let Some(recovery) = recovery {
+        return recovery.comment(cause, pr_url, machine);
+    }
+    let preserved = match (branch, pr_url) {
+        (Some(branch), Some(pr_url)) => {
+            format!("Issue branch `{branch}`, with pull request {pr_url}")
+        }
+        (Some(branch), None) => format!("Issue branch `{branch}`, if it reached origin"),
+        (None, Some(pr_url)) => format!("pull request {pr_url}"),
+        (None, None) => "no work".to_string(),
+    };
+    let facts = vec![
+        format!("{STOPPED}{BEFORE_WORK}"),
+        format!("{PRESERVED}{preserved}"),
+    ];
+    render(cause, facts, machine, RETRY_BY_LABEL)
+}
+
+/// The comment's text: the attribution line, `cause` with local paths taken
+/// out, `facts` and the `machine`, then `retry`, how to retry.
+fn render(cause: &str, facts: Vec<String>, machine: Option<&str>, retry: &str) -> String {
+    let cause = without_local_paths(&cause.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut text = format!(
+        "{}\n\nthirdshift's Run on this issue failed, so it waits for the Day shift.\n\n\
+         - Cause: {cause}\n",
+        crate::github::GENERATED
+    );
+    for fact in facts {
+        text += &format!("- {fact}\n");
+    }
+    text += &format!("- Machine: {}\n\n{retry}\n", machine.unwrap_or("unknown"));
+    text
+}
+
+/// `text` with each absolute or home-relative local path in a word replaced
+/// by `<local path>`: one opening the word, past any opening quote or
+/// bracket, or following `=` or a `:` that does not start `://`, as in
+/// `--git-dir=/home/u/x` or `path:/home/u/x`. The path runs to the word's
+/// end, less closing punctuation, which is kept. A URL is not a local path.
+fn without_local_paths(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let Some(start) = local_path_start(word) else {
+                return word.to_string();
+            };
+            let rest = &word[start..];
+            let path = rest.trim_end_matches([')', ']', '\'', '"', '`', ',', '.', ';', ':']);
+            format!("{}<local path>{}", &word[..start], &rest[path.len()..])
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where the first local path in `word` starts, if it has one.
+fn local_path_start(word: &str) -> Option<usize> {
+    word.char_indices().find_map(|(at, _)| {
+        let rest = &word[at..];
+        if !(rest.starts_with('/') || rest.starts_with("~/")) {
+            return None;
+        }
+        let before = word[..at].chars().next_back();
+        let opens = match before {
+            None => true,
+            Some('(' | '[' | '\'' | '"' | '`' | '=') => true,
+            Some(':') => !rest.starts_with("//"),
+            Some(_) => false,
+        };
+        opens.then_some(at)
+    })
 }
 
 #[cfg(test)]
@@ -377,5 +503,132 @@ mod tests {
             "Preserved: work may exist only locally on issue-21 at /worktrees/issue-21; push was not confirmed"
         );
         assert!(has(&recovery, BEFORE_RETRYING));
+    }
+
+    #[test]
+    fn the_comment_names_the_cause_stop_preserved_branch_and_pull_request_machine_and_retry() {
+        let mut recovery = Recovery::new(Stage::Ci, Preservation::Remote);
+        recovery.add_command_context(context(), false);
+        assert_eq!(
+            recovery.comment(
+                "CI failed",
+                Some("https://github.com/acme/widgets/pull/3"),
+                Some("night-host")
+            ),
+            "This comment was generated by AI.\n\n\
+             thirdshift's Run on this issue failed, so it waits for the Day shift.\n\n\
+             - Cause: CI failed\n\
+             - Stopped at: CI watching\n\
+             - Preserved: Issue branch `issue-21` on origin, with pull request \
+             https://github.com/acme/widgets/pull/3\n\
+             - Machine: night-host\n\n\
+             Put `ready-for-agent` back to retry.\n"
+        );
+    }
+
+    #[test]
+    fn the_comment_leaves_out_local_paths_and_the_continue_command() {
+        let mut recovery = Recovery::new(Stage::Push, Preservation::Local);
+        recovery.add_command_context(context(), false);
+        recovery.record_worktree("/worktrees/issue-21".into());
+        recovery.add_child_work(["Ticket #22 kept at /kept/22".to_string()]);
+        let comment = recovery.comment(
+            "could not push (/worktrees/issue-21): see ~/.thirdshift/logs/a.jsonl,\nthen retry",
+            None,
+            Some("night-host"),
+        );
+        for local in [
+            "/worktrees",
+            "/kept",
+            "~/",
+            "/launch",
+            "thirdshift https://",
+        ] {
+            assert!(!comment.contains(local), "{local}: {comment}");
+        }
+        assert!(
+            comment
+                .contains("- Cause: could not push (<local path>): see <local path>, then retry\n"),
+            "{comment}"
+        );
+        assert!(
+            comment.contains(
+                "- Preserved: Issue branch `issue-21` may exist only locally on night-host; its \
+                 push was not confirmed; some child work may exist only locally on night-host\n"
+            ),
+            "{comment}"
+        );
+    }
+
+    #[test]
+    fn a_comment_without_a_recovery_names_the_branch_and_pull_request_it_has() {
+        let comment = comment(
+            None,
+            Some("issue-21"),
+            "could not create the worktree",
+            Some("https://github.com/acme/widgets/pull/3"),
+            None,
+        );
+        assert!(
+            comment.contains(
+                "- Preserved: Issue branch `issue-21`, with pull request \
+                 https://github.com/acme/widgets/pull/3\n- Machine: unknown\n"
+            ),
+            "{comment}"
+        );
+        assert!(
+            comment.contains("- Stopped at: Start, before any work began\n"),
+            "{comment}"
+        );
+    }
+
+    #[test]
+    fn a_comment_without_a_recovery_still_says_where_the_run_stopped() {
+        let comment = comment(
+            None,
+            Some("issue-21"),
+            "could not create the worktree",
+            None,
+            None,
+        );
+        assert!(comment.contains("- Stopped at: "), "{comment}");
+    }
+
+    #[test]
+    fn a_comment_after_the_spec_pr_changed_says_to_decide_before_retrying() {
+        let mut recovery = Recovery::new(Stage::Tickets, Preservation::Remote);
+        recovery.add_command_context(context(), false);
+        recovery.add_spec_pr_changed();
+        let comment = recovery.comment("Spec PR closed", None, Some("night-host"));
+        assert!(comment.contains("Spec PR changed"), "{comment}");
+    }
+
+    #[test]
+    fn the_comment_scrubs_a_path_joined_by_an_equals_sign() {
+        let comment = comment(
+            None,
+            None,
+            "git --git-dir=/home/u/repo/.git failed",
+            None,
+            None,
+        );
+        assert!(!comment.contains("/home/u"), "{comment}");
+    }
+
+    #[test]
+    fn the_comment_scrubs_a_path_after_a_colon_but_keeps_urls() {
+        let comment = comment(
+            None,
+            None,
+            "path:/home/u/x, see https://github.com/acme/widgets/pull/3",
+            None,
+            None,
+        );
+        assert!(
+            comment.contains(
+                "- Cause: path:<local path>, see https://github.com/acme/widgets/pull/3\n"
+            ),
+            "{comment}"
+        );
     }
 }

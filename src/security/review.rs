@@ -212,8 +212,22 @@ impl PrivateReportMaterial {
 }
 
 pub(crate) fn private_report_material(repo: &Repo) -> PrivateReportMaterial {
+    private_report_material_under(&logs::root(repo))
+}
+
+/// [`private_report_material`], or none before the logs are configured.
+pub(crate) fn private_report_material_if_configured(repo: &Repo) -> PrivateReportMaterial {
+    logs::root_if_configured(repo).map_or_else(
+        || PrivateReportMaterial {
+            fragments: Vec::new(),
+        },
+        |root| private_report_material_under(&root),
+    )
+}
+
+fn private_report_material_under(logs_root: &Path) -> PrivateReportMaterial {
     let mut fragments = Vec::new();
-    let root = logs::root(repo).join("security-reviews");
+    let root = logs_root.join("security-reviews");
     if is_real_dir(&root)
         && let Ok(entries) = fs::read_dir(&root)
     {

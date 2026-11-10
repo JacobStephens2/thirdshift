@@ -473,6 +473,11 @@ pub fn root(repo: &Repo) -> PathBuf {
     record().root(repo)
 }
 
+/// [`root`], or nothing before [`configured`].
+pub(crate) fn root_if_configured(repo: &Repo) -> Option<PathBuf> {
+    record().root_if_configured(repo)
+}
+
 /// The command whose folder holds this process's Session traces.
 pub fn command_kind() -> CommandKind {
     record().command_kind()

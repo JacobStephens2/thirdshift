@@ -494,16 +494,44 @@ impl HeldClaim<'_> {
         }
     }
 
-    fn end(&mut self, ending: claim::Ending) {
+    fn end(&mut self, ending: claim::Ending, comment: Option<String>) {
         if let Some(claim) = self.claim.take() {
-            claim.end(ending);
+            claim.end(ending, comment);
         }
     }
+
+    /// End the Claim as failed by `error` before any Step ran on `selection`'s
+    /// Issue branch, with its Recovery comment if the ending owes one, and
+    /// hand `error` on.
+    fn fail(&mut self, selection: &Selection, error: anyhow::Error) -> anyhow::Error {
+        self.end(
+            claim::Ending::Failed,
+            Some(before_steps_comment(selection, &error)),
+        );
+        error
+    }
+}
+
+/// The Recovery comment for a run on `selection`'s Issue branch that failed
+/// with `error` before its Steps left a Failed run: it names the Issue branch,
+/// and the pull request a Continuation continues.
+fn before_steps_comment(selection: &Selection, error: &anyhow::Error) -> String {
+    let pr_url = match selection {
+        Selection::Continuation { pr, .. } => pr.as_ref().map(|pr| pr.url.as_str()),
+        Selection::Fresh { .. } => None,
+    };
+    recovery::comment(
+        None,
+        Some(selection.branch()),
+        &format!("{error:#}"),
+        pr_url,
+        crate::host::name().as_deref(),
+    )
 }
 
 impl Drop for HeldClaim<'_> {
     fn drop(&mut self) {
-        self.end(claim::Ending::Failed);
+        self.end(claim::Ending::Failed, None);
     }
 }
 
@@ -920,14 +948,24 @@ fn run_issue_branch(
     };
     let checkout = match checkout {
         Ok(checkout) => checkout,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
+        }
     };
     let commit = if base == base_branch.name() {
         base_branch.origin_commit().to_string()
     } else {
         match launch_git.run(&["rev-parse", &format!("origin/{base}")]) {
             Ok(commit) => commit,
-            Err(error) => return Err(failed_before_steps(notification, error)),
+            Err(error) => {
+                return Err(failed_before_steps(
+                    notification,
+                    claim.fail(&selection, error),
+                ));
+            }
         }
     };
     let prepared = match prepare_from(
@@ -945,14 +983,27 @@ fn run_issue_branch(
         },
     ) {
         Ok(prepared) => prepared,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
+        }
     };
     if let Err(error) = refuse_unstartable(&prepared) {
-        return Err(failed_before_steps(notification, error));
+        return Err(failed_before_steps(
+            notification,
+            claim.fail(&selection, error),
+        ));
     }
     let repo = match launch::repo() {
         Ok(repo) => repo,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
+        }
     };
     let mut held = Some(checkout);
     // Session traces ask for the log root, which exists once this command is
@@ -960,6 +1011,9 @@ fn run_issue_branch(
     // for the issue.
     logs::begin(Begin::Process { name, pass: false });
     logs::configured(config);
+    if let Some(made) = &mut claim.claim {
+        made.capture_private_reports();
+    }
     let logs = session::Logs::of_run(&issue);
     let mut base_fix = BaseFix::new(None, BaseFixAsk::Forbid);
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
@@ -1001,20 +1055,25 @@ fn run_issue_branch(
     // Issue branch. Release the Claim, as a run that published nothing does,
     // instead of removing it the way a finished Delivery does.
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
+    let comment = match (&completed.failed_run, &result) {
+        (Some(failed), _) => Some(failed.comment(Some(&branch))),
+        (None, Err(error)) => Some(before_steps_comment(&selection, error)),
+        (None, Ok(_)) => None,
+    };
     drop(completed);
     if result.is_ok() && not_reproduced {
-        claim.end(claim::Ending::NotReproduced);
+        claim.end(claim::Ending::NotReproduced, None);
     } else if delivered && merged && result.is_ok() {
         // A Self-merge that merged ends the Claim as a Ticket run's does:
         // only once the issue is closed, so a closing that failed stays
         // visible.
-        claim.end(claim::Ending::Reached(Goal::Merged));
+        claim.end(claim::Ending::Reached(Goal::Merged), None);
     } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
     } else if result.is_ok() {
-        claim.end(claim::Ending::BeforeDelivery);
+        claim.end(claim::Ending::BeforeDelivery, None);
     } else {
-        claim.end(claim::Ending::Failed);
+        claim.end(claim::Ending::Failed, comment);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));

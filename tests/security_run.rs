@@ -1926,6 +1926,8 @@ fn the_security_run_ends_as_a_failed_fix_and_sends_one_private_metadata_notifica
         scenario.gh_state()["labels"]["8"],
         json!(["security-fix", "agent-failed"])
     );
+    // Its Recovery stays in the private advisory: no comment on the issue.
+    assert!(scenario.issue_comments(8).is_empty());
     let (subject, body) = the_one_notification(&resend);
     assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
     assert!(body.contains("critical"));
