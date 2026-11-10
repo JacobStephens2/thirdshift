@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 
 # The full suite starts helpers that import tomllib; refuse before selecting.
@@ -27,15 +28,42 @@ DOC_CHECKS = {
 }
 
 
+# Lines of a failing browser test's error message printed in the summary.
+ERROR_LINES = 15
+
+
 def git(*arguments):
     return subprocess.check_output(["git", *arguments])
 
 
+def print_error_block(lines):
+    lines = "\n".join(lines).rstrip("\n").splitlines()
+    for line in textwrap.dedent("\n".join(lines)).splitlines()[:ERROR_LINES]:
+        print(line, flush=True)
+    if len(lines) > ERROR_LINES:
+        print(f"({len(lines) - ERROR_LINES} more lines left out; see the log)", flush=True)
+
+
 def print_failures(log_path):
     panic = False
+    # A browser test's error block: its header's indentation, whether it ends
+    # at the first stack frame (the spec reporter's does), and its lines.
+    block = None
     with open(log_path, encoding="utf-8", errors="replace") as log:
         for line in log:
             line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).rstrip()
+            indent = len(line) - len(line.lstrip())
+            if block:
+                header_indent, ends_at_frame, lines = block
+                frame = re.fullmatch(
+                    r"at (?:.+:\d+:\d+\)?|.+ \((?:<anonymous>|index \d+)\))(?: \{)?",
+                    line.strip(),
+                )
+                if not line or (indent > header_indent and not (ends_at_frame and frame)):
+                    lines.append(line)
+                    continue
+                print_error_block(lines)
+                block = None
             if "panicked at" in line:
                 print(line, flush=True)
                 panic = True
@@ -44,12 +72,18 @@ def print_failures(log_path):
                     panic = False
                 else:
                     print(line, flush=True)
+            elif re.fullmatch(r"error: [|>][-+]?", line.strip()):
+                block = (indent, False, [])
             elif re.match(
                 r"test .+ \.\.\. FAILED$|(?:FAIL|TIMEOUT|SIG[A-Z0-9]+)\s"
                 r"|(?:FAIL|ERROR):|error(?:\[|:)"
                 r"|not ok \d+ - |✖ (?!failing tests:)", line.strip(),
             ):
                 print(line.strip(), flush=True)
+                if line.strip().startswith("✖ "):
+                    block = (indent, True, [])
+    if block:
+        print_error_block(block[2])
 
 
 def run(*command, cwd=None):
