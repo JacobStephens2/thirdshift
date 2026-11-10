@@ -26,6 +26,8 @@ trials_per_arm = 3
 
 [dependencies]
 factory_skills = ["skills/thirdshift-code-review/"]
+# Optional for process suites; omitted by existing review suites.
+builtin_processes = ["processes/", "src/processes.rs", "src/processes/"]
 session_prompts = ["src/prompt.rs"]
 harness_defaults = ["src/harness/", "src/config.rs"]
 model_defaults = ["src/config.rs", "src/setup.rs"]
@@ -34,7 +36,8 @@ effort_defaults = ["src/config.rs", "src/setup.rs"]
 
 `trials_per_arm` is a positive integer **per Eval task**. For example, the
 code-review suite uses three and the Spec-review suite uses one. All five
-dependency categories must be declared; an unused category is `[]`. Each entry
+original dependency categories must be declared; an unused category is `[]`.
+`builtin_processes` is optional and defaults to `[]`. Each entry
 is a repository-relative path: an exact file, or a directory prefix ending in
 `/`. Wildcards, absolute paths, `.` and `..` components are refused. The example
 selects this suite for `src/prompt.rs` or `src/harness/codex.rs`, but not
@@ -84,7 +87,37 @@ effort = "high"
   preserving its inputs and manifest comments. Approving again is harmless.
   It starts no work and affects future Experiments only; an existing
   Experiment keeps its fixed Eval tasks, including when resumed.
-- `session` is `code-review` or `spec-review`.
+- `session` is `code-review`, `spec-review` or `process`. Process tasks also
+  require `provenance = "real"` and `environment = "host"` at the top level.
+  They start at `base`, with the Ticket inputs and a local origin; `change`
+  remains a private reference fix and is not applied to their repository.
+  Their Arm's Built-in process runs through its local Steps, stopping before
+  publication. A delivered Trial passes only when both groups of code checks
+  in its required `process_grading` table pass. Stopped-to-ask and failed do
+  not pass. Review task checks and Model grading continue as before.
+
+  ```toml
+  [process_grading]
+  test_files = ["tests/counter.rs"]
+  test_fakes = ["tests/support/counter.rs"] # optional, defaults to []
+  fail_to_pass = [["cargo", "test", "--offline", "--test", "counter", "regression"]]
+  pass_to_pass = [["cargo", "test", "--offline", "--test", "counter", "neighbor"]]
+  ```
+
+  `test_files` is nonempty; `test_fakes` names shared test fakes changed by
+  the reference fix. Each path is confined and relative to the repository.
+  Both selector groups require at least one nonempty argument vector.
+  After the Trial, the Grader exports its final commit, discarding uncommitted,
+  untracked and ignored files. It replaces the named tests and fakes with their
+  contents and executable modes from `change`, then runs `fail_to_pass` followed
+  by `pass_to_pass`. Selectors share build artifacts in this private copy.
+  They run offline in bwrap, sharing the Bar's timeout with preparation of the
+  final-commit snapshot. Nonzero exits and
+  timeouts fail checks; the Score records the selector and its reason. Editing
+  the overlaid files cannot help a Trial pass. Python selectors search the
+  repository after the standard library, so a committed module cannot replace
+  one. Process tasks use this table instead of `checks`; review tasks cannot
+  use it.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the
@@ -102,15 +135,16 @@ effort = "high"
   `thirdshift evals` (also `evals list`, optionally `--json`) lists the table or
   `null`, plus `measured` and `discriminating` booleans for each Eval task.
 - `repository` names a local Git repository holding both commits, absolute or
-  relative to the Eval task's folder. Preparation never fetches from the network.
+  relative to the Eval task's folder. History import is local. Process screening
+  runs on the host with network access so test tools can install dependencies.
 - `base` and `change` are full commit object IDs (SHA-1 or SHA-256). The base must
   be an ancestor of the change. `base` is the last history visible to a Trial;
   `change` supplies the working-tree diff under review. They may be equal for a
   Spec-review Eval task needing no initial code diff.
-- `criteria` is nonempty written success criteria for a model Grader. `checks`
+- `criteria` is nonempty written success criteria for a model Grader. Review `checks`
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
-  executed by preparation. After a Trial, the Experiment runs each check with
+  executed by review-task preparation. After a Trial, the Experiment runs each check with
   an isolated copy of the prepared repository, captured before the session,
   as its working directory. Session edits and commits cannot change the code
   these checks grade. Exit zero
@@ -233,13 +267,68 @@ an otherwise successful Trial void with `repository_changed`. Ordinary Issue
 branch commits, pushes to the local origin, report files, and other tracked,
 untracked or ignored working-tree changes do not void a Trial. For tasks with
 `checks`, a private copy captured before the session supplies their repository;
-checks share their own build artifacts, never the session's edits.
+checks share their own build artifacts, never the session's edits. Process
+Trials instead grade the final commit with the reference fix's test overlay,
+as described in `process_grading` above.
 `evals verify` retains its
 inspection contract: it expects the detached base, before the synthetic commit.
 
 These commands prepare data for the Experiment runner; they start no Harness,
 Trial or Grader. Isolation of the session's home, processes and network belongs
 to the runner's sandbox, not to this Git preparation step.
+
+## Process task preparation and proposals
+
+Process tasks record their separate tests and command-vector selectors:
+
+```toml
+[process_grading]
+test_files = ["tests/counter.rs"]
+test_fakes = ["tests/support/mod.rs"]
+fail_to_pass = [["cargo", "test", "--test", "counter", "increments"]]
+pass_to_pass = [["cargo", "test", "--test", "counter"]]
+```
+
+The optional `[process_grading.real_fix]` table retains private leak-check
+identifiers: `pull_request` and `issue` URLs, `branch`, `title`, and `issue_title`. Proposals
+populate these from the source Ticket and pull request. The merge commit is
+always `change`. Older manually authored tasks also check their available
+`trial` references and the reference commit's title. This data stays outside the
+Trial request and prepared repository.
+
+`evals prepare` requires this selection for process tasks. In disposable
+checkouts it overlays these files from `change` onto both `base` and `change`,
+then requires every fail-to-pass selector to fail at the base and pass at the
+merge. A refusal names the selector and side. Each command has a ten-minute
+deadline and runs with host network access. A changed inline Rust test module
+in a source file is refused, naming the file; production edits outside an
+unchanged inline test module remain eligible. Separate overlays must be regular
+test files and may not cross symlinks; executable modes are preserved. Screening leaves the source checkout
+untouched, and the prepared Trial still contains only base history and Ticket
+inputs, with neither the fix nor its test overlay exposed.
+
+`thirdshift evals propose-process <repository> [--limit <1..100>]` reads recent
+merged GitHub pull requests for a local repository's origin and drafts private
+`process` Eval tasks. It lists each qualifying pull request's bug or feature
+kind, non-test added/deleted line count, test files, shared fakes and selectors.
+Pull requests must close a Ticket (an issue with no sub-issues), change source,
+and have separate tests without changed inline tests. Rust integration tests
+and Python test scripts are recognized automatically; other layouts are reported
+as skipped for manual task authoring. Security fixes are excluded. The command
+keeps a private repository holding both commits and writes the Ticket title and
+body as `.thirdshift-issue.md` input. Proposals are not screened or approved
+automatically: review the selectors and issue input before approval and
+preparation. Repeating the command preserves existing proposals and approvals.
+Merge, squash and rebase ranges include the entire Ticket's change. For rewritten
+linear history, discovery compares the original PR's patch with the merged
+range; an ambiguous range is skipped for manual task authoring. The API twin,
+`POST /api/v1/evals/propose-process`, requires `admin` and accepts a known Launch
+directory's `owner/repo` plus an optional `limit`, rather than a filesystem path.
+
+The new suite has three Trials per Eval task. Its dependencies include the
+implement, tdd, codebase-design, code-review and security-audit Factory skills,
+Built-in process files and their Rust engine, and the other suites' Session
+prompt, Harness, Model and Effort sources. Selection remains manifest-driven.
 
 ## One-time import of #429's material
 
@@ -330,6 +419,23 @@ Harnesses use their CLI names (`claude`, `codex`, `agy`, `grok`, `muse`,
 to a new file at `<record.json>`. Its parent directory must exist. It records
 `baseline` and `candidate`, each with `commit`, the cached thirdshift `binary`,
 and a `harness` holding its `name`, resolved `path` and `version`.
+
+Append `--baseline-process <name-or-file.toml>` or
+`--candidate-process <name-or-file.toml>` to freeze a Process per Arm; the
+unspecified Arm then uses `ticket-run`. Names resolve Built-in processes or
+Custom processes in `~/.thirdshift/processes/`. Each Arm's optional `process`
+contains `name`, a private frozen `directory`, a `files` map from home-relative
+paths to SHA-256 hashes, and `steps` with each Step's `name`, pinned `harness`,
+`model` and `effort`. Home skills come from `~/.thirdshift/skills/`; their full
+directories are frozen, including helpers. Factory skills stay in the build,
+and repository skills stay in the Eval task. The flags `--baseline-model`,
+`--baseline-effort`, `--candidate-model` and `--candidate-effort` set inherited
+Step choices; fields explicitly set by a Step take precedence.
+
+Frozen folders live beside the Arm record. Keep them with the record. Before
+every Trial the Experiment checks both Arms' file sets and content hashes,
+then copies verified bytes into that Trial's fresh home. A changed, added or
+missing file stops the Experiment with its filename before that Trial starts.
 
 Each missing build runs `cargo build --release --locked` in a detached worktree
 at that Arm's commit, with a private target directory. The finished executable

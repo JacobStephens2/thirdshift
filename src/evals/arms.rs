@@ -12,9 +12,15 @@ use super::format;
 use crate::harness::Harness;
 use crate::process::{self, Control, Interruption};
 
+mod frozen;
+pub(crate) use frozen::Process;
+
 pub(crate) struct Requested {
     commit: String,
     harness: Harness,
+    process: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 impl Requested {
@@ -23,7 +29,52 @@ impl Requested {
         Ok(Self {
             commit: commit.into(),
             harness: Harness::named(harness).context("unknown Arm Harness")?,
+            process: None,
+            model: None,
+            effort: None,
         })
+    }
+
+    pub fn with_process(
+        mut self,
+        process: Option<&str>,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Self {
+        self.process = process.map(String::from);
+        self.model = model.map(String::from);
+        self.effort = effort.map(String::from);
+        self
+    }
+
+    pub fn options(arms: &mut [Self; 2], options: &[String]) -> Result<()> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut options = options.iter();
+        while let Some(flag) = options.next() {
+            anyhow::ensure!(seen.insert(flag), "repeated {flag}");
+            let value = options
+                .next()
+                .with_context(|| format!("{flag} requires a value"))?;
+            let (index, field) = if let Some(field) = flag.strip_prefix("--baseline-") {
+                (0, field)
+            } else if let Some(field) = flag.strip_prefix("--candidate-") {
+                (1, field)
+            } else {
+                bail!("unknown Arm flag: {flag}");
+            };
+            match field {
+                "process" => arms[index].process = Some(value.clone()),
+                "model" => arms[index].model = Some(value.clone()),
+                "effort" => arms[index].effort = Some(value.clone()),
+                _ => bail!("unknown Arm flag: {flag}"),
+            }
+        }
+        if arms.iter().any(|arm| arm.process.is_some()) {
+            for arm in arms {
+                arm.process.get_or_insert_with(|| "ticket-run".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -39,6 +90,8 @@ pub(crate) struct Arm {
     pub commit: String,
     pub binary: PathBuf,
     pub harness: FixedHarness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<Process>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -55,26 +108,55 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
     let [baseline, candidate] = arms;
     // Resolve all Harnesses at the start, before either potentially long build.
     // The same Harness is resolved only once even when both Arms use it.
-    let baseline_harness = fixed_harness(baseline.harness)?;
-    let candidate_harness = if baseline.harness == candidate.harness {
-        baseline_harness.clone()
-    } else {
-        fixed_harness(candidate.harness)?
-    };
+    let parent = record
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let frozen = tempfile::Builder::new()
+        .prefix(".arm-inputs-")
+        .tempdir_in(parent)?;
+    let frozen_root = frozen.path().canonicalize()?;
+    let mut pinned = std::collections::BTreeMap::new();
+    let baseline_harness = frozen::pin(baseline.harness, &mut pinned)?;
+    let candidate_harness = frozen::pin(candidate.harness, &mut pinned)?;
+    let mut baseline_process =
+        Process::freeze(&baseline, &frozen_root.join("baseline"), &mut pinned, None)?;
+    let mut candidate_process = Process::freeze(
+        &candidate,
+        &frozen_root.join("candidate"),
+        &mut pinned,
+        None,
+    )?;
     let builds = crate::config::home()?.join(".thirdshift/evals/builds");
     fs::create_dir_all(&builds)?;
     let builds = builds.canonicalize()?;
+    let baseline_binary = build(repository, &builds, &baseline.commit)?;
+    let candidate_binary = build(repository, &builds, &candidate.commit)?;
+    Process::from_build(
+        &baseline,
+        &baseline_binary,
+        &mut baseline_process,
+        &mut pinned,
+    )?;
+    Process::from_build(
+        &candidate,
+        &candidate_binary,
+        &mut candidate_process,
+        &mut pinned,
+    )?;
     let prepared = Prepared {
         format: 1,
         baseline: Arm {
-            binary: build(repository, &builds, &baseline.commit)?,
+            binary: baseline_binary,
             commit: baseline.commit,
             harness: baseline_harness,
+            process: baseline_process,
         },
         candidate: Arm {
-            binary: build(repository, &builds, &candidate.commit)?,
+            binary: candidate_binary,
             commit: candidate.commit,
             harness: candidate_harness,
+            process: candidate_process,
         },
     };
     let json = serde_json::to_string_pretty(&prepared)?;
@@ -87,6 +169,9 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
     temporary
         .persist_noclobber(record)
         .with_context(|| format!("can't publish Arm record {}", record.display()))?;
+    if prepared.baseline.process.is_some() || prepared.candidate.process.is_some() {
+        let _ = frozen.keep();
+    }
     Ok(prepared)
 }
 

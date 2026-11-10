@@ -1,8 +1,8 @@
 # Trial protocol, version 1
 
-`thirdshift --trial /absolute/path/request.json` runs one session in a prepared
-repository through the same session code as a Run. This internal flag is hidden
-from `help`. `session_kind` accepts `code-review` and `spec-review`.
+`thirdshift --trial /absolute/path/request.json` runs a review session or the
+local Ticket Step prefix in a prepared repository through Run execution code. This internal flag is hidden
+from `help`. `session_kind` accepts `code-review`, `spec-review` and `process`.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
 The current Experiment supervises their Session traces (or older Arms' raw Session logs) for plan-limit
@@ -27,6 +27,41 @@ the index unchanged; it fixes and publishes nothing. Its `pr_url` input remains
 required by version 1 but is unused.
 A Trial does not acquire a Worktree,
 make a Claim, fetch the issue, push, watch CI, or perform Delivery itself.
+
+A `process` request exercises a Built-in or Custom process through the Process
+engine's local Ticket source. The caller checks out `inputs.branch`, supplies
+`inputs.base` as a local branch and sets `origin` to an absolute local repository
+directory, with a repository-local Git author identity for commits inside the
+fresh home. The engine runs the Process's Steps, preserving their Harness,
+Model and Effort choices, and stops before the first publishing Step. The
+local source refuses `delivery` and `self-merge` if asked to execute either.
+The optional `process` field accepts a name or a frozen `.toml` file and defaults
+to `ticket-run`. Processes that need GitHub before publication are refused
+before a Trial starts. Experiments set `THIRDSHIFT_TRIAL_HOME` to the attempt's
+fresh home containing only its frozen Process and home skills. Skill lookup
+uses that home, and the sandbox uses it as the session's home while reading
+Harness logins from the production home as usual.
+
+Before each session, including Resume, the local source restores the supplied
+issue file. Its prompts instruct the agent to commit locally, with no GitHub
+publication. Security review uses the Issue branch's diff against the local
+Base branch; validated pre-existing findings stay under `output_dir`, with no
+Security record published. A failed or incomplete Security review fails the
+local Process. Step results and Session traces are also kept under `output_dir`;
+the result's `log` and `model_evidence` identify the last session. `pr_url` remains
+required by version 1 and is unused for a local Process.
+
+Process results end `delivered`, `stopped_to_ask`, `failed` or `void`.
+`delivered` means every local Step finished up to the first publishing Step;
+it publishes nothing. A final message ending in a question mark, including
+ordinary Markdown emphasis or quotation around the question, is
+`stopped_to_ask`, counted as failed in the Verdict. The existing external Void
+causes still apply. The result's `steps` array retains each completed Step's
+name, outcome, start/end times and elapsed milliseconds. Sessions and Step
+spans join the Experiment's Trace, and all evidence lives under its Trial
+attempt. Trials create no factory Command records, Activity entries or run
+metrics. Repository changes are expected for process Trials; the repository
+integrity rule applies only to review Trials.
 
 ## Request
 

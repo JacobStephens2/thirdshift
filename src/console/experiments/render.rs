@@ -25,6 +25,11 @@ struct Status {
 
 fn status(view: &View) -> Status {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => Status {
+            label: "Waiting on leak decisions",
+            tone: "look",
+            group: 1,
+        },
         Some(Conclusion::Pass) => Status {
             label: "Pass",
             tone: "done",
@@ -87,6 +92,14 @@ fn now(view: &View) -> String {
         );
     };
     let mut reasons = Vec::new();
+    let pending_leaks = view
+        .leak_hits
+        .iter()
+        .filter(|hit| hit.decision.is_none())
+        .count();
+    if pending_leaks > 0 {
+        reasons.push(format!("{pending_leaks} leak decisions waiting"));
+    }
     if !view.pending_rechecks.is_empty() {
         reasons.push(format!(
             "{} rechecks waiting, provisionally {}",
@@ -235,7 +248,7 @@ fn question(view: &View) -> String {
     )
 }
 
-pub(super) fn detail(view: &View) -> String {
+pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     let id = esc(&view.description.id);
     let command_log = view.details.command_log.as_ref().map_or_else(
         || "Command log unavailable".into(),
@@ -276,10 +289,24 @@ pub(super) fn detail(view: &View) -> String {
                 ));
             }
         } else {
-            html.push_str("<p>Trials fill in as they finish. Model Graders then score each Eval task's blind packet before the Verdict appears.</p>");
+            html.push_str("<p>Trials fill in as they finish. Model Graders then score review tasks' blind packets; process tasks are scored on their outcome.</p>");
         }
     }
+    html.push_str(&leaks(view, csrf, can_act));
     html.push_str(&verdict(view));
+    if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
+        html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
+        for (label, counts) in [
+            ("Baseline", &view.outcomes.baseline),
+            ("Candidate", &view.outcomes.candidate),
+        ] {
+            html.push_str(&format!(
+                "<dt>{label}</dt><dd>{} delivered · {} stopped-to-ask · {} failed</dd>",
+                counts.delivered, counts.stopped_to_ask, counts.failed
+            ));
+        }
+        html.push_str("</dl></section>");
+    }
     for finding in &view.findings {
         html.push_str(&format!(
             "<p class=\"experiment-callout\">Finding: {}</p>",
@@ -300,6 +327,9 @@ pub(super) fn detail(view: &View) -> String {
 
 fn lead(view: &View) -> String {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => {
+            "Review the pending Session evidence leak hits before the Verdict is final.".into()
+        }
         Some(Conclusion::WaitingOnRechecks) => format!(
             "Provisionally {}, until you recheck {} Scores.",
             decision(
@@ -323,6 +353,33 @@ fn lead(view: &View) -> String {
         }
         None => now(view),
     }
+}
+
+fn leaks(view: &View, csrf: &str, can_act: bool) -> String {
+    if view.leak_hits.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(
+        "<section class=\"experiment-callout\" id=\"experiment-leaks\" aria-label=\"Session evidence leak check\"><h2>Session evidence leak check</h2><p>Review each match to the real fix. Dismiss false positives to keep the Trial; confirm a leak to make it Void. Decisions retain the reviewer and reason.</p><ul>",
+    );
+    for hit in &view.leak_hits {
+        html.push_str(&format!("<li><p><strong>{}</strong> · {} · <code>{}</code></p><p>Trial <code>{}</code> · attempt {} · <a href=\"/experiments/{}/sessions/{}\">Session evidence</a> · Session evidence line {}</p>", hit.status(), hit.kind, esc(&hit.identifier), esc(&hit.trial_id), hit.attempt + 1, esc(&view.description.id), esc(&hit.session), hit.line));
+        if let Some(decision) = &hit.decision {
+            html.push_str(&format!(
+                "<p>{} · {} · {}</p>",
+                esc(&decision.reviewer.to_string()),
+                when(&decision.recorded_at),
+                esc(&decision.reason)
+            ));
+        } else if can_act && !active(view) {
+            html.push_str(&format!("<form method=\"post\" action=\"/experiments/{}/leaks/{}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><label>Reason <input name=\"reason\" required></label><button name=\"decision\" value=\"dismiss\">Dismiss false positive</button><button name=\"decision\" value=\"confirm\">Confirm leak</button></form>", esc(&view.description.id), esc(&hit.id), esc(csrf)));
+        } else if active(view) {
+            html.push_str("<p>Decide after the Experiment stops.</p>");
+        }
+        html.push_str("</li>");
+    }
+    html.push_str("</ul></section>");
+    html
 }
 
 fn points(value: f64) -> String {
@@ -404,6 +461,12 @@ fn verdict(view: &View) -> String {
     };
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
+    if let Some(line) = &verdict.line {
+        html.push_str(&format!(
+            "<p class=\"experiment-resource-verdict\">{}</p>",
+            esc(line)
+        ));
+    }
     for (name, suite) in &verdict.suites {
         let advisory = suite.advisory == Some(true);
         let counts = suite.counts.as_ref();
@@ -708,9 +771,11 @@ impl<'a> Cell<'a> {
         self.terminal
             && self.result.is_some_and(|r| {
                 r.outcome != Outcome::Void
-                    && r.score
-                        .as_ref()
-                        .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
+                    && r.score.as_ref().is_some_and(|s| {
+                        r.outcome == Outcome::Delivered
+                            || s.model.is_some()
+                            || s.checks.iter().any(|c| !c.passed)
+                    })
             })
     }
     fn passed(&self) -> bool {
@@ -830,7 +895,7 @@ impl<'a> Cell<'a> {
                         esc(&model.label)
                     ));
                 } else {
-                    html.push_str("Not graded by the Model Grader yet.");
+                    html.push_str("No Model Grader assessment.");
                 }
                 html.push_str("</dd>");
                 for recheck in &score.rechecks {
@@ -871,7 +936,7 @@ impl<'a> Cell<'a> {
             html.push_str("<h3>Attempts</h3><ol>");
             for (index, attempt) in result.attempts.iter().enumerate() {
                 html.push_str(&format!(
-                    "<li>{}{}{} · {:.1} minutes · {}</li>",
+                    "<li>{}{}{} · {:.1} minutes · {}",
                     attempt.outcome,
                     attempt
                         .void_cause
@@ -885,6 +950,21 @@ impl<'a> Cell<'a> {
                     attempt.timings.total_ms as f64 / 60_000.0,
                     self.sessions(index)
                 ));
+                if !attempt.steps.is_empty() {
+                    html.push_str("<h4>Steps</h4><ol>");
+                    for step in &attempt.steps {
+                        html.push_str(&format!(
+                            "<li>{} · {} · {:.1}s · {} to {}</li>",
+                            esc(&step.name),
+                            step.outcome,
+                            step.elapsed_ms as f64 / 1000.0,
+                            when(&step.started_at),
+                            when(&step.ended_at)
+                        ));
+                    }
+                    html.push_str("</ol>");
+                }
+                html.push_str("</li>");
             }
             html.push_str("</ol>");
         }
@@ -1119,7 +1199,7 @@ fn arms(view: &View) -> String {
         &view.voids.baseline.to_string(),
         &view.voids.candidate.to_string(),
     ));
-    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></details></section>");
+    html.push_str("</tbody></table><p>The Bar's optional cost and time ceilings apply to frozen-price accounting. This table shows Harness-reported usage; unknown usage was not reported by the Harness.</p></details></section>");
     html
 }
 
@@ -1133,6 +1213,17 @@ fn change(baseline: Option<f64>, candidate: Option<f64>) -> String {
 
 fn bar(view: &View) -> String {
     let b = &view.description.bar;
+    let ceiling = |ratio: Option<f64>| {
+        ratio.map_or_else(
+            || "Off".into(),
+            |ratio| format!("{ratio:.3}× Candidate/Baseline"),
+        )
+    };
+    let ceilings = format!(
+        "<dt>Cost ceiling</dt><dd>{}</dd><dt>Time ceiling</dt><dd>{}</dd>",
+        ceiling(b.cost_ceiling),
+        ceiling(b.time_ceiling)
+    );
     let levels = match b.levels {
         crate::verdict::Levels::Separate {
             pass_level,
@@ -1179,7 +1270,7 @@ fn bar(view: &View) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}{ceilings}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
         b.prior,
         b.seed,

@@ -9,7 +9,12 @@ fn machine_changes_require_admin_and_import_theme_content_without_paths() {
     let client = reqwest::blocking::Client::new();
     for scope in ["read", "act", "run"] {
         let token = tokens::create(home.path(), scope, &["--scopes", scope]);
-        for route in ["/update", "/themes", "/evals/import-replays"] {
+        for route in [
+            "/update",
+            "/themes",
+            "/evals/import-replays",
+            "/evals/propose-process",
+        ] {
             let response = client
                 .post(format!("{}/api/v1{route}", console.address))
                 .bearer_auth(&token)
@@ -60,6 +65,27 @@ fn machine_changes_require_admin_and_import_theme_content_without_paths() {
             .unwrap()
             .iter()
             .any(|event| event["event"] == "theme-saved" && event["email"] == "owner")
+    );
+}
+
+#[test]
+fn process_proposals_require_a_known_launch_directory() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let token = tokens::create(home.path(), "data-owner", &["--scopes", "admin"]);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = reqwest::blocking::Client::new()
+        .post(format!("{}/api/v1/evals/propose-process", console.address))
+        .bearer_auth(&token)
+        .json(&json!({"repository":"/tmp/not-a-known-repository", "limit":10}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+    assert!(
+        response.json::<Value>().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("no known Launch directory")
     );
 }
 

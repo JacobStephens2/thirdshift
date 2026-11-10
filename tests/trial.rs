@@ -1,5 +1,7 @@
 //! Trials use the Run's session machinery without creating a Command.
 
+#[path = "trial/process.rs"]
+mod process;
 mod support;
 
 use std::fs;

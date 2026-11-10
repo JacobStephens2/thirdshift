@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
@@ -71,6 +72,9 @@ fn prepare_repository(
         &source,
         &["merge-base", "--is-ancestor", &task.base, &task.change],
     )?;
+    if trial.is_none() && task.session == Session::Process {
+        super::process_tasks::screen(&source, task)?;
+    }
     let object_format = git(&source, &["rev-parse", "--show-object-format"])?;
     let temporary = tempfile::Builder::new()
         .prefix(".thirdshift-eval-")
@@ -97,34 +101,40 @@ fn prepare_repository(
         ],
     )?;
     git(repo, &["checkout", "-q", "--detach", &task.base])?;
-    let patch = bytes(
-        &source,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "--full-index",
-            "--no-color",
-            "--unified=3",
-            "--no-relative",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            "--submodule=short",
-            "--ignore-submodules=none",
-            &task.base,
-            &task.change,
-            "--",
-        ],
-        None,
-    )?;
+    // The real fix is a grading reference for process tasks. Expose only the
+    // base ancestry and Ticket inputs to the implementing sessions.
+    let patch = if task.session == Session::Process {
+        Vec::new()
+    } else {
+        bytes(
+            &source,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--binary",
+                "--full-index",
+                "--no-color",
+                "--unified=3",
+                "--no-relative",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--submodule=short",
+                "--ignore-submodules=none",
+                &task.base,
+                &task.change,
+                "--",
+            ],
+            None,
+        )?
+    };
     if !patch.is_empty() {
         bytes(repo, &["apply", "--index", "--binary", "-"], Some(&patch))?;
     }
     copy_inputs(directory, task, repo)?;
     prune(repo)?;
     verify(repo, &task.base)?;
-    let origin = if task.session == Session::SpecReview {
+    let origin = if matches!(task.session, Session::SpecReview | Session::Process) {
         // Seed a Trial's requested Base branch so the inspection name `base`
         // cannot reserve a prefix needed by a custom Trial branch.
         let seed_branch = trial.map_or("base", |inputs| inputs.base.as_str());
@@ -287,28 +297,45 @@ pub(super) fn git(repo: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub(super) fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
+    execute(repo, args, input, None)
+}
+
+/// Read grading objects under one deadline, including blocked object I/O.
+pub(super) fn bytes_until(repo: &Path, args: &[&str], deadline: Instant) -> Result<Vec<u8>> {
+    execute(repo, args, None, Some(deadline))
+}
+
+fn execute(
+    repo: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>> {
     // Prepared repositories must not inherit host hooks, templates, replacement
     // refs or Git directory overrides. Local fetching needs no host credentials.
-    let output = process::output(
-        Command::new("git")
-            .current_dir(repo)
-            .args(["-c", "gc.auto=0", "-c", "protocol.file.allow=always"])
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES"),
-        input,
-        Control {
-            name: "Eval git",
-            interruption: Interruption::Ordinary,
-            stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-        },
-    )?;
+    let mut command = Command::new("git");
+    command
+        .current_dir(repo)
+        .args(["-c", "gc.auto=0", "-c", "protocol.file.allow=always"])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+    let control = Control {
+        name: "Eval git",
+        interruption: Interruption::Ordinary,
+        stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+    };
+    let output = match deadline {
+        Some(deadline) => process::output_until(&mut command, input, control, deadline, &|| Ok(())),
+        None => process::output(&mut command, input, control),
+    }?;
     if !output.status.success() {
         bail!(
             "Eval git {args:?} failed: {}",

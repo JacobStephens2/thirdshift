@@ -7,6 +7,21 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("Experiment format documentation matches the emitted contract", async () => {
+  const root = join(__dirname, "..", "..");
+  const reading = await readFile(join(root, "src/evals/experiment/reading.rs"), "utf8");
+  const format = reading.match(/format:\s*(\d+)/)[1];
+  for (const [file, prefix] of [
+    ["docs/guide.md", "identified by `format: "],
+    ["site/docs/index.html", "identified by <code>format: "],
+    ["site/how-it-works/index.html", "documented result contract with <code>format: "],
+  ]) {
+    const source = await readFile(join(root, file), "utf8");
+    assert.ok(source.includes(prefix), file);
+    assert.equal(source.split(prefix)[1].match(/^\d+/)[0], format, file);
+  }
+});
+
 test("API start lists include the Experiment command", async () => {
   for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html"]) {
     const source = await readFile(join(__dirname, "..", file), "utf8");
@@ -137,7 +152,7 @@ test('the architecture page distinguishes Triage stdout JSON from its notificati
 
 test('the workflow page identifies the current Experiment result contract', async () => {
   const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
-  assert.match(page, /contract with <code>format: 4<\/code>/);
+  assert.match(page, /contract with <code>format: 8<\/code>/);
 });
 
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {

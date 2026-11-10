@@ -179,9 +179,11 @@ enum View {
     RecordDifficulty,
     PendingRechecks,
     Recheck,
+    DecideLeak,
     Update,
     RunUpdate,
     ImportReplays,
+    ProposeProcess,
     Config,
     ConfigSetting,
     SetConfig,
@@ -252,10 +254,12 @@ impl PageRoute {
                 | View::RecordDifficulty
                 | View::PendingRechecks
                 | View::Recheck
+                | View::DecideLeak
                 | View::Whoami
                 | View::Update
                 | View::RunUpdate
                 | View::ImportReplays
+                | View::ProposeProcess
                 | View::Config
                 | View::ConfigSetting
                 | View::SetConfig
@@ -441,6 +445,14 @@ const PAGES: &[PageRoute] = &[
         view: View::StartRun,
     },
     PageRoute {
+        path: "/experiments/{id}/leaks/{hit}",
+        api: "/api/v1/experiments/{id}/leaks/{hit}",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --leak hit confirm --reason reviewed --json"],
+        method: Method::POST,
+        view: View::DecideLeak,
+    },
+    PageRoute {
         path: "/api/v1/launch-directories",
         api: "/api/v1/launch-directories",
         scope: Some(Scope::Read),
@@ -487,6 +499,14 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift evals import-replays"],
         method: Method::POST,
         view: View::ImportReplays,
+    },
+    PageRoute {
+        path: "/evals/propose-process",
+        api: "/api/v1/evals/propose-process",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift evals propose-process repository"],
+        method: Method::POST,
+        view: View::ProposeProcess,
     },
     PageRoute {
         path: "/config",
@@ -1014,9 +1034,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::RecordDifficulty, Method::POST) => post(commands::difficulty),
             (View::PendingRechecks, Method::GET) => get(commands::pending),
             (View::Recheck, Method::POST) => post(commands::recheck),
+            (View::DecideLeak, Method::POST) => post(experiments::decide_leak),
             (View::Update, Method::GET) => get(update::show),
             (View::RunUpdate, Method::POST) => post(update::run),
             (View::ImportReplays, Method::POST) => post(evals::import_replays),
+            (View::ProposeProcess, Method::POST) => post(evals::propose_process),
             (View::Config, Method::GET) => get(user_config::show),
             (View::ConfigSetting, Method::GET) => get(user_config::one),
             (View::SetConfig, Method::POST) => post(user_config::set),

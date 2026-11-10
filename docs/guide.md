@@ -743,6 +743,7 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
 | `/update` | none | `update` |
 | `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+| `/evals/propose-process` | `repository` (known owner/repo), optional `limit` (1–100) | `evals propose-process <repository>`; requires `admin` |
 
 Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
 JSON bodies use `Content-Type: application/json`. GET calls take no body.
@@ -1120,6 +1121,7 @@ thirdshift setup                    # choose your defaults and write the User co
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
 thirdshift evals approve <suite> <task> [--json]  # approve a proposed Eval task in its suite
 thirdshift evals import-replays     # import #429's private manifests and grading files once
+thirdshift evals propose-process <repository> [--limit <1..100>]  # draft process Eval tasks from merged Tickets
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
@@ -1151,6 +1153,14 @@ approves one in its suite without changing its inputs or starting work. The
 Console offers the same action under Proposed Eval tasks on the Experiments
 list and, for its suites, on an Experiment page. Approval affects future
 Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+`evals propose-process <repository>` drafts proposed process Eval tasks from
+recent merged pull requests closing Tickets, listing their bug or feature kind,
+source line count and separate test layout. Review each draft's selectors before
+approving it. `evals prepare` screens process tasks on the host with network
+access: each fail-to-pass selector must fail at the base and pass at the merge
+with the reference tests and shared fakes overlaid. It refuses changed inline
+Rust tests and names the file. The prepared process repository keeps the fix
+and test overlay private. See the [task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#process-task-preparation-and-proposals).
 Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
@@ -1159,6 +1169,14 @@ by commit under `~/.thirdshift/evals/builds/` and records their commits, binarie
 and each Harness's real path and version in a new JSON file. A failed build or
 version lookup stops preparation. Trials use the recorded Harness path so an
 installation's symlink update cannot change the Harness between Arms.
+For process Arms, add `--baseline-process <name-or-file.toml>` and
+`--candidate-process <name-or-file.toml>`; the other Arm defaults to `ticket-run`.
+Names select Built-in processes or files under `~/.thirdshift/processes/`.
+The Process file and its referenced home skills, including supporting files,
+are copied into private Arm folders beside the record. The record lists each
+file's SHA-256 and the resolved Harness, Model and Effort per Step. Optional
+`--baseline-model`, `--baseline-effort`, `--candidate-model` and
+`--candidate-effort` set the inherited choices.
 The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
 documents the manifests with made-up data and the Arm record.
 
@@ -1240,9 +1258,11 @@ before Void dropouts, rather than the retained judged count.
 
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
-Bar's timeout, in session-minutes; and, for each suite and Harness that has
-history, an estimate from the mean minutes of completed, non-void Trials in this
-machine's earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
+Bar's timeout, in session-minutes; and, for each suite and exact Arm setup that has
+history, an estimate from completed, non-Void Trials in this machine's earlier
+Experiments. The setup includes the build, Harness, Model, Effort and Process.
+Estimates count every attempt's minutes and show priced dollars when all of
+that history has complete accounting. The total time estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
 stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` or `yes`
 exits without building an Arm or starting a Trial, and a new Experiment
@@ -1252,6 +1272,18 @@ and so does a stdin that is not a terminal. `scripts/release.sh
 --with-experiment` passes `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.
+
+Each new Experiment freezes a dated token price table. `--prices <file.json>`
+supplies another table with exact observed Model names and USD rates per million
+input, output, cache-read and cache-write tokens; otherwise it uses the bundled
+standard-rate snapshot. The table cannot change once a Trial starts. Every
+session, including a Resume or fallback, is priced and attributed to its starting
+Step. Missing usage or a missing Model price makes the Trial Void with an
+accounting-gap cause. Arm totals include all attempts; paired median
+Candidate-to-Baseline cost and time ratios use matching complete, non-Void Trials.
+Time spent paused at a usage limit between invocations is excluded. Harness-reported
+costs remain separate from these frozen comparison prices. See the
+[Experiment accounting format](experiment-results.md) for the table and result fields.
 
 `--name <text>` saves a name with the Experiment: one line of at most 100
 characters, trimmed. An empty or over-long name is refused before any build.
@@ -1283,6 +1315,52 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
+Process Eval tasks run each Arm's Process at the task's base commit, stopping
+before its first publishing Step. `--baseline-process <name-or-file.toml>` and
+`--candidate-process <name-or-file.toml>` select a Built-in or Custom process;
+both default to the Built-in `ticket-run` with `implement` and `security-review`.
+Preparation freezes the Process file and referenced home skills by SHA-256,
+recording each Step's Harness, Model and Effort in the Experiment's description.
+Custom process and home-skill content also identifies the Arm: editing either
+starts a new Experiment and uses separate cost-estimate history. Repeating the
+command with unchanged inputs resumes its frozen Experiment.
+Each Trial gets its own copies in its fresh home. Both Arms' frozen files are
+checked before every Trial; a mismatch pauses the Experiment with the filename.
+A Process needing GitHub before publication is refused at start. The Trial
+publishes nothing and creates no factory run of its own. Its Steps and all
+sessions appear in the Experiment's Trial Peek and Trace. Process outcomes are
+delivered, stopped-to-ask or failed, with the existing Void causes.
+Stopped-to-ask counts as failed; each Arm's outcome counts appear beside the
+Verdict. A delivered Trial passes only when its code Grader passes both the
+fail-to-pass and pass-to-pass selectors. The Grader exports the Trial's final
+commit and overlays the reference fix's test files and changed shared test
+fakes, replacing any Trial edits to those files. Python selectors search
+the repository after the standard library, so a committed module cannot
+replace one. Selectors run offline in bwrap, sharing the Bar's timeout with
+preparation of the final-commit snapshot,
+and their failures name the selector in
+the Score's reason. The task's required `process_grading` table declares the
+files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
+
+After each process Trial, thirdshift searches its Session traces for the
+real fix's merge commit (including abbreviations of at least seven characters),
+pull-request and issue references, branch and title. Matches appear as leak hits
+on the Console's Experiment page and in `thirdshift experiments <id> --json`.
+The Verdict waits on these hits, including hits from measurement-only tasks.
+Review the linked Session evidence, then dismiss a false positive or confirm a
+leak in the Console, or use:
+
+```sh
+thirdshift experiments <id> --leak <hit-id> dismiss --reason 'False positive'
+thirdshift experiments <id> --leak <hit-id> confirm --reason 'Saw the real fix'
+```
+
+Each decision retains the reviewer, time and reason. Dismissals keep the Trial
+and remain on the auditable list; confirmation makes the Trial Void and drops
+its paired Eval task from the Verdict. Original results and Session traces remain
+unchanged. Decisions require the Experiment to have stopped and cannot be
+overwritten. A confirmed leak is excluded when the Experiment resumes.
+
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
@@ -1291,6 +1369,16 @@ Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--se
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
+
+Optional `--cost-ceiling 2` and `--time-ceiling 2` cap the paired median
+Candidate/Baseline ratios at 2×. Both are off by default and fixed with the Bar;
+a ratio above either set ceiling fails the Experiment. Unmeasured ceilings
+cannot pass. Quality statistics still follow ADR-0025. When quality passes,
+the Verdict adds "cheaper" or "faster" when the paired ratio's pass-level
+Bayesian bootstrap interval lies below 1 (at least two paired tasks), or says
+"costs more" or "takes longer" when its median exceeds 1. JSON `verdict.line`,
+the text view and the Console show the same line. See the
+[resource comparison rules](experiment-results.md#verdict-and-bar).
 
 The default pass level is the highest at which an A/A Experiment at the
 measured disagreement rate passes at least 80% of the time on each suite at
@@ -1357,7 +1445,7 @@ both workers. An installation failure makes the Trial void with
 allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
-editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
+for review Trials, editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
 branch, or altering or removing the base or prepared change commit makes an
 otherwise successful Trial void with `repository_changed`. Issue branch commits,
 pushes to the local origin, reports and other working-tree files are allowed.
@@ -1365,7 +1453,7 @@ A review with no reports fails, and the Eval task's mechanical checks must pass.
 Those checks run on a private copy of the prepared repository captured before
 the session, so the session cannot change the code they grade. Checks share
 their own build artifacts. Scores retain each check and its reason.
-Then a fresh model Grader scores one blind packet per Eval task against its
+For review Trials, a fresh model Grader then scores one blind packet per Eval task against its
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.
@@ -1497,7 +1585,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 4`.
+[Experiment results format](experiment-results.md), identified by `format: 8`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

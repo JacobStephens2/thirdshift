@@ -1,5 +1,5 @@
-//! The hidden, versioned Trial protocol. Only session execution is shared
-//! with a Run: a Trial has no Command, Claim, Worktree acquisition or Delivery.
+//! The hidden, versioned Trial protocol. Sessions and the local Ticket Step
+//! prefix share Run machinery without a Command, Claim or Delivery.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -16,6 +16,7 @@ use crate::issue::IssueUrl;
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::{config::UserConfig, git::Git, interrupt, prompt, skills};
 
+pub(crate) mod accounting;
 mod reports;
 pub(crate) use reports::Reports;
 
@@ -25,6 +26,8 @@ struct Request {
     version: u64,
     repository: PathBuf,
     session_kind: SessionKind,
+    #[serde(default)]
+    process: Option<String>,
     inputs: Inputs,
     harness: String,
     model: Option<String>,
@@ -37,6 +40,7 @@ struct Request {
 enum SessionKind {
     CodeReview,
     SpecReview,
+    Process,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,12 +63,52 @@ pub(crate) struct Output {
     pub log: Option<PathBuf>,
     pub model_evidence: Option<PathBuf>,
     pub reports: Reports,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<accounting::Attempt>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Step {
+    pub name: String,
+    pub outcome: Outcome,
+    pub started_at: String,
+    pub ended_at: String,
+    pub elapsed_ms: u128,
+}
+
+#[derive(Debug)]
+pub(crate) struct StoppedToAsk(String);
+
+impl std::fmt::Display for StoppedToAsk {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "session stopped to ask: {}", self.0)
+    }
+}
+
+impl std::error::Error for StoppedToAsk {}
+
+/// A final question leaves an unattended Step unfinished even when its turn
+/// completed successfully. Preserve the question as the Trial's cause.
+pub(crate) fn check_question(message: Option<&str>) -> Result<()> {
+    if let Some(message) = message {
+        let ending = message.trim_end_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '*' | '_' | '`' | '"' | '\'' | ')' | ']')
+        });
+        if ending.ends_with('?') {
+            return Err(StoppedToAsk(message.to_owned()).into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Succeeded,
+    Delivered,
+    StoppedToAsk,
     Failed,
     Void,
 }
@@ -73,6 +117,8 @@ impl std::fmt::Display for Outcome {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Succeeded => "succeeded",
+            Self::Delivered => "delivered",
+            Self::StoppedToAsk => "stopped-to-ask",
             Self::Failed => "failed",
             Self::Void => "void",
         })
@@ -90,6 +136,8 @@ pub(crate) enum VoidCause {
     SandboxUnavailable,
     HostKilled,
     MemoryCap,
+    AccountingGap,
+    FixLeaked,
 }
 
 impl std::fmt::Display for VoidCause {
@@ -103,6 +151,8 @@ impl std::fmt::Display for VoidCause {
             Self::SandboxUnavailable => "sandbox_unavailable",
             Self::HostKilled => "host_killed",
             Self::MemoryCap => "memory_cap",
+            Self::AccountingGap => "accounting_gap",
+            Self::FixLeaked => "fix_leaked",
         })
     }
 }
@@ -131,6 +181,8 @@ impl Output {
                 standards: None,
                 spec: None,
             },
+            steps: Vec::new(),
+            accounting: None,
         }
     }
 
@@ -159,6 +211,8 @@ impl Output {
                 standards: None,
                 spec: None,
             },
+            steps: Vec::new(),
+            accounting: None,
         }
     }
 }
@@ -183,6 +237,11 @@ pub fn run(path: &Path) -> Result<String> {
         "unsupported Trial request version {version}; supported version: 1"
     );
     let request: Request = serde_json::from_value(document).context("invalid Trial request")?;
+    if matches!(request.session_kind, SessionKind::Process) {
+        crate::processes::source::validate_local(
+            request.process.as_deref().unwrap_or("ticket-run"),
+        )?;
+    }
     ensure!(
         request.repository.is_absolute(),
         "Trial repository path must be absolute"
@@ -203,6 +262,7 @@ pub fn run(path: &Path) -> Result<String> {
         chosen_by: ChosenBy::Command,
     };
     let (kind, prompt) = match request.session_kind {
+        SessionKind::Process => (Kind::Implementation, String::new()),
         SessionKind::CodeReview => (
             Kind::CodeReview,
             prompt::code_review(&issue, &request.inputs.base, &request.inputs.branch),
@@ -225,17 +285,32 @@ pub fn run(path: &Path) -> Result<String> {
             return serde_json::to_string(&output).context("could not serialize Trial result");
         }
     };
-    let logs = Logs::of_trial(&output_dir);
     let session_started = Instant::now();
-    let run = |sessions: &Sessions| {
-        skills::exclude(&Git::new(&repository), &format!("/{}", prompt::ISSUE_FILE))?;
-        sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
-    };
-    let (ended, log) = match &sandbox {
-        Some(prepared) => {
-            Sessions::within_sandboxed(&logs, &repository, &choice, &prepared.launch(), run)
-        }
-        None => Sessions::within(&logs, &repository, &choice, run),
+    let mut steps = Vec::new();
+    let (ended, log) = if matches!(request.session_kind, SessionKind::Process) {
+        let (ended, log, recorded_steps) = crate::processes::source::run_local(
+            request.process.as_deref().unwrap_or("ticket-run"),
+            &repository,
+            &request.inputs,
+            &choice,
+            &output_dir,
+            sandbox.as_ref().map(|prepared| prepared.launch()),
+        );
+        steps = recorded_steps;
+        (ended.map(|_| None), log)
+    } else {
+        let logs = Logs::of_trial(&output_dir);
+        let run = |sessions: &Sessions| {
+            skills::exclude(&Git::new(&repository), &format!("/{}", prompt::ISSUE_FILE))?;
+            sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
+        };
+        let (ended, log) = match &sandbox {
+            Some(prepared) => {
+                Sessions::within_sandboxed(&logs, &repository, &choice, &prepared.launch(), run)
+            }
+            None => Sessions::within(&logs, &repository, &choice, run),
+        };
+        (ended.map(|ended| ended.session_id), log)
     };
     let ended = ended.map_err(|error| {
         sandbox
@@ -269,12 +344,23 @@ pub fn run(path: &Path) -> Result<String> {
         stream.into_session_id()
     };
     let (outcome, session_id, cause, void_cause) = match ended {
-        Ok(ended) => (Outcome::Succeeded, ended.session_id, None, None),
+        Ok(session_id) => (
+            if matches!(request.session_kind, SessionKind::Process) {
+                Outcome::Delivered
+            } else {
+                Outcome::Succeeded
+            },
+            session_id,
+            None,
+            None,
+        ),
         Err(error) => {
             let void_cause = void_cause(&error);
             (
                 if void_cause.is_some() {
                     Outcome::Void
+                } else if error.is::<StoppedToAsk>() {
+                    Outcome::StoppedToAsk
                 } else {
                     Outcome::Failed
                 },
@@ -303,6 +389,8 @@ pub fn run(path: &Path) -> Result<String> {
             spec: artifact("spec"),
         },
         log: log.as_deref().map(crate::logs::session::path),
+        steps,
+        accounting: None,
     };
     serde_json::to_string(&output).context("could not serialize Trial result")
 }

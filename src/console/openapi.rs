@@ -127,10 +127,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
         View::RecordDifficulty => array(record),
-        View::RenameExperiment | View::PendingRechecks | View::Recheck => record,
+        View::RenameExperiment | View::PendingRechecks | View::Recheck | View::DecideLeak => record,
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
+        View::ProposeProcess => {
+            object(json!({"proposals":array(record.clone()),"skipped":array(record)}))
+        }
         View::Config => object(json!({"version": version, "settings": array(setting())})),
         View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
@@ -296,6 +299,12 @@ fn action_body(view: View) -> Value {
             return json!({"required":true,"content":{"application/json":{"schema":schema}}});
         }
         View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::ProposeProcess => {
+            return json_request(
+                json!({"repository":{"type":"string","description":"A known Launch directory's owner/repo, not a filesystem path."},"limit":{"type":"integer","minimum":1,"maximum":100,"default":100}}),
+                vec!["repository"],
+            );
+        }
         View::VerifyEval => {
             return json_request(
                 json!({"repository":text,"base":text}),
@@ -316,6 +325,11 @@ fn action_body(view: View) -> Value {
                 {"required":["fingerprint"],"not":{"required":["trial"]}}
             ]);
             return body;
+        }
+        View::DecideLeak => {
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"decision":{"enum":["confirm","dismiss"]},"reason":text},"required":["decision","reason"]
+            }}}});
         }
         View::StartRun => {
             return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
@@ -493,7 +507,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 4}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 8}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))

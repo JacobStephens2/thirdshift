@@ -393,6 +393,7 @@ impl ReviewProcess {
                             &results,
                             &results.join(format!("{}.txt", step.name)),
                             Some(CommandInput::PullRequest(&pr.url)),
+                            None,
                         )?,
                         StepKind::SecurityReview => {
                             if !security_review {

@@ -25,6 +25,12 @@ mod code_graders;
 #[path = "experiments/cost.rs"]
 mod cost;
 
+#[path = "experiments/accounting.rs"]
+mod accounting;
+
+#[path = "experiments/ceilings.rs"]
+mod ceilings;
+
 #[path = "experiments/difficulty.rs"]
 mod difficulty;
 #[path = "experiments/discriminating.rs"]
@@ -50,6 +56,9 @@ mod release;
 
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
+
+#[path = "experiments/process.rs"]
+mod process;
 
 #[test]
 fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
@@ -718,7 +727,10 @@ fn arm_usage_keeps_unreported_cost_and_model_unknown() {
     );
     assert!(usage["baseline"]["models"]["requested-only"].is_null());
     assert!(usage["baseline"]["cost_usd"].is_null());
-    assert_eq!(usage["candidate"]["models"], json!({}));
+    assert_eq!(
+        usage["candidate"]["models"]["claude-sonnet-5-5"]["input_tokens"],
+        10
+    );
     assert!(usage["candidate"]["cost_usd"].is_null());
 }
 
@@ -844,7 +856,7 @@ printf changed >> .thirdshift-issue.md
 }
 
 #[test]
-fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
+fn spec_review_generated_instruction_fallbacks_do_not_change_the_repository() {
     for harness_name in ["agy", "opencode"] {
         let fixture = Fixture::new();
         let harness = fixture.scenario.path(&format!("bin/{harness_name}"));
@@ -881,8 +893,8 @@ fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
         let experiment = fixture.experiment();
         for result in experiment["results"].as_array().unwrap() {
             assert_eq!(
-                result["outcome"], "succeeded",
-                "{harness_name}: generated fallback links must not invalidate an unchanged Trial"
+                result["attempts"][0]["void_cause"], "accounting_gap",
+                "{harness_name}: generated fallback links must not invalidate the repository; these fake Harnesses report no observed Model: {result}"
             );
         }
     }
@@ -1038,6 +1050,40 @@ PY
             let fixed = scenario.path(&format!("versions/v1/{name}"));
             fs::create_dir_all(fixed.parent().unwrap()).unwrap();
             fs::copy(real, &fixed).unwrap();
+            if name == "claude" {
+                let delegate = fixed.parent().unwrap().join("delegate/claude");
+                fs::create_dir_all(delegate.parent().unwrap()).unwrap();
+                fs::rename(&fixed, &delegate).unwrap();
+                fs::write(&fixed, format!(r#"#!/usr/bin/python3
+import json, os, signal, subprocess, sys
+if '--output-format' not in sys.argv:
+    os.execv({delegate:?}, [{delegate:?}, *sys.argv[1:]])
+for stop in [signal.SIGTERM, signal.SIGINT]:
+    signal.signal(stop, lambda *_: None)
+child = subprocess.Popen([{delegate:?}, *sys.argv[1:]], stdout=subprocess.PIPE)
+measured = False
+ending = []
+for line in child.stdout:
+    measured |= b'"usage"' in line or b'"modelUsage"' in line
+    try:
+        result = json.loads(line).get('type') == 'result'
+    except (ValueError, AttributeError):
+        result = False
+    if result or ending:
+        ending.append(line)
+    else:
+        sys.stdout.buffer.write(line)
+        sys.stdout.buffer.flush()
+code = child.wait()
+if not measured:
+    print(json.dumps({{"type":"assistant","message":{{"id":"fixture-usage","model":"claude-sonnet-5-5","usage":{{"input_tokens":10,"output_tokens":2}},"content":[]}}}}), flush=True)
+for line in ending:
+    sys.stdout.buffer.write(line)
+sys.stdout.buffer.flush()
+sys.exit(code)
+"#)).unwrap();
+                fs::set_permissions(&fixed, fs::Permissions::from_mode(0o755)).unwrap();
+            }
             fs::remove_file(&harness).unwrap();
             std::os::unix::fs::symlink(fixed, &harness).unwrap();
         }
@@ -1124,6 +1170,12 @@ harness = "claude"
             ),
         )
         .unwrap();
+        fs::write(scenario.launch_dir().join(".fixture-prices.json"), json!({
+            "date":"2026-11-09", "source":"Experiment fixture",
+            "models": (["claude-sonnet-5-5", "fixture-model", "observed", "observed-a", "observed-b", "gemini-observed"]
+                .into_iter().map(|name| (name.to_owned(), json!({"input":2,"output":10,"cache_read":0.2,"cache_write":2.5})))
+                .collect::<serde_json::Map<_, _>>())
+        }).to_string()).unwrap();
         Self {
             scenario,
             baseline,
@@ -1133,6 +1185,9 @@ harness = "claude"
 
     fn experiment_args<'a>(extra: &[&'a str]) -> Vec<&'a str> {
         let mut args = vec!["experiment", "candidate", "--json"];
+        if !extra.contains(&"--prices") {
+            args.extend(["--prices", ".fixture-prices.json"]);
+        }
         // These tiny fixtures exercise deciding suites. Advisory tests invoke
         // the default minimum through the CLI explicitly.
         if !extra.contains(&"--min-discriminating-tasks") {
@@ -1645,11 +1700,34 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
 #[test]
 fn stop_and_resume_preserve_finished_trials_and_refuse_a_changed_bar() {
     let fixture = Fixture::new();
+    // Stop while one Trial has a Session and the other is still preparing its
+    // repository. The latter has an attempt directory but has not started.
+    let preparing = fixture.scenario.path("preparing-repository");
+    let release = fixture.scenario.path("release-preparation");
+    let git = fixture.scenario.path("bin/git");
+    fs::write(
+        &git,
+        format!(
+            r#"#!/bin/sh
+if [ ! -f {release:?} ]; then
+  case "$PWD" in *--candidate--1/attempt-*/*)
+    touch {preparing:?}
+    while [ ! -f {release:?} ]; do sleep 0.01; done
+    ;;
+  esac
+fi
+exec /usr/bin/git "$@"
+"#
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(git, fs::Permissions::from_mode(0o755)).unwrap();
     fixture.scenario.agent_does(&format!(
         r#"
 case "$PWD" in
   *--0/*) exit 0 ;;
 esac
+while [ ! -f {preparing:?} ]; do sleep 0.01; done
 touch '{}'
 while true; do sleep 0.05; done
 "#,
@@ -1679,10 +1757,22 @@ while true; do sleep 0.05; done
     let before = fixture.experiment();
     assert_eq!(before["state"], "interrupted");
     let attempts = retention::attempts(&fixture, &before);
+    let started_attempts: Vec<_> = attempts
+        .iter()
+        .filter(|attempt| attempt.join("started.json").is_file())
+        .collect();
+    assert!(!started_attempts.is_empty());
+    assert!(
+        started_attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     assert!(
         attempts
             .iter()
-            .all(|attempt| attempt.join("repository").is_dir())
+            .any(|attempt| !attempt.join("started.json").exists()
+                && !attempt.join("repository").exists()),
+        "the interrupted preparation must exercise an unstarted attempt"
     );
     let finished = before["results"].as_array().unwrap();
     assert!(!finished.is_empty());
@@ -1698,6 +1788,7 @@ while true; do sleep 0.05; done
         changed.stderr
     );
     assert_eq!(fixture.trial_calls().len(), calls_before);
+    fs::write(release, "").unwrap();
     fixture.scenario.agent_does("true");
     let resumed = fixture.run(&["--trials-per-task", "3"]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
@@ -1705,6 +1796,16 @@ while true; do sleep 0.05; done
     assert_eq!(after["state"], "completed");
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["results"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        after["accounting"]["baseline"]["sessions"]
+            .as_u64()
+            .unwrap()
+            + after["accounting"]["candidate"]["sessions"]
+                .as_u64()
+                .unwrap(),
+        after["sessions"].as_array().unwrap().len() as u64,
+        "Every Session started before interruption must remain in Trial accounting"
+    );
     assert!(
         retention::attempts(&fixture, &after)
             .iter()
@@ -1752,9 +1853,14 @@ fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
         ),
     ] {
         let fixture = Fixture::new();
+        let usage = if harness == "claude" {
+            "echo '{\"type\":\"assistant\",\"message\":{\"id\":\"priced\",\"model\":\"fixture-model\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2},\"content\":[]}}'"
+        } else {
+            "true"
+        };
         fixture
             .scenario
-            .agent_does(&format!("echo '{event}'\nsleep 0.5\n"));
+            .agent_does(&format!("{usage}\necho '{event}'\nsleep 0.5\n"));
         let args = [
             "--trials-per-task",
             "3",
@@ -1802,7 +1908,31 @@ fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
         assert_eq!(after["results"].as_array().unwrap().len(), 6);
         assert_eq!(calls().len(), started + 6, "void Trials must be retried");
         for result in after["results"].as_array().unwrap() {
-            assert_eq!(result["outcome"], "succeeded");
+            let missing_before =
+                before["unfinished_trials"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|prior| {
+                        prior["arm"] == result["arm"]
+                            && prior["trial"] == result["trial"]
+                            && prior["attempts"].as_array().unwrap().iter().any(|attempt| {
+                                attempt["accounting"]["sessions"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|session| !session["gap"].is_null())
+                            })
+                    });
+            if harness == "claude" && !missing_before {
+                assert_eq!(result["outcome"], "succeeded", "{result}");
+            } else {
+                assert_eq!(result["outcome"], "void", "{result}");
+                assert_eq!(
+                    result["attempts"].as_array().unwrap().last().unwrap()["void_cause"],
+                    "accounting_gap"
+                );
+            }
         }
     }
 }
@@ -2075,6 +2205,7 @@ fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     let escaped = fixture.scenario.path("escaped-after-timeout");
     fixture.scenario.agent_does(&format!(
         r#"
+echo '{{"type":"assistant","message":{{"id":"partial","model":"observed","usage":{{"input_tokens":10,"output_tokens":2}},"content":[]}}}}'
 printf changed > changed-by-agent.txt
 (sleep 7; echo escaped > '{}') &
 while true; do sleep 0.05; done
@@ -2204,7 +2335,7 @@ fn an_unexplained_trial_process_kill_fails_without_a_retry() {
 }
 
 #[test]
-fn an_agent_killing_its_own_harness_fails_without_a_retry() {
+fn a_harness_killed_before_reporting_usage_is_void_without_a_retry() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does("kill -KILL \"$PPID\"");
     let run = fixture.run(&[]);
@@ -2212,14 +2343,15 @@ fn an_agent_killing_its_own_harness_fails_without_a_retry() {
     let experiment = fixture.experiment();
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(
-            result["outcome"], "failed",
-            "agent action must count against its Arm: {result}"
+            result["outcome"], "void",
+            "missing Session usage must void the Trial: {result}"
         );
+        assert_eq!(result["attempts"][0]["void_cause"], "accounting_gap");
         assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
     }
     assert_eq!(
         experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
-        0
+        1
     );
 }
 
@@ -2845,6 +2977,15 @@ while true; do sleep 0.05; done
         "each Arm already completed one Void Trial attempt before Stop"
     );
     for result in fixture.experiment()["results"].as_array().unwrap() {
-        assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+        let attempts = result["attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 4, "three completed attempts plus the stop");
+        assert_eq!(
+            attempts
+                .iter()
+                .filter(|attempt| attempt["accounting"]["incomplete"] == true)
+                .count(),
+            1,
+            "retained Session accounting must not consume a completed-attempt retry"
+        );
     }
 }

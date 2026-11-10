@@ -1,4 +1,4 @@
-# Experiment results (format 4)
+# Experiment results (format 8)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 4` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 4.
+`format: 8` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 8.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -33,11 +33,39 @@ Format 2 shipped in v0.17.4. Format 3 adds `bar.discriminating_tasks` and each
 suite's `counts` and `measurement` fields for `paired-dirichlet-v4`, without
 rewriting the stored Bar or Verdict of older Experiments.
 Format 4 adds `bar.min_discriminating_tasks` and each suite's `advisory` flag.
+Format 5 adds the prepared Arms' optional `process` with frozen file hashes and
+per-Step Harness, Model and Effort. Older Arm records omit this field.
 Only suites that are not advisory decide the overall Verdict and require
 rechecks; every suite advisory gives inconclusive. Saved Experiments without
 the minimum keep their original Bar, Verdict and aggregation policy.
 The Arm record's `prepared.format` and each attempt's `version` identify their
 own formats, independently of the result format.
+
+Format 6 adds process Trial `leaks`, the `leak_hits` decision list,
+`waiting_on_leaks` Verdict and `fix_leaked` Void cause. Each hit retains its
+opaque ID, Trial ID, attempt index, Session ID, identifier kind and value, and
+one-based Session evidence line. `decision` is null while pending; otherwise it keeps
+`decision` (`confirm` or `dismiss`), `reason`, `reviewer` (the shared action
+Actor) and `recorded_at`. Dismissed hits form the auditable false-positive list.
+Confirmed hits overlay the Trial and matching attempt as Void in the view;
+original Trial files remain intact. Pending hits hold the whole Verdict,
+including hits from Advisory or measurement-only tasks.
+
+Format 7 adds optional `bar.cost_ceiling` and `bar.time_ceiling`, and the
+Verdict's optional `efficiency` and `line`. Saved Verdicts without these fields
+retain their original shape and decision when read.
+
+Format 8 adds optional `Setup.process_digest`, the content digest of a Custom
+process and its referenced home skills. It identifies the Arm for Experiment
+reuse and cost-estimate history. Built-in processes are identified by the build
+and omit this field. Older saved setups also omit it.
+
+Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
+scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
+failed counts per Arm, excluding Void attempts. `Setup.process`, when present,
+names the selected Process or Custom process file. Each process attempt's `steps` retains names,
+outcomes, start/end times and elapsed milliseconds; all sessions remain in the
+shared `sessions` listing. Existing review records omit these optional fields.
 
 ## Experiment view
 
@@ -69,13 +97,46 @@ IDs are opaque: use the returned ID rather than constructing a filename.
 
 `results` holds terminal Trials. `unfinished_trials` holds checkpointed attempts
 awaiting continuation; a paused Experiment can have both. `minutes` sums each
-Arm's completed attempt durations, including voids and timeouts. `voids` counts
+Arm's completed attempt durations, including voids and timeouts. Time spent
+paused between invocations at a usage limit is outside those durations.
+`voids` counts
 completed Void attempts and groups them by cause, including unfinished Trials.
 `findings` contains human-readable resource diagnostics, currently repeated
 memory-cap kills. `usage` groups observed tokens and USD costs by Arm and Model;
 unreported Model identity uses the key `unknown`. Input tokens include cache
 reads and writes; cache counters are also reported separately. Partial totals
 follow the [guide's Session usage rules](guide.md#experiments).
+
+`pricing` is the frozen, dated token price table for this Experiment. New
+Experiments copy the bundled standard-rate snapshot; `experiment ... --prices
+<file.json>` supplies a replacement with `date`, `source` and `models` (exact
+observed Model names). Each rate has `input`, `output`, `cache_read` and
+`cache_write` in USD per million tokens. These are comparison prices, separate
+from the Harness-reported costs in `usage`. The bundled snapshot uses the
+shortest cache-write TTL; provide a table for your billing tier or other Models.
+After any Trial starts, prices cannot change. Resuming without `--prices` keeps
+the saved table; passing it again checks that the contents still match.
+
+`accounting` reports each Trial's cost and active attempt time, its sessions with
+their attempt indices, observed Models, and the role of the Step that started
+them. Resumes and fallback sessions belong to that same Step. Arm totals and
+`roles` include all spent attempts, including Voids. A missing session usage
+measurement (input or output), unknown observed Model, or missing frozen price
+leaves cost null and makes a Trial Void with an `accounting_gap` cause naming
+the gap. Existing external Void causes retain their cause and pause behavior;
+an accounting gap in an earlier attempt still voids a later completed Trial.
+An attempt stopped by the operator retains its Session facts with
+`accounting.incomplete: true`; it does not consume the completed-attempt retry
+budget. Completed interrupted Voids retain the saved Bar's retry policy.
+
+`paired_median_ratios` pairs terminal, non-Void Trials by suite, task and Trial
+index, divides Candidate by Baseline within each pair, then takes the median.
+It includes failed quality outcomes when their accounting is complete. Zero
+Baseline denominators are omitted for that metric; no eligible ratios means
+null. Old Experiments without a price table keep their original outcomes and
+show unknown priced costs. Pre-run estimates use the suite and the exact Arm
+setup (build, Harness, Model, Effort and Process) from earlier non-Void Trials,
+including every attempt's time and any complete priced cost.
 
 ## Trial files and Scores
 
@@ -90,7 +151,8 @@ trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidenc
 
 Trial result files have the `TrialResult` shape below, governed by their parent
 Experiment's format. They have no separate format field. Trial indices are
-zero-based within an Eval task and Arm; `outcome` is `succeeded`, `failed` or
+zero-based within an Eval task and Arm; `outcome` is `succeeded`, `delivered`,
+`stopped_to_ask`, `failed` or
 `void`. `attempts` retains each Trial protocol result in execution order,
 including retries/resumes. Its `version: 1`, timing milliseconds, nullable
 failure cause, Void cause, Session ID, log, Model evidence and report paths are
@@ -115,6 +177,27 @@ files retain original Scores; the history is stored in `experiment.json` and
 overlaid in the view. Do not rewrite the result files to apply a recheck.
 
 ## Verdict and Bar
+
+`--cost-ceiling` and `--time-ceiling` set positive finite Candidate/Baseline
+ratios before the first Trial; both are off by default. Each ceiling compares
+the paired median ratio, including complete non-Void Trials from all suites.
+A ratio strictly above a ceiling fails the Experiment. A missing ratio or
+incomplete accounting under a set ceiling cannot pass (inconclusive unless
+another metric fails). Zero Baseline denominators are unmeasured.
+
+`efficiency.quality_verdict` retains the quality decision before ceilings;
+suite quality statistics and ADR-0025's decision are unchanged. `cost` and `time`
+each report `ratio` (paired median), `interval` (nullable), valid `pairs`,
+`complete` and nullable `ceiling`. The interval uses a Bayesian bootstrap of
+the paired median at the Bar's pass level, seed and draw count. Independent
+exponential weights are shared by all Trials of each suite/task pair; at least
+two tasks and complete paired measurements are needed. It describes variation
+over observed tasks, without adding unobserved tasks. `method` records this rule.
+An interval wholly below 1 adds "cheaper" or "faster"; a median above 1 says
+"costs more" or "takes longer". `line` combines the decision and these facts,
+for example "pass: no worse, and cheaper". A passing quality regression inside
+the margin keeps its "worse, within the margin" annotation. Pending rechecks
+and leak decisions still hold the Verdict.
 
 `verdict` is null until assessment. Its `verdict` is `pass`, `fail`,
 `inconclusive` or `waiting_on_rechecks`. `provisional_verdict` is the paired
@@ -197,7 +280,7 @@ run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
 are kept. There is no automatic resume, failure email or failure metric.
 
 The `CommandPause` projection in the contract below covers those fields on
-the Command record and on `show --json`; it does not change Experiment format 4.
+the Command record and on `show --json`; it does not change the Experiment view.
 
 ## Checked field contract
 
@@ -223,7 +306,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 4,
+    "format": 8,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -233,6 +316,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "bar": "Bar",
     "prepared": "Prepared?",
     "state": "prepared|running|completed|interrupted|paused",
+    "pricing": "Prices?",
+    "accounting": "Accounting",
     "baseline_ref": "string?",
     "candidate_ref": "string?",
     "title": "string?",
@@ -249,16 +334,34 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "unfinished_trials": ["TrialResult"],
     "verdict": "Verdict?",
     "pending_rechecks": ["Pending"],
+    "leak_hits": ["LeakHit"],
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
+    "outcomes": {"baseline": "OutcomeCounts", "candidate": "OutcomeCounts"},
     "findings": ["string"]
   },
-  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?"},
+  "Prices": {"date":"string", "source":"string", "models":{"*":"Rate"}},
+  "Rate": {"input":"number", "output":"number", "cache_read":"number", "cache_write":"number"},
+  "Accounting": {
+    "baseline":"ArmAccounting", "candidate":"ArmAccounting", "trials":["TrialAccounting"],
+    "paired_median_ratios":{"cost":"number?", "time":"number?", "pairs":"integer"}
+  },
+  "TotalAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer"},
+  "ArmAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}},
+  "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
+  "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
+  "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
+  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
     "commit": "string", "binary": "string",
-    "harness": {"name": "string", "path": "string", "version": "string"}
+    "harness": "FixedHarness", "process?": "FrozenProcess"
+  },
+  "FixedHarness": {"name": "string", "path": "string", "version": "string"},
+  "FrozenProcess": {
+    "name": "string", "directory": "string", "files": {"*": "string"},
+    "steps": [{"name": "string", "harness": "FixedHarness", "model": "string?", "effort": "string?"}]
   },
   "Bar": {
     "margin": "number", "pass_level?": "number", "fail_level?": "number",
@@ -266,19 +369,30 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
     "discriminating_tasks?": {"*": ["string"]},
     "min_discriminating_tasks?": "integer",
+    "cost_ceiling?": "number", "time_ceiling?": "number",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
-  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
-    "outcome": "succeeded|failed|void", "score": "Score?", "attempts": ["Attempt"]
+    "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"], "leaks?": ["LeakHit"]
+  },
+  "LeakHit": {
+    "id": "string", "trial_id": "string", "attempt": "integer", "session": "string",
+    "kind": "merge_commit|pull_request|issue|branch|title", "identifier": "string", "line": "integer", "decision": "LeakDecision?"
+  },
+  "LeakDecision": {
+    "decision": "confirm|dismiss", "reason": "string", "recorded_at": "string",
+    "reviewer": {"who": "string", "from_console": "boolean", "console_holder?": "string"}
   },
   "Attempt": {
-    "version": 1, "outcome": "succeeded|failed|void",
+    "version": 1, "outcome": "succeeded|delivered|stopped_to_ask|failed|void",
     "timings": {"total_ms": "integer", "session_ms": "integer"},
     "void_cause": "VoidCause?", "cause": "string?", "session_id": "string?",
     "log": "string?", "model_evidence": "string?",
-    "reports": {"standards": "string?", "spec": "string?"}
+    "reports": {"standards": "string?", "spec": "string?"},
+    "steps?": [{"name": "string", "outcome": "string", "started_at": "string", "ended_at": "string", "elapsed_ms": "integer"}],
+    "accounting?": {"sessions":["SessionAccounting"], "incomplete?":"boolean"}
   },
   "Score": {
     "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean",
@@ -298,8 +412,15 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
   },
   "Verdict": {
-    "verdict": "pass|fail|inconclusive|waiting_on_rechecks",
-    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
+    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks",
+    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer",
+    "efficiency?": "Efficiency", "line?": "string"
+  },
+  "Efficiency": {
+    "quality_verdict": "Decision", "method": "string", "cost": "Comparison", "time": "Comparison"
+  },
+  "Comparison": {
+    "ratio": "number?", "interval": "Interval?", "pairs": "integer", "complete": "boolean", "ceiling": "number?"
   },
   "Decision": "pass|fail|inconclusive",
   "SuiteVerdict": {
@@ -308,7 +429,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "accuracy": "Assessment", "wrong_findings": "Assessment", "verdict": "Decision",
     "retained_tasks": "integer", "dropped_tasks": "integer", "pass_cubed": "PassCubed?",
     "counts?": {"judged": "integer", "measurement_only": "integer", "void_dropped": "integer", "other_setup": "integer"},
-    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
+    "measurement?": [{"task": "string", "trials": [{"arm": "baseline|candidate", "trial": "integer", "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean"}]}]
   },
   "SuiteBar": {
     "margin": "number", "pass_level?": "number", "fail_level?": "number",

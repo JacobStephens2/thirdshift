@@ -19,6 +19,33 @@ use crate::harness::Adapter;
 mod directory;
 use directory::CheckedDirectory;
 
+/// A Trial's private home containing only its Arm's frozen inputs.
+pub(crate) const TRIAL_HOME: &str = "THIRDSHIFT_TRIAL_HOME";
+
+pub(crate) fn trial_home() -> Option<PathBuf> {
+    std::env::var_os(TRIAL_HOME).map(PathBuf::from)
+}
+
+/// Freeze a referenced home skill, including its supporting files. Factory
+/// skills remain supplied by the Arm's build; repository skills by the task.
+pub(crate) fn freeze_home_skill(name: &str, destination: &Path) -> Result<()> {
+    if factory_skill(name) {
+        return Ok(());
+    }
+    let Some(catalog) = read_home_skills()? else {
+        return Ok(());
+    };
+    if let Some(skill) = catalog.skills.iter().find(|skill| skill.name == name) {
+        copy_inside(
+            skill.skill_md.parent().context("skill has no directory")?,
+            &destination.join(name),
+            &catalog.root,
+            0,
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -149,7 +176,7 @@ fn home_skills() -> Result<Vec<(String, PathBuf)>> {
 
 /// The canonical home skills directory and the skills inside it.
 fn read_home_skills() -> Result<Option<HomeCatalog>> {
-    let Ok(home) = crate::config::home() else {
+    let Ok(home) = trial_home().map_or_else(crate::config::home, Ok) else {
         return Ok(None);
     };
     let skills_dir = home.join(".thirdshift/skills");

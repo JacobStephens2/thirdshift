@@ -30,6 +30,7 @@ fn result(task: &Task, arm: Arm, passed: bool, wrong_finding: bool) -> TrialResu
             rechecks: Vec::new(),
         }),
         attempts: Vec::new(),
+        leaks: Vec::new(),
     }
 }
 
@@ -54,6 +55,8 @@ fn observation(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Value {
 
 fn setup() -> Setup {
     Setup {
+        process: None,
+        process_digest: None,
         commit: "a".repeat(40),
         harness: "claude".into(),
         model: None,

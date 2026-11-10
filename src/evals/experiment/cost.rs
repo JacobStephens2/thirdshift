@@ -46,23 +46,29 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     }
 }
 
-/// Completed Trials' minutes, by suite and Harness.
-type History = BTreeMap<(String, String), TrialMinutes>;
+/// Completed Trials' measurements, by suite and exact Arm setup.
+type History = BTreeMap<(String, String), TrialMeasurements>;
 
 #[derive(Clone, Copy, Default)]
-struct TrialMinutes {
-    total: f64,
+struct TrialMeasurements {
+    total_minutes: f64,
     trials: usize,
+    cost_usd: f64,
+    priced_trials: usize,
 }
 
-impl TrialMinutes {
-    fn add(&mut self, minutes: f64) {
-        self.total += minutes;
+impl TrialMeasurements {
+    fn add(&mut self, minutes: f64, cost_usd: Option<f64>) {
+        self.total_minutes += minutes;
         self.trials += 1;
+        if let Some(cost) = cost_usd {
+            self.cost_usd += cost;
+            self.priced_trials += 1;
+        }
     }
 
-    fn per_trial(self) -> f64 {
-        self.total / self.trials as f64
+    fn minutes_per_trial(self) -> f64 {
+        self.total_minutes / self.trials as f64
     }
 }
 
@@ -88,15 +94,22 @@ fn history(files: &impl Files, experiments: &Path, current: &str) -> History {
         };
         for result in results.iter().map(trial_results::Terminal::result) {
             if let Some(minutes) = completed_minutes(result) {
-                let harness = &stored.description.setup(result.arm).harness;
+                let setup = stored.description.setup(result.arm);
                 history
-                    .entry((result.suite.clone(), harness.clone()))
+                    .entry(history_key(&result.suite, setup))
                     .or_default()
-                    .add(minutes);
+                    .add(minutes, super::accounting::trial_total(result).cost_usd);
             }
         }
     }
     history
+}
+
+fn history_key(suite: &str, setup: &super::Setup) -> (String, String) {
+    (
+        suite.into(),
+        serde_json::to_string(setup).expect("Arm setup JSON"),
+    )
 }
 
 /// Every attempt's minutes of a Trial that completed, not void, as the
@@ -126,6 +139,7 @@ struct Group {
     harness: String,
     trials: usize,
     mean: Option<f64>,
+    mean_cost: Option<f64>,
 }
 
 impl Plan {
@@ -151,8 +165,12 @@ impl Plan {
                         harness: setup.harness.clone(),
                         trials,
                         mean: history
-                            .get(&(suite.clone(), setup.harness.clone()))
-                            .map(|minutes| minutes.per_trial()),
+                            .get(&history_key(suite, setup))
+                            .map(|measurements| measurements.minutes_per_trial()),
+                        mean_cost: history
+                            .get(&history_key(suite, setup))
+                            .filter(|past| past.priced_trials == past.trials)
+                            .map(|past| past.cost_usd / past.trials as f64),
                     });
                 }
             }
@@ -195,6 +213,10 @@ impl Plan {
                     minutes(mean * group.trials as f64)
                 ),
                 None => "no earlier Trials to estimate from".into(),
+            };
+            let estimate = match group.mean_cost {
+                Some(cost) => format!("{estimate}, ${:.6}", cost * group.trials as f64),
+                None => estimate,
             };
             lines.push(format!(
                 "{}, {arm} arm ({}): {}, {estimate}",

@@ -30,6 +30,7 @@ pub struct Recording {
     /// Command remain errors; they must never select the Trial's storage.
     owner: std::result::Result<Option<Owner>, String>,
     trial_context: Option<logs::trace::Context>,
+    trial_role: Option<String>,
     process: Option<crate::processes::Identity>,
 }
 
@@ -63,7 +64,15 @@ impl Recording {
         Self {
             owner: logs::captured_owner().map(Some),
             trial_context: None,
+            trial_role: None,
             process: None,
+        }
+    }
+
+    pub(super) fn for_trial_step(role: &str) -> Self {
+        Self {
+            trial_role: Some(role.into()),
+            ..Self::for_trial()
         }
     }
 
@@ -89,6 +98,7 @@ impl Recording {
                 .ok()
                 .and_then(|json| serde_json::from_str(&json).ok()),
             process: None,
+            trial_role: None,
         }
     }
 
@@ -106,6 +116,7 @@ impl Recording {
                 .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
             trial_context: None,
+            trial_role: None,
             process: None,
         }
     }
@@ -207,15 +218,18 @@ impl Recording {
         if let Some(process) = &self.process {
             context.process = process.clone();
         }
-        let trace = Arc::new(Mutex::new(super::trace::Trace::create(
-            log,
-            kind,
-            choice,
-            input.prompt,
-            context,
-            command,
-            self.command_log(),
-        )?));
+        let trace = Arc::new(Mutex::new(
+            super::trace::Trace::create(
+                log,
+                kind,
+                choice,
+                input.prompt,
+                context,
+                command,
+                self.command_log(),
+            )?
+            .with_trial_role(self.trial_role.as_deref())?,
+        ));
         if borrowed_trial {
             // Supervisor-side metadata must finish before the Harness adds
             // members to the borrowed Trial cgroup's cleanup population.

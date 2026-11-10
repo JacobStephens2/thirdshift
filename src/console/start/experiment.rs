@@ -14,11 +14,21 @@ pub(in crate::console) fn properties() -> Value {
         "candidate_model",
         "baseline_effort",
         "candidate_effort",
+        "baseline_process",
+        "candidate_process",
         "name",
+        "prices",
     ] {
         properties.insert(key.into(), json!({"type":"string"}));
     }
-    for key in ["margin", "pass_level", "fail_level", "prior"] {
+    for key in [
+        "margin",
+        "pass_level",
+        "fail_level",
+        "prior",
+        "cost_ceiling",
+        "time_ceiling",
+    ] {
         properties.insert(key.into(), json!({"type":"number"}));
     }
     for key in [

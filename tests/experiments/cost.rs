@@ -72,7 +72,7 @@ fn yes_and_a_non_terminal_stdin_skip_the_question() {
 }
 
 #[test]
-fn the_estimate_uses_earlier_experiments_per_suite_and_harness() {
+fn the_estimate_uses_earlier_experiments_per_suite_and_arm_setup() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does("true");
     let earlier = fixture.run(&[]);
@@ -119,15 +119,21 @@ fn the_estimate_uses_earlier_experiments_per_suite_and_harness() {
     let same = fixture.run_on_terminal(&["--candidate-model", "other-model"], &[(QUESTION, "n")]);
     assert_eq!(same.code, Some(1), "{}", same.stderr);
     assert!(
-        same.stderr
-            .contains("spec-review, Baseline arm (claude): 1 Trial, estimate 10 session-minutes"),
+        same.stderr.contains(
+            "spec-review, Baseline arm (claude): 1 Trial, no earlier Trials to estimate from"
+        ),
         "{}",
         same.stderr
     );
     assert!(
         same.stderr.contains(
-            "thirdshift: Estimate: 20 session-minutes, from this machine's earlier Experiments"
+            "spec-review, Candidate arm (claude): 1 Trial, no earlier Trials to estimate from"
         ),
+        "{}",
+        same.stderr
+    );
+    assert!(
+        !same.stderr.contains("thirdshift: Estimate:"),
         "{}",
         same.stderr
     );

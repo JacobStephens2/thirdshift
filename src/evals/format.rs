@@ -19,6 +19,19 @@ pub(super) enum State {
 pub(super) enum Session {
     CodeReview,
     SpecReview,
+    Process,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Provenance {
+    Real,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Environment {
+    Host,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -27,16 +40,45 @@ pub(super) struct Task {
     pub format: u32,
     pub state: State,
     pub session: Session,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
     pub repository: String,
     pub base: String,
     pub change: String,
     pub criteria: String,
     #[serde(default)]
     pub checks: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_grading: Option<ProcessGrading>,
     pub inputs: BTreeMap<String, String>,
     pub trial: Option<crate::trial::Inputs>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProcessGrading {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_fix: Option<RealFix>,
+    pub test_files: Vec<String>,
+    #[serde(default)]
+    pub test_fakes: Vec<String>,
+    pub fail_to_pass: Vec<Vec<String>>,
+    pub pass_to_pass: Vec<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RealFix {
+    pub pull_request: String,
+    pub issue: String,
+    pub branch: String,
+    pub title: String,
+    #[serde(default)]
+    pub issue_title: String,
 }
 
 /// One replaceable A/A reading, with the setup that produced it.
@@ -69,6 +111,46 @@ impl Task {
         let path = directory.join("task.toml");
         let task: Self = read(&path)?;
         version(task.format)?;
+        if task.session == Session::Process {
+            anyhow::ensure!(
+                task.provenance.is_some() && task.environment.is_some(),
+                "process tasks require provenance and environment"
+            );
+            anyhow::ensure!(
+                task.checks.is_empty(),
+                "process tasks use process_grading, not checks"
+            );
+            let grading = task
+                .process_grading
+                .as_ref()
+                .context("process tasks require process_grading")?;
+            anyhow::ensure!(
+                !grading.test_files.is_empty(),
+                "process_grading requires test_files"
+            );
+            for file in grading.test_files.iter().chain(&grading.test_fakes) {
+                relative_path(file)?;
+            }
+            for selectors in [&grading.fail_to_pass, &grading.pass_to_pass] {
+                anyhow::ensure!(
+                    !selectors.is_empty(),
+                    "process_grading requires fail_to_pass and pass_to_pass selectors"
+                );
+                for selector in selectors {
+                    anyhow::ensure!(
+                        selector
+                            .first()
+                            .is_some_and(|command| !command.trim().is_empty()),
+                        "process_grading selectors must be nonempty argument vectors"
+                    );
+                }
+            }
+        } else {
+            anyhow::ensure!(
+                task.process_grading.is_none(),
+                "only process tasks use process_grading"
+            );
+        }
         commit_id(&task.base)?;
         commit_id(&task.change)?;
         if let Some(difficulty) = &task.difficulty {
