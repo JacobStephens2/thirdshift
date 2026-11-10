@@ -50,6 +50,7 @@ mod github;
 mod harness;
 #[cfg(target_os = "linux")]
 mod host;
+#[cfg(target_os = "linux")]
 mod host_work;
 #[cfg(target_os = "linux")]
 mod implement;
