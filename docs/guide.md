@@ -743,6 +743,7 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
 | `/update` | none | `update` |
 | `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+| `/evals/propose-process` | `repository` (known owner/repo), optional `limit` (1–100) | `evals propose-process <repository>`; requires `admin` |
 
 Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
 JSON bodies use `Content-Type: application/json`. GET calls take no body.
@@ -1120,6 +1121,7 @@ thirdshift setup                    # choose your defaults and write the User co
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
 thirdshift evals approve <suite> <task> [--json]  # approve a proposed Eval task in its suite
 thirdshift evals import-replays     # import #429's private manifests and grading files once
+thirdshift evals propose-process <repository> [--limit <1..100>]  # draft process Eval tasks from merged Tickets
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
@@ -1151,6 +1153,14 @@ approves one in its suite without changing its inputs or starting work. The
 Console offers the same action under Proposed Eval tasks on the Experiments
 list and, for its suites, on an Experiment page. Approval affects future
 Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+`evals propose-process <repository>` drafts proposed process Eval tasks from
+recent merged pull requests closing Tickets, listing their bug or feature kind,
+source line count and separate test layout. Review each draft's selectors before
+approving it. `evals prepare` screens process tasks on the host with network
+access: each fail-to-pass selector must fail at the base and pass at the merge
+with the reference tests and shared fakes overlaid. It refuses changed inline
+Rust tests and names the file. The prepared process repository keeps the fix
+and test overlay private. See the [task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#process-task-preparation-and-proposals).
 Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.

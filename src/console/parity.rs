@@ -75,6 +75,7 @@ const PROCESSES: &[(&str, &str)] = &[
 const EVALS: &[(&str, &str)] = &[
     ("List", "evals list"),
     ("ImportReplays", "evals import-replays"),
+    ("ProposeProcess", "evals propose-process repository"),
     ("Approve", "evals approve suite task"),
     ("Touched", "evals touched src/main.rs"),
     ("Prepare", "evals prepare suite task output"),
