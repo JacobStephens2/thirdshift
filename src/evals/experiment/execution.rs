@@ -299,7 +299,10 @@ impl<'a> Execution<'a> {
                 protocol.steps = serde_json::from_slice(&fs::read(path)?)?;
             }
         }
-        let unchanged = protocol.void_cause == Some(VoidCause::Interrupted)
+        // A successful protocol can also claim interruption. Only an attempt
+        // that is already void for that cause skips the repository walk.
+        let unchanged = (protocol.outcome == Outcome::Void
+            && protocol.void_cause == Some(VoidCause::Interrupted))
             || task.manifest.session == crate::evals::format::Session::Process
             || before
                 .unchanged(&prepared_repo.repository)

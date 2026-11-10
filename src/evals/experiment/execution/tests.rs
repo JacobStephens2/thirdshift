@@ -662,6 +662,35 @@ fn completed_score_and_evidence_live_through_publication() {
 }
 
 #[test]
+fn a_claimed_interruption_cannot_hide_a_changed_repository() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(&format!(
+        r#"
+(repository / '{file}').write_text('Edited input')
+report = output / 'standards.md'
+report.write_text('Review complete.\n')
+print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause='interrupted', cause=None, session_id=None, log=None, model_evidence=None)))
+"#,
+        file = crate::prompt::ISSUE_FILE
+    ));
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(
+                output.outcome == Outcome::Void,
+                "a successful Trial kept a mutated repository by claiming interruption: {:?}",
+                output.void_cause
+            );
+            assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+            assert!(!score.passed, "the mutated Trial was scored as a pass");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn a_delivered_review_that_changes_the_repository_is_voided() {
     if isolated(&[]) {
         return;
