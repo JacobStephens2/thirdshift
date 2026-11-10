@@ -28,16 +28,19 @@ required by version 1 but is unused.
 A Trial does not acquire a Worktree,
 make a Claim, fetch the issue, push, watch CI, or perform Delivery itself.
 
-A `process` request exercises the Built-in Ticket run through the Process
+A `process` request exercises a Built-in or Custom process through the Process
 engine's local Ticket source. The caller checks out `inputs.branch`, supplies
 `inputs.base` as a local branch and sets `origin` to an absolute local repository
 directory, with a repository-local Git author identity for commits inside the
-fresh home. The engine runs `implement` and `security-review`, then stops before
-`delivery`. The local source refuses `delivery` and `self-merge` if asked to
-execute either. The optional `process` field names the Built-in process and
-defaults to `ticket-run`. Other Built-in processes that need GitHub before
-publication are refused before a Trial starts. Custom process selection is
-separate work.
+fresh home. The engine runs the Process's Steps, preserving their Harness,
+Model and Effort choices, and stops before the first publishing Step. The
+local source refuses `delivery` and `self-merge` if asked to execute either.
+The optional `process` field accepts a name or a frozen `.toml` file and defaults
+to `ticket-run`. Processes that need GitHub before publication are refused
+before a Trial starts. Experiments set `THIRDSHIFT_TRIAL_HOME` to the attempt's
+fresh home containing only its frozen Process and home skills. Skill lookup
+uses that home, and the sandbox uses it as the session's home while reading
+Harness logins from the production home as usual.
 
 Before each session, including Resume, the local source restores the supplied
 issue file. Its prompts instruct the agent to commit locally, with no GitHub

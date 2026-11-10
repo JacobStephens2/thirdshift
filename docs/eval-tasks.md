@@ -412,6 +412,23 @@ to a new file at `<record.json>`. Its parent directory must exist. It records
 `baseline` and `candidate`, each with `commit`, the cached thirdshift `binary`,
 and a `harness` holding its `name`, resolved `path` and `version`.
 
+Append `--baseline-process <name-or-file.toml>` or
+`--candidate-process <name-or-file.toml>` to freeze a Process per Arm; the
+unspecified Arm then uses `ticket-run`. Names resolve Built-in processes or
+Custom processes in `~/.thirdshift/processes/`. Each Arm's optional `process`
+contains `name`, a private frozen `directory`, a `files` map from home-relative
+paths to SHA-256 hashes, and `steps` with each Step's `name`, pinned `harness`,
+`model` and `effort`. Home skills come from `~/.thirdshift/skills/`; their full
+directories are frozen, including helpers. Factory skills stay in the build,
+and repository skills stay in the Eval task. The flags `--baseline-model`,
+`--baseline-effort`, `--candidate-model` and `--candidate-effort` set inherited
+Step choices; fields explicitly set by a Step take precedence.
+
+Frozen folders live beside the Arm record. Keep them with the record. Before
+every Trial the Experiment checks both Arms' file sets and content hashes,
+then copies verified bytes into that Trial's fresh home. A changed, added or
+missing file stops the Experiment with its filename before that Trial starts.
+
 Each missing build runs `cargo build --release --locked` in a detached worktree
 at that Arm's commit, with a private target directory. The finished executable
 is published at `~/.thirdshift/evals/builds/<commit>/thirdshift`. A per-commit

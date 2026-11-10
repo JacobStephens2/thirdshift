@@ -1268,6 +1268,14 @@ by commit under <code>~/.thirdshift/evals/builds/</code> and records their commi
 and each Harness&#39;s real path and version in a new JSON file. A failed build or
 version lookup stops preparation. Trials use the recorded Harness path so an
 installation&#39;s symlink update cannot change the Harness between Arms.
+For process Arms, add <code>--baseline-process &lt;name-or-file.toml&gt;</code> and
+<code>--candidate-process &lt;name-or-file.toml&gt;</code>; the other Arm defaults to <code>ticket-run</code>.
+Names select Built-in processes or files under <code>~/.thirdshift/processes/</code>.
+The Process file and its referenced home skills, including supporting files,
+are copied into private Arm folders beside the record. The record lists each
+file&#39;s SHA-256 and the resolved Harness, Model and Effort per Step. Optional
+<code>--baseline-model</code>, <code>--baseline-effort</code>, <code>--candidate-model</code> and
+<code>--candidate-effort</code> set the inherited choices.
 The <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task format</a>
 documents the manifests with made-up data and the Arm record.</p>
 <p>On the host holding #429&#39;s material, <code>thirdshift evals import-replays</code> reads
@@ -1376,10 +1384,14 @@ production code-review Factory skill on the historical diff and retain both
 axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: <code>gh</code> calls fail
 inside the sandbox and only their reports are graded.</p>
-<p>Process Eval tasks run the Built-in Ticket run&#39;s <code>implement</code> and
-<code>security-review</code> Steps at the task&#39;s base commit, stopping before Delivery.
-<code>--baseline-process ticket-run</code> and <code>--candidate-process ticket-run</code> name the
-Built-in process per Arm; both default to <code>ticket-run</code> for process tasks.
+<p>Process Eval tasks run each Arm&#39;s Process at the task&#39;s base commit, stopping
+before its first publishing Step. <code>--baseline-process &lt;name-or-file.toml&gt;</code> and
+<code>--candidate-process &lt;name-or-file.toml&gt;</code> select a Built-in or Custom process;
+both default to the Built-in <code>ticket-run</code> with <code>implement</code> and <code>security-review</code>.
+Preparation freezes the Process file and referenced home skills by SHA-256,
+recording each Step&#39;s Harness, Model and Effort in the Experiment&#39;s description.
+Each Trial gets its own copies in its fresh home. Both Arms&#39; frozen files are
+checked before every Trial; a mismatch pauses the Experiment with the filename.
 A Process needing GitHub before publication is refused at start. The Trial
 publishes nothing and creates no factory run of its own. Its Steps and all
 sessions appear in the Experiment&#39;s Trial Peek and Trace. Process outcomes are
@@ -1642,7 +1654,7 @@ reports its saved results. A changed Bar is refused after the first Trial.
 That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 4</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 5</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost
