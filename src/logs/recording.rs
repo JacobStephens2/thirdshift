@@ -116,7 +116,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::ReviewRun { .. } => CommandKind::Review,
             Begin::FixRun { .. } => CommandKind::Fix,
-            Begin::TriageRun => CommandKind::Triage,
+            Begin::TriageRun { .. } => CommandKind::Triage,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
         };
@@ -133,7 +133,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::ReviewRun { pass } => ("Review run starting".into(), pass),
             Begin::FixRun { pass } => ("Fix run starting".into(), pass),
-            Begin::TriageRun => ("Triage run starting".into(), false),
+            Begin::TriageRun { pass } => ("Triage run starting".into(), pass),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
@@ -202,8 +202,8 @@ impl<O: Outside> Record<O> {
             CommandKind::Secure => Pass::Security,
             CommandKind::Review => Pass::Review,
             CommandKind::Fix => Pass::Fix,
+            CommandKind::Triage => Pass::Triage,
             CommandKind::Issue
-            | CommandKind::Triage
             | CommandKind::Scoring
             | CommandKind::Experiment
             | CommandKind::Process => return,

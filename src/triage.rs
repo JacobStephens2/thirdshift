@@ -15,6 +15,9 @@ use crate::{command_limit, launch, logs, prompt, session, worktree};
 
 mod existing;
 mod images;
+mod pass;
+
+pub use pass::{Outcome, run as run_pass};
 
 /// Input is resolved before Setup can consume a piped Report.
 pub enum Input {
@@ -23,11 +26,23 @@ pub enum Input {
 }
 
 impl Input {
-    pub fn read(issue: Option<IssueInput>, file: Option<&str>) -> Result<Self> {
-        match issue {
-            Some(issue) => Ok(Self::Issue(launch::resolve_issue(issue)?)),
-            None => Ok(Self::Report(Report::read(file)?)),
+    /// No supplied work means an unattended Pass. Resolve stdin before Setup.
+    pub fn read(issue: Option<IssueInput>, file: Option<&str>) -> Result<Option<Self>> {
+        if let Some(issue) = issue {
+            return Ok(Some(Self::Issue(launch::resolve_issue(issue)?)));
         }
+        if file.is_none() && std::io::stdin().is_terminal() {
+            return Ok(None);
+        }
+        let report = Report::read(file)?;
+        if file.is_none() && report.text.trim().is_empty() {
+            return Ok(None);
+        }
+        ensure!(
+            !report.text.trim().is_empty(),
+            "give a Report on standard input or with --file <path>"
+        );
+        Ok(Some(Self::Report(report)))
     }
 }
 
@@ -45,18 +60,10 @@ impl Report {
             std::fs::read_to_string(path)
                 .with_context(|| format!("could not read Report {path}"))?
         } else {
-            ensure!(
-                !std::io::stdin().is_terminal(),
-                "give a Report on standard input or with --file <path>"
-            );
             let mut text = String::new();
             std::io::stdin().read_to_string(&mut text)?;
             text
         };
-        ensure!(
-            !text.trim().is_empty(),
-            "give a Report on standard input or with --file <path>"
-        );
         Ok(Report {
             text,
             file: file.map(String::from),
@@ -502,13 +509,29 @@ pub fn run(
         None => launch::checked_out_base()?,
     };
     let launch = Git::new(std::env::current_dir().context("could not read the Launch directory")?);
-    let mut claim = target
+    let claim = target
         .filter(|_| !options.recommend_only)
         .map(|issue| existing::Claim::take(&launch, issue))
         .transpose()?;
+    investigate(input, options, harness, &repo, &launch, &base, claim)
+}
+
+fn investigate(
+    input: &Input,
+    options: Options,
+    harness: &mut Choice,
+    repo: &Repo,
+    launch: &Git,
+    base: &launch::BaseBranch,
+    mut claim: Option<existing::Claim<'_>>,
+) -> Result<Ended, FailedRun> {
+    let target = match input {
+        Input::Issue(issue) => Some(issue),
+        Input::Report(_) => None,
+    };
     harness.check_without_probe()?;
-    let checkout = worktree::ReviewWorktree::for_triage(&launch, &repo.name, base.origin_commit())?;
-    let session_logs = session::Logs::of_triage_run(&repo);
+    let checkout = worktree::ReviewWorktree::for_triage(launch, &repo.name, base.origin_commit())?;
+    let session_logs = session::Logs::of_triage_run(repo);
     let mut published = Vec::new();
     let investigate = |sessions: &session::Sessions<'_>| {
         let skill = crate::skills::find(checkout.path(), "thirdshift-triage")?;
@@ -534,7 +557,7 @@ pub fn run(
         }
         let publication = check_publication(
             &recommendation,
-            &repo,
+            repo,
             &github,
             options.allow_ready_for_agent,
         )
@@ -552,7 +575,7 @@ pub fn run(
                 Input::Report(report) => publish(
                     &mut recommendation,
                     checked,
-                    &repo,
+                    repo,
                     report,
                     &github,
                     &mut published,
