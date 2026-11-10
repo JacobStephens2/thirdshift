@@ -302,10 +302,10 @@ impl Report {
             let baseline = trial_total(baseline);
             let candidate = trial_total(candidate);
             report.paired_median_ratios.pairs += 1;
-            if let Some((base, cand)) = baseline.cost_usd.zip(candidate.cost_usd) {
-                if base > 0.0 {
-                    costs.push(cand / base);
-                }
+            if let Some((base, cand)) = baseline.cost_usd.zip(candidate.cost_usd)
+                && base > 0.0
+            {
+                costs.push(cand / base);
             }
             if baseline.time_ms > 0 {
                 times.push(candidate.time_ms as f64 / baseline.time_ms as f64);
