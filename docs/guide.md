@@ -702,7 +702,7 @@ by later Console API tickets appear when they are served.
 | Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
 | Run metrics | `/api/v1/metrics` (`command`, `from`, `through`, repeated `repo`) | `metrics` |
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
-| Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
+| Experiments, Trial Session evidence and blind pairs | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>`, `/api/v1/experiments/<id>/pairs/<pair>` | `experiments [<id>] [--session <session> \| --pair <pair>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
 | Known Launch directories | `/api/v1/launch-directories` | `launch-directories` |
 | Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
@@ -762,6 +762,8 @@ JSON bodies use `Content-Type: application/json`. GET calls take no body.
 | POST `/experiments/<id>/name` | `admin` | JSON `name` | `experiments <id> --name <name> --json` |
 | POST `/experiments/<id>/difficulty` | `admin` | none | `experiments <id> --record-difficulty --json` |
 | GET `/experiments/<id>/rechecks` | `read` | none | `recheck <id> --pending --json` |
+| POST `/experiments/<id>/pairs/<pair>/merge` | `act` | form `a` and `b`, each `ready` or `not-ready` | `experiments <id> --pair <pair> --merge <a> <b> --json` |
+| POST `/experiments/<id>/pairs/<pair>/preference` | `act` | form `preference` (`a`, `b`, `tie` or `both-bad`), optional `rubric_<criterion>` | `experiments <id> --pair <pair> --prefer <preference> [--rubric <criterion>=<value>]... --json` |
 | POST `/experiments/<id>/rechecks` | `act` | JSON `trial` or `fingerprint`, `decision` (`pass` or `fail`), `reason`, optional `wrong_finding` | `recheck <id> <trial> <decision> --reason <reason> --json`, or `--batch <fingerprint>` |
 
 See OpenAPI for each CLI twin's response and full argument schema. The route
@@ -1355,7 +1357,35 @@ snapshot could not be prepared, decides nothing either way. The Console's
 Experiment page lists it under Pair evidence. The text view adds a line for
 each disagreement, new test that passes on the base, run that did not finish
 and evidence that could not run. `thirdshift experiments <id> --json` keeps it
-under `pairs`.
+under `pairs`, with each Arm's whole change since the base.
+
+Each pair with evidence can also be read blind, one person at a time. The
+Experiment page's **People's calls** section links each pair's page, which shows
+the Ticket, its acceptance checklist numbered from 1, the two changes side by
+side with code before tests, and each change's evidence. The sides, A and B, are
+drawn for each pair from the Bar's seed, and the page names no Arm, build,
+Harness or Model and shows no model call. First make a sealed merge call for
+each side, ready or not ready; then give a preference (A, B, tie or both bad)
+and, optionally, the rubric: which change better does what the Ticket asks
+(`correctness`), has proportionate tests that check the change (`tests`) and
+keeps to what was asked (`scope`). The preference and rubric are refused until
+both merge calls are sealed, and sealed calls can't be made again until you
+have given that preference. Every call is a new record, attributed to you and
+never changed, so reading a pair again adds a second review; one begun after
+your reveal is marked as not blind and left out of people–panel agreement.
+Once you have given
+a preference, the page shows which Arm made each side, the Grader panel's calls
+when it has read the pair, and every reader's calls. In the shell:
+
+```sh
+thirdshift experiments <id> --pair <pair-id>
+thirdshift experiments <id> --pair <pair-id> --merge ready not-ready
+thirdshift experiments <id> --pair <pair-id> --prefer a --rubric scope=tie
+```
+
+People's calls, in Arm terms, and their agreement with the panel's merge calls
+show beside the Verdict on the Experiment page, in the text view, and under
+`people` in `--json`. They change no Score and no Verdict.
 
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
@@ -1600,7 +1630,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 9`.
+[Experiment results format](experiment-results.md), identified by `format: 10`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

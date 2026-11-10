@@ -146,20 +146,24 @@ pub(in super::super) fn changed(
     commit: &str,
     deadline: Instant,
 ) -> Result<Vec<String>> {
-    let names = repository::bytes_until(
-        repository,
-        &[
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--diff-filter=AM",
-            base,
-            commit,
-            "--",
-        ],
-        deadline,
-    )?;
+    listed(repository, &["--diff-filter=AM", base, commit], deadline)
+}
+
+/// Files a commit adds, changes or deletes since `base`, in path order.
+pub(in super::super) fn touched(
+    repository: &Path,
+    base: &str,
+    commit: &str,
+    deadline: Instant,
+) -> Result<Vec<String>> {
+    listed(repository, &[base, commit], deadline)
+}
+
+fn listed(repository: &Path, selection: &[&str], deadline: Instant) -> Result<Vec<String>> {
+    let mut args = vec!["diff", "--name-only", "-z", "--no-renames"];
+    args.extend_from_slice(selection);
+    args.push("--");
+    let names = repository::bytes_until(repository, &args, deadline)?;
     names
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())

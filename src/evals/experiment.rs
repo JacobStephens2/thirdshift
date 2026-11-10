@@ -13,7 +13,8 @@ mod leaks;
 mod model_grader;
 mod names;
 mod options;
-mod pairs;
+pub(crate) mod pairs;
+pub(crate) mod pairwise;
 mod reading;
 mod rechecks;
 mod release;
@@ -527,6 +528,42 @@ pub fn show(args: &[String]) -> Result<String> {
             json,
         );
     }
+    if let [id, flag, pair, rest @ ..] = positional.as_slice()
+        && flag.as_str() == "--pair"
+    {
+        let page = match rest {
+            [] => pairwise::page(id, pair, &logs::Actor::cli("a blind pair")?)?,
+            [flag, a, b] if flag.as_str() == "--merge" => {
+                pairwise::merge(id, pair, a, b, logs::Actor::cli("merge calls")?)?
+            }
+            [flag, preference, rubric @ ..] if flag.as_str() == "--prefer" => {
+                let mut graded = Vec::new();
+                for chunk in rubric.chunks(2) {
+                    let [flag, value] = chunk else {
+                        anyhow::bail!("--rubric needs <criterion>=<a|b|tie|both-bad>");
+                    };
+                    let (criterion, value) = value
+                        .split_once('=')
+                        .filter(|_| flag.as_str() == "--rubric")
+                        .context("--rubric needs <criterion>=<a|b|tie|both-bad>")?;
+                    graded.push((criterion.to_owned(), value.to_owned()));
+                }
+                pairwise::prefer(
+                    id,
+                    pair,
+                    preference,
+                    &graded,
+                    logs::Actor::cli("a preference")?,
+                )?
+            }
+            _ => anyhow::bail!("{PAIR_USAGE}"),
+        };
+        return if json {
+            Ok(serde_json::to_string_pretty(&page)?)
+        } else {
+            Ok(pairwise::text(&page))
+        };
+    }
     if let [id, flag] = positional.as_slice()
         && flag.as_str() == "--record-difficulty"
     {
@@ -549,10 +586,12 @@ pub fn show(args: &[String]) -> Result<String> {
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json], experiments <id> --session <session-id> [--json] or experiments <id> --leak <hit-id> <confirm|dismiss> --reason <text> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json], experiments <id> --session <session-id> [--json], experiments <id> --leak <hit-id> <confirm|dismiss> --reason <text> [--json] or {PAIR_USAGE}"
     );
     store::show(&root, positional.first().map(|id| id.as_str()), json)
 }
+
+const PAIR_USAGE: &str = "experiments <id> --pair <pair-id> [--merge <ready|not-ready> <ready|not-ready> | --prefer <a|b|tie|both-bad> [--rubric <criterion>=<a|b|tie|both-bad>]...] [--json]";
 
 /// The shown resume command leaves out `--name`, so following it keeps a
 /// later rename. Flags pair with values as `options::parse` reads them.

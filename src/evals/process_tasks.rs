@@ -83,7 +83,7 @@ impl From<&ProcessGrading> for TestSelection {
     }
 }
 
-fn is_test_path(path: &str) -> bool {
+pub(super) fn is_test_path(path: &str) -> bool {
     path.split('/')
         .any(|part| matches!(part, "tests" | "test" | "__tests__"))
         || Path::new(path)

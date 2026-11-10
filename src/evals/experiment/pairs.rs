@@ -13,7 +13,7 @@ use super::evidence::Started;
 use super::grading::process::{self, GraderRun, Source};
 use super::trial_results::files::{Files, Native, directory, metadata};
 use super::{Arm, Task, TrialResult, store, trial_results, trial_sessions};
-use crate::evals::format;
+use crate::evals::{format, repository};
 use crate::sandbox::code_grader::{Check, CheckRun};
 use crate::{interrupt, progress};
 
@@ -24,11 +24,24 @@ pub(crate) struct Pair {
     pub trial: usize,
     pub baseline: Side,
     pub candidate: Side,
+    /// The Grader panel's calls on this pair, once it has read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<super::pairwise::PanelCalls>,
+}
+
+impl Pair {
+    /// The pair's ID, its retained file's name.
+    pub(crate) fn key(&self) -> String {
+        trial_results::pair_key(&self.suite, &self.task, self.trial)
+    }
 }
 
 /// One Arm's new tests, run on the base and against the other Arm.
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Side {
+    /// The Arm's final commit against the base, code files before tests.
+    #[serde(default)]
+    pub diff: Vec<FileDiff>,
     /// Files the Arm's final commit adds or changes that match `new_tests`.
     pub test_files: Vec<String>,
     /// Null when the Arm has no new tests or its evidence could not run.
@@ -39,6 +52,15 @@ pub(crate) struct Side {
     pub base: Vec<Check>,
     pub cross: Vec<Check>,
     pub error: Option<String>,
+}
+
+/// One file's change, as `git diff` shows it.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct FileDiff {
+    pub path: String,
+    /// A new test file or a file in a test location, shown after the code.
+    pub test: bool,
+    pub patch: String,
 }
 
 /// Run evidence for every finished pair still without it. Retained pairs are
@@ -101,6 +123,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                 trial: index,
                 baseline: evidence.side(resolved(&baseline), resolved(&candidate))?,
                 candidate: evidence.side(resolved(&candidate), resolved(&baseline))?,
+                panel: None,
             };
             fs::create_dir_all(&pairs)?;
             store::write(&path, &pair)?;
@@ -190,6 +213,43 @@ fn last_commit(experiment: &Path, identity: &trial_results::Identity<'_>) -> Res
     anyhow::bail!("Trial's last attempt is no longer retained")
 }
 
+/// Every file the commit changes since `base`, code files before tests, each
+/// group in path order. The Trial repository is gone once the Experiment
+/// completes, so the blind pairwise page reads this copy.
+fn diff(
+    own: &Commit,
+    base: &str,
+    new_tests: &format::NewTests,
+    deadline: Instant,
+) -> Result<Vec<FileDiff>> {
+    let mut files = Vec::new();
+    for path in process::touched(&own.repository, base, &own.commit, deadline)? {
+        let path = path.as_str();
+        let patch = repository::bytes_until(
+            &own.repository,
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                base,
+                &own.commit,
+                "--",
+                path,
+            ],
+            deadline,
+        )?;
+        files.push(FileDiff {
+            path: path.to_owned(),
+            test: new_tests.matches(path) || crate::evals::process_tasks::is_test_path(path),
+            patch: String::from_utf8_lossy(&patch).into_owned(),
+        });
+    }
+    files.sort_by(|a, b| (a.test, &a.path).cmp(&(b.test, &b.path)));
+    Ok(files)
+}
+
 fn resolved(commit: &Result<Commit, String>) -> Result<&Commit, String> {
     commit.as_ref().map_err(Clone::clone)
 }
@@ -221,6 +281,7 @@ impl Evidence<'_> {
             let own = own.map_err(anyhow::Error::msg)?;
             let manifest = &self.task.manifest;
             let deadline = Instant::now() + self.timeout;
+            side.diff = diff(own, &manifest.base, self.new_tests, deadline)?;
             side.test_files =
                 process::changed(&own.repository, &manifest.base, &own.commit, deadline)?
                     .into_iter()
