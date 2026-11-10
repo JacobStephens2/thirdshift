@@ -5,11 +5,11 @@
 In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready.
 
 ```
-/thirdshift-code-review <base>, with the Spec <Spec URL> as the spec
+/thirdshift-code-review origin/<base>, with the Spec <Spec URL> as the spec
 
-Every Ticket of the Spec <Spec URL> has landed on branch <Spec branch>, its Spec branch (see git log <base>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
+Every Ticket of the Spec <Spec URL> has landed on branch <Spec branch>, its Spec branch (see git log origin/<base>..HEAD). Review the Spec as a whole, including how the Tickets' work fits together.
 
-Review with the `thirdshift-code-review` skill using <base> as the fixed point and <Spec URL> as the spec.
+Review with the `thirdshift-code-review` skill using origin/<base> as the fixed point and <Spec URL> as the spec.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
 Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
