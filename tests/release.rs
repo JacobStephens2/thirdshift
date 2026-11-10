@@ -535,6 +535,7 @@ fi
                 "FAKE_OPENCODE_RECORD",
                 self.root().join("opencode-calls.json"),
             )
+            .env("FAKE_KIMI_RECORD", self.root().join("kimi-calls.json"))
             .env("RELEASE_POLL_SECONDS", "0");
         command
     }
@@ -1022,7 +1023,7 @@ fn the_release_summary_uses_the_user_configs_default_harness_model_and_effort() 
 #[test]
 fn every_harness_receives_the_complete_release_input_above_the_argument_limit() {
     let prompt = format!("Summarize the release.\n{}", "x".repeat(150_000));
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         let release = Release::new();
         fs::create_dir(release.root().join("home/.thirdshift")).unwrap();
         fs::write(
@@ -1065,7 +1066,7 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
         &'static [&'static str],
         &'static [&'static [&'static str]],
     );
-    let cases: [Case; 4] = [
+    let cases: [Case; 5] = [
         (
             "agy",
             &["--dangerously-skip-permissions"],
@@ -1098,6 +1099,8 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
             ],
         ),
         ("opencode", &["--auto"], &[]),
+        // Print mode approves every tool itself, so the summary's agent has none.
+        ("kimi", &[], &[&["--agent-file"]]),
     ];
     for (harness, forbidden, required) in cases {
         let release = Release::new();
@@ -1139,6 +1142,10 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
                 "{harness}: {run:?} missing from {argv:?}"
             );
         }
+        if harness == "kimi" {
+            assert_eq!(call["agent_tools"], "[]", "{call:#?}");
+            assert_eq!(call["prompt"], "Summarize the release.", "{call:#?}");
+        }
         if harness == "opencode" {
             assert_eq!(
                 call["config_content"], r#"{"permission":{"*":"deny"}}"#,
@@ -1150,7 +1157,7 @@ fn every_other_harness_summarizes_without_its_session_permission_bypass() {
 
 #[test]
 fn every_other_configured_harness_supplies_its_final_text_to_the_release() {
-    for harness in ["agy", "grok", "muse", "opencode"] {
+    for harness in ["agy", "grok", "muse", "opencode", "kimi"] {
         let release = Release::new();
         release.ci_reports(GREEN);
         fs::create_dir(release.root().join("home/.thirdshift")).unwrap();

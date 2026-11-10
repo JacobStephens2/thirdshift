@@ -230,7 +230,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
-  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode), Model and Effort
+  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode, kimi), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands: architect, pickup, secure, review --author <login>, fix, triage (no supplied work). For architect, pickup, secure, fix and triage, base <branch> selects an origin branch; fix also accepts author <login>.

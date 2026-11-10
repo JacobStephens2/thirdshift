@@ -175,6 +175,16 @@ fn prepare_repository(
     };
     if let Some(inputs) = trial {
         git(repo, &["branch", &inputs.base, &task.base])?;
+        // Review prompts name the sampled origin ref, including in historical
+        // Trials that have no remote. Keep it pinned to the task's base.
+        git(
+            repo,
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{}", inputs.base),
+                &task.base,
+            ],
+        )?;
         git(repo, &["checkout", "-b", &inputs.branch])?;
         // Commit the staged patch only. Copied inputs may overlay tracked
         // worktree files without belonging to the reviewed change.

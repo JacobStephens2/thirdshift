@@ -103,6 +103,7 @@ fn isolated(name: &str, installed: &[Harness]) -> bool {
         "FAKE_GROK_RECORD",
         "FAKE_MUSE_RECORD",
         "FAKE_OPENCODE_RECORD",
+        "FAKE_KIMI_RECORD",
     ] {
         command.env(variable, root.join(variable));
     }
@@ -133,7 +134,7 @@ fn registered_order_and_enter_defaults_produce_one_complete_answer() {
     assert_eq!(
         terminal.prompts,
         [
-            "Harness for every Ticket run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
+            "Harness for every Ticket run's sessions, claude or codex or agy or grok or muse or opencode or kimi [claude]: ",
             "Model for claude [claude's own default]: ",
             "Effort for claude [claude's own default]: ",
         ]
@@ -168,7 +169,7 @@ fn no_installed_harness_retains_all_settings_without_questions() {
     assert_eq!(
         terminal.said,
         [
-            "No Harness is installed here, so the harness settings stay as they are; install claude or codex or agy or grok or muse or opencode, then rerun `thirdshift setup`."
+            "No Harness is installed here, so the harness settings stay as they are; install claude or codex or agy or grok or muse or opencode or kimi, then rerun `thirdshift setup`."
         ]
     );
 }
@@ -882,11 +883,12 @@ fn eof_at_selection_model_or_effort_propagates_the_existing_error() {
         return;
     }
     for harness in Harness::ALL {
-        for answers in [
-            vec![],
-            vec![("Harness", harness.name())],
-            vec![("Harness", harness.name()), ("Model", "")],
-        ] {
+        let mut cases = vec![vec![], vec![("Harness", harness.name())]];
+        // Kimi Code asks no Effort, so its Model is its last answer.
+        if harness != Harness::Kimi {
+            cases.push(vec![("Harness", harness.name()), ("Model", "")]);
+        }
+        for answers in cases {
             let mut terminal = Scripted::answering(&answers);
             assert_eq!(
                 ask(&mut terminal, &Settings::default())

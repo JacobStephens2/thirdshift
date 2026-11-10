@@ -5,8 +5,26 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
+
+# The full suite starts helpers that import tomllib; refuse before selecting.
+if sys.version_info < (3, 11):
+    sys.exit("Python 3.11 or later is required; found Python "
+             f"{'.'.join(map(str, sys.version_info[:3]))} at {sys.executable}")
+
+
+# Markdown read by builds or tests must retain its consumers' checks.
+# scripts/test_affected_tests.py guards this list against new code references.
+DOC_CHECKS = {
+    b"docs/guide.md": "site",
+    b"GLOSSARY.md": "site",
+    b"docs/experiment-results.md": "full",
+    b"docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md": "full",
+    b"docs/research/go-vs-rust-prototype.md": "full",
+    b"docs/research/console-core-split.md": "console-split",
+}
 
 
 def git(*arguments):
@@ -74,6 +92,8 @@ def main():
             areas.add("go")
         elif path.startswith(b"prototypes/typescript/"):
             typescript = True
+        elif path.startswith(b"prototypes/console-split/"):
+            areas.update({"console-split", "full"})
         elif path.startswith((b"src/console/", b"src/config/console/")) or path in {
             b"src/console.rs", b"src/config/console.rs", b"tests/console/scoring_fixture.py",
             b"tests/fixtures/waterfall-logs.jsonl", b"tests/fixtures/waterfall-spans.jsonl",
@@ -83,7 +103,13 @@ def main():
         elif path.startswith(b"console/"):
             areas.add("console")
             print(f"Console browser tests for {os.fsdecode(path)!r}.", flush=True)
-        elif path.startswith(b"site/") or path == b"docs/guide.md":
+        elif path in DOC_CHECKS:
+            areas.add(DOC_CHECKS[path])
+        elif (path.startswith(b"docs/") and path.endswith(b".md")) or path in {
+            b"GLOSSARY.md", b"CODING_STANDARDS.md",
+        }:
+            print(f"No checks for docs-only {os.fsdecode(path)!r}.", flush=True)
+        elif path.startswith(b"site/"):
             areas.add("site")
         elif path.startswith(b"scripts/release") or path in {
             b"scripts/generate-release.py", b"scripts/test_generate_release.py",
@@ -92,10 +118,12 @@ def main():
         else:
             areas.add("full")
             print(f"Conservative full-suite selection for {os.fsdecode(path)!r}.", flush=True)
-    rust_areas = areas - {"go"}
+    rust_areas = areas - {"go", "console-split"}
     full = "full" in rust_areas or len(rust_areas) > 1
     if "go" in areas:
         run("go", "test", "./...", cwd="prototype/go")
+    if "console-split" in areas:
+        run("python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py")
     if typescript:
         run("bun", "run", "--cwd", "prototypes/typescript", "typecheck")
         run("bun", "test", "--cwd", "prototypes/typescript")

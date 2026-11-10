@@ -13,6 +13,55 @@ fn skills_prefix(adapter: &dyn Adapter, depth: usize) -> PathBuf {
 }
 
 #[test]
+fn overlapping_test_users_share_skills_until_the_last_finishes() {
+    const CHILD: &str = "THIRDSHIFT_SKILLS_LIFETIME_TEST";
+    if std::env::var_os(CHILD).is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::test_support::assert_test_without_warnings(
+            "skills::tests::overlapping_test_users_share_skills_until_the_last_finishes",
+            |command| {
+                command.env(CHILD, "1").env("TMPDIR", tmp.path());
+            },
+        );
+        return;
+    }
+
+    let first = testing::FactorySkills::hold();
+    let worktree = scratch_worktree();
+    let adapter = Harness::Codex.adapter();
+    link_into(worktree.path(), adapter).unwrap();
+    let skill = Path::new(adapter.project_skills()).join("thirdshift-implement");
+    let target = fs::read_link(worktree.path().join(&skill)).unwrap();
+
+    let (ready, started) = std::sync::mpsc::channel();
+    let (finish, finishing) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        let _skills = testing::FactorySkills::hold();
+        let worktree = scratch_worktree();
+        link_into(worktree.path(), adapter).unwrap();
+        ready
+            .send(fs::read_link(worktree.path().join(&skill)).unwrap())
+            .unwrap();
+        finishing.recv().unwrap();
+        assert!(fs::read_to_string(worktree.path().join(skill).join("SKILL.md")).is_ok());
+    });
+    let shared = started
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap();
+    // Check readability while the second user still holds the extraction.
+    drop(first);
+    let retained = fs::read_to_string(target.join("SKILL.md"));
+    finish.send(()).unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        shared, target,
+        "overlapping tests must share one extraction"
+    );
+    assert!(retained.is_ok(), "the second test still needed the skills");
+    assert!(!target.exists(), "the last test must remove the extraction");
+}
+
+#[test]
 fn refuses_non_directory_skill_paths_without_changing_any_entries() {
     for harness in Harness::ALL {
         let adapter = harness.adapter();
@@ -80,6 +129,7 @@ fn refuses_non_directory_skill_paths_without_changing_any_entries() {
 
 #[test]
 fn links_factory_skills_in_existing_and_missing_directories_for_every_adapter() {
+    let _skills = testing::FactorySkills::hold();
     for harness in Harness::ALL {
         let adapter = harness.adapter();
         for existing_depth in [0, 1, 2] {
@@ -128,6 +178,7 @@ fn links_factory_skills_in_existing_and_missing_directories_for_every_adapter() 
 
 #[test]
 fn links_in_ordinary_directories_without_directory_read_permission() {
+    let _skills = testing::FactorySkills::hold();
     for harness in Harness::ALL {
         let adapter = harness.adapter();
         for restricted_depth in [0, 1, 2] {
