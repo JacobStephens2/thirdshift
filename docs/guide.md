@@ -1456,6 +1456,24 @@ Experiment has completed. The Verdict says who decided it and on how many
 pairs. People–people agreement on shared pairs and people–panel agreement are
 reported in every mode.
 
+The estimate shown before the Trials includes the panel: for each seat, its
+remaining sessions (pairs × 2 orders) and their expected cost, priced from the
+Experiment's frozen price table. A seat is priced at the mean of its sessions
+measured in this Experiment once there are some, and otherwise at an assumed
+session of 400k input tokens (80% of them cache reads) and 15k output tokens.
+A seat whose Model has no frozen price is listed without one. Panel spend is
+reported apart from the Arms' cost, in the text view and under `panel_spend`
+in `--json`, and never counts toward an Arm's cost or the Bar's
+`--cost-ceiling`. `--panel-spending-limit 25` caps what each run of the
+Experiment spends on panel sessions, in USD: once this run's priced panel
+sessions reach it, grading pauses before the next session, as it does when a
+Grader is unavailable. A panel session that can't be priced, because its
+Model has no frozen price or it reported no usage, also pauses grading while a
+limit is set, since the limit can't count it; its call is kept. Resuming gets
+the limit afresh and continues from the calls already made; none is graded
+again. When every Trial has run and only panel calls remain, the estimate lists
+just the panel and a terminal asks `Run the remaining Grader panel sessions?`.
+
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1482,10 +1500,10 @@ timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
 The Grader panel's `--panel-seat`, `--panel-vote`, `--panel-arm-family-rule`,
-`--panel`, `--panel-families` and `--panel-agreement`, and the people's
-`--people`, `--people-reader`, `--people-sample` and `--people-overlap`, are
-part of the Bar too; it has no panel by default, and anyone may read any pair
-beside the Verdict.
+`--panel-spending-limit`, `--panel`, `--panel-families` and `--panel-agreement`,
+and the people's `--people`, `--people-reader`, `--people-sample` and
+`--people-overlap`, are part of the Bar too; it has no panel by default, and
+anyone may read any pair beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 

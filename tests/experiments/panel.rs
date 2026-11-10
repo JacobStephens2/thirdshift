@@ -579,3 +579,221 @@ fn a_counted_peoples_call_that_settles_the_verdict_releases_trial_repositories()
         repositories()
     );
 }
+
+/// [`panel_graders`] whose every session reports 10,000 input and 1,000
+/// output tokens of `fixture-model`: $0.03 at the fixture's frozen prices.
+fn priced_panel_graders(fixture: &Fixture, seats: &[&str]) {
+    panel_graders(fixture, seats);
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    let calls = fs::read_to_string(&script).unwrap();
+    fs::write(
+        &script,
+        format!(
+            "echo '{{\"type\":\"assistant\",\"message\":{{\"id\":\"panel\",\"model\":\"fixture-model\",\"usage\":{{\"input_tokens\":10000,\"output_tokens\":1000}},\"content\":[]}}}}'\n{calls}"
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_estimate_lists_each_panel_seats_expected_cost() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    priced_panel_graders(&fixture, &["candidate", "candidate"]);
+    let run = fixture.run(&[
+        "--panel-seat",
+        "harness=claude,model=fixture-model",
+        "--panel-seat",
+        "harness=claude,model=judge-two",
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    // 400k input tokens, 320k of them cache reads, and 15k output tokens at
+    // $2, $0.20 and $10 per million: $0.374 a session, two sessions a pair.
+    for line in [
+        "Grader panel seat 1 (claude/fixture-model): 2 sessions (1 pair × 2 orders), estimate $0.748000 at $0.374000 per assumed 400k-input, 15k-output session",
+        "Grader panel seat 2 (claude/judge-two): 2 sessions (1 pair × 2 orders), no frozen price for Model judge-two",
+        "Grader panel estimate: $0.748000 for priced seats, apart from the Arms",
+    ] {
+        assert!(run.stderr.contains(line), "{line}\n{}", run.stderr);
+    }
+}
+
+#[test]
+fn a_low_spending_limit_pauses_grading_and_a_resume_continues_from_completed_calls() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    priced_panel_graders(&fixture, &["candidate"]);
+    let args = [
+        "--panel-seat",
+        "harness=claude,model=fixture-model",
+        "--panel-spending-limit",
+        "0.01",
+    ];
+    let paused = fixture.run(&args);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let view = fixture.experiment();
+    assert_eq!(view["state"], "paused", "{view}");
+    assert_eq!(view["bar"]["panel"]["spending_limit"], 0.01);
+    let reason = view["pause_reason"].as_str().unwrap();
+    assert!(
+        reason.contains("Grader panel reached its $0.010000 spending limit"),
+        "{reason}"
+    );
+    // The first session spent $0.03, past the limit, so the second order
+    // waits.
+    assert_eq!(fixture.grader_calls().len(), 1);
+    assert_eq!(view["panel"], json!([]));
+    assert_eq!(view["panel_spend"]["sessions"], 1, "{view}");
+    assert_eq!(view["panel_spend"]["cost_usd"], 0.03, "{view}");
+    // The panel's spend is its own: no Arm's sessions or cost include it.
+    let arm_sessions: Vec<&Value> = view["accounting"]["trials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|trial| trial["sessions"].as_array().unwrap())
+        .collect();
+    assert!(!arm_sessions.is_empty());
+    for session in arm_sessions {
+        assert!(
+            !session["path"].as_str().unwrap().contains("graders/"),
+            "{session}"
+        );
+    }
+    let arms = |view: &Value| {
+        json!([
+            view["accounting"]["baseline"],
+            view["accounting"]["candidate"],
+            view["accounting"]["paired_median_ratios"]
+        ])
+    };
+    let before = arms(&view);
+
+    // Each run of the command gets the limit afresh; the saved call is kept.
+    let resumed = fixture.run(&args);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let view = fixture.experiment();
+    assert_eq!(view["state"], "completed", "{view}");
+    assert_eq!(
+        fixture.grader_calls().len(),
+        2,
+        "a completed call was graded again"
+    );
+    assert_eq!(panel_pair(&view)["preference"], "candidate");
+    assert_eq!(view["panel_spend"]["sessions"], 2, "{view}");
+    assert_eq!(view["panel_spend"]["cost_usd"], 0.06, "{view}");
+    assert_eq!(
+        view["panel_spend"]["seats"],
+        json!([{"harness": "claude", "model": "fixture-model", "effort": null, "sessions": 2, "cost_usd": 0.06}])
+    );
+    assert_eq!(arms(&view), before, "panel spend changed the Arms' cost");
+    let shown = fixture
+        .scenario
+        .run_with_env(&["experiments", view["id"].as_str().unwrap()], &NO_SANDBOX);
+    assert!(
+        shown.stdout.contains(
+            "Grader panel spend, apart from the Arms: $0.060000 over 2 sessions\nGrader panel claude/fixture-model: 2 sessions, $0.060000"
+        ),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn a_panel_spending_limit_needs_a_seat_and_a_positive_amount() {
+    let fixture = super::process::fixture();
+    for (args, error) in [
+        (
+            vec!["--panel-spending-limit", "5"],
+            "need at least one --panel-seat",
+        ),
+        (
+            vec![
+                "--panel-seat",
+                "harness=claude,model=a",
+                "--panel-spending-limit",
+                "0",
+            ],
+            "--panel-spending-limit must be a positive finite amount in USD",
+        ),
+    ] {
+        let run = fixture.run(&args);
+        assert_eq!(run.code, Some(2), "{args:?}");
+        assert!(run.stderr.contains(error), "{args:?}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn an_unpriceable_panel_session_under_a_limit_keeps_its_completed_call() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    priced_panel_graders(&fixture, &["candidate"]);
+    // The sessions report a Model the frozen table doesn't price.
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    let calls = fs::read_to_string(&script).unwrap();
+    fs::write(&script, calls.replace("fixture-model", "unpriced-model")).unwrap();
+    let args = [
+        "--panel-seat",
+        "harness=claude,model=judge-two",
+        "--panel-spending-limit",
+        "5",
+    ];
+    let paused = fixture.run(&args);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let view = fixture.experiment();
+    let reason = view["pause_reason"].as_str().unwrap();
+    assert!(
+        reason.contains("can't price a Grader panel session against the spending limit"),
+        "{reason}"
+    );
+    for _ in 0..2 {
+        fixture.run(&args);
+    }
+    // Each order's call is kept once made: no session is paid for twice.
+    assert_eq!(
+        fixture.grader_calls().len(),
+        2,
+        "a completed call was graded again"
+    );
+    let view = fixture.experiment();
+    assert_eq!(view["panel"].as_array().unwrap().len(), 1, "{view}");
+    assert_eq!(view["panel_spend"]["cost_usd"], Value::Null, "{view}");
+}
+
+#[test]
+fn a_resume_with_only_panel_calls_left_asks_about_the_panel_alone() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    priced_panel_graders(&fixture, &["candidate"]);
+    let args = [
+        "--panel-seat",
+        "harness=claude,model=fixture-model",
+        "--panel-spending-limit",
+        "0.01",
+    ];
+    let paused = fixture.run(&args);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+
+    let declined = fixture.run_on_terminal(
+        &args,
+        &[("Run the remaining Grader panel sessions? [y/N] ", "n")],
+    );
+    assert_eq!(declined.code, Some(1), "{}", declined.stderr);
+    for shown in [
+        "0 of 2 Trials remain",
+        "Grader panel seat 1 (claude/fixture-model): 1 session, estimate $0.030000 at $0.030000 per session measured in this Experiment",
+        "Grader panel spending limit: $0.010000 per run, then grading pauses",
+        "Experiment declined; no Grader panel sessions were run",
+    ] {
+        assert!(
+            declined.stderr.contains(shown),
+            "{shown}: {}",
+            declined.stderr
+        );
+    }
+    assert!(
+        !declined.stderr.contains("Worst case"),
+        "{}",
+        declined.stderr
+    );
+    assert_eq!(fixture.grader_calls().len(), 1);
+}

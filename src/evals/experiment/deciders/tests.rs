@@ -42,6 +42,7 @@ fn bar(panel: Role, people: Option<PeopleSetting>) -> Bar {
             seats: Vec::new(),
             vote: super::super::panel::Vote::Family,
             arm_family_rule: true,
+            spending_limit: None,
             role: panel,
             families: 2,
             agreement: 0.8,

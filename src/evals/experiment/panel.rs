@@ -14,11 +14,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::deciders::Role;
-use super::trial_results::files::Files;
+use super::trial_results::files::{Files, Native};
 use super::{Arm, Description, Task, arms, model_grader, pairs, store, trial_results};
 use crate::evals::{format, repository};
 use crate::harness::{Choice, ChosenBy, Harness};
 use crate::sandbox::code_grader::Check;
+use crate::session::usage;
+use crate::trial::accounting::Prices;
 use crate::trial::blind_diff;
 use crate::{interrupt, progress, prompt};
 
@@ -31,6 +33,14 @@ pub(crate) struct Panel {
     /// A seat from either Arm's family doesn't vote while a seat from
     /// another family sits on the panel.
     pub arm_family_rule: bool,
+    /// USD each run of the Experiment may spend on panel sessions, priced
+    /// from the frozen table, before grading pauses. Never the Arms' cost.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::efficiency::optional_decimal"
+    )]
+    pub spending_limit: Option<f64>,
     /// Beside the Verdict or counted in it.
     #[serde(default)]
     pub role: Role,
@@ -128,6 +138,7 @@ impl Panel {
             .transpose()?;
         let vote = flags.remove("--panel-vote");
         let arm_family_rule = flags.remove("--panel-arm-family-rule");
+        let spending_limit = flags.remove("--panel-spending-limit");
         let families = flags.remove("--panel-families");
         let agreement = flags.remove("--panel-agreement");
         if seats.is_empty() || role == Some(Role::Off) {
@@ -136,9 +147,10 @@ impl Panel {
                 role.is_none_or(|role| role == Role::Off)
                     && vote.is_none()
                     && arm_family_rule.is_none()
+                    && spending_limit.is_none()
                     && families.is_none()
                     && agreement.is_none(),
-                "--panel, --panel-vote, --panel-arm-family-rule, --panel-families and --panel-agreement need at least one --panel-seat"
+                "--panel, --panel-vote, --panel-arm-family-rule, --panel-spending-limit, --panel-families and --panel-agreement need at least one --panel-seat"
             );
             return Ok(None);
         }
@@ -182,6 +194,11 @@ impl Panel {
                 Some("off") => false,
                 Some(other) => bail!("invalid --panel-arm-family-rule {other}: expected on or off"),
             },
+            spending_limit: spending_limit
+                .map(|value| {
+                    super::options::positive("--panel-spending-limit", value, "amount in USD")
+                })
+                .transpose()?,
             role: role.unwrap_or(Role::Beside),
             families,
             agreement,
@@ -520,8 +537,162 @@ fn call_path(root: &Path, pair: &str, seat: usize, order: usize) -> std::path::P
         .join(format!("seat-{}-order-{order}.json", seat + 1))
 }
 
+/// The panel's spend, priced from the Experiment's frozen table and kept
+/// apart from the Arms' accounting.
+#[derive(Serialize)]
+pub(crate) struct Spend {
+    pub sessions: usize,
+    /// Null while any session can't be priced.
+    pub cost_usd: Option<f64>,
+    pub seats: Vec<SeatSpend>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SeatSpend {
+    pub harness: String,
+    pub model: String,
+    pub effort: Option<String>,
+    pub sessions: usize,
+    pub cost_usd: Option<f64>,
+}
+
+/// The seat, from 0, whose sessions a `graders/` workspace holds.
+fn workspace_seat(name: &str) -> Option<usize> {
+    let (_, rest) = name.rsplit_once("--seat-")?;
+    let (seat, order) = rest.split_once("--order-")?;
+    order.parse::<usize>().ok()?;
+    seat.parse::<usize>().ok()?.checked_sub(1)
+}
+
+/// The `session-*` folders a Grader workspace retains, one per session.
+fn sessions(files: &impl Files, workspace: &Path) -> Result<Vec<std::path::PathBuf>> {
+    Ok(trial_results::files::directory(files, workspace)?
+        .into_iter()
+        .filter(|entry| {
+            entry.kind.is_dir()
+                && entry
+                    .path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("session-"))
+        })
+        .map(|entry| entry.path)
+        .collect())
+}
+
+/// One panel session's cost, from the usage its spans retain.
+fn session_cost(files: &impl Files, session: &Path, prices: Option<&Prices>) -> Result<f64> {
+    let prices = prices.context("the Experiment has no frozen price table")?;
+    let spans = files
+        .read(&session.join("stdout.spans.jsonl"))
+        .context("missing usage")?;
+    prices.cost(&usage::from_spans(std::io::Cursor::new(spans))?)
+}
+
+/// Every retained panel session, retries included, priced by seat.
+pub(super) fn spend(
+    files: &impl Files,
+    root: &Path,
+    description: &Description,
+    prices: Option<&Prices>,
+) -> Result<Option<Spend>> {
+    let Some(panel) = &description.bar.panel else {
+        return Ok(None);
+    };
+    let mut seats: Vec<SeatSpend> = panel
+        .seats
+        .iter()
+        .map(|seat| SeatSpend {
+            harness: seat.harness.clone(),
+            model: seat.model.clone(),
+            effort: seat.effort.clone(),
+            sessions: 0,
+            cost_usd: Some(0.0),
+        })
+        .collect();
+    for workspace in trial_results::files::directory(files, &root.join("graders"))? {
+        let seat = workspace
+            .path
+            .file_name()
+            .and_then(|name| workspace_seat(&name.to_string_lossy()))
+            .and_then(|seat| seats.get_mut(seat));
+        let Some(seat) = seat.filter(|_| workspace.kind.is_dir()) else {
+            continue;
+        };
+        for session in sessions(files, &workspace.path)? {
+            seat.sessions += 1;
+            let cost = session_cost(files, &session, prices).ok();
+            seat.cost_usd = seat.cost_usd.zip(cost).map(|(sum, cost)| sum + cost);
+        }
+    }
+    Ok(Some(Spend {
+        sessions: seats.iter().map(|seat| seat.sessions).sum(),
+        cost_usd: seats
+            .iter()
+            .try_fold(0.0, |sum, seat| seat.cost_usd.map(|cost| sum + cost)),
+        seats,
+    }))
+}
+
+impl SeatSpend {
+    /// The mean of this seat's sessions, once there are some and all are priced.
+    pub(super) fn mean_usd(&self) -> Option<f64> {
+        (self.sessions > 0)
+            .then_some(self.cost_usd)
+            .flatten()
+            .map(|cost| cost / self.sessions as f64)
+    }
+}
+
+impl Spend {
+    pub(super) fn render(&self) -> String {
+        let cost =
+            |amount: Option<f64>| amount.map_or("unknown".into(), |amount| format!("${amount:.6}"));
+        let mut text = format!(
+            "\nGrader panel spend, apart from the Arms: {} over {}",
+            cost(self.cost_usd),
+            super::cost::counted(self.sessions, "session")
+        );
+        for seat in &self.seats {
+            text.push_str(&format!(
+                "\nGrader panel {}/{}: {}, {}",
+                seat.harness,
+                seat.model,
+                super::cost::counted(seat.sessions, "session"),
+                cost(seat.cost_usd)
+            ));
+        }
+        text
+    }
+}
+
+/// The panel sessions still to run, by seat, and the pairs they read.
+pub(super) fn remaining(experiment: &store::Stored) -> Vec<(usize, usize)> {
+    let Some(panel) = &experiment.description.bar.panel else {
+        return Vec::new();
+    };
+    let mut remaining = vec![(0, 0); panel.seats.len()];
+    for task in &experiment.tasks {
+        if task.manifest.session != format::Session::Process {
+            continue;
+        }
+        for index in 0..experiment.description.bar.trials_per_task[&task.suite] {
+            let key = trial_results::pair_key(&task.suite, &task.name, index);
+            for (seat, (sessions, pairs)) in remaining.iter_mut().enumerate() {
+                let orders = (1..=2)
+                    .filter(|order| !call_path(&experiment.directory, &key, seat, *order).exists())
+                    .count();
+                *sessions += orders;
+                *pairs += usize::from(orders > 0);
+            }
+        }
+    }
+    remaining
+}
+
 /// Grade every finished pair of process Trials with every seat, in both
-/// orders. Saved calls are never asked again, so a resume continues.
+/// orders. Saved calls are never asked again, so a resume continues. Once
+/// this run's panel sessions reach the Bar's spending limit, grading pauses;
+/// each run gets the limit afresh.
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let bar = &experiment.description.bar;
     let Some(panel) = &bar.panel else {
@@ -532,6 +703,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     ensure!(seats.len() == panel.seats.len(), "panel seats changed");
     let timeout = Duration::from_secs(bar.timeout_seconds);
     let mut caps = None;
+    let mut spent = 0.0;
     for task in &experiment.tasks {
         if task.manifest.session != format::Session::Process {
             continue;
@@ -558,6 +730,12 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                         continue;
                     }
                     interrupt::check()?;
+                    if let Some(limit) = panel.spending_limit {
+                        ensure!(
+                            spent < limit,
+                            "Grader panel reached its ${limit:.6} spending limit for this run (${spent:.6} spent); resume the Experiment to grade the remaining pairs"
+                        );
+                    }
                     let sides = match &mut sides {
                         Some(sides) => sides,
                         None => {
@@ -589,6 +767,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                         .join("graders")
                         .join(format!("{key}--seat-{}--order-{order}", seat_index + 1));
                     fs::create_dir_all(&workspace)?;
+                    let earlier = sessions(&Native, &workspace)?;
                     let response: Response = model_grader::session(
                         model_grader::Session {
                             kind: "panel Grader",
@@ -610,6 +789,21 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                     let call = response.call(shown)?;
                     fs::create_dir_all(path.parent().context("panel call path")?)?;
                     store::write(&path, &call)?;
+                    // Priced after the call is saved, so a pause keeps it.
+                    if panel.spending_limit.is_some() {
+                        for session in sessions(&Native, &workspace)? {
+                            if !earlier.contains(&session) {
+                                spent += session_cost(
+                                    &Native,
+                                    &session,
+                                    experiment.pricing.as_ref(),
+                                )
+                                .context(
+                                    "can't price a Grader panel session against the spending limit",
+                                )?;
+                            }
+                        }
+                    }
                 }
             }
         }

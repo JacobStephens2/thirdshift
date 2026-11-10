@@ -70,6 +70,8 @@ pub(crate) struct View {
     pub leak_hits: Vec<super::leaks::Hit>,
     pub pairs: Vec<super::pairs::Pair>,
     pub panel: Vec<super::panel::PanelPair>,
+    /// The Grader panel's spend, apart from the Arms' `accounting`.
+    pub panel_spend: Option<super::panel::Spend>,
     /// People's blind pairwise calls, beside the Verdict.
     pub people: super::pairwise::People,
 }
@@ -528,6 +530,9 @@ impl Stored {
             }
             if self.pricing.is_some() {
                 selection.push_str(&view.accounting.render());
+            }
+            if let Some(spend) = &view.panel_spend {
+                selection.push_str(&spend.render());
             }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}

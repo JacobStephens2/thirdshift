@@ -1534,6 +1534,23 @@ the Verdict is <code>waiting_on_people</code>; each call recalculates it once th
 Experiment has completed. The Verdict says who decided it and on how many
 pairs. People–people agreement on shared pairs and people–panel agreement are
 reported in every mode.</p>
+<p>The estimate shown before the Trials includes the panel: for each seat, its
+remaining sessions (pairs × 2 orders) and their expected cost, priced from the
+Experiment&#39;s frozen price table. A seat is priced at the mean of its sessions
+measured in this Experiment once there are some, and otherwise at an assumed
+session of 400k input tokens (80% of them cache reads) and 15k output tokens.
+A seat whose Model has no frozen price is listed without one. Panel spend is
+reported apart from the Arms&#39; cost, in the text view and under <code>panel_spend</code>
+in <code>--json</code>, and never counts toward an Arm&#39;s cost or the Bar&#39;s
+<code>--cost-ceiling</code>. <code>--panel-spending-limit 25</code> caps what each run of the
+Experiment spends on panel sessions, in USD: once this run&#39;s priced panel
+sessions reach it, grading pauses before the next session, as it does when a
+Grader is unavailable. A panel session that can&#39;t be priced, because its
+Model has no frozen price or it reported no usage, also pauses grading while a
+limit is set, since the limit can&#39;t count it; its call is kept. Resuming gets
+the limit afresh and continues from the calls already made; none is graded
+again. When every Trial has run and only panel calls remain, the estimate lists
+just the panel and a terminal asks <code>Run the remaining Grader panel sessions?</code>.</p>
 <p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1556,10 +1573,10 @@ timeout, and up to two fresh retries for Void Trials.
 Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fail-level</code>, <code>--prior</code>, <code>--seed</code>,
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--min-discriminating-tasks</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
 The Grader panel&#39;s <code>--panel-seat</code>, <code>--panel-vote</code>, <code>--panel-arm-family-rule</code>,
-<code>--panel</code>, <code>--panel-families</code> and <code>--panel-agreement</code>, and the people&#39;s
-<code>--people</code>, <code>--people-reader</code>, <code>--people-sample</code> and <code>--people-overlap</code>, are
-part of the Bar too; it has no panel by default, and anyone may read any pair
-beside the Verdict.
+<code>--panel-spending-limit</code>, <code>--panel</code>, <code>--panel-families</code> and <code>--panel-agreement</code>,
+and the people&#39;s <code>--people</code>, <code>--people-reader</code>, <code>--people-sample</code> and
+<code>--people-overlap</code>, are part of the Bar too; it has no panel by default, and
+anyone may read any pair beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.</p>
 <p>Optional <code>--cost-ceiling 2</code> and <code>--time-ceiling 2</code> cap the paired median

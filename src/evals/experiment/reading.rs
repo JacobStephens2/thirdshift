@@ -20,6 +20,7 @@ struct Observation {
     usage: usage::Arms,
     pairs: Vec<super::pairs::Pair>,
     panel: Vec<super::panel::PanelPair>,
+    panel_spend: Option<super::panel::Spend>,
     people: super::pairwise::People,
 }
 
@@ -96,6 +97,12 @@ impl Observation {
         observation.panel =
             super::panel::read(files, &stored.directory, &stored.description, &stored.tasks)?;
         super::panel::attach(&mut observation.pairs, &observation.panel);
+        observation.panel_spend = super::panel::spend(
+            files,
+            &stored.directory,
+            &stored.description,
+            stored.pricing.as_ref(),
+        )?;
         observation.people = super::pairwise::people(
             files,
             &stored.directory,
@@ -156,6 +163,7 @@ impl Observation {
             voids: self.voids,
             pairs: self.pairs,
             panel: self.panel,
+            panel_spend: self.panel_spend,
             people: self.people,
         }
     }

@@ -426,7 +426,7 @@ The **Command** that compares a **Baseline arm** with a **Candidate arm** on the
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
-The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, the **Grader panel**'s seats and voting rules, whether the **Day shift** grades and whether that counts in the Verdict, and optional cost and time ceilings as Candidate-to-Baseline ratios, off by default.
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, the **Grader panel**'s seats, voting rules and spending limit, whether the **Day shift** grades and whether that counts in the Verdict, and optional cost and time ceilings as Candidate-to-Baseline ratios, off by default.
 _Avoid_: threshold, gate, acceptance criteria
 
 **Verdict**:

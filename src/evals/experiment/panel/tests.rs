@@ -45,6 +45,7 @@ fn a_family_split_is_its_own_tie_before_the_panel_votes() {
         role: Role::Beside,
         families: 2,
         agreement: 0.8,
+        spending_limit: None,
     };
     let candidate = Preference::Candidate;
     let (_, votes, preference, _) = tally(
