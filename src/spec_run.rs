@@ -593,7 +593,7 @@ impl TicketsNotDone {
         let mut text = format!(
             "{}\n\nthirdshift's Spec run on this Spec ended only waiting: no Ticket failed, \
              and each Ticket not done waits on a person or on other work.\n\n",
-            crate::recovery::GENERATED
+            crate::github::GENERATED
         );
         for ticket in &self.not_done {
             text += &format!("- {ticket}\n");

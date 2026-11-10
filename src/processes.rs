@@ -500,18 +500,33 @@ impl HeldClaim<'_> {
         }
     }
 
-    /// End the Claim as failed by `error` before any Step ran on the Issue
-    /// branch `branch`, with its Recovery comment if the ending owes one.
-    fn fail(&mut self, branch: &str, error: &anyhow::Error) {
-        let comment = recovery::comment(
-            None,
-            Some(branch),
-            &format!("{error:#}"),
-            None,
-            crate::host::name().as_deref(),
+    /// End the Claim as failed by `error` before any Step ran on `selection`'s
+    /// Issue branch, with its Recovery comment if the ending owes one, and
+    /// hand `error` on.
+    fn fail(&mut self, selection: &Selection, error: anyhow::Error) -> anyhow::Error {
+        self.end(
+            claim::Ending::Failed,
+            Some(before_steps_comment(selection, &error)),
         );
-        self.end(claim::Ending::Failed, Some(comment));
+        error
     }
+}
+
+/// The Recovery comment for a run on `selection`'s Issue branch that failed
+/// with `error` before its Steps left a Failed run: it names the Issue branch,
+/// and the pull request a Continuation continues.
+fn before_steps_comment(selection: &Selection, error: &anyhow::Error) -> String {
+    let pr_url = match selection {
+        Selection::Continuation { pr: Some(pr), .. } => Some(pr.url.as_str()),
+        _ => None,
+    };
+    recovery::comment(
+        None,
+        Some(selection.branch()),
+        &format!("{error:#}"),
+        pr_url,
+        crate::host::name().as_deref(),
+    )
 }
 
 impl Drop for HeldClaim<'_> {
@@ -934,8 +949,10 @@ fn run_issue_branch(
     let checkout = match checkout {
         Ok(checkout) => checkout,
         Err(error) => {
-            claim.fail(&branch, &error);
-            return Err(failed_before_steps(notification, error));
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
         }
     };
     let commit = if base == base_branch.name() {
@@ -944,8 +961,10 @@ fn run_issue_branch(
         match launch_git.run(&["rev-parse", &format!("origin/{base}")]) {
             Ok(commit) => commit,
             Err(error) => {
-                claim.fail(&branch, &error);
-                return Err(failed_before_steps(notification, error));
+                return Err(failed_before_steps(
+                    notification,
+                    claim.fail(&selection, error),
+                ));
             }
         }
     };
@@ -965,19 +984,25 @@ fn run_issue_branch(
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
-            claim.fail(&branch, &error);
-            return Err(failed_before_steps(notification, error));
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
         }
     };
     if let Err(error) = refuse_unstartable(&prepared) {
-        claim.fail(&branch, &error);
-        return Err(failed_before_steps(notification, error));
+        return Err(failed_before_steps(
+            notification,
+            claim.fail(&selection, error),
+        ));
     }
     let repo = match launch::repo() {
         Ok(repo) => repo,
         Err(error) => {
-            claim.fail(&branch, &error);
-            return Err(failed_before_steps(notification, error));
+            return Err(failed_before_steps(
+                notification,
+                claim.fail(&selection, error),
+            ));
         }
     };
     let mut held = Some(checkout);
@@ -1029,13 +1054,7 @@ fn run_issue_branch(
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
     let comment = match (&completed.failed_run, &result) {
         (Some(failed), _) => Some(failed.comment(Some(&branch))),
-        (None, Err(error)) => Some(recovery::comment(
-            None,
-            Some(&branch),
-            &format!("{error:#}"),
-            None,
-            crate::host::name().as_deref(),
-        )),
+        (None, Err(error)) => Some(before_steps_comment(&selection, error)),
         (None, Ok(_)) => None,
     };
     drop(completed);

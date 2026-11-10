@@ -34,20 +34,21 @@ impl FailedRun {
     /// Whether it is a Spec run that ended only waiting, uninterrupted: every
     /// Ticket not done waits on a person or on other work, and none failed.
     pub fn waiting(&self) -> bool {
-        !self.interrupted
-            && self
-                .error
-                .downcast_ref::<crate::spec_run::TicketsNotDone>()
-                .is_some_and(|not_done| not_done.only_waiting)
+        self.waiting_on().is_some()
+    }
+
+    /// The Tickets not done a Spec run that ended only waiting waits on.
+    fn waiting_on(&self) -> Option<&crate::spec_run::TicketsNotDone> {
+        self.error
+            .downcast_ref::<crate::spec_run::TicketsNotDone>()
+            .filter(|not_done| !self.interrupted && not_done.only_waiting)
     }
 
     /// The comment its Claim's ending posts on its issue, from the Issue
     /// branch `branch` if known: a waiting Spec run's names each Ticket not
     /// done and what it waits on, and any other's is its Recovery comment.
     pub fn comment(&self, branch: Option<&str>) -> String {
-        if self.waiting()
-            && let Some(not_done) = self.error.downcast_ref::<crate::spec_run::TicketsNotDone>()
-        {
+        if let Some(not_done) = self.waiting_on() {
             return not_done.comment();
         }
         crate::recovery::comment(

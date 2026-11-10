@@ -129,10 +129,10 @@ impl Claim<'_> {
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
     ///   remains on origin, or is released even with work when asked to requeue.
     ///
-    /// An ending that labels the issue `agent-failed`, other than a failed
-    /// Security fix's, and a waiting ending, then post `comment`, if given, on
-    /// the issue: the Recovery comment, or the waiting Spec's. Released,
-    /// stopped and every other ending post nothing.
+    /// Then post `comment`, if given, on the issue when the ending owes one:
+    /// the Recovery comment after labelling the issue `agent-failed`, except
+    /// for a failed Security fix, or the waiting Spec's comment after handing
+    /// it back. A released Claim, a Stop and every other ending post nothing.
     ///
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
