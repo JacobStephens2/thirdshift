@@ -5,7 +5,9 @@
 //! release's installer moves the new binary into place with a rename, so a Run
 //! or a Spec run still using the old binary keeps running it. So do the child
 //! Runs it starts afterwards, which the child Run module starts from the
-//! running binary rather than from its install path.
+//! running binary rather than from its install path. An Experiment's later
+//! Trials and Graders also keep its original OOM wrapper through the owning
+//! process's `/proc/<pid>/exe` link, even for scopes prepared before the update.
 
 use std::fmt::Display;
 
