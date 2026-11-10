@@ -1515,7 +1515,7 @@ fn run_step_in(
         StepKind::Command(command) => {
             progress::step(format_args!("running step {}", step.name));
             let result_file = results.join(format!("{}.txt", step.name));
-            run_command(
+            run.source.command(
                 cwd,
                 command,
                 results,
@@ -1535,14 +1535,18 @@ fn run_skill(
     prompt: &str,
 ) -> Result<String> {
     run_session_step(run, worktree, step, |sessions, index| {
-        sessions
+        let message = sessions
             .run_to_final_message(
                 session::Purpose::Ordinary,
                 session::Kind::ProcessStep(index),
                 prompt,
             )?
             .filter(|message| !message.trim().is_empty())
-            .with_context(|| format!("Step {} ended without a final message", step.name))
+            .with_context(|| format!("Step {} ended without a final message", step.name))?;
+        if matches!(run.source, source::TicketSource::Local(_)) {
+            crate::trial::check_question(Some(&message))?;
+        }
+        Ok(message)
     })
 }
 
@@ -1708,14 +1712,29 @@ fn run_command(
     results: &Path,
     result_file: &Path,
     input: Option<CommandInput<'_>>,
+    sandbox: Option<&crate::sandbox::Launch>,
 ) -> Result<String> {
-    let mut child = Command::new("sh");
+    let mut launched: Box<dyn process::Invocation> = if let Some(sandbox) = sandbox {
+        let mut shell = sandbox.clone().shell().with_writable_directory(results);
+        shell.set_env(RESULTS_DIR, results);
+        shell.set_env(STEP_RESULT, result_file);
+        match &input {
+            Some(CommandInput::Issue(url)) => shell.set_env(ISSUE_URL, url),
+            Some(CommandInput::PullRequest(url)) => shell.set_env(PULL_REQUEST_URL, url),
+            None => {}
+        }
+        shell.session_command(&["-c".into(), command.into()], true)?
+    } else {
+        Box::new(Command::new("sh"))
+    };
+    let child = launched.command();
     child
-        .arg("-c")
-        .arg(command)
         .current_dir(worktree)
         .env(RESULTS_DIR, results)
         .env(STEP_RESULT, result_file);
+    if sandbox.is_none() {
+        child.args(["-c", command]);
+    }
     child.env_remove(ISSUE_URL).env_remove(PULL_REQUEST_URL);
     match input {
         Some(CommandInput::Issue(url)) => {
@@ -1727,7 +1746,7 @@ fn run_command(
         None => {}
     }
     let output = process::output(
-        &mut child,
+        launched.as_mut(),
         None,
         Control {
             name: "command",

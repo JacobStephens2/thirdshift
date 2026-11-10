@@ -132,7 +132,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
         Harness::Claude => {
             copy_files(original, home, &[".claude.json"])?;
             copy_files(&claude, &home.join(".claude"), &[".credentials.json"])?;
-            launch.set_env("CLAUDE_CONFIG_DIR", &home.join(".claude"));
+            launch.set_env("CLAUDE_CONFIG_DIR", home.join(".claude"));
         }
         Harness::Codex => {
             let source = from_environment("CODEX_HOME", original.join(".codex"));

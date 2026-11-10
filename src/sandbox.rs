@@ -189,7 +189,7 @@ pub(crate) fn for_session(
         skills_dir: &crate::skills::written_out()?,
         harness_binary: binary,
         home: &home,
-        fresh_home: &output_dir.join("home"),
+        fresh_home: &crate::skills::trial_home().unwrap_or_else(|| output_dir.join("home")),
         secrets,
         adapter_env: choice.harness.adapter().environment().to_vec(),
     })
@@ -258,13 +258,19 @@ impl Launch {
     }
 
     /// Publish a session path to both bwrap and the retained-session reader.
-    pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
+    pub(crate) fn set_env(&mut self, name: &str, value: impl AsRef<std::ffi::OsStr>) {
         self.argv.extend([
             OsString::from("--setenv"),
             name.into(),
-            value.as_os_str().to_owned(),
+            value.as_ref().to_owned(),
         ]);
-        self.env.push((name.into(), value.as_os_str().to_owned()));
+        self.env.push((name.into(), value.as_ref().to_owned()));
+    }
+
+    /// A Process command Step uses the same confinement with a shell program.
+    pub(crate) fn shell(mut self) -> Self {
+        self.program = SHELL.into();
+        self
     }
 
     /// The bwrap command running the Harness's `args` inside the sandbox.

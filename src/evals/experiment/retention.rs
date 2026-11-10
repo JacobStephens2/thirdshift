@@ -15,6 +15,9 @@ pub(super) struct Caches(pub PathBuf);
 impl Drop for Caches {
     fn drop(&mut self) {
         for relative in [
+            "home/.codex/cache",
+            "home/.cache",
+            "home/.local/share/muse/model-catalog",
             "session/home/.codex/cache",
             "session/home/.cache",
             "session/home/.local/share/muse/model-catalog",

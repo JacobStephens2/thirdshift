@@ -97,6 +97,70 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existi
 }
 
 #[test]
+fn custom_process_sessions_and_commands_use_the_frozen_fresh_home_in_the_sandbox() {
+    if !bwrap_present() {
+        println!("SKIPPED (Custom process fresh home): bwrap is not on PATH");
+        return;
+    }
+    let scenario = Scenario::new();
+    let request = prepare_local_process(&scenario);
+    let home = scenario.path("frozen-home");
+    let skill = home.join(".thirdshift/skills/fixture");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(skill.join("SKILL.md"), "Frozen instructions\n").unwrap();
+    let process = home.join(".thirdshift/processes/frozen.toml");
+    fs::create_dir_all(process.parent().unwrap()).unwrap();
+    fs::write(&process, r#"version = 1
+description = "Frozen Custom process"
+[worktrees.ticket]
+kind = "issue-branch"
+[[steps]]
+name = "custom"
+skill = "fixture"
+worktree = "ticket"
+[[steps]]
+name = "command"
+command = 'test -f "$HOME/.thirdshift/processes/frozen.toml" && test "$THIRDSHIFT_ISSUE_URL" = "https://github.com/acme/widgets/issues/7" && test -n "$THIRDSHIFT_STEP_RESULT" && echo command-complete'
+worktree = "ticket"
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "ticket"
+"#).unwrap();
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["process"] = json!(process);
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    scenario.agent_does(
+        r#"
+test "$(cat .claude/skills/fixture/SKILL.md)" = 'Frozen instructions'
+test -f "$HOME/.thirdshift/processes/frozen.toml"
+echo implemented > feature.txt
+git add feature.txt
+git commit -q -m 'Custom implementation'
+printf 'Complete.\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = run_trial(
+        &scenario,
+        &request,
+        &[("THIRDSHIFT_TRIAL_HOME", home.to_str().unwrap())],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(
+        output["outcome"], "delivered",
+        "{output}\n{}",
+        result.stderr
+    );
+    assert_eq!(output["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        fs::read_to_string(scenario.path("trial-output/steps/command.txt")).unwrap(),
+        "command-complete\n"
+    );
+    assert!(scenario.gh_calls().is_empty());
+}
+
+#[test]
 fn local_issue_restore_does_not_follow_a_symlink_outside_the_repository() {
     let scenario = Scenario::new();
     let request = prepare_local_process(&scenario);

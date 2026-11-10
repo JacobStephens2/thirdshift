@@ -1,4 +1,4 @@
-# Experiment results (format 4)
+# Experiment results (format 5)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 4` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 4.
+`format: 5` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 5.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -33,6 +33,8 @@ Format 2 shipped in v0.17.4. Format 3 adds `bar.discriminating_tasks` and each
 suite's `counts` and `measurement` fields for `paired-dirichlet-v4`, without
 rewriting the stored Bar or Verdict of older Experiments.
 Format 4 adds `bar.min_discriminating_tasks` and each suite's `advisory` flag.
+Format 5 adds the prepared Arms' optional `process` with frozen file hashes and
+per-Step Harness, Model and Effort. Older Arm records omit this field.
 Only suites that are not advisory decide the overall Verdict and require
 rechecks; every suite advisory gives inconclusive. Saved Experiments without
 the minimum keep their original Bar, Verdict and aggregation policy.
@@ -205,7 +207,7 @@ run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
 are kept. There is no automatic resume, failure email or failure metric.
 
 The `CommandPause` projection in the contract below covers those fields on
-the Command record and on `show --json`; it does not change Experiment format 4.
+the Command record and on `show --json`; it does not change Experiment format 5.
 
 ## Checked field contract
 
@@ -231,7 +233,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 4,
+    "format": 5,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -268,7 +270,12 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
     "commit": "string", "binary": "string",
-    "harness": {"name": "string", "path": "string", "version": "string"}
+    "harness": "FixedHarness", "process?": "FrozenProcess"
+  },
+  "FixedHarness": {"name": "string", "path": "string", "version": "string"},
+  "FrozenProcess": {
+    "name": "string", "directory": "string", "files": {"*": "string"},
+    "steps": [{"name": "string", "harness": "FixedHarness", "model": "string?", "effort": "string?"}]
   },
   "Bar": {
     "margin": "number", "pass_level?": "number", "fail_level?": "number",
