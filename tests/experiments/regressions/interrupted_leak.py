@@ -46,7 +46,10 @@ fail_to_pass = [["true"]]
 pass_to_pass = [["true"]]
 ''')
 arm_script = '''#!/usr/bin/env python3
-import json, pathlib, sys, time
+import json, pathlib, subprocess, sys, time
+if sys.argv[1:] == ['process', 'show', 'ticket-run']:
+    subprocess.run([BINARY, *sys.argv[1:]], check=True)
+    sys.exit(0)
 request=json.load(open(sys.argv[2])); out=pathlib.Path(request['output_dir']);out.mkdir(parents=True,exist_ok=True)
 root=pathlib.Path(ROOT)
 if not (root/'resume').exists():
@@ -55,7 +58,7 @@ if not (root/'resume').exists():
     while True:time.sleep(1)
 (out/'trial-process.jsonl').write_text(json.dumps({'type':'assistant','message':'No reference here'})+'\\n')
 print(json.dumps({'version':1,'outcome':'delivered','timings':{'total_ms':1,'session_ms':1},'void_cause':None,'cause':None,'session_id':None,'log':str(out/'trial-process.jsonl'),'model_evidence':None,'reports':{'standards':None,'spec':None}}))
-'''.replace('ROOT',repr(str(root))).replace('FIX',repr(fix))
+'''.replace('ROOT',repr(str(root))).replace('FIX',repr(fix)).replace('BINARY',repr(str(binary)))
 for commit in (base,candidate):write(home/f'.thirdshift/evals/builds/{commit}/thirdshift',arm_script,True)
 args=[str(binary),'experiment','candidate','--json','--yes','--min-discriminating-tasks','1','--void-retries','0']
 log=open(root/'initial.stdout','w');err=open(root/'initial.stderr','w')

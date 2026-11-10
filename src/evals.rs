@@ -102,14 +102,19 @@ pub fn parse(args: &[String]) -> Result<Action> {
             candidate,
             candidate_harness,
             record,
-        ] if action == "prepare-arms" => Ok(Action::PrepareArms {
-            repository: repository.into(),
-            arms: [
+            options @ ..,
+        ] if action == "prepare-arms" => {
+            let mut arms = [
                 arms::Requested::new(baseline, baseline_harness)?,
                 arms::Requested::new(candidate, candidate_harness)?,
-            ],
-            record: record.into(),
-        }),
+            ];
+            arms::Requested::options(&mut arms, options)?;
+            Ok(Action::PrepareArms {
+                repository: repository.into(),
+                arms,
+                record: record.into(),
+            })
+        }
         _ => bail!(
             "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | propose-process <repository> [--limit <1..100>] | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
