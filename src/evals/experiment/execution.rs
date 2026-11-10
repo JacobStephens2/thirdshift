@@ -205,7 +205,7 @@ impl<'a> Execution<'a> {
             &prepared_repo.repository,
             &setup.choice(),
         ));
-        let waiting = RefCell::new(crate::poll::WaitingLine::reported(()));
+        let waiting = RefCell::new(crate::poll::WaitingLine::already_reported(()));
         let started = Instant::now();
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.

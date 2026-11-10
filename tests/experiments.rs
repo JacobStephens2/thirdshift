@@ -767,6 +767,145 @@ fn trial_waiting_lines_fall_back_to_half_the_silent_time() {
     assert_trials_wait_until_their_outcomes(&fixture, 10);
 }
 
+/// Issue #1495's report: both workers mid-Trial, the Trials stage and the
+/// Command log both aged past `inbox.silent_minutes`. The Experiment is Silent
+/// until a Trial waiting line arrives, then Working again.
+#[test]
+fn a_trial_waiting_line_keeps_a_long_trials_stage_working() {
+    let fixture = Fixture::new();
+    let root = fixture.scenario.path("");
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{root}/mid-'"$arm"
+while [ ! -f '{root}/mid-baseline' ] || [ ! -f '{root}/mid-candidate' ]; do sleep 0.01; done
+touch '{root}/started'
+while true; do sleep 0.05; done
+"#,
+        root = root.display()
+    ));
+    // A 2 s minute makes the five-minute waiting line 10 s, leaving time to
+    // see the aged Experiment Silent before the first one.
+    let mut held = fixture.scenario.run_until(
+        &Fixture::experiment_args(&[]),
+        &[NO_SANDBOX[0], ("THIRDSHIFT_WAITING_MINUTE_MS", "2000")],
+        "started",
+    );
+    let folder = fixture
+        .scenario
+        .path("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let entries: Vec<_> = fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let record_path = entries
+        .iter()
+        .find(|path| path.to_string_lossy().ends_with(".command.json"))
+        .unwrap();
+    let log = entries
+        .iter()
+        .find(|path| path.extension().is_some_and(|extension| extension == "log"))
+        .unwrap();
+    let mut record: Value = serde_json::from_slice(&fs::read(record_path).unwrap()).unwrap();
+    let trials = record["stages"].as_array_mut().unwrap().last_mut().unwrap();
+    assert_eq!(trials["name"], "Trials");
+    let began = (chrono::Local::now() - chrono::Duration::minutes(15)).to_rfc3339();
+    trials["began_at"] = began.clone().into();
+    fs::write(record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(log)
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new().set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(11 * 60),
+            ),
+        )
+        .unwrap();
+    let experiment = || {
+        let status = fixture.scenario.run(&["status", "--json"]);
+        assert_eq!(status.code, Some(0), "{}", status.stderr);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        status["commands"][0].clone()
+    };
+    let silent = experiment();
+    assert_eq!(silent["health"]["state"], "silent", "{silent}");
+    assert_eq!(silent["group"], "needs you", "{silent}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let working = loop {
+        let row = experiment();
+        if row["health"]["state"] == "ok" {
+            break row;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no Trial waiting line arrived: {row}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    assert_eq!(working["group"], "working", "{working}");
+    let record: Value = serde_json::from_slice(&fs::read(record_path).unwrap()).unwrap();
+    assert_eq!(
+        record["stages"].as_array().unwrap().last().unwrap()["began_at"],
+        began.as_str(),
+        "the Trials stage stays aged, so only the waiting line made it Working"
+    );
+    let shown = fixture
+        .scenario
+        .run(&["show", working["name"].as_str().unwrap(), "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(shown["command"]["health"]["state"], "ok", "{shown}");
+    let stopped = fixture
+        .scenario
+        .run(&["stop", working["name"].as_str().unwrap(), "--json"]);
+    if stopped.code != Some(0) {
+        held.signal("TERM");
+    }
+    let ended = held.finish();
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+}
+
+#[test]
+fn a_plan_limit_stop_ends_its_trials_waiting_lines() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(
+        r#"
+sleep 1
+echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}'
+sleep 20
+"#,
+    );
+    let paused = fixture.scenario.run_with_env(
+        &Fixture::experiment_args(&["--void-retries", "0"]),
+        &[NO_SANDBOX[0], ("THIRDSHIFT_WAITING_MINUTE_MS", "40")],
+    );
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    assert_eq!(fixture.experiment()["state"], "paused");
+    // A plan-limit stop writes no Trial outcome; the Experiment's pause
+    // follows the end of both Trials' supervision.
+    let folder = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment";
+    let logs = fixture.scenario.log_files(folder, "log");
+    let log = fs::read_to_string(fixture.scenario.path(folder).join(&logs[0])).unwrap();
+    let (running, after) = log
+        .split_once("Command paused at a plan-limit warning")
+        .unwrap_or_else(|| panic!("no plan-limit pause in:\n{log}"));
+    for arm in ["baseline", "candidate"] {
+        assert!(
+            running
+                .lines()
+                .filter(
+                    |line| line.contains(&format!("--{arm}--")) && line.ends_with("still running")
+                )
+                .count()
+                >= 2,
+            "the {arm} Trial repeats its waiting line before the limit:\n{log}"
+        );
+    }
+    assert!(!after.contains("still running"), "{log}");
+}
+
 /// Each arm's Trial repeats its waiting line at least `repeats` times
 /// between its start and its outcome, and writes none after it.
 fn assert_trials_wait_until_their_outcomes(fixture: &Fixture, repeats: usize) {

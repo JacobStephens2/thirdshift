@@ -43,7 +43,7 @@ impl<T: PartialEq> WaitingLine<T> {
 
     /// A waiting line for a state whose first line was already written:
     /// it repeats only after the interval.
-    pub fn reported(state: T) -> Self {
+    pub fn already_reported(state: T) -> Self {
         Self {
             reported: Some(state),
             ..Self::new()
