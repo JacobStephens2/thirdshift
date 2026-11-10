@@ -91,8 +91,8 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 5,
-        "format 5 adds frozen Process inputs"
+        experiment["format"], 6,
+        "format 6 adds Session evidence leak decisions to frozen Process inputs"
     );
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(

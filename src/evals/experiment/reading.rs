@@ -75,8 +75,20 @@ impl Observation {
         let progress = capture.into_progress(&stored.rechecks);
         observation.results = progress.results;
         observation.unfinished_trials = progress.unfinished_trials;
+        super::leaks::apply(&mut observation.results, &stored.leak_decisions);
+        super::leaks::apply(&mut observation.unfinished_trials, &stored.leak_decisions);
         observation.minutes = progress.minutes;
         observation.voids = progress.voids;
+        if !stored.leak_decisions.is_empty() {
+            observation.voids = Voids::default();
+            for result in observation
+                .results
+                .iter()
+                .chain(&observation.unfinished_trials)
+            {
+                observation.voids.include(result);
+            }
+        }
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions
@@ -88,7 +100,7 @@ impl Observation {
     // and the Experiment metadata already loaded by Stored.
     fn project(self, stored: &Stored) -> View {
         View {
-            format: 5,
+            format: 6,
             name: stored.name(),
             name_set: stored.name.is_some(),
             description: stored.description.clone(),
@@ -112,6 +124,12 @@ impl Observation {
             running_trials: self.running_trials,
             sessions: self.sessions,
             outcomes: super::store::Outcomes::of(&self.results, &stored.tasks),
+            leak_hits: self
+                .results
+                .iter()
+                .chain(&self.unfinished_trials)
+                .flat_map(|result| result.leaks.clone())
+                .collect(),
             results: self.results,
             unfinished_trials: self.unfinished_trials,
             verdict: stored.verdict.clone(),

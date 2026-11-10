@@ -312,6 +312,23 @@ fn pending_rechecks_are_listed_and_waited_for_before_pushing() {
 }
 
 #[test]
+fn pending_leak_hits_are_listed_and_waited_for_before_pushing() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut waiting = verdict("waiting_on_leaks");
+    waiting["leak_hits"] =
+        json!([{"id":"hit-1","kind":"merge_commit","identifier":"abcdef123456","decision":null}]);
+    cargo_reports(&release, &[waiting.clone(), waiting, verdict("pass")]);
+    let output = release.run_script_with(&["--with-experiment", "0.2.0"], "", &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = unstamped(&output);
+    assert!(err.contains("waiting for your leak decisions"), "{err}");
+    assert!(err.contains("--leak hit-1 confirm|dismiss"), "{err}");
+    assert_eq!(calls(&release).len(), 3);
+    assert!(release.origin_tag("v0.2.0").is_some());
+}
+
+#[test]
 fn resume_reuses_the_content_commit_and_checks_a_pushed_branch_before_opening_its_pr() {
     let release = Release::new();
     let candidate = release.origin(&["rev-parse", "main"]);

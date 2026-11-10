@@ -29,6 +29,7 @@ impl Attempt for execution::Execution<'_> {
 pub(super) struct Runner<'a> {
     directory: &'a Path,
     bar: &'a Bar,
+    leak_decisions: &'a super::leaks::History,
     signal: &'a Path,
     trace: &'a logs::trace::Context,
     execution: Box<dyn Attempt + 'a>,
@@ -52,6 +53,7 @@ impl<'a> Runner<'a> {
         Ok(Self {
             directory: &experiment.directory,
             bar: &description.bar,
+            leak_decisions: &experiment.leak_decisions,
             signal,
             trace,
             execution: Box::new(execution),
@@ -68,7 +70,9 @@ impl<'a> Runner<'a> {
         };
         let mut writer = Writer::resume(self.directory, &identity)?;
         // Recovery may only need to publish retained history. Never replay its pause.
-        if !writer.can_continue(self.bar) {
+        if !writer.can_continue(self.bar)
+            || super::leaks::confirmed(&writer.progress, self.leak_decisions)
+        {
             writer.finish()?;
         } else {
             loop {
@@ -83,6 +87,17 @@ impl<'a> Runner<'a> {
                     },
                     Box::new(|attempt, output, score| {
                         let pause = pause_cause(&output);
+                        let hits = super::leaks::scan(
+                            task,
+                            self.directory,
+                            &identity.key(),
+                            writer.progress.attempts.len(),
+                        )?;
+                        for hit in hits {
+                            if !writer.progress.leaks.iter().any(|saved| saved.id == hit.id) {
+                                writer.progress.leaks.push(hit);
+                            }
+                        }
                         writer.record_attempt(&attempt, output, score)?;
                         // Terminal publication belongs to the same evidence lease.
                         if !writer.can_continue(self.bar) {
@@ -151,6 +166,7 @@ impl Writer {
                 outcome: Outcome::Void,
                 score: None,
                 attempts: Vec::new(),
+                leaks: Vec::new(),
             }
         };
         Ok(Self {

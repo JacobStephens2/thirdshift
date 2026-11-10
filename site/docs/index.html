@@ -1406,6 +1406,21 @@ replace one. Selectors run offline in bwrap, each under the Bar&#39;s timeout,
 and their failures name the selector in
 the Score&#39;s reason. The task&#39;s required <code>process_grading</code> table declares the
 files and selectors; see <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task manifests</a>.</p>
+<p>After each process Trial, thirdshift searches its Session traces for the
+real fix&#39;s merge commit (including abbreviations of at least seven characters),
+pull-request and issue references, branch and title. Matches appear as leak hits
+on the Console&#39;s Experiment page and in <code>thirdshift experiments &lt;id&gt; --json</code>.
+The Verdict waits on these hits, including hits from measurement-only tasks.
+Review the linked Session evidence, then dismiss a false positive or confirm a
+leak in the Console, or use:</p>
+<pre><code class="language-sh">thirdshift experiments &lt;id&gt; --leak &lt;hit-id&gt; dismiss --reason &#39;False positive&#39;
+thirdshift experiments &lt;id&gt; --leak &lt;hit-id&gt; confirm --reason &#39;Saw the real fix&#39;
+</code></pre>
+<p>Each decision retains the reviewer, time and reason. Dismissals keep the Trial
+and remain on the auditable list; confirmation makes the Trial Void and drops
+its paired Eval task from the Verdict. Original results and Session traces remain
+unchanged. Decisions require the Experiment to have stopped and cannot be
+overwritten. A confirmed leak is excluded when the Experiment resumes.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,
 prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
 Advisory minimum of <code>20</code> discriminating Eval tasks, an <code>1800</code>-second per-Trial
@@ -1654,7 +1669,7 @@ reports its saved results. A changed Bar is refused after the first Trial.
 That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 5</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 6</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost

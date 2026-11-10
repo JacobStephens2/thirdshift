@@ -61,11 +61,24 @@ pub(super) struct Task {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProcessGrading {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_fix: Option<RealFix>,
     pub test_files: Vec<String>,
     #[serde(default)]
     pub test_fakes: Vec<String>,
     pub fail_to_pass: Vec<Vec<String>>,
     pub pass_to_pass: Vec<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RealFix {
+    pub pull_request: String,
+    pub issue: String,
+    pub branch: String,
+    pub title: String,
+    #[serde(default)]
+    pub issue_title: String,
 }
 
 /// One replaceable A/A reading, with the setup that produced it.

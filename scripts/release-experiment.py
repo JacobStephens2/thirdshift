@@ -14,7 +14,7 @@ def main():
     if not re.fullmatch(r"[0-9a-f]{64}", experiment) or view["state"] != "completed":
         raise ValueError("release Experiment must be completed with a valid ID")
     outcome = view["verdict"]["verdict"]
-    if outcome not in {"pass", "fail", "inconclusive", "waiting_on_rechecks"}:
+    if outcome not in {"pass", "fail", "inconclusive", "waiting_on_rechecks", "waiting_on_leaks"}:
         raise ValueError(f"unexpected release Experiment Verdict: {outcome}")
     print(f"release: Experiment {experiment}: {outcome}", file=sys.stderr)
     for name, suite in view["verdict"]["suites"].items():
@@ -32,7 +32,15 @@ def main():
                 ]
             for interval_label, interval in intervals:
                 print(f"release: {name}: {interval_label} [{interval['lower']}, {interval['upper']}]", file=sys.stderr)
-    if outcome == "waiting_on_rechecks":
+    if outcome == "waiting_on_leaks":
+        pending = [hit for hit in view["leak_hits"] if hit["decision"] is None]
+        if not pending:
+            raise ValueError("waiting Experiment has no pending leak hits")
+        print("release: waiting for your leak decisions:", file=sys.stderr)
+        for hit in pending:
+            print(f"release: {hit['kind']}: {hit['identifier']}\n"
+                  f"release: thirdshift experiments {experiment} --leak {hit['id']} confirm|dismiss --reason '…'", file=sys.stderr)
+    elif outcome == "waiting_on_rechecks":
         pending = view["pending_rechecks"]
         if not pending:
             raise ValueError("waiting Experiment has no pending Scores")

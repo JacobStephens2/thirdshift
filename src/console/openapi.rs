@@ -127,7 +127,7 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
         View::RecordDifficulty => array(record),
-        View::RenameExperiment | View::PendingRechecks | View::Recheck => record,
+        View::RenameExperiment | View::PendingRechecks | View::Recheck | View::DecideLeak => record,
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
@@ -326,6 +326,11 @@ fn action_body(view: View) -> Value {
             ]);
             return body;
         }
+        View::DecideLeak => {
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"decision":{"enum":["confirm","dismiss"]},"reason":text},"required":["decision","reason"]
+            }}}});
+        }
         View::StartRun => {
             return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
         }
@@ -502,7 +507,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 4}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 6}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))

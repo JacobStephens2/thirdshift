@@ -201,6 +201,7 @@ pub(crate) enum Conclusion {
     Fail,
     Inconclusive,
     WaitingOnRechecks,
+    WaitingOnLeaks,
 }
 
 impl From<Decision> for Conclusion {
@@ -272,6 +273,7 @@ impl Verdict {
             Conclusion::Fail => "fail",
             Conclusion::Inconclusive => "inconclusive",
             Conclusion::WaitingOnRechecks => "waiting_on_rechecks",
+            Conclusion::WaitingOnLeaks => "waiting_on_leaks",
         }
     }
 }
