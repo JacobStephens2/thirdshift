@@ -52,6 +52,19 @@ fn console_experiment_shows_pair_evidence_as_disagreements_not_scores() {
         .unwrap(),
     )
     .unwrap();
+    let mut unfinished = side(&["test_slow.py"], Some(true), None);
+    unfinished["cross"] = json!([{"command": ["python3", "test_slow.py"], "passed": false,
+        "reason": "timed out"}]);
+    fs::write(
+        directory.join("pairs/fixture--pair--1.json"),
+        serde_json::to_vec(&json!({
+            "suite": "process", "task": "fixture", "trial": 1,
+            "baseline": unfinished,
+            "candidate": side(&[], None, None),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     let section = html
@@ -74,6 +87,14 @@ fn console_experiment_shows_pair_evidence_as_disagreements_not_scores() {
     assert!(section.contains("Passes"), "{section}");
     assert!(section.contains("Fails: disagreement"), "{section}");
     assert!(section.contains("changes no Score"), "{section}");
+    assert!(
+        section.contains("process/fixture #2</td><td>Baseline</td><td><code>test_slow.py</code></td><td>Fails</td><td>Did not finish</td>"),
+        "{section}"
+    );
+    assert!(
+        section.contains("<td>Candidate</td><td>None</td><td>—</td><td>—</td>"),
+        "{section}"
+    );
 }
 
 #[test]

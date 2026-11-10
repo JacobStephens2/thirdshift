@@ -208,6 +208,8 @@ class Candidate(unittest.TestCase):
     assert_eq!(candidate["fails_on_base"], false, "{candidate}");
 }
 
+/// The Bar's 4-second timeout also bounds both process Trials and their
+/// process Graders; this test only needs the slow new test to be cut short.
 #[test]
 fn new_tests_share_the_bar_timeout() {
     let fixture = super::process::fixture();
@@ -230,9 +232,85 @@ class Candidate(unittest.TestCase):
             "{candidate}"
         );
     }
-    assert_eq!(candidate["passes_on_other"], false, "{candidate}");
-    assert_eq!(candidate["disagreement"], true, "{candidate}");
-    for result in view["results"].as_array().unwrap() {
-        assert_eq!(result["score"]["passed"], true, "{result}");
-    }
+    // A run cut short says nothing about the code it ran on.
+    assert_eq!(candidate["passes_on_other"], Value::Null, "{candidate}");
+    let text = fixture
+        .scenario
+        .run_with_env(&["experiments", view["id"].as_str().unwrap()], &NO_SANDBOX);
+    assert!(
+        text.stdout.contains(
+            "Pair process/fixture #1 · Candidate tests did not finish on the Baseline's commit"
+        ),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn a_timed_out_base_run_is_not_reported_as_failing_on_the_base() {
+    let fixture = super::process::fixture();
+    pair_fixture(
+        &fixture,
+        r#"import time, unittest
+class Candidate(unittest.TestCase):
+    def test_slow(self):
+        time.sleep(60)"#,
+    );
+    let run = fixture.run(&["--timeout", SHORT_TIMEOUT]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let candidate = &pair(&view)["candidate"];
+    assert_ne!(
+        candidate["fails_on_base"], true,
+        "a timeout is not evidence that the tests check the change: {candidate}"
+    );
+    assert_eq!(
+        candidate["disagreement"], false,
+        "a timeout is not a disagreement: {candidate}"
+    );
+}
+
+#[test]
+fn a_missing_other_arm_keeps_the_base_test_and_names_the_error() {
+    let fixture = super::process::fixture();
+    pair_fixture(&fixture, CANDIDATE_TEST);
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    // The Candidate waits for the Baseline's terminal result, then removes
+    // the Baseline's retained repository, so its final commit cannot be read.
+    fixture.scenario.agent_does(&script.replace(
+        "git add extra.txt test_new_candidate.py ;;",
+        r#"git add extra.txt test_new_candidate.py
+    experiment=$(printf '%s' "$PATH" | tr ':' '\n' | grep '/harnesses/candidate$' | head -n 1)
+    experiment=${experiment%/harnesses/candidate}
+    for _ in $(seq 600); do ls "$experiment"/results/*--baseline--0.json >/dev/null 2>&1 && break; sleep 0.1; done
+    rm -rf "$experiment"/trials/*--baseline--0/attempt-*/repository/.git ;;"#,
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let candidate = &pair(&view)["candidate"];
+    assert!(
+        candidate["error"].as_str().unwrap().contains("other Arm"),
+        "{candidate}"
+    );
+    assert_eq!(candidate["fails_on_base"], true, "{candidate}");
+    assert_eq!(candidate["passes_on_other"], Value::Null, "{candidate}");
+    assert_eq!(candidate["disagreement"], false, "{candidate}");
+    assert!(pair(&view)["baseline"]["error"].is_string(), "{view}");
+}
+
+#[test]
+fn unpreparable_base_test_is_an_error_not_a_failure() {
+    let fixture = super::process::fixture();
+    pair_fixture(&fixture, CANDIDATE_TEST);
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&script.replace(
+        "git add extra.txt test_new_candidate.py",
+        "rm test_new_candidate.py; ln -s feature.txt test_new_candidate.py; git add extra.txt test_new_candidate.py",
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let candidate = &pair(&view)["candidate"];
+    assert_ne!(candidate["fails_on_base"], true, "{candidate}");
 }

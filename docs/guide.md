@@ -1350,9 +1350,11 @@ table's paths, run on the unchanged base and against the other Arm's final
 commit, offline in the code Grader's sandbox, each run within the Bar's
 timeout. New tests that pass on the base may not check the change. A
 cross-test failure is a disagreement to look into, not a defect: this evidence
-changes no Score and no Verdict. The Console's Experiment page lists it under
-Pair evidence, the text view adds a line for each disagreement or new test
-that passes on the base, and `thirdshift experiments <id> --json` keeps it
+changes no Score and no Verdict. A run cut short by the timeout, or whose
+snapshot could not be prepared, decides nothing either way. The Console's
+Experiment page lists it under Pair evidence. The text view adds a line for
+each disagreement, new test that passes on the base, run that did not finish
+and evidence that could not run. `thirdshift experiments <id> --json` keeps it
 under `pairs`.
 
 After each process Trial, thirdshift searches its Session traces for the

@@ -10,11 +10,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::evidence::Started;
-use super::grading::process::{self, Run, Source};
-use super::trial_results::files::{Files, directory};
-use super::{Arm, Task, TrialResult, store, trial_results};
-use crate::evals::{format, repository};
-use crate::sandbox::code_grader::Check;
+use super::grading::process::{self, GraderRun, Source};
+use super::trial_results::files::{Files, Native, directory, metadata};
+use super::{Arm, Task, TrialResult, store, trial_results, trial_sessions};
+use crate::evals::format;
+use crate::sandbox::code_grader::{Check, Ran};
 use crate::{interrupt, progress};
 
 #[derive(Serialize, Deserialize)]
@@ -47,6 +47,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let bar = &experiment.description.bar;
     let timeout = Duration::from_secs(bar.timeout_seconds);
     let pairs = experiment.directory.join("pairs");
+    let mut caps = None;
     for task in &experiment.tasks {
         let Some(new_tests) = task
             .manifest
@@ -61,40 +62,45 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                 "{}.json",
                 trial_results::pair_key(&task.suite, &task.name, index)
             ));
-            let finished = [Arm::Baseline, Arm::Candidate].map(|arm| {
-                trial_results::finished(
-                    &experiment.directory,
-                    &trial_results::Identity {
-                        suite: &task.suite,
-                        task: &task.name,
-                        arm,
-                        trial: index,
-                    },
-                )
+            let identities = [Arm::Baseline, Arm::Candidate].map(|arm| trial_results::Identity {
+                suite: &task.suite,
+                task: &task.name,
+                arm,
+                trial: index,
             });
-            if path.exists() || finished.contains(&false) {
+            if path.exists()
+                || identities
+                    .iter()
+                    .any(|identity| !trial_results::finished(&experiment.directory, identity))
+            {
                 continue;
             }
             interrupt::check()?;
             progress::step(format!(
-                "Pair evidence {}/{} #{index}: base-tests and cross-tests",
-                task.suite, task.name
+                "Pair evidence {}/{} #{}: base-tests and cross-tests",
+                task.suite,
+                task.name,
+                index + 1
             ));
-            let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-            let [baseline, candidate] = [Arm::Baseline, Arm::Candidate]
-                .map(|arm| last_commit(&experiment.directory, task, arm, index));
+            let caps = match &mut caps {
+                Some(caps) => caps,
+                None => caps.insert(crate::config::UserConfig::load()?.trial_caps.with_env()?),
+            };
+            let [baseline, candidate] = identities.map(|identity| {
+                last_commit(&experiment.directory, &identity).map_err(|error| format!("{error:#}"))
+            });
             let evidence = Evidence {
                 task,
                 new_tests,
                 timeout,
-                caps: &caps,
+                caps,
             };
             let pair = Pair {
                 suite: task.suite.clone(),
                 task: task.name.clone(),
                 trial: index,
-                baseline: evidence.side(&baseline, &candidate)?,
-                candidate: evidence.side(&candidate, &baseline)?,
+                baseline: evidence.side(resolved(&baseline), resolved(&candidate))?,
+                candidate: evidence.side(resolved(&candidate), resolved(&baseline))?,
             };
             fs::create_dir_all(&pairs)?;
             store::write(&path, &pair)?;
@@ -127,11 +133,21 @@ pub(super) fn lines(pairs: &[Pair]) -> String {
             if let Some(error) = &side.error {
                 findings.push(format!("evidence unavailable: {error}"));
             }
-            if side.fails_on_base == Some(false) {
-                findings.push("pass on the base".to_owned());
+            match side.fails_on_base {
+                Some(false) => findings.push("pass on the base".to_owned()),
+                None if !side.base.is_empty() => {
+                    findings.push("did not finish on the base".to_owned());
+                }
+                _ => {}
             }
-            if side.disagreement {
-                findings.push(format!("fail on the {other}'s commit (disagreement)"));
+            match side.passes_on_other {
+                Some(false) => {
+                    findings.push(format!("fail on the {other}'s commit (disagreement)"));
+                }
+                None if !side.cross.is_empty() => {
+                    findings.push(format!("did not finish on the {other}'s commit"));
+                }
+                _ => {}
             }
             for finding in findings {
                 text.push_str(&format!(
@@ -152,8 +168,8 @@ struct Commit {
     commit: String,
 }
 
-fn last_commit(experiment: &Path, task: &Task, arm: Arm, index: usize) -> Result<Commit> {
-    let key = trial_results::trial_key(&task.suite, &task.name, arm, index);
+fn last_commit(experiment: &Path, identity: &trial_results::Identity<'_>) -> Result<Commit> {
+    let key = identity.key();
     let result: TrialResult = serde_json::from_slice(&fs::read(
         experiment.join("results").join(format!("{key}.json")),
     )?)?;
@@ -162,32 +178,20 @@ fn last_commit(experiment: &Path, task: &Task, arm: Arm, index: usize) -> Result
         .len()
         .checked_sub(1)
         .context("Trial has no attempts")?;
-    for entry in fs::read_dir(experiment.join("trials").join(&key))? {
-        let attempt = entry?.path();
-        let started = attempt.join("started.json");
-        if !attempt
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with("attempt-"))
-            || !started.is_file()
-        {
-            continue;
-        }
-        let started: Started = serde_json::from_slice(&fs::read(started)?)?;
-        if started.index == last {
-            let repository = attempt.join("repository");
-            let commit = repository::bytes_until(
-                &repository,
-                &["rev-parse", "--verify", "HEAD^{commit}"],
-                Instant::now() + Duration::from_secs(60),
-            )
-            .context("Trial repository is no longer retained")?;
-            return Ok(Commit {
-                repository,
-                commit: std::str::from_utf8(&commit)?.trim().to_owned(),
-            });
+    for attempt in trial_sessions::trial(&Native, &experiment.join("trials").join(&key))? {
+        let started = metadata::<Started>(&Native, &attempt.path.join("started.json"))?;
+        if started.is_some_and(|started| started.index == last) {
+            let repository = attempt.path.join("repository");
+            let commit = process::head(&repository, Instant::now() + Duration::from_secs(60))
+                .context("Trial repository is no longer retained")?;
+            return Ok(Commit { repository, commit });
         }
     }
     anyhow::bail!("Trial's last attempt is no longer retained")
+}
+
+fn resolved(commit: &Result<Commit, String>) -> Result<&Commit, String> {
+    commit.as_ref().map_err(Clone::clone)
 }
 
 struct Evidence<'a> {
@@ -197,13 +201,24 @@ struct Evidence<'a> {
     caps: &'a crate::scope::Caps,
 }
 
+/// What a run's checks say about the tests: `Some(false)` when one ran to a
+/// failing exit, `Some(true)` when all ran and passed, and `None` when the
+/// rest timed out or never started, which says nothing about the code.
+fn outcome(ran: &[Ran]) -> Option<bool> {
+    if ran.iter().any(|ran| ran.concluded && !ran.check.passed) {
+        Some(false)
+    } else {
+        ran.iter().all(|ran| ran.concluded).then_some(true)
+    }
+}
+
 impl Evidence<'_> {
     /// `own`'s new tests on the base, then on `other`'s final commit. Each run
     /// has the Bar's timeout, shared with preparing its snapshot.
-    fn side(&self, own: &Result<Commit>, other: &Result<Commit>) -> Result<Side> {
+    fn side(&self, own: Result<&Commit, String>, other: Result<&Commit, String>) -> Result<Side> {
         let mut side = Side::default();
         let result = (|| -> Result<()> {
-            let own = own.as_ref().map_err(|error| anyhow::anyhow!("{error:#}"))?;
+            let own = own.map_err(anyhow::Error::msg)?;
             let manifest = &self.task.manifest;
             let deadline = Instant::now() + self.timeout;
             side.test_files =
@@ -224,7 +239,7 @@ impl Evidence<'_> {
                 commit: &own.commit,
             };
             let source = self.task.directory.join(&manifest.repository);
-            side.base = process::overlaid(
+            let base = process::overlaid(
                 Source {
                     repository: &source,
                     commit: &manifest.base,
@@ -232,17 +247,16 @@ impl Evidence<'_> {
                 tests(),
                 &side.test_files,
                 &commands,
-                Run {
+                GraderRun {
                     name: "base-test",
                     deadline,
                     caps: self.caps,
                 },
             )?;
-            side.fails_on_base = Some(!side.base.iter().all(|check| check.passed));
-            let other = other
-                .as_ref()
-                .map_err(|error| anyhow::anyhow!("other Arm: {error:#}"))?;
-            side.cross = process::overlaid(
+            side.fails_on_base = outcome(&base).map(|passed| !passed);
+            side.base = base.into_iter().map(|ran| ran.check).collect();
+            let other = other.map_err(|error| anyhow::anyhow!("other Arm: {error}"))?;
+            let cross = process::overlaid(
                 Source {
                     repository: &other.repository,
                     commit: &other.commit,
@@ -250,15 +264,15 @@ impl Evidence<'_> {
                 tests(),
                 &side.test_files,
                 &commands,
-                Run {
+                GraderRun {
                     name: "cross-test",
                     deadline: Instant::now() + self.timeout,
                     caps: self.caps,
                 },
             )?;
-            let passes = side.cross.iter().all(|check| check.passed);
-            side.passes_on_other = Some(passes);
-            side.disagreement = !passes;
+            side.passes_on_other = outcome(&cross);
+            side.disagreement = side.passes_on_other == Some(false);
+            side.cross = cross.into_iter().map(|ran| ran.check).collect();
             Ok(())
         })();
         if let Err(error) = result {

@@ -66,11 +66,16 @@ Format 9 adds `pairs`: base-tests and cross-tests for process tasks whose
 Candidate Trial *k*. Each `PairSide` lists the Arm's `test_files`, the files its
 final commit adds or changes since the base that match `new_tests.paths`. `base`
 holds their checks on the unchanged base and `cross` their checks on the other
-Arm's final commit, each with the code Grader's check shape. `fails_on_base`
-is true when any base check failed; `passes_on_other` is true when every
-cross check passed. Both are null when the Arm has no new tests, or when
-`error` says why its evidence could not run. `disagreement` is true when a
-cross check failed: something to look into, not a defect. Pairs are evidence,
+Arm's final commit, each with the code Grader's check shape. Only checks
+whose command ran to an exit status decide the results. `fails_on_base` is
+true when a base check failed that way and false when all passed;
+`passes_on_other` is true when every cross check passed and false when one
+failed. Each is null when the Arm has no new tests, when its run did not
+finish (a timeout or a snapshot that could not be prepared, named in its
+checks), or when `error` says why that run could not start. A base result
+already decided stays when only the other Arm's commit is missing.
+`disagreement` is true exactly when `passes_on_other` is false: something to
+look into, not a defect. Pairs are evidence,
 never Scores: they change no Score, Verdict or Void cause. Experiments
 without `new_tests`, and pairs not yet finished, have none.
 

@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::Task;
 use crate::evals::{format, repository};
-use crate::sandbox::code_grader::{self, Check};
+use crate::sandbox::code_grader::{self, Check, Ran};
 use crate::scope::Caps;
 use crate::trial::Reports;
 
@@ -39,14 +39,11 @@ pub(super) fn execute(
         .chain(&grading.test_fakes)
         .cloned()
         .collect();
-    let code =
-        repository::bytes_until(trial, &["rev-parse", "--verify", "HEAD^{commit}"], deadline)
-            .and_then(|commit| Ok(std::str::from_utf8(&commit)?.trim().to_owned()));
-    let code = match code {
+    let code = match head(trial, deadline) {
         Ok(commit) => commit,
-        Err(error) => return Ok(vec![unprepared("process Grader", &error)]),
+        Err(error) => return Ok(vec![unprepared("process Grader", &error).check]),
     };
-    overlaid(
+    let ran = overlaid(
         Source {
             repository: trial,
             commit: &code,
@@ -57,12 +54,23 @@ pub(super) fn execute(
         },
         &paths,
         &commands,
-        Run {
+        GraderRun {
             name: "process Grader",
             deadline,
             caps,
         },
-    )
+    )?;
+    Ok(ran.into_iter().map(|ran| ran.check).collect())
+}
+
+/// The commit checked out in `repository`.
+pub(in super::super) fn head(repository: &Path, deadline: Instant) -> Result<String> {
+    let commit = repository::bytes_until(
+        repository,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        deadline,
+    )?;
+    Ok(std::str::from_utf8(&commit)?.trim().to_owned())
 }
 
 /// One commit in one repository.
@@ -72,7 +80,7 @@ pub(in super::super) struct Source<'a> {
 }
 
 /// One named code-Grader run, bounded by a deadline shared with its snapshot.
-pub(in super::super) struct Run<'a> {
+pub(in super::super) struct GraderRun<'a> {
     pub name: &'a str,
     pub deadline: Instant,
     pub caps: &'a Caps,
@@ -80,15 +88,15 @@ pub(in super::super) struct Run<'a> {
 
 /// Export `code`'s commit, lay `paths` from `tests`'s commit over it, and run
 /// `commands` offline in the code-Grader sandbox, all before the deadline.
-/// A snapshot that cannot be prepared is one failed check.
+/// A snapshot that cannot be prepared is one failed, unconcluded check.
 pub(in super::super) fn overlaid(
     code: Source<'_>,
     tests: Source<'_>,
     paths: &[String],
     commands: &[Vec<String>],
-    run: Run<'_>,
-) -> Result<Vec<Check>> {
-    let Run {
+    run: GraderRun<'_>,
+) -> Result<Vec<Ran>> {
+    let GraderRun {
         name,
         deadline,
         caps,
@@ -97,7 +105,7 @@ pub(in super::super) fn overlaid(
         Ok(snapshot) => snapshot,
         Err(error) => return Ok(vec![unprepared(name, &error)]),
     };
-    let mut checks = code_grader::execute(
+    let mut ran = code_grader::execute_runs(
         &snapshot.path().join("repository"),
         &Reports {
             standards: None,
@@ -108,7 +116,7 @@ pub(in super::super) fn overlaid(
         caps,
         true,
     )?;
-    for check in &mut checks {
+    for Ran { check, .. } in &mut ran {
         if let Some(command) = &check.command {
             check.reason = format!(
                 "{}: {}",
@@ -117,14 +125,17 @@ pub(in super::super) fn overlaid(
             );
         }
     }
-    Ok(checks)
+    Ok(ran)
 }
 
-fn unprepared(what: &str, error: &anyhow::Error) -> Check {
-    Check {
-        command: None,
-        passed: false,
-        reason: format!("could not prepare {what}: {error:#}"),
+fn unprepared(what: &str, error: &anyhow::Error) -> Ran {
+    Ran {
+        check: Check {
+            command: None,
+            passed: false,
+            reason: format!("could not prepare {what}: {error:#}"),
+        },
+        concluded: false,
     }
 }
 

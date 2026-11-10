@@ -345,21 +345,20 @@ fn pairs(view: &View) -> String {
                     .collect::<Vec<_>>()
                     .join(" ")
             };
-            let unknown = || {
-                side.error.as_deref().map_or_else(
-                    || "—".to_owned(),
-                    |error| format!("Unavailable: {}", esc(error)),
-                )
+            let unknown = |checks: &[crate::sandbox::code_grader::Check]| match &side.error {
+                Some(error) => format!("Unavailable: {}", esc(error)),
+                None if checks.is_empty() => "—".to_owned(),
+                None => "Did not finish".to_owned(),
             };
             let base = match side.fails_on_base {
                 Some(true) => "Fails".to_owned(),
                 Some(false) => "Passes".to_owned(),
-                None => unknown(),
+                None => unknown(&side.base),
             };
             let other = match side.passes_on_other {
                 Some(true) => "Passes".to_owned(),
                 Some(false) => "Fails: disagreement".to_owned(),
-                None => unknown(),
+                None => unknown(&side.cross),
             };
             html.push_str(&format!(
                 "<tr><td>{}/{} #{}</td><td>{arm}</td><td>{tests}</td><td>{base}</td><td>{other}</td></tr>",
