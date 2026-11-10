@@ -10,12 +10,17 @@ pub(crate) mod bug_origin;
 pub(crate) mod experiment;
 mod format;
 mod import;
+mod process_tasks;
 mod repository;
 mod suite;
 
 pub enum Action {
     List,
     ImportReplays,
+    ProposeProcess {
+        repository: PathBuf,
+        limit: u32,
+    },
     Approve {
         suite: String,
         task: String,
@@ -55,6 +60,18 @@ pub fn parse(args: &[String]) -> Result<Action> {
         }
         [action] if action == "list" => Ok(Action::List),
         [action] if action == "import-replays" => Ok(Action::ImportReplays),
+        [action, repository] if action == "propose-process" => Ok(Action::ProposeProcess {
+            repository: repository.into(),
+            limit: 100,
+        }),
+        [action, repository, flag, limit] if action == "propose-process" && flag == "--limit" => {
+            let limit: u32 = limit.parse()?;
+            anyhow::ensure!((1..=100).contains(&limit), "proposal limit must be 1..100");
+            Ok(Action::ProposeProcess {
+                repository: repository.into(),
+                limit,
+            })
+        }
         [action, paths @ ..] if action == "touched" => {
             for path in paths {
                 format::relative_path(path)?;
@@ -94,7 +111,7 @@ pub fn parse(args: &[String]) -> Result<Action> {
             record: record.into(),
         }),
         _ => bail!(
-            "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
+            "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | propose-process <repository> [--limit <1..100>] | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
     }
 }
@@ -102,6 +119,9 @@ pub fn parse(args: &[String]) -> Result<Action> {
 pub fn execute(action: Action) -> Result<String> {
     let root = crate::config::home()?.join(".thirdshift/evals/suites");
     match action {
+        Action::ProposeProcess { repository, limit } => Ok(serde_json::to_string_pretty(
+            &process_tasks::propose(&repository, limit)?,
+        )?),
         Action::Approve { suite, task } => Ok(serde_json::to_string_pretty(&approval::approve(
             &suite, &task,
         )?)?),

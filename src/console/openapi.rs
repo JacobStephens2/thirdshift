@@ -131,6 +131,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
+        View::ProposeProcess => {
+            object(json!({"proposals":array(record.clone()),"skipped":array(record)}))
+        }
         View::Config => object(json!({"version": version, "settings": array(setting())})),
         View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
@@ -296,6 +299,12 @@ fn action_body(view: View) -> Value {
             return json!({"required":true,"content":{"application/json":{"schema":schema}}});
         }
         View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::ProposeProcess => {
+            return json_request(
+                json!({"repository":{"type":"string","description":"A known Launch directory's owner/repo, not a filesystem path."},"limit":{"type":"integer","minimum":1,"maximum":100,"default":100}}),
+                vec!["repository"],
+            );
+        }
         View::VerifyEval => {
             return json_request(
                 json!({"repository":text,"base":text}),

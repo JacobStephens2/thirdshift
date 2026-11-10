@@ -5,6 +5,9 @@ use std::process::{Command, Output};
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "evals/process_tasks.rs"]
+mod process_tasks;
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(dir)

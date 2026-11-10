@@ -12,6 +12,8 @@ use super::format::{self, Session, State, Task};
 #[serde(deny_unknown_fields)]
 pub(super) struct Dependencies {
     factory_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    builtin_processes: Vec<String>,
     session_prompts: Vec<String>,
     harness_defaults: Vec<String>,
     model_defaults: Vec<String>,
@@ -22,6 +24,7 @@ impl Dependencies {
     fn paths(&self) -> impl Iterator<Item = &str> {
         [
             &self.factory_skills,
+            &self.builtin_processes,
             &self.session_prompts,
             &self.harness_defaults,
             &self.model_defaults,

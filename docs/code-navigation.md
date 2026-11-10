@@ -86,6 +86,10 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 Eval task manifests, suite dependency selection and repository preparation live in
 `src/evals.rs` and `src/evals/`; `tests/evals.rs` tests the CLI with real Git
 repositories. The private data format is documented in `docs/eval-tasks.md`.
+Process task screening, separate test selection and proposal publication live
+in `src/evals/process_tasks.rs` and `src/evals/process_tasks/`; merged PR and
+Ticket metadata comes from `src/github/evals.rs`. CLI coverage is in
+`tests/evals/process_tasks.rs`.
 The one-time #429 replay import is owned by `src/evals/import.rs` and exercised
 through the same CLI tests with made-up manifests and grading files.
 
