@@ -35,8 +35,28 @@ impl CronJobs {
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
-    #[serde(default)]
+    /// Absent on older inventories. A label with a control character is not a
+    /// repository: an origin URL can contain a newline, and printing that as a
+    /// heading would add a line to the schedule listing.
+    #[serde(default, deserialize_with = "deserialize_repository")]
     pub repository: Option<String>,
+}
+
+fn repository_label(repository: Option<String>) -> Option<String> {
+    repository.filter(|label| {
+        !label
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    })
+}
+
+fn deserialize_repository<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(repository_label(Option::<String>::deserialize(
+        deserializer,
+    )?))
 }
 
 pub(crate) fn load() -> Result<CronJobs> {
@@ -44,8 +64,10 @@ pub(crate) fn load() -> Result<CronJobs> {
     let home = crate::config::home()?;
     let mut jobs = jobs()?;
     for job in &mut jobs {
-        job.repository = crate::launch_directories::from_cron(&job.command, &home)
-            .map(|directory| directory.repository);
+        job.repository = repository_label(
+            crate::launch_directories::from_cron(&job.command, &home)
+                .map(|directory| directory.repository),
+        );
     }
     // Stable sorting retains crontab order and duplicates within each repository.
     jobs.sort_by(|a, b| {
@@ -147,4 +169,26 @@ pub(crate) fn shell_command(command: &str) -> &str {
         })
         .unwrap_or(command.len());
     &command[..command_end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_repository_label_with_a_newline_is_unresolved() {
+        let forged: CronJob = serde_json::from_str(
+            "{\"schedule\":\"@daily\",\"command\":\"thirdshift\",\"repository\":\"acme/widgets\\n@reboot echo forged\"}",
+        )
+        .unwrap();
+        assert_eq!(forged.repository, None);
+        let legacy: CronJob =
+            serde_json::from_str("{\"schedule\":\"@daily\",\"command\":\"thirdshift\"}").unwrap();
+        assert_eq!(legacy.repository, None);
+        let kept: CronJob = serde_json::from_str(
+            "{\"schedule\":\"@daily\",\"command\":\"thirdshift\",\"repository\":\"acme/widgets\"}",
+        )
+        .unwrap();
+        assert_eq!(kept.repository.as_deref(), Some("acme/widgets"));
+    }
 }

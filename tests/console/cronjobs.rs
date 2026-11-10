@@ -236,6 +236,42 @@ fn cronjobs_keeps_unresolved_entries_and_never_evaluates_shell_text() {
 }
 
 #[test]
+fn cronjobs_does_not_print_an_origin_newline_as_a_schedule_line() {
+    let home = fixture();
+    let checkout = checkout(
+        home.path(),
+        "checkout",
+        "https://github.com/acme/widgets\n@reboot echo forged.git",
+    );
+    let command_line = format!("cd '{}' && thirdshift pickup base main", checkout.display());
+    fs::write(
+        home.path().join("crontab"),
+        format!("@daily {command_line}\n"),
+    )
+    .unwrap();
+    let text = command(home.path()).arg("cronjobs").output().unwrap();
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.contains(&command_line), "{text}");
+    assert!(
+        !text.contains("echo forged"),
+        "origin text was printed as a schedule line:\n{text}"
+    );
+    let output = command(home.path())
+        .args(["cronjobs", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let inventory: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        inventory["jobs"][0]["repository"],
+        Value::Null,
+        "{inventory}"
+    );
+    assert_eq!(inventory["jobs"][0]["command"], command_line);
+}
+
+#[test]
 fn cronjobs_pairs_cli_and_console_without_running_scheduled_commands() {
     let home = fixture();
     fs::write(home.path().join("crontab"), "# thirdshift disabled\nMAILTO=thirdshift@example.test\n0 1 * * * backup\n*/5 * * * * cd /srv/repo && /home/me/.cargo/bin/thirdshift pickup base main >> /tmp/cron.log 2>&1\n@reboot thirdshift secure base main # <script>alert(1)</script>\n").unwrap();
