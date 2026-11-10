@@ -163,16 +163,29 @@ pub(super) fn lines(pairs: &[Pair]) -> String {
 }
 
 /// A finished Trial's final commit, in its last attempt's repository.
-struct Commit {
-    repository: PathBuf,
-    commit: String,
+pub(super) struct Commit {
+    pub repository: PathBuf,
+    pub commit: String,
 }
 
-fn last_commit(experiment: &Path, identity: &trial_results::Identity<'_>) -> Result<Commit> {
+/// A finished Trial's saved result.
+pub(super) fn trial_result(
+    experiment: &Path,
+    identity: &trial_results::Identity<'_>,
+) -> Result<TrialResult> {
+    Ok(serde_json::from_slice(&fs::read(
+        experiment
+            .join("results")
+            .join(format!("{}.json", identity.key())),
+    )?)?)
+}
+
+pub(super) fn last_commit(
+    experiment: &Path,
+    identity: &trial_results::Identity<'_>,
+) -> Result<Commit> {
     let key = identity.key();
-    let result: TrialResult = serde_json::from_slice(&fs::read(
-        experiment.join("results").join(format!("{key}.json")),
-    )?)?;
+    let result = trial_result(experiment, identity)?;
     let last = result
         .attempts
         .len()

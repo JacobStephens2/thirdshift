@@ -1,4 +1,4 @@
-# Experiment results (format 9)
+# Experiment results (format 10)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 9` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 9.
+`format: 10` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 10.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -78,6 +78,26 @@ already decided stays when only the other Arm's commit is missing.
 look into, not a defect. Pairs are evidence,
 never Scores: they change no Score, Verdict or Void cause. Experiments
 without `new_tests`, and pairs not yet finished, have none.
+
+Format 10 adds the Grader panel: the Bar's optional `panel` and the
+Experiment's `panel` reports. `bar.panel` lists the `seats` (Harness, Model and
+optional Effort), the `vote` unit (`family`, the default, or `model`) and
+`arm_family_rule` (on by default). Each seat reads every pair of process
+Trials in a blind packet, once in each presentation order, with the sides
+swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
+its `family` (its provider: the Harness's own, or the provider an OpenCode
+Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
+the Arm shown as side `a`, gives each Arm's per-criterion `rubric`, merge
+reason and `ready_to_merge` call, then the comparison's `reason` and
+`preference`. A Grader's `preference` and `merge` calls stand only when both
+orders agree; a call that flips with the order is `tie`. With
+`arm_family_rule`, a seat from either Arm's family does not vote while a seat
+from another family sits on the panel. `votes` lists the units that counted:
+one per family, each taking its own majority first, or one per Model. A call
+needs more than half of the votes, otherwise it is `tie`; the panel's tied
+merge call is `not_ready`. Pairs appear once every seat has called both
+orders. The panel is reported beside the Verdict and changes no Score,
+Verdict or Void cause. Experiments without a panel have none.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -326,7 +346,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 9,
+    "format": 10,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -356,6 +376,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pending_rechecks": ["Pending"],
     "leak_hits": ["LeakHit"],
     "pairs": ["Pair"],
+    "panel": ["PanelPair"],
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -391,7 +412,12 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "discriminating_tasks?": {"*": ["string"]},
     "min_discriminating_tasks?": "integer",
     "cost_ceiling?": "number", "time_ceiling?": "number",
-    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
+    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]},
+    "panel?": "Panel"
+  },
+  "Panel": {
+    "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
+    "vote": "family|model", "arm_family_rule": "boolean"
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
@@ -428,6 +454,25 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
     "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
   },
+  "PanelPair": {
+    "suite": "string", "task": "string", "trial": "integer", "graders": ["PanelGrader"],
+    "votes": [{"name": "string", "preference": "Preference", "merge": "MergeCalls"}],
+    "preference": "Preference", "merge": {"baseline": "ready|not_ready", "candidate": "ready|not_ready"}
+  },
+  "PanelGrader": {
+    "harness": "string", "model": "string", "effort": "string?", "family": "string",
+    "votes": "boolean", "orders": ["PanelCall"], "preference": "Preference", "merge": "MergeCalls"
+  },
+  "PanelCall": {
+    "a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
+    "reason": "string", "preference": "Preference"
+  },
+  "PanelSide": {
+    "rubric": [{"criterion": "string", "met": "boolean", "evidence": "string"}],
+    "merge_reason": "string", "ready_to_merge": "boolean"
+  },
+  "Preference": "baseline|candidate|tie|both_bad",
+  "MergeCalls": {"baseline": "ready|not_ready|tie", "candidate": "ready|not_ready|tie"},
   "Command": ["string"],
   "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},
   "Recheck": {"passed": "boolean", "reason": "string", "wrong_finding": "boolean?", "recorded_at": "string"},

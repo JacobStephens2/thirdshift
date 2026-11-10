@@ -69,6 +69,7 @@ pub(crate) struct View {
     pub findings: Vec<String>,
     pub leak_hits: Vec<super::leaks::Hit>,
     pub pairs: Vec<super::pairs::Pair>,
+    pub panel: Vec<super::panel::PanelPair>,
 }
 
 /// Facts for readers; these never participate in Experiment identity or the Bar.
@@ -526,6 +527,7 @@ Candidate: {}{}{}",
                     )
                     .chain(view.leak_hits.iter().map(|hit| format!("\nLeak hit {}: {} · {} · {} · Session {} line {}{}", hit.id, hit.status(), hit.kind, hit.identifier, hit.session, hit.line, hit.decision.as_ref().map_or_else(|| format!("\nthirdshift experiments {} --leak {} confirm|dismiss --reason '…'", self.description.id, hit.id), |decision| format!(" · {} · {} · {}", decision.reviewer, decision.recorded_at, decision.reason)))))
                     .chain(std::iter::once(super::pairs::lines(&view.pairs)))
+                    .chain(std::iter::once(super::panel::lines(&view.panel)))
                     .collect::<String>(),
                 selection
             ))

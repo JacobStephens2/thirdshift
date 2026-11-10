@@ -1357,6 +1357,33 @@ each disagreement, new test that passes on the base, run that did not finish
 and evidence that could not run. `thirdshift experiments <id> --json` keeps it
 under `pairs`.
 
+A Grader panel can also grade each pair of process Trials. Name its seats in
+the Bar, one `--panel-seat` per Harness and Model, several per family allowed:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5,effort=high \
+  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel-seat harness=claude,model=claude-opus-5-5
+```
+
+Each seat reads every pair in a blind packet twice, once in each presentation
+order, in fresh sandboxed sessions. The packet holds the Ticket, the success
+criteria, a rubric, and for each side its outcome, its diff against the base and
+its Pair evidence, with the sides labelled A and B at random and swapped for
+the second order. For each side the Grader rates each rubric criterion with
+evidence and makes a merge call, then gives its reason and a preference: A, B,
+tie or both bad. A call that flips with the order is a tie. A seat's family is
+its provider: the Harness's own, or the provider an OpenCode Model names.
+The panel votes one vote per family by default, each family taking its own
+majority first; `--panel-vote model` gives each Model a vote. A seat from
+either Arm's family is reported but doesn't vote while a seat from another
+family sits on the panel; `--panel-arm-family-rule off` lets it vote. A call
+needs more than half the votes, otherwise it is a tie, and a tied merge call is
+not ready. Every seat's calls and the panel's result are reported beside the
+Verdict, in the text view and under `panel` in
+`thirdshift experiments <id> --json`; they change no Score and no Verdict.
+
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1382,6 +1409,8 @@ Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
 timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
+The Grader panel's `--panel-seat`, `--panel-vote` and `--panel-arm-family-rule`
+are part of the Bar too; it has no panel by default.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 
@@ -1600,7 +1629,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 9`.
+[Experiment results format](experiment-results.md), identified by `format: 10`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

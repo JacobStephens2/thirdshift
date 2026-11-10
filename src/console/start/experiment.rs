@@ -18,6 +18,8 @@ pub(in crate::console) fn properties() -> Value {
         "candidate_process",
         "name",
         "prices",
+        "panel_vote",
+        "panel_arm_family_rule",
     ] {
         properties.insert(key.into(), json!({"type":"string"}));
     }
@@ -44,10 +46,12 @@ pub(in crate::console) fn properties() -> Value {
     for key in ["release", "yes"] {
         properties.insert(key.into(), json!({"type":"boolean"}));
     }
-    properties.insert(
-        "suite".into(),
-        json!({"type":"array","items":{"type":"string"}}),
-    );
+    for key in ["suite", "panel_seat"] {
+        properties.insert(
+            key.into(),
+            json!({"type":"array","items":{"type":"string"}}),
+        );
+    }
     Value::Object(properties)
 }
 
@@ -82,7 +86,10 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
             }
         } else if let Some(items) = value.as_array() {
             for item in items {
-                args.extend(["--suite".into(), item.as_str().unwrap().into()]);
+                args.extend([
+                    format!("--{}", key.replace('_', "-")),
+                    item.as_str().unwrap().into(),
+                ]);
             }
         } else {
             args.extend([
@@ -96,4 +103,40 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
     }
     crate::evals::experiment::parse(&args)?;
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_panel_seat_becomes_its_own_flag() {
+        let options = BTreeMap::from([
+            ("candidate".to_owned(), json!("HEAD")),
+            (
+                "panel_seat".to_owned(),
+                json!([
+                    "harness=claude,model=judge-one",
+                    "harness=codex,model=judge-two"
+                ]),
+            ),
+            ("panel_vote".to_owned(), json!("model")),
+            ("panel_arm_family_rule".to_owned(), json!("off")),
+        ]);
+        assert_eq!(
+            arguments(Some(&options)).unwrap(),
+            [
+                "--json",
+                "HEAD",
+                "--panel-arm-family-rule",
+                "off",
+                "--panel-seat",
+                "harness=claude,model=judge-one",
+                "--panel-seat",
+                "harness=codex,model=judge-two",
+                "--panel-vote",
+                "model",
+            ]
+        );
+    }
 }

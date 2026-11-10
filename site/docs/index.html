@@ -1437,6 +1437,29 @@ Experiment page lists it under Pair evidence. The text view adds a line for
 each disagreement, new test that passes on the base, run that did not finish
 and evidence that could not run. <code>thirdshift experiments &lt;id&gt; --json</code> keeps it
 under <code>pairs</code>.</p>
+<p>A Grader panel can also grade each pair of process Trials. Name its seats in
+the Bar, one <code>--panel-seat</code> per Harness and Model, several per family allowed:</p>
+<pre><code class="language-sh">thirdshift experiment &lt;candidate&gt; \
+  --panel-seat harness=codex,model=gpt-5.5,effort=high \
+  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel-seat harness=claude,model=claude-opus-5-5
+</code></pre>
+<p>Each seat reads every pair in a blind packet twice, once in each presentation
+order, in fresh sandboxed sessions. The packet holds the Ticket, the success
+criteria, a rubric, and for each side its outcome, its diff against the base and
+its Pair evidence, with the sides labelled A and B at random and swapped for
+the second order. For each side the Grader rates each rubric criterion with
+evidence and makes a merge call, then gives its reason and a preference: A, B,
+tie or both bad. A call that flips with the order is a tie. A seat&#39;s family is
+its provider: the Harness&#39;s own, or the provider an OpenCode Model names.
+The panel votes one vote per family by default, each family taking its own
+majority first; <code>--panel-vote model</code> gives each Model a vote. A seat from
+either Arm&#39;s family is reported but doesn&#39;t vote while a seat from another
+family sits on the panel; <code>--panel-arm-family-rule off</code> lets it vote. A call
+needs more than half the votes, otherwise it is a tie, and a tied merge call is
+not ready. Every seat&#39;s calls and the panel&#39;s result are reported beside the
+Verdict, in the text view and under <code>panel</code> in
+<code>thirdshift experiments &lt;id&gt; --json</code>; they change no Score and no Verdict.</p>
 <p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1458,6 +1481,8 @@ Advisory minimum of <code>20</code> discriminating Eval tasks, an <code>1800</co
 timeout, and up to two fresh retries for Void Trials.
 Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fail-level</code>, <code>--prior</code>, <code>--seed</code>,
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--min-discriminating-tasks</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
+The Grader panel&#39;s <code>--panel-seat</code>, <code>--panel-vote</code> and <code>--panel-arm-family-rule</code>
+are part of the Bar too; it has no panel by default.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.</p>
 <p>Optional <code>--cost-ceiling 2</code> and <code>--time-ceiling 2</code> cap the paired median
@@ -1709,7 +1734,7 @@ reports its saved results. A changed Bar is refused after the first Trial.
 That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 9</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 10</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost

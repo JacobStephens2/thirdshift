@@ -4,7 +4,7 @@ use super::*;
 
 /// Both Arms implement the fix. Each commits its own new test file; the
 /// Candidate's also asserts an extra file that only the Candidate writes.
-fn pair_fixture(fixture: &Fixture, new_test: &str) {
+pub(super) fn pair_fixture(fixture: &Fixture, new_test: &str) {
     let task = fixture
         .scenario
         .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
@@ -44,7 +44,7 @@ git add feature.txt"#
     ));
 }
 
-const CANDIDATE_TEST: &str = r#"import unittest
+pub(super) const CANDIDATE_TEST: &str = r#"import unittest
 from pathlib import Path
 class Candidate(unittest.TestCase):
     def test_feature(self):
