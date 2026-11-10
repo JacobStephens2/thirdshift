@@ -6,7 +6,9 @@
 //! anything back when its pull request is ready for review, and released when
 //! the run failed with nothing on origin to take over. A failed run with work
 //! on origin, and a failed Security fix, swap it for `agent-failed`, which the
-//! Failure limit counts and the next Claim takes off. A Stop instead leaves
+//! Failure limit counts and the next Claim takes off. A Spec run that is only
+//! waiting swaps it for `ready-for-agent`, or for `needs-triage` after an
+//! untrusted edit of its Spec. A Stop instead leaves
 //! the issue for triage, or explicitly releases it when asked to requeue. A
 //! Custom process's Delivery removes it when the pull request is ready for
 //! review, without putting `ready-for-agent` back.
@@ -26,6 +28,7 @@ use crate::issue::IssueUrl;
 use crate::labels::{self, Edit, Label, Labels, READY_FOR_AGENT};
 use crate::progress;
 use crate::run::Goal;
+use crate::trust::{self, IssueText};
 
 /// The label of a Claimed issue.
 pub const IN_PROGRESS: Label =
@@ -55,6 +58,9 @@ pub enum Ending {
     /// It failed with its pull request left ready for review: a policy,
     /// security or merge hold held its Self-merge.
     Held,
+    /// A Spec run ended only waiting: no Ticket failed or was interrupted,
+    /// and every Ticket not done waits on a person or on other work.
+    Waiting,
     /// It failed otherwise.
     Failed,
 }
@@ -113,6 +119,12 @@ impl Claim<'_> {
     ///   place of `in-progress` in one label edit.
     /// - Before Delivery: a successful Custom process releases its Claim if
     ///   nothing is on origin, except a Security fix, and adds no failure label.
+    /// - Waiting: a Spec run only waiting hands its Spec back, labelling it
+    ///   `ready-for-agent` in place of `in-progress`, so Pickup continues it
+    ///   once a Ticket can start. If an account that is not a Trusted account
+    ///   edited the Spec's title or body since its last `ready-for-agent`
+    ///   labelling by a Trusted account, it is labelled `needs-triage`
+    ///   instead.
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
     ///   remains on origin, or is released even with work when asked to requeue.
     ///
@@ -158,6 +170,10 @@ trait Outside {
     fn started(&mut self, issue: &IssueUrl) -> Result<bool>;
     /// Whether this Run's selected Issue branch or an open PR from it remains.
     fn remaining(&mut self, issue: &IssueUrl) -> Result<bool>;
+    /// The first part of the issue's text an account that is not a Trusted
+    /// account edited since its last `ready-for-agent` labelling by a Trusted
+    /// account, if one did.
+    fn untrusted_edit(&mut self, issue: &IssueUrl) -> Result<Option<IssueText>>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
     /// Whether the run was interrupted.
@@ -210,6 +226,10 @@ impl Outside for OnGitHub<'_> {
             .pull_requests_with_head_prefix(issue, self.branch)?
             .iter()
             .any(|pr| pr.head == self.branch && pr.state == crate::github::PrState::Open))
+    }
+
+    fn untrusted_edit(&mut self, issue: &IssueUrl) -> Result<Option<IssueText>> {
+        trust::untrusted_edit_since_ready(&self.github, issue)
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
@@ -348,6 +368,7 @@ impl<'a> Claimed<'a> {
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
             Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
+            Ending::Waiting => self.hand_back(outside),
             // A NotReproduced ending was dealt with above.
             Ending::NotReproduced => {}
             Ending::BeforeDelivery if self.security_fix => {}
@@ -404,6 +425,54 @@ impl<'a> Claimed<'a> {
                      hand: {}",
                     issue.number,
                     labels::by_hand(issue, &[IN_PROGRESS], &[AGENT_FAILED])
+                ),
+            );
+        }
+    }
+
+    /// [`Ending::Waiting`], through `outside`: label the Spec
+    /// `ready-for-agent` in place of `in-progress`, in one request that keeps
+    /// its other labels, or `needs-triage` if an account that is not a
+    /// Trusted account edited it since its last Trusted `ready-for-agent`
+    /// labelling. One no longer `in-progress` is left as it is. It finishes
+    /// after an interrupt, and a failure is a warning naming what to run by
+    /// hand.
+    fn hand_back(&self, outside: &mut impl Outside) {
+        let issue = self.issue;
+        if let Err(error) = retry_if_interrupted(outside, |outside| {
+            let untrusted = outside.untrusted_edit(issue)?;
+            let (off, on): (&[Label], &[Label]) = match untrusted {
+                None => (&[IN_PROGRESS], &[READY_FOR_AGENT]),
+                Some(_) => (&[IN_PROGRESS, READY_FOR_AGENT], &[labels::NEEDS_TRIAGE]),
+            };
+            let edit = Edit::of(issue, outside.labels(issue)?, off, on);
+            if !edit.takes_off(IN_PROGRESS) {
+                return Ok(());
+            }
+            outside.step(match untrusted {
+                None => format!(
+                    "labelling #{} {READY_FOR_AGENT}, in place of {IN_PROGRESS}: its Spec run \
+                     is only waiting",
+                    issue.number
+                ),
+                Some(text) => format!(
+                    "labelling #{} {}, in place of {IN_PROGRESS}: its Spec run is only \
+                     waiting, but its {text} was edited by an account that is not a Trusted \
+                     account since it was last labelled {READY_FOR_AGENT}",
+                    issue.number,
+                    labels::NEEDS_TRIAGE
+                ),
+            });
+            outside.apply(&edit)
+        }) {
+            outside.warn(
+                &error,
+                format!(
+                    "could not hand #{} back after its Spec run ended only waiting; unless an \
+                     account that is not a Trusted account edited it since it was last labelled \
+                     {READY_FOR_AGENT}, run: {}",
+                    issue.number,
+                    labels::by_hand(issue, &[IN_PROGRESS], &[READY_FOR_AGENT])
                 ),
             );
         }
@@ -608,6 +677,7 @@ mod in_memory {
     use super::{Outside, State};
     use crate::issue::IssueUrl;
     use crate::labels::{Edit, Labels};
+    use crate::trust::IssueText;
 
     /// A read or a change of [`Outside`] that can fail.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +685,7 @@ mod in_memory {
         Labels,
         State,
         Started,
+        Trust,
         Edit,
     }
 
@@ -627,6 +698,9 @@ mod in_memory {
         State,
         /// It asked whether the issue was started on origin.
         Started,
+        /// It asked whether an untrusted account edited the issue since its
+        /// last Trusted `ready-for-agent` labelling.
+        Trust,
         /// It applied an Edit, taking `off` off the issue and putting `on`
         /// on it, which leaves it with `labels`.
         Edit {
@@ -653,6 +727,9 @@ mod in_memory {
         pub started: bool,
         pub interrupted: bool,
         pub stop: Option<crate::logs::stop::Ending>,
+        /// The issue's text an untrusted account edited since its last
+        /// Trusted `ready-for-agent` labelling, if any.
+        pub untrusted: Option<IssueText>,
         /// Each read or edit that fails, with how many times more it does.
         failing: Vec<(Fails, usize)>,
         /// Every call made, in order.
@@ -724,6 +801,12 @@ mod in_memory {
 
         fn remaining(&mut self, issue: &IssueUrl) -> Result<bool> {
             self.started(issue)
+        }
+
+        fn untrusted_edit(&mut self, _: &IssueUrl) -> Result<Option<IssueText>> {
+            self.calls.push(Call::Trust);
+            self.fail_if(Fails::Trust)?;
+            Ok(self.untrusted)
         }
 
         fn apply(&mut self, edit: &Edit) -> Result<()> {
@@ -1204,6 +1287,113 @@ mod tests {
         issue.stop = Some(crate::logs::stop::Ending::Triage);
 
         claimed.end(&mut issue, Ending::Failed);
+
+        assert_eq!(labels(&issue), ["in-progress", "needs-triage"]);
+    }
+
+    #[test]
+    fn a_waiting_spec_run_puts_ready_for_agent_back_in_place_of_in_progress() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["enhancement", "ready-for-agent", "agent-failed"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = true;
+
+        claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Trust,
+                Call::Labels,
+                step(
+                    "labelling #7 ready-for-agent, in place of in-progress: its Spec run is only waiting"
+                ),
+                edit(
+                    &["in-progress"],
+                    &["ready-for-agent"],
+                    &["enhancement", "ready-for-agent"]
+                ),
+            ]
+        );
+        assert_eq!(labels(&issue), ["enhancement", "ready-for-agent"]);
+    }
+
+    #[test]
+    fn a_waiting_spec_run_edited_by_an_untrusted_account_is_labelled_needs_triage() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.untrusted = Some(IssueText::Title);
+
+        claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Trust,
+                Call::Labels,
+                step(
+                    "labelling #7 needs-triage, in place of in-progress: its Spec run is only \
+                     waiting, but its title was edited by an account that is not a Trusted \
+                     account since it was last labelled ready-for-agent"
+                ),
+                edit(&["in-progress"], &["needs-triage"], &["needs-triage"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_waiting_spec_run_whose_spec_lost_its_claim_meanwhile_is_left_as_it_is() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.labels = vec!["ready-for-human".to_string()];
+
+        claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(issue.calls, [Call::Trust, Call::Labels]);
+        assert_eq!(labels(&issue), ["ready-for-human"]);
+    }
+
+    #[test]
+    fn a_waiting_spec_run_that_cannot_check_trust_keeps_its_claim_and_warns() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.interrupted = true;
+        issue = issue.failing(Fails::Trust);
+
+        claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Trust,
+                Call::Interrupted,
+                Call::Trust,
+                Call::Warn {
+                    error: "gh: Trust failed: HTTP 502".to_string(),
+                    warning: "could not hand #7 back after its Spec run ended only waiting; \
+                         unless an account that is not a Trusted account edited it since it was \
+                         last labelled ready-for-agent, run: gh api --method DELETE \
+                         repos/acme/widgets/issues/7/labels/in-progress && gh api --method POST \
+                         repos/acme/widgets/issues/7/labels -f 'labels[]=ready-for-agent'"
+                        .to_string(),
+                },
+            ]
+        );
+        assert_eq!(labels(&issue), ["in-progress"]);
+    }
+
+    #[test]
+    fn a_stopped_waiting_spec_run_goes_to_triage() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = true;
+        issue.stop = Some(crate::logs::stop::Ending::Triage);
+
+        claimed.end(&mut issue, Ending::Waiting);
 
         assert_eq!(labels(&issue), ["in-progress", "needs-triage"]);
     }

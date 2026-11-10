@@ -167,6 +167,50 @@ impl TicketBoard {
         }
     }
 
+    /// Whether the Spec run is only waiting: no Ticket's Run failed or was
+    /// interrupted, and every open Ticket waits on a person or on other work.
+    /// It waits if it is an Unready Ticket or outside the Spec's repository,
+    /// or if it is blocked only by issues outside the Spec and by Tickets
+    /// that wait themselves. A Ticket in a blocking cycle doesn't wait:
+    /// nothing will unblock it until someone reshapes the Tickets.
+    pub(super) fn only_waiting(&self) -> bool {
+        let failed = self.standings.values().any(|standing| {
+            matches!(
+                standing,
+                Standing::Running
+                    | Standing::Ended(Ended::Failed { .. } | Ended::Interrupted { .. })
+            )
+        });
+        let open = || self.tickets.iter().filter(|ticket| ticket.is_open);
+        !failed
+            && open().all(|ticket| cycle_through(&ticket.issue, &self.tickets).is_none())
+            && open().all(|ticket| self.waits(ticket))
+    }
+
+    /// Whether open `ticket`, in no blocking cycle, waits on a person or on
+    /// other work, as [`TicketBoard::only_waiting`] says. One whose bug was
+    /// not reproduced waits once it is labelled `needs-info`; one otherwise
+    /// ended in this Spec run, landed but still open included, doesn't.
+    fn waits(&self, ticket: &Ticket) -> bool {
+        match self.standings.get(&ticket.issue.identity()) {
+            None | Some(Standing::Ended(Ended::NotReproduced { .. })) => {}
+            Some(_) => return false,
+        }
+        if !self.spec.in_same_repo(&ticket.issue)
+            || ticket.labels.unready().is_some()
+            || ticket.has_sub_issues
+        {
+            return true;
+        }
+        !ticket.open_blockers.is_empty()
+            && ticket.open_blockers.iter().all(|blocker| {
+                self.tickets
+                    .iter()
+                    .find(|ticket| ticket.issue.identity() == blocker.issue.identity())
+                    .is_none_or(|blocker| blocker.is_open && self.waits(blocker))
+            })
+    }
+
     /// The open Tickets' names and reasons they are not done, in the order
     /// they were read, without the unready prefix or Session trace paths.
     pub(super) fn not_done(&self) -> Vec<String> {

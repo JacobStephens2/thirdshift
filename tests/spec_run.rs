@@ -2314,6 +2314,127 @@ fn an_unready_tickets_outside_blockers_are_reported_in_the_checklist_log_and_rec
     assert_eq!(tickets[1]["blockers"][0]["title"], "Release the migration");
 }
 
+/// A Spec #20, labelled `ready-for-agent` and `enhancement`, whose Tickets are
+/// `tickets`, as [`spec_of`] makes them.
+fn ready_spec_of(tickets: &[(u32, &[u32])]) -> Scenario {
+    let scenario = spec_of(tickets);
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    scenario
+}
+
+/// Assert the Spec run ended only waiting: a Failed spec run as before, its
+/// Spec handed back `ready-for-agent`, with neither `in-progress` nor
+/// `agent-failed`.
+fn assert_waiting_spec_run(scenario: &Scenario, result: &support::RunResult, checklist: &str) {
+    assert_failed_spec_run(scenario, result, checklist);
+    assert_eq!(
+        scenario.issue_labels(SPEC),
+        ["enhancement", "ready-for-agent"]
+    );
+    assert_contains(
+        &result.stderr,
+        "thirdshift: labelling #20 ready-for-agent, in place of in-progress: its Spec run is only waiting\n",
+    );
+}
+
+#[test]
+fn a_spec_run_waiting_only_on_unready_tickets_hands_its_spec_back() {
+    let scenario = ready_spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[]), (25, &[])]);
+    scenario.issue_labelled(21, &["ready-for-human"]);
+    scenario.issue_labelled(23, &["needs-info"]);
+    scenario.issue_labelled(24, &["needs-triage"]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_waiting_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 unready: labelled ready-for-human\n\
+         - [ ] #22 blocked by #21\n\
+         - [ ] #23 unready: labelled needs-info\n\
+         - [ ] #24 unready: labelled needs-triage\n\
+         - [x] #25 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["25"]);
+}
+
+#[test]
+fn a_spec_run_waiting_on_an_outside_blocker_or_a_foreign_ticket_hands_its_spec_back() {
+    let scenario = ready_spec_of(&[(21, &[90]), (22, &[21]), (23, &[]), (24, &[])]);
+    let mut state = scenario.gh_state();
+    state["issue_urls"] = serde_json::json!({"23": "https://github.com/other/widgets/issues/23"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_waiting_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 blocked by #90 (outside the Spec)\n\
+         - [ ] #22 blocked by #21\n\
+         - [ ] https://github.com/other/widgets/issues/23 unready: outside the Spec's repository\n\
+         - [x] #24 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["24"]);
+}
+
+#[test]
+fn a_spec_run_with_a_failed_ticket_is_labelled_agent_failed_though_others_only_wait() {
+    let scenario = ready_spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["ready-for-human"]);
+    scenario.agent_does_for(22, "exit 1");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "agent-failed"]);
+}
+
+#[test]
+fn a_spec_run_with_a_blocking_cycle_is_labelled_agent_failed() {
+    let scenario = ready_spec_of(&[(21, &[22]), (22, &[21]), (23, &[])]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        "- [ ] #21 in a cycle: #21 blocked by #22 blocked by #21\n\
+         - [ ] #22 in a cycle: #22 blocked by #21 blocked by #22\n\
+         - [x] #23 landed with https://github.com/acme/widgets/pull/1\n",
+    );
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "agent-failed"]);
+}
+
+#[test]
+fn a_waiting_spec_edited_by_an_untrusted_account_is_labelled_needs_triage() {
+    let scenario = ready_spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+    let mut state = scenario.gh_state();
+    // The later labelling, by an outsider, is not one that counts.
+    state["trust_events"] = serde_json::json!({"20": [
+        {"created_at": "2020-01-04T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+        {"created_at": "2020-01-06T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+    ]});
+    state["edits"] = serde_json::json!({"20": [
+        {"kind": "title", "by": "outsider", "at": "2020-01-05T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "needs-triage"]);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: labelling #20 needs-triage, in place of in-progress: its Spec run is only \
+         waiting, but its title was edited by an account that is not a Trusted account since it \
+         was last labelled ready-for-agent\n",
+    );
+}
+
 #[test]
 fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
     let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);

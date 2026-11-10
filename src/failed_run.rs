@@ -30,6 +30,12 @@ impl FailedRun {
     pub fn held(&self) -> bool {
         is_hold(&self.error)
     }
+
+    /// Whether it is a Spec run that ended only waiting, uninterrupted: every
+    /// Ticket not done waits on a person or on other work, and none failed.
+    pub fn waiting(&self) -> bool {
+        !self.interrupted && self.error.is::<crate::spec_run::OnlyWaiting>()
+    }
 }
 
 /// Whether `error` is a policy, security or merge hold: a Self-merge held
