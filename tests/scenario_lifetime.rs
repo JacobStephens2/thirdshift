@@ -160,14 +160,20 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         // Emergency cleanup bounds a regression in the guardian.
         if self.harness.try_wait().ok().flatten().is_none() {
+            // SAFETY: the group is the unreaped harness's own.
             unsafe { libc::kill(-(self.harness.id() as libc::pid_t), libc::SIGKILL) };
         }
         let _ = self.harness.wait();
         for &(_, pid) in &self.owned {
             let mut status = 0;
+            // SAFETY: only a process adopted here and still unreaped is
+            // killed, so its pid cannot have been reused; one its guardian
+            // reaped is left alone.
             unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, &mut status, libc::WNOHANG);
+                if libc::waitpid(pid, &mut status, libc::WNOHANG) == 0 {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
             }
         }
     }

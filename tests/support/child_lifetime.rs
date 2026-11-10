@@ -237,6 +237,11 @@ fn fixture_guardian() {
 /// in a process group or session of its own. Dropping the owner, or the
 /// harness dying for any reason, closes the lease every guardian polls; the
 /// guardian then kills and reaps everything it owns.
+///
+/// Unlike [`FixtureChild`]'s guardian, this one is forked rather than
+/// exec'd, so a Run keeps its exact `Command`, stdio and process id, and
+/// costs no new test process. Being a fork of a multithreaded process, it
+/// must allocate nothing and take no locks.
 pub struct OwnedRuns {
     /// Write end of the lease; only this process holds it outside an exec.
     lease: Option<OwnedFd>,
@@ -273,32 +278,36 @@ impl OwnedRuns {
 
     /// Spawn `command` with its stdio as configured, under a new guardian.
     pub fn spawn(&self, command: &mut Command) -> OwnedRun {
-        let (report, guardian_report) = UnixStream::pair().unwrap();
-        let fds = [
-            self.lease_reader.as_raw_fd(),
-            guardian_report.as_raw_fd(),
-            self.done.as_ref().unwrap().as_raw_fd(),
-        ];
+        let (mut report, guardian_report) = UnixStream::pair().unwrap();
+        let fds = GuardianFds {
+            lease: self.lease_reader.as_raw_fd(),
+            report: guardian_report.as_raw_fd(),
+            done: self.done.as_ref().unwrap().as_raw_fd(),
+        };
         // SAFETY: the post-fork closure calls only async-signal-safe
         // functions, and the processes that do not exec never return.
         unsafe { command.pre_exec(move || start_guarded(fds)) };
         let mut launcher = command.spawn().expect("could not start thirdshift");
         drop(guardian_report);
+        // Child::wait closes stdin, so the Run's pipes are taken first.
+        let (stdin, stdout, stderr) = (
+            launcher.stdin.take(),
+            launcher.stdout.take(),
+            launcher.stderr.take(),
+        );
         // The launcher only forks the guardian, which outlives it.
         assert!(launcher.wait().unwrap().success());
-        let mut run = OwnedRun {
-            pid: 0,
+        let Report::Value(pid) = read_report(&mut report) else {
+            panic!("the Run's guardian ended at once");
+        };
+        OwnedRun {
+            pid: pid as u32,
             report: Some(report),
             status: None,
-            stdin: launcher.stdin.take(),
-            stdout: launcher.stdout.take(),
-            stderr: launcher.stderr.take(),
-        };
-        run.pid = run
-            .read_report()
-            .flatten()
-            .expect("the Run's guardian ended at once") as u32;
-        run
+            stdin,
+            stdout,
+            stderr,
+        }
     }
 }
 
@@ -306,8 +315,25 @@ impl Drop for OwnedRuns {
     fn drop(&mut self) {
         drop(self.lease.take());
         drop(self.done.take());
-        // EOF once every guardian has reaped what it owned and exited.
-        let _ = std::io::Read::read_to_end(&mut self.done_reader, &mut Vec::new());
+        // Guardians write nothing: the pipe reads EOF once every one has
+        // reaped what it owned and exited.
+        let mut done = libc::pollfd {
+            fd: self.done_reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let deadline = Instant::now() + super::WAIT_BOUND;
+        // SAFETY: poll inspects only this owner's done pipe.
+        while unsafe { libc::poll(&mut done, 1, 10) } < 1 || done.revents == 0 {
+            if Instant::now() >= deadline {
+                assert!(
+                    thread::panicking(),
+                    "a Scenario's Run guardians were still cleaning up after {:?}",
+                    super::WAIT_BOUND
+                );
+                return;
+            }
+        }
     }
 }
 
@@ -318,23 +344,25 @@ impl OwnedRun {
 
     pub fn try_wait(&mut self) -> Option<ExitStatus> {
         if self.status.is_none() {
-            let report = self.report.as_ref().unwrap();
+            let report = self.report.as_mut().unwrap();
             report.set_nonblocking(true).unwrap();
-            let status = self.read_report();
-            self.report
-                .as_ref()
-                .unwrap()
-                .set_nonblocking(false)
-                .unwrap();
-            self.record(status.expect("the Run's guardian ended first"));
+            let read = read_report(report);
+            report.set_nonblocking(false).unwrap();
+            match read {
+                Report::Value(status) => self.record(status),
+                Report::Pending => {}
+                Report::Closed => panic!("the Run's guardian ended first"),
+            }
         }
         self.status
     }
 
     pub fn wait(&mut self) -> ExitStatus {
         if self.status.is_none() {
-            let status = self.read_report();
-            self.record(status.expect("the Run's guardian ended first"));
+            let Report::Value(status) = read_report(self.report.as_mut().unwrap()) else {
+                panic!("the Run's guardian ended first");
+            };
+            self.record(status);
         }
         self.status.unwrap()
     }
@@ -362,38 +390,58 @@ impl OwnedRun {
         }
     }
 
-    /// The next raw value the guardian reports, `None` at EOF, or
-    /// `Some(None)` when nonblocking and none has arrived.
-    fn read_report(&mut self) -> Option<Option<i32>> {
-        let mut bytes = [0; 4];
-        let mut read = 0;
-        while read < bytes.len() {
-            match std::io::Read::read(self.report.as_mut().unwrap(), &mut bytes[read..]) {
-                Ok(0) => return None,
-                Ok(n) => read += n,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && read == 0 => {
-                    return Some(None);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => panic!("could not read the Run's guardian: {error}"),
-            }
-        }
-        Some(Some(i32::from_ne_bytes(bytes)))
+    fn record(&mut self, status: i32) {
+        self.status = Some(ExitStatus::from_raw(status));
+        // Lets the guardian reap the Run, as waiting on a Child would, and
+        // waits until it has.
+        let mut report = self.report.take().unwrap();
+        report.shutdown(std::net::Shutdown::Write).unwrap();
+        let _ = std::io::Read::read_to_end(&mut report, &mut Vec::new());
     }
+}
 
-    fn record(&mut self, status: Option<i32>) {
-        if let Some(status) = status {
-            self.status = Some(ExitStatus::from_raw(status));
-            // Lets the guardian reap the Run, as waiting on a Child would,
-            // and waits until it has.
-            let mut report = self.report.take().unwrap();
-            report.set_nonblocking(false).unwrap();
-            report.shutdown(std::net::Shutdown::Write).unwrap();
-            let _ = std::io::Read::read_to_end(&mut report, &mut Vec::new());
+/// What a read from a guardian's report socket found. A guardian reports
+/// its Run's process id, then the Run's raw wait status.
+enum Report {
+    Value(i32),
+    /// Nothing yet, on a nonblocking socket.
+    Pending,
+    /// The guardian has closed its end.
+    Closed,
+}
+
+fn read_report(report: &mut UnixStream) -> Report {
+    let mut bytes = [0; 4];
+    let mut read = 0;
+    while read < bytes.len() {
+        match std::io::Read::read(report, &mut bytes[read..]) {
+            Ok(0) => return Report::Closed,
+            Ok(n) => read += n,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && read == 0 => {
+                return Report::Pending;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => panic!("could not read the Run's guardian: {error}"),
         }
+    }
+    Report::Value(i32::from_ne_bytes(bytes))
+}
+
+/// The harness's descriptors a guardian keeps: the Scenario's lease, the
+/// Run's report socket and the Scenario's done pipe.
+#[derive(Clone, Copy)]
+struct GuardianFds {
+    lease: libc::c_int,
+    report: libc::c_int,
+    done: libc::c_int,
+}
+
+impl GuardianFds {
+    fn all(self) -> [libc::c_int; 3] {
+        [self.lease, self.report, self.done]
     }
 }
 
@@ -407,9 +455,11 @@ fn pipe() -> (OwnedFd, OwnedFd) {
 
 /// Runs in the forked launcher before exec. The launcher forks the guardian
 /// and exits; the guardian forks the process that returns here to exec.
-fn start_guarded([lease, report, done]: [libc::c_int; 3]) -> std::io::Result<()> {
-    // SAFETY: fork, prctl and _exit are async-signal-safe.
+fn start_guarded(fds: GuardianFds) -> std::io::Result<()> {
+    // SAFETY: open, getdents64, fcntl, close, fork, prctl and _exit are
+    // async-signal-safe.
     unsafe {
+        close_inherited(fds.all());
         match libc::fork() {
             -1 => return Err(std::io::Error::last_os_error()),
             0 => {}
@@ -421,19 +471,68 @@ fn start_guarded([lease, report, done]: [libc::c_int; 3]) -> std::io::Result<()>
         match libc::fork() {
             -1 => libc::_exit(1),
             0 => Ok(()),
-            run => guard(run, lease, report, done),
+            run => guard(run, fds),
         }
+    }
+}
+
+/// Close every inherited close-on-exec descriptor but `keep` before forking
+/// again. Unlike the exec of a plain spawn, these forks would otherwise hold
+/// the harness's descriptors for milliseconds: an executable another test
+/// is writing would fail to start with ETXTBSY. std's exec-error pipe goes
+/// too, so a failed exec shows as the Run exiting instead.
+unsafe fn close_inherited(keep: [libc::c_int; 3]) {
+    unsafe {
+        let dir = libc::open(
+            c"/proc/self/fd".as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        );
+        if dir == -1 {
+            return;
+        }
+        let mut buffer = [0u8; 1024];
+        loop {
+            let read = libc::syscall(libc::SYS_getdents64, dir, buffer.as_mut_ptr(), buffer.len());
+            if read <= 0 {
+                break;
+            }
+            // Each linux_dirent64 has its record length at byte 16 and its
+            // NUL-terminated name from byte 19.
+            let mut offset = 0;
+            while offset < read as usize {
+                let length = u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]);
+                let mut fd: libc::c_int = 0;
+                let mut named = false;
+                for &byte in &buffer[offset + 19..offset + length as usize] {
+                    if !byte.is_ascii_digit() {
+                        break;
+                    }
+                    fd = fd * 10 + libc::c_int::from(byte - b'0');
+                    named = true;
+                }
+                if named
+                    && fd > 2
+                    && fd != dir
+                    && !keep.contains(&fd)
+                    && libc::fcntl(fd, libc::F_GETFD) & libc::FD_CLOEXEC != 0
+                {
+                    libc::close(fd);
+                }
+                offset += length as usize;
+            }
+        }
+        libc::close(dir);
     }
 }
 
 /// The guardian's loop. It allocates nothing and takes no locks: it is a
 /// fork of a multithreaded process that never execs.
-unsafe fn guard(
-    run: libc::pid_t,
-    lease: libc::c_int,
-    mut report: libc::c_int,
-    done: libc::c_int,
-) -> ! {
+unsafe fn guard(run: libc::pid_t, fds: GuardianFds) -> ! {
+    let GuardianFds {
+        lease,
+        mut report,
+        done,
+    } = fds;
     unsafe {
         // Outside the harness's process group, a signal to that group or
         // terminal leaves the guardian to clean up after it.
