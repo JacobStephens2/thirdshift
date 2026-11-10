@@ -28,6 +28,9 @@ use crate::issue::IssueUrl;
 use crate::labels::{self, Edit, Label, Labels, READY_FOR_AGENT};
 use crate::progress;
 use crate::run::Goal;
+use crate::security::review::{
+    PrivateReportMaterial, private_report_material, private_report_material_if_configured,
+};
 use crate::trust::{self, IssueText};
 
 /// The label of a Claimed issue.
@@ -77,7 +80,16 @@ pub struct Claim<'a> {
     launch: &'a Git,
     claimed: Claimed<'a>,
     branch: String,
+    /// Captured before the run's sessions: one can read a private Security
+    /// report and delete it, and its failure can be posted in a comment.
+    private_reports: Vec<PrivateReportMaterial>,
 }
+
+/// The comment posted in place of one that included private Security
+/// review material.
+const WITHHELD: &str = "thirdshift's Run on this issue ended, but how it ended is withheld: it \
+                        included private Security review material. Put `ready-for-agent` back \
+                        to retry.";
 
 /// Make the Claim on `issue`, from its Launch directory `launch`: label it
 /// `in-progress`, in place of `ready-for-agent` and `agent-failed` if it has
@@ -99,10 +111,18 @@ pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Cl
         launch,
         claimed,
         branch: branch.into(),
+        private_reports: vec![private_report_material_if_configured(&issue.repo())],
     })
 }
 
 impl Claim<'_> {
+    /// Capture the private Security reports again, for a run whose logs were
+    /// configured only after it made the Claim, before its sessions start.
+    pub fn capture_private_reports(&mut self) {
+        let reports = private_report_material(&self.claimed.issue.repo());
+        self.private_reports.push(reports);
+    }
+
     /// End the Claim once the Run or the Spec run that made it has ended as
     /// `ending` says:
     ///
@@ -146,6 +166,20 @@ impl Claim<'_> {
         if self.claimed.end(outside, ending)
             && let Some(comment) = comment
         {
+            // A prompt not to copy a private Security report is not a
+            // boundary, so any stored report fragment replaces the whole
+            // comment.
+            let current = private_report_material_if_configured(&self.claimed.issue.repo());
+            let comment = if self
+                .private_reports
+                .iter()
+                .chain([&current])
+                .any(|reports| reports.exposes(&comment))
+            {
+                format!("{}\n\n{WITHHELD}\n", crate::github::GENERATED)
+            } else {
+                comment
+            };
             self.claimed.post(outside, &comment);
         }
     }

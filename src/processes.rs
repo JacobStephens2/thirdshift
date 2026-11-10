@@ -1011,6 +1011,9 @@ fn run_issue_branch(
     // for the issue.
     logs::begin(Begin::Process { name, pass: false });
     logs::configured(config);
+    if let Some(made) = &mut claim.claim {
+        made.capture_private_reports();
+    }
     let logs = session::Logs::of_run(&issue);
     let mut base_fix = BaseFix::new(None, BaseFixAsk::Forbid);
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);

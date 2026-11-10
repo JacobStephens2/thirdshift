@@ -537,3 +537,52 @@ fn a_recovery_comment_that_cannot_be_posted_is_a_warning_and_the_run_still_fails
         result.stderr
     );
 }
+
+/// A private Security report line a failed session quoted, for the test below.
+const PRIVATE_LINE: &str = "private proof-of-concept line for an unfixed finding";
+
+#[test]
+fn a_recovery_comment_never_posts_private_security_report_material_its_cause_quoted() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let report = scenario.path("home/.thirdshift/logs/acme/widgets/security-reviews/7-earlier");
+    std::fs::create_dir_all(&report).unwrap();
+    std::fs::write(
+        report.join("pre-existing.json"),
+        serde_json::json!([{
+            "fingerprint": "private-fingerprint",
+            "title": "A private finding title",
+            "description": "A private description of the unfixed finding",
+            "proof_of_concept": {
+                "test": "#[test]\nfn private() {}",
+                "command": "cargo test private",
+                "head_exit_code": 101,
+                "merge_base_exit_code": 101,
+                "notes": format!("Private notes on the unfixed finding.\n{PRIVATE_LINE}"),
+                "severity": "medium",
+                "fix_size": "single"
+            }
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    scenario.agent_does(&format!(
+        r#"
+echo "feature" > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+cat > "$FAKE_CLAUDE_AFTER_RESULT" <<'EVENTS'
+{{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["session stopped","{PRIVATE_LINE}"]}}
+EVENTS
+exit 1
+"#
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
+    for comment in scenario.issue_comments(7) {
+        assert!(!comment.contains(PRIVATE_LINE), "{comment}");
+    }
+}
