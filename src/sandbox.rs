@@ -40,11 +40,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::harness::Harness;
 use crate::proxy;
-use crate::resend_key::Credentials;
+use crate::resend_key::{Credentials, OpenCodeKeys};
 use crate::{config, interrupt};
 
 pub(crate) mod code_grader;
@@ -98,14 +98,14 @@ impl std::error::Error for NoLogin {}
 #[derive(Default)]
 pub(crate) struct Secrets {
     pub claude_setup_token: Option<String>,
-    pub opencode_api_key: Option<String>,
+    pub opencode_keys: OpenCodeKeys,
 }
 
 impl From<&Credentials> for Secrets {
     fn from(credentials: &Credentials) -> Self {
         Secrets {
             claude_setup_token: credentials.claude_setup_token(),
-            opencode_api_key: credentials.opencode_api_key(),
+            opencode_keys: credentials.opencode_keys(),
         }
     }
 }
@@ -1207,25 +1207,28 @@ impl Drop for GrokGuard {
 
 /// An OpenCode Trial's provider key: through its environment, never
 /// production's `opencode.db`, which holds its credentials beside its
-/// sessions. The key comes from `opencode.api_key` in the Credentials, and
-/// the Trial's config sets the provider's `apiKey` to `{env:…}` naming the
-/// variable that carries it. Without a key, the Trial fails before its
-/// session starts.
+/// sessions. The key is the one the Credentials hold for the provider the
+/// Model names, under `[opencode.keys]`, else their single `opencode.api_key`,
+/// so OpenCode sessions on different providers each get their own. The
+/// Trial's config sets that provider's `apiKey` to `{env:…}` naming the
+/// variable that carries it. Without a key, the Trial fails before its session starts.
 fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
-    let Some(key) = request.secrets.opencode_api_key.as_deref() else {
+    let provider = trial_provider(request.model)?;
+    let Some(key) = request.secrets.opencode_keys.for_provider(provider) else {
         let path = config::home()
             .map(|home| home.join(".thirdshift/credentials.toml"))
             .unwrap_or_else(|_| PathBuf::from("~/.thirdshift/credentials.toml"));
         return Err(anyhow::Error::new(NoLogin {
             diagnostic: format!(
-                "OpenCode Trial login failed: no opencode.api_key in {}; \
-                 add the provider key as api_key under [opencode] (mode 600)",
+                "OpenCode Trial login failed: no key for provider {provider} in {}; \
+                 add it as {provider} = \"…\" under [opencode.keys], or as api_key \
+                 under [opencode] for every provider (mode 600)",
                 path.display()
             ),
         }));
     };
     environment.set_str(OPENCODE_API_KEY_ENV, key);
-    environment.set_str(OPENCODE_CONFIG_ENV, &provider_config(request.model)?);
+    environment.set_str(OPENCODE_CONFIG_ENV, &provider_config(provider));
     Ok(())
 }
 
@@ -1264,17 +1267,22 @@ fn kimi_into(request: &Request<'_>, environment: &mut Environment) -> Result<()>
     Ok(())
 }
 
-/// The Trial's OpenCode config for `model`: the provider's `apiKey` set to
-/// `{env:…}` naming the variable that carries the key, with web search and
-/// web fetch denied, since a Trial runs behind the allowlisting proxy.
-fn provider_config(model: Option<&str>) -> Result<String> {
-    let Some(provider) = proxy::opencode_provider(model) else {
-        bail!(
+/// The provider an OpenCode Trial's `model` names, which its key and config
+/// are for. A Model without one fails before the session starts.
+fn trial_provider(model: Option<&str>) -> Result<&str> {
+    proxy::opencode_provider(model).ok_or_else(|| {
+        anyhow!(
             "OpenCode Trial login failed: the Model must name its provider as \
              <provider>/<model>, so the Trial's config can set that provider's apiKey"
-        );
-    };
-    Ok(serde_json::json!({
+        )
+    })
+}
+
+/// The Trial's OpenCode config for `provider`: its `apiKey` set to `{env:…}`
+/// naming the variable that carries the key, with web search and web fetch
+/// denied, since a Trial runs behind the allowlisting proxy.
+fn provider_config(provider: &str) -> String {
+    serde_json::json!({
         "provider": {
             provider: { "apiKey": format!("{{env:{OPENCODE_API_KEY_ENV}}}") }
         },
@@ -1283,7 +1291,7 @@ fn provider_config(model: Option<&str>) -> Result<String> {
             "websearch": "deny",
         }
     })
-    .to_string())
+    .to_string()
 }
 
 /// The Harness binaries' directory inside the sandbox, outside every home.
@@ -1504,7 +1512,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" && ");
             let secrets = Secrets {
-                opencode_api_key: Some("fixture-key".into()),
+                opencode_keys: opencode_keys("[opencode]\napi_key = \"fixture-key\"\n"),
                 ..Secrets::default()
             };
             let model = (harness == Harness::OpenCode).then_some("anthropic/claude");
@@ -1951,7 +1959,7 @@ mod tests {
         .unwrap();
         let secrets = Secrets {
             claude_setup_token: None,
-            opencode_api_key: Some("opencode-provider-key".into()),
+            opencode_keys: opencode_keys("[opencode]\napi_key = \"opencode-provider-key\"\n"),
         };
         let script = "test -n \"$THIRDSHIFT_OPENCODE_API_KEY\" || exit 21; \
             test ! -e \"$HOME/.local/share/opencode/opencode.db\" || exit 22; \
@@ -1981,6 +1989,84 @@ mod tests {
         assert_eq!(config["permission"]["websearch"], "deny");
     }
 
+    /// The OpenCode keys a Credentials file holding `text` gives a Trial.
+    fn opencode_keys(text: &str) -> OpenCodeKeys {
+        let home = tempfile::TempDir::new().unwrap();
+        let path = home.path().join("credentials.toml");
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        Credentials::read_from(path).unwrap().opencode_keys()
+    }
+
+    #[test]
+    fn opencode_seats_with_different_providers_each_get_their_own_key() {
+        if !bwrap_or_skip("opencode keys") {
+            return;
+        }
+        let keys = opencode_keys(
+            "[opencode]\napi_key = \"single-key\"\n\
+             [opencode.keys]\nfireworks-ai = \"fireworks-key\"\nbaseten = \"baseten-key\"\n",
+        );
+        for (model, key) in [
+            (
+                "fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro",
+                "fireworks-key",
+            ),
+            (
+                "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                "baseten-key",
+            ),
+            ("anthropic/claude", "single-key"),
+        ] {
+            let layout = Layout::new();
+            let secrets = Secrets {
+                claude_setup_token: None,
+                opencode_keys: keys.clone(),
+            };
+            let script = "echo \"$THIRDSHIFT_OPENCODE_API_KEY\"";
+            let request = layout.request(Harness::OpenCode, script, secrets, Some(model), &[]);
+            let prepared = prepare(&request).unwrap();
+
+            let output = run_script(&prepared, &layout.repo);
+
+            assert!(
+                output.status.success(),
+                "{model}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                key,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opencode_trial_without_its_providers_key_fails_before_its_session_starts() {
+        if !bwrap_or_skip("opencode key") {
+            return;
+        }
+        let layout = Layout::new();
+        let secrets = Secrets {
+            claude_setup_token: None,
+            opencode_keys: opencode_keys("[opencode.keys]\nfireworks-ai = \"fireworks-key\"\n"),
+        };
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            secrets,
+            Some("baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
+            &[],
+        );
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("login failed"), "{error}");
+        assert!(error.contains("baseten"), "{error}");
+        assert!(error.contains("[opencode.keys]"), "{error}");
+    }
+
     #[test]
     fn an_opencode_trial_naming_an_unknown_provider_fails_before_its_session_starts() {
         if !bwrap_or_skip("opencode provider") {
@@ -1989,7 +2075,7 @@ mod tests {
         let layout = Layout::new();
         let secrets = Secrets {
             claude_setup_token: None,
-            opencode_api_key: Some("opencode-provider-key".into()),
+            opencode_keys: opencode_keys("[opencode]\napi_key = \"opencode-provider-key\"\n"),
         };
         let request = layout.request(
             Harness::OpenCode,
@@ -2022,7 +2108,8 @@ mod tests {
         let error = format!("{:#}", prepare(&request).err().unwrap());
 
         assert!(error.contains("login failed"), "{error}");
-        assert!(error.contains("opencode.api_key"), "{error}");
+        assert!(error.contains("no key for provider acme"), "{error}");
+        assert!(error.contains("api_key under [opencode]"), "{error}");
     }
 
     #[test]
@@ -2034,7 +2121,7 @@ mod tests {
             (Some("model-without-provider"), None),
             (Some("/model"), None),
         ] {
-            match (provider_config(model), provider) {
+            match (trial_provider(model).map(provider_config), provider) {
                 (Ok(config), Some(provider)) => {
                     let config: serde_json::Value = serde_json::from_str(&config).unwrap();
                     assert_eq!(
@@ -2056,7 +2143,7 @@ mod tests {
         let layout = Layout::new();
         let secrets = Secrets {
             claude_setup_token: Some("trial-token".into()),
-            opencode_api_key: None,
+            opencode_keys: OpenCodeKeys::default(),
         };
         let request = layout.request(
             Harness::Claude,

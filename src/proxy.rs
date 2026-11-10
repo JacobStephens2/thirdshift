@@ -37,6 +37,8 @@ const META_HOSTS: &[&str] = &["api.meta.ai"];
 const AGY_HOSTS: &[&str] = &["antigravity-unleash.goog", "play.googleapis.com"];
 /// Fireworks' OpenAI-compatible API, `https://api.fireworks.ai/inference/v1`.
 const FIREWORKS_HOSTS: &[&str] = &["api.fireworks.ai"];
+/// Baseten's OpenAI-compatible Model APIs, `https://inference.baseten.co/v1`.
+const BASETEN_HOSTS: &[&str] = &["inference.baseten.co"];
 /// The managed Kimi Code provider's API and sign-in hosts, from Kimi Code
 /// 2.5.2's defaults, in its two regions.
 const KIMI_HOSTS: &[&str] = &["api.kimi.com", "auth.kimi.com"];
@@ -50,6 +52,7 @@ fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
         "xai" => Some(XAI_HOSTS),
         "meta" => Some(META_HOSTS),
         "fireworks-ai" => Some(FIREWORKS_HOSTS),
+        "baseten" => Some(BASETEN_HOSTS),
         _ => None,
     }
 }
@@ -788,6 +791,26 @@ mod tests {
         // A Kimi Trial must name its Model, whose provider the proxy allows.
         assert!(allowed_hosts(Harness::Kimi, None).is_err());
         assert!(kimi_trial_hosts(Some("kimi-k9"), kimi).is_err());
+    }
+
+    #[test]
+    fn an_opencode_fireworks_or_baseten_model_reaches_its_provider_host_alone() {
+        for (model, provider_host) in [
+            (
+                "fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro",
+                "api.fireworks.ai",
+            ),
+            (
+                "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                "inference.baseten.co",
+            ),
+        ] {
+            assert_eq!(
+                allowed_hosts(Harness::OpenCode, Some(model)).unwrap(),
+                ["opencode.ai", "models.opencode.ai", provider_host],
+                "{model}"
+            );
+        }
     }
 
     #[test]

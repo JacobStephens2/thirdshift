@@ -275,7 +275,7 @@ A **Ticket run** that picks up an existing **Issue branch**, one with no pull re
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Ticket run** started on that machine, such as the **Run notification** address, whether a merged **Command** still emails its Run notification, whether every Ticket run is asked to **Self-merge**, whether a Ticket run may start a **Base fix**, whether a Ticket run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`, and the **Harness**, with a **Model** and **Effort** for each Harness. With no User config, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
 **Credentials**:
-The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and a Claude setup token reserved for **Trials**. The Resend key in the environment wins over the saved key; the User config holds no secret.
+The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and a Claude setup token and OpenCode provider keys reserved for **Trials**: one key per provider, with a single key for any provider without its own. The Resend key in the environment wins over the saved key; the User config holds no secret.
 _Avoid_: secrets file, key file
 
 **Setup**:
