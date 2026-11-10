@@ -82,6 +82,7 @@ pub(super) fn score(
             &task.manifest.checks,
             timeout,
             &caps,
+            false,
         )?);
     }
     Ok(Score {

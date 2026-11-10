@@ -50,6 +50,7 @@ pub(super) fn execute(
         &commands,
         timeout,
         caps,
+        true,
     )?;
     for check in &mut checks {
         if let Some(command) = &check.command {

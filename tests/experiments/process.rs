@@ -197,6 +197,37 @@ git add test_feature.py test_support.py"#,
 }
 
 #[test]
+fn a_shadowed_standard_library_cannot_pass_a_broken_commit() {
+    let fixture = fixture();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&script.replace(
+        "echo implemented > feature.txt\n    git add feature.txt",
+        r#"echo broken > feature.txt
+cat > pathlib.py << 'PY'
+class Path:
+    def __init__(self, *args, **kwargs):
+        self.name = str(args[0]) if args else ""
+    def exists(self):
+        return True
+    def read_text(self):
+        if self.name == "neighbor.txt":
+            return "stable"
+        return "implemented\n"
+PY
+git add feature.txt pathlib.py"#,
+    ));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(result["score"]["passed"], false, "{result}");
+        assert_eq!(result["score"]["checks"][1]["passed"], false, "{result}");
+        assert_eq!(result["score"]["checks"][2]["passed"], true, "{result}");
+    }
+}
+
+#[test]
 fn uncommitted_repairs_do_not_change_the_graded_commit() {
     let fixture = fixture();
     let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();

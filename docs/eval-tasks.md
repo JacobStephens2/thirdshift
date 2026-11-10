@@ -110,8 +110,10 @@ effort = "high"
   by `pass_to_pass`. Selectors share build artifacts in this private copy.
   They run offline in bwrap, each under the Bar's timeout. Nonzero exits and
   timeouts fail checks; the Score records the selector and its reason. Editing
-  the overlaid files cannot help a Trial pass. Process tasks use this table
-  instead of `checks`; review tasks cannot use it.
+  the overlaid files cannot help a Trial pass. Python selectors search the
+  repository after the standard library, so a committed module cannot replace
+  one. Process tasks use this table instead of `checks`; review tasks cannot
+  use it.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the

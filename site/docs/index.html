@@ -1374,8 +1374,10 @@ Stopped-to-ask counts as failed; each Arm&#39;s outcome counts appear beside the
 Verdict. A delivered Trial passes only when its code Grader passes both the
 fail-to-pass and pass-to-pass selectors. The Grader exports the Trial&#39;s final
 commit and overlays the reference fix&#39;s test files and changed shared test
-fakes, replacing any Trial edits to those files. Selectors run offline in
-bwrap, each under the Bar&#39;s timeout, and their failures name the selector in
+fakes, replacing any Trial edits to those files. Python selectors search
+the repository after the standard library, so a committed module cannot
+replace one. Selectors run offline in bwrap, each under the Bar&#39;s timeout,
+and their failures name the selector in
 the Score&#39;s reason. The task&#39;s required <code>process_grading</code> table declares the
 files and selectors; see <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task manifests</a>.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,
