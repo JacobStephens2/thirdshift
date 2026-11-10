@@ -890,6 +890,7 @@ fn home_into(
             user_file(request, binds, ".config/opencode/opencode.json");
             user_file(request, binds, ".config/opencode/AGENTS.md");
         }
+        Harness::Kimi => kimi_into(request, environment)?,
     }
     Ok(guard)
 }
@@ -1085,6 +1086,41 @@ fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result
     Ok(())
 }
 
+/// A Kimi Trial's config, sign-in and provider key. The config holds the
+/// Model aliases and their providers, and the managed provider's sign-in its
+/// token, each copied into the fresh home, under `KIMI_CODE_HOME` when that
+/// is set, as [`login_into`] copies other logins. A provider whose key comes
+/// from an environment variable gets that variable from this process, never
+/// from a file; one that is unset fails before the session starts.
+fn kimi_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
+    use crate::harness::kimi::{Catalog, HOME_ENV, HOME_FILES, HOME_NAME};
+    for file in HOME_FILES {
+        login_into(request, environment, Some(HOME_ENV), HOME_NAME, file)?;
+    }
+    let Some(model) = request.model else {
+        return Ok(()); // The proxy refuses a Trial without its Model.
+    };
+    let provider = Catalog::read()
+        .and_then(|catalog| catalog.provider(model))
+        .map_err(|error| {
+            anyhow::Error::new(NoLogin {
+                diagnostic: format!("Kimi Trial login failed: {error:#}"),
+            })
+        })?;
+    if let Some(name) = provider.api_key_env {
+        let Some(key) = std::env::var_os(&name).filter(|key| !key.is_empty()) else {
+            return Err(anyhow::Error::new(NoLogin {
+                diagnostic: format!(
+                    "Kimi Trial login failed: {name} is not set; the Model {model}'s \
+                     provider takes its key from it"
+                ),
+            }));
+        };
+        environment.set(&name, Path::new(&key));
+    }
+    Ok(())
+}
+
 /// The Trial's OpenCode config for `model`: the provider's `apiKey` set to
 /// `{env:…}` naming the variable that carries the key, with web search and
 /// web fetch denied, since a Trial runs behind the allowlisting proxy.
@@ -1145,6 +1181,25 @@ fn harness_into(
             binds.read_only(binary, &dest);
             dest
         }
+        // npm installs Kimi Code as `dist/main.mjs` in its package, which
+        // also holds the native helpers it loads beside it.
+        Harness::Kimi => match binary
+            .parent()
+            .filter(|dist| dist.ends_with("dist"))
+            .and_then(Path::parent)
+            .filter(|package| package.join("package.json").is_file())
+        {
+            Some(package) => {
+                binds.read_only(package, &dest_dir);
+                dest_dir
+                    .join("dist")
+                    .join(binary.file_name().unwrap_or_default())
+            }
+            None => {
+                binds.read_only(binary, &dest_dir);
+                dest_dir
+            }
+        },
         Harness::Claude | Harness::Agy | Harness::Grok | Harness::Muse | Harness::OpenCode => {
             binds.read_only(binary, &dest_dir);
             dest_dir

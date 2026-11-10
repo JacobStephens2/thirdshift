@@ -10,6 +10,7 @@ Sessions run with no human to answer an approval prompt or a trust question. The
 | Grok Build | `--always-approve`, `GROK_FOLDER_TRUST=0` |
 | Muse Code | `--yolo` |
 | OpenCode | `--auto`, `--standalone` |
+| Kimi Code | `-p`, whose print mode approves every action (`--yolo` and `--auto` are refused beside it), `KIMI_CODE_TRUST_WORKSPACE=1` |
 
 The worktree is the only boundary. This generalises the Codex part of ADR 0012. Sources: `docs/research/harness-candidates.md`, `docs/research/codex-headless-harness.md`.
 
@@ -24,6 +25,6 @@ Exception (#1711): a Triage run with `--read-machine`, or in a repository the Us
 
 ## Consequences
 
-- A Harness's self-update is turned off in each session's environment too (`MUSE_NO_AUTO_UPDATE=1`, `GROK_DISABLE_AUTOUPDATER=1`, `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `OPENCODE_DISABLE_AUTOUPDATE=1`). An update in the middle of a Run could replace the binary a Resume needs. agy ignores `=1`; only `=true` works.
-- Each Harness reads its own instruction file and falls back to the other. thirdshift adds the fallback where a CLI lacks one: a `GEMINI.md` link for agy, and an `AGENTS.md` link for OpenCode, both to `CLAUDE.md` at the worktree root and kept out of git. Grok reads both files when both exist, and thirdshift leaves that as it is.
-- Instructions in the user's `~/.claude/` reach only the Harnesses that read them: Claude, Grok and Muse. They don't reach Codex, agy or OpenCode.
+- A Harness's self-update is turned off in each session's environment too (`MUSE_NO_AUTO_UPDATE=1`, `GROK_DISABLE_AUTOUPDATER=1`, `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `OPENCODE_DISABLE_AUTOUPDATE=1`, `KIMI_CODE_NO_AUTO_UPDATE=1`). An update in the middle of a Run could replace the binary a Resume needs. agy ignores `=1`; only `=true` works.
+- Each Harness reads its own instruction file and falls back to the other. thirdshift adds the fallback where a CLI lacks one: a `GEMINI.md` link for agy, and an `AGENTS.md` link for OpenCode and Kimi Code, each to `CLAUDE.md` at the worktree root and kept out of git. Grok reads both files when both exist, and thirdshift leaves that as it is.
+- Instructions in the user's `~/.claude/` reach only the Harnesses that read them: Claude, Grok and Muse. They don't reach Codex, agy, OpenCode or Kimi Code.

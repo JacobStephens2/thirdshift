@@ -1190,7 +1190,7 @@ wait_minutes = 5   # minutes since the latest shaping event before an issue is R
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
-default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse, opencode or kimi; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -1215,6 +1215,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[harness.kimi]
+model = ""    # the Model alias in Kimi Code's config its sessions run on; default blank, for Kimi Code's default_model
+effort = ""   # leave blank: Kimi Code takes its thinking from its own config; default blank
 
 [triage]
 allow_ready_for_agent = false   # keep recommended ready-for-agent on filed issues; default false
@@ -1526,6 +1530,8 @@ mod tests {
                 "harness.muse.effort",
                 "harness.opencode.model",
                 "harness.opencode.effort",
+                "harness.kimi.model",
+                "harness.kimi.effort",
                 "triage.allow_ready_for_agent",
                 "triage.read_machine",
                 "security.fix",
@@ -1615,7 +1621,7 @@ mod tests {
         for (text, error) in [
             (
                 "[harness]\ndefault = \"gemini\"\n",
-                "harness.default must be claude or codex or agy or grok or muse or opencode, not \"gemini\"",
+                "harness.default must be claude or codex or agy or grok or muse or opencode or kimi, not \"gemini\"",
             ),
             (
                 "[harness]\ndefault = true\n",
