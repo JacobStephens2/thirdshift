@@ -140,14 +140,7 @@ impl Panel {
             },
             spending_limit: spending_limit
                 .map(|value| {
-                    let usd: f64 = value
-                        .parse()
-                        .with_context(|| format!("invalid --panel-spending-limit: {value}"))?;
-                    ensure!(
-                        usd.is_finite() && usd > 0.0,
-                        "--panel-spending-limit must be a positive finite amount in USD"
-                    );
-                    Ok(usd)
+                    super::options::positive("--panel-spending-limit", value, "amount in USD")
                 })
                 .transpose()?,
         }))
@@ -537,21 +530,31 @@ pub(super) fn spend(
     }))
 }
 
+impl SeatSpend {
+    /// The mean of this seat's sessions, once there are some and all are priced.
+    pub(super) fn mean_usd(&self) -> Option<f64> {
+        (self.sessions > 0)
+            .then_some(self.cost_usd)
+            .flatten()
+            .map(|cost| cost / self.sessions as f64)
+    }
+}
+
 impl Spend {
     pub(super) fn render(&self) -> String {
         let cost =
             |amount: Option<f64>| amount.map_or("unknown".into(), |amount| format!("${amount:.6}"));
         let mut text = format!(
-            "\nGrader panel spend, apart from the Arms: {} over {} sessions",
+            "\nGrader panel spend, apart from the Arms: {} over {}",
             cost(self.cost_usd),
-            self.sessions
+            super::cost::counted(self.sessions, "session")
         );
         for seat in &self.seats {
             text.push_str(&format!(
-                "\nGrader panel {}/{}: {} sessions, {}",
+                "\nGrader panel {}/{}: {}, {}",
                 seat.harness,
                 seat.model,
-                seat.sessions,
+                super::cost::counted(seat.sessions, "session"),
                 cost(seat.cost_usd)
             ));
         }
@@ -680,6 +683,10 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                         },
                         &sides.packet(task, order, shown),
                     )?;
+                    let call = response.call(shown)?;
+                    fs::create_dir_all(path.parent().context("panel call path")?)?;
+                    store::write(&path, &call)?;
+                    // Priced after the call is saved, so a pause keeps it.
                     if panel.spending_limit.is_some() {
                         for session in sessions(&Native, &workspace)? {
                             if !earlier.contains(&session) {
@@ -694,9 +701,6 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                             }
                         }
                     }
-                    let call = response.call(shown)?;
-                    fs::create_dir_all(path.parent().context("panel call path")?)?;
-                    store::write(&path, &call)?;
                 }
             }
         }

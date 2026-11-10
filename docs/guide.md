@@ -1426,8 +1426,12 @@ in `--json`, and never counts toward an Arm's cost or the Bar's
 `--cost-ceiling`. `--panel-spending-limit 25` caps what each run of the
 Experiment spends on panel sessions, in USD: once this run's priced panel
 sessions reach it, grading pauses before the next session, as it does when a
-Grader is unavailable. Resuming gets the limit afresh and continues from the
-calls already made; none is graded again.
+Grader is unavailable. A panel session that can't be priced, because its
+Model has no frozen price or it reported no usage, also pauses grading while a
+limit is set, since the limit can't count it; its call is kept. Resuming gets
+the limit afresh and continues from the calls already made; none is graded
+again. When every Trial has run and only panel calls remain, the estimate lists
+just the panel and a terminal asks `Run the remaining Grader panel sessions?`.
 
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),

@@ -14,6 +14,8 @@ use crate::trial::Outcome;
 use crate::trial::accounting::Prices;
 
 const QUESTION: &str = "Run these Trials? [y/N] ";
+/// Asked instead when every Trial has run and only Grader panel calls remain.
+const PANEL_QUESTION: &str = "Run the remaining Grader panel sessions? [y/N] ";
 
 /// Show the remaining Trials' cost, then ask on a terminal unless `yes`.
 /// Declining returns an error before any Arm is built.
@@ -34,8 +36,16 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     if yes || !std::io::stdin().is_terminal() {
         return Ok(());
     }
+    let (question, declined) = if plan.remaining() == 0 {
+        (
+            PANEL_QUESTION,
+            "Experiment declined; no Grader panel sessions were run",
+        )
+    } else {
+        (QUESTION, "Experiment declined; no Trials were run")
+    };
     let mut stderr = std::io::stderr();
-    let _ = write!(stderr, "{QUESTION}");
+    let _ = write!(stderr, "{question}");
     let _ = stderr.flush();
     let answer = crate::terminal::line()?;
     if answer.is_none() {
@@ -43,7 +53,7 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     }
     match answer.as_deref().map(str::trim) {
         Some("y" | "yes") => Ok(()),
-        _ => bail!("Experiment declined; no Trials were run"),
+        _ => bail!("{declined}"),
     }
 }
 
@@ -131,28 +141,71 @@ struct Plan {
     total: usize,
     timeout_minutes: f64,
     groups: Vec<Group>,
-    seats: Vec<Seat>,
+    seats: Vec<SeatEstimate>,
     spending_limit: Option<f64>,
 }
 
 /// The remaining sessions of one Grader panel seat.
-struct Seat {
+struct SeatEstimate {
     name: String,
     model: String,
     sessions: usize,
     pairs: usize,
-    /// Per session, with how it was reached.
-    price: Option<(f64, &'static str)>,
+    price: Option<SessionPrice>,
+}
+
+/// What one of a seat's sessions is expected to cost.
+#[derive(Clone, Copy)]
+enum SessionPrice {
+    /// The mean of the seat's sessions priced in this Experiment.
+    Measured(f64),
+    /// [`ASSUMED_SESSION`] priced from the frozen table.
+    Assumed(f64),
+}
+
+impl SessionPrice {
+    fn usd(self) -> f64 {
+        match self {
+            Self::Measured(usd) | Self::Assumed(usd) => usd,
+        }
+    }
+
+    fn basis(self) -> String {
+        match self {
+            Self::Measured(_) => "session measured in this Experiment".into(),
+            Self::Assumed(_) => format!(
+                "assumed {}k-input, {}k-output session",
+                (ASSUMED_SESSION.input + ASSUMED_SESSION.cache_read) / 1000.0,
+                ASSUMED_SESSION.output / 1000.0
+            ),
+        }
+    }
+}
+
+/// A session's tokens: uncached input, cache reads and output.
+struct SessionTokens {
+    input: f64,
+    cache_read: f64,
+    output: f64,
 }
 
 /// The research's assumed pairwise Grader session, until one is measured:
 /// 400k input tokens, 80% of them cache reads, and 15k output tokens.
-const ASSUMED_SESSION: (f64, f64, f64) = (80_000.0, 320_000.0, 15_000.0);
+const ASSUMED_SESSION: SessionTokens = SessionTokens {
+    input: 80_000.0,
+    cache_read: 320_000.0,
+    output: 15_000.0,
+};
 
 fn assumed_session(prices: Option<&Prices>, model: &str) -> Option<f64> {
     let rate = prices?.models.get(model)?;
-    let (input, cache_read, output) = ASSUMED_SESSION;
-    Some((input * rate.input + cache_read * rate.cache_read + output * rate.output) / 1_000_000.0)
+    let tokens = &ASSUMED_SESSION;
+    Some(
+        (tokens.input * rate.input
+            + tokens.cache_read * rate.cache_read
+            + tokens.output * rate.output)
+            / 1_000_000.0,
+    )
 }
 
 /// The remaining Trials of one suite and Arm.
@@ -277,18 +330,20 @@ impl Plan {
         }
         for (index, seat) in self.seats.iter().enumerate() {
             let sessions = if seat.sessions == 2 * seat.pairs {
-                let pairs = if seat.pairs == 1 { "pair" } else { "pairs" };
                 format!(
-                    "{} sessions ({} {pairs} × 2 orders)",
-                    seat.sessions, seat.pairs
+                    "{} ({} × 2 orders)",
+                    counted(seat.sessions, "session"),
+                    counted(seat.pairs, "pair")
                 )
             } else {
-                format!("{} sessions", seat.sessions)
+                counted(seat.sessions, "session")
             };
             let estimate = match seat.price {
-                Some((price, basis)) => format!(
-                    "estimate ${:.6} at ${price:.6} per {basis}",
-                    price * seat.sessions as f64
+                Some(price) => format!(
+                    "estimate ${:.6} at ${:.6} per {}",
+                    price.usd() * seat.sessions as f64,
+                    price.usd(),
+                    price.basis()
                 ),
                 None => format!("no frozen price for Model {}", seat.model),
             };
@@ -302,7 +357,7 @@ impl Plan {
             let priced: f64 = self
                 .seats
                 .iter()
-                .filter_map(|seat| seat.price.map(|(price, _)| price * seat.sessions as f64))
+                .filter_map(|seat| seat.price.map(|price| price.usd() * seat.sessions as f64))
                 .sum();
             lines.push(format!(
                 "Grader panel estimate: ${priced:.6} for priced seats, apart from the Arms"
@@ -320,11 +375,13 @@ impl Plan {
 /// Each panel seat with sessions still to run, priced from the frozen table:
 /// at this Experiment's measured mean once its sessions are all priced,
 /// otherwise at the assumed session size.
-fn seats(experiment: &store::Stored) -> Vec<Seat> {
+fn seats(experiment: &store::Stored) -> Vec<SeatEstimate> {
     let Some(panel) = &experiment.description.bar.panel else {
         return Vec::new();
     };
     let prices = experiment.pricing.as_ref();
+    // Unreadable spend only loses the measured price, as unreadable history
+    // narrows the Arms' estimate.
     let spent = super::panel::spend(
         &Native,
         &experiment.directory,
@@ -345,30 +402,30 @@ fn seats(experiment: &store::Stored) -> Vec<Seat> {
         .map(|(index, (seat, (sessions, pairs)))| {
             let measured = spent
                 .as_ref()
-                .map(|spent| &spent.seats[index])
-                .filter(|spent| spent.sessions > 0)
-                .and_then(|spent| spent.cost_usd.map(|cost| cost / spent.sessions as f64));
-            Seat {
+                .and_then(|spent| spent.seats[index].mean_usd());
+            SeatEstimate {
                 name: format!("{}/{}", seat.harness, seat.model),
                 model: seat.model.clone(),
                 sessions,
                 pairs,
                 price: measured
-                    .map(|price| (price, "session measured in this Experiment"))
-                    .or_else(|| {
-                        assumed_session(prices, &seat.model)
-                            .map(|price| (price, "assumed 400k-input, 15k-output session"))
-                    }),
+                    .map(SessionPrice::Measured)
+                    .or_else(|| assumed_session(prices, &seat.model).map(SessionPrice::Assumed)),
             }
         })
         .collect()
 }
 
 fn trials(count: usize) -> String {
+    counted(count, "Trial")
+}
+
+/// `count` of `noun`, adding `s` unless there is one.
+pub(super) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
-        "1 Trial".into()
+        format!("1 {noun}")
     } else {
-        format!("{count} Trials")
+        format!("{count} {noun}s")
     }
 }
 
