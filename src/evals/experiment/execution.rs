@@ -319,6 +319,14 @@ impl<'a> Execution<'a> {
                 protocol.accounting = Some(accounting);
             }
             match grading::score(task, &grading_repository, &protocol, self.timeout) {
+                Err(error) if self.pricing.is_some() && interrupt::check().is_err() => {
+                    protocol.outcome = Outcome::Void;
+                    protocol.void_cause = Some(VoidCause::Interrupted);
+                    protocol.cause = Some(format!("{error:#}"));
+                    // Interrupted code checks produced no Score. Retain the
+                    // sessions already priced before propagating interruption.
+                    grading::score(task, &grading_repository, &protocol, self.timeout)
+                }
                 Err(error) if error.is::<crate::sandbox::Unavailable>() => {
                     protocol.outcome = Outcome::Void;
                     protocol.void_cause = Some(VoidCause::SandboxUnavailable);
