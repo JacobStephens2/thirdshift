@@ -9,6 +9,38 @@ const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
 
+test('passing cheaper Candidates share the Verdict line with JSON and text on desktop and phone', async t => {
+  const value = fixture.finish(fixture.record());
+  Object.assign(value.bar, { margin: -1, draws: 1024, min_discriminating_tasks: 0, discriminating_tasks: { 'code-review': ['alpha', 'beta', 'gamma'] } });
+  value.verdict = null;
+  value.pending_rechecks = [];
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  t.after(async () => { await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  for (const task of ['alpha', 'beta', 'gamma']) for (const arm of ['baseline', 'candidate']) for (let trial = 0; trial < 3; trial++) {
+    const result = fixture.result(task, arm, trial);
+    Object.assign(result.score, { passed: true, wrong_finding: false, borderline: false, model: null });
+    result.attempts[0].accounting = { sessions: [{ path: 'session', role: 'review', time_ms: 1000, models: {}, cost_usd: arm === 'baseline' ? 1 : 0.5, gap: null }] };
+    await writeFile(join(folder, 'results', `${fixture.key(task, arm, trial)}.json`), JSON.stringify(result));
+  }
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+  const env = { ...process.env, HOME: home };
+  const shown = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--json'], { env, timeout: 20000 }));
+  assert.equal(shown.verdict.line, 'pass: no worse, and cheaper');
+  assert.match(execFileSync(binary, ['experiments', fixture.id], { env, timeout: 20000 }).toString(), /pass: no worse, and cheaper/);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${origin}/experiments/${fixture.id}`);
+      assert.equal(await page.locator('.experiment-resource-verdict').textContent(), 'pass: no worse, and cheaper');
+      await page.locator('#experiment-bar > summary').click();
+      assert.match(await page.locator('#experiment-bar').textContent(), /Cost ceilingOff.*Time ceilingOff/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+});
+
 test('leak decisions retain the reviewer and false positives, and confirmation voids the Trial', async t => {
   const value = fixture.finish(fixture.record());
   value.bar.draws = 256;

@@ -206,6 +206,21 @@ pub fn parse(args: &[String]) -> Result<Options> {
     number!("--min-discriminating-tasks", minimum);
     bar.min_discriminating_tasks = Some(minimum);
     number!("--timeout", bar.timeout_seconds);
+    for (flag, target) in [
+        ("--cost-ceiling", &mut bar.cost_ceiling),
+        ("--time-ceiling", &mut bar.time_ceiling),
+    ] {
+        if let Some(value) = flags.remove(flag) {
+            let ratio: f64 = value
+                .parse()
+                .with_context(|| format!("invalid {flag}: {value}"))?;
+            ensure!(
+                ratio.is_finite() && ratio > 0.0,
+                "{flag} must be a positive finite Candidate/Baseline ratio"
+            );
+            *target = Some(ratio);
+        }
+    }
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
         bar.void_rules.retries <= 2,

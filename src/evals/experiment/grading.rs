@@ -100,6 +100,10 @@ pub(super) fn score(
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Verdict {
     pub verdict: Conclusion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efficiency: Option<super::efficiency::Efficiency>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
     #[serde(default, skip_serializing_if = "Provisional::is_missing")]
     pub provisional_verdict: Provisional,
     pub suites: BTreeMap<String, SuiteVerdict>,
@@ -215,6 +219,30 @@ impl From<Decision> for Conclusion {
 }
 
 impl Verdict {
+    pub(super) fn update_line(&mut self) {
+        let Some(efficiency) = &self.efficiency else {
+            return;
+        };
+        let mut line = self.outcome().replace('_', " ");
+        if matches!(self.verdict, Conclusion::Pass) {
+            line.push_str(if self.worse_within_margin_metrics().is_empty() {
+                ": no worse"
+            } else {
+                ": worse, within the margin"
+            });
+        }
+        let annotation = efficiency.annotation();
+        if !annotation.is_empty() {
+            line.push_str(if matches!(self.verdict, Conclusion::Pass) {
+                ", and "
+            } else {
+                ": "
+            });
+            line.push_str(&annotation);
+        }
+        self.line = Some(line);
+    }
+
     pub fn selection_report(&self) -> String {
         let mut report = String::new();
         for (suite, verdict) in &self.suites {
@@ -379,6 +407,14 @@ pub(super) fn assess(
     if !pending.is_empty() {
         verdict.verdict = Conclusion::WaitingOnRechecks;
     }
+    let efficiency = super::efficiency::Efficiency::of(results, bar, original);
+    let decision = efficiency.decision();
+    verdict.provisional_verdict = Provisional::Recorded(Some(decision));
+    if pending.is_empty() {
+        verdict.verdict = decision.into();
+    }
+    verdict.efficiency = Some(efficiency);
+    verdict.update_line();
     Ok((verdict, pending))
 }
 
@@ -523,6 +559,8 @@ fn evaluate(
         .count();
     Ok(Verdict {
         verdict: verdict.into(),
+        efficiency: None,
+        line: None,
         provisional_verdict: Provisional::Recorded(Some(verdict)),
         suites,
         borderline_trials,

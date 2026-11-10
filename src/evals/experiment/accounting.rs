@@ -286,19 +286,7 @@ impl Report {
         }
         let mut costs = Vec::new();
         let mut times = Vec::new();
-        for baseline in results
-            .iter()
-            .filter(|result| result.arm == super::Arm::Baseline && result.outcome != Outcome::Void)
-        {
-            let Some(candidate) = results.iter().find(|result| {
-                result.arm == super::Arm::Candidate
-                    && result.suite == baseline.suite
-                    && result.task == baseline.task
-                    && result.trial == baseline.trial
-                    && result.outcome != Outcome::Void
-            }) else {
-                continue;
-            };
+        for (baseline, candidate) in pairs(results) {
             let baseline = trial_total(baseline);
             let candidate = trial_total(candidate);
             report.paired_median_ratios.pairs += 1;
@@ -317,7 +305,25 @@ impl Report {
     }
 }
 
-fn median(values: &mut [f64]) -> Option<f64> {
+pub(super) fn pairs(results: &[TrialResult]) -> impl Iterator<Item = (&TrialResult, &TrialResult)> {
+    results
+        .iter()
+        .filter(|result| result.arm == super::Arm::Baseline && result.outcome != Outcome::Void)
+        .filter_map(|baseline| {
+            results
+                .iter()
+                .find(|result| {
+                    result.arm == super::Arm::Candidate
+                        && result.suite == baseline.suite
+                        && result.task == baseline.task
+                        && result.trial == baseline.trial
+                        && result.outcome != Outcome::Void
+                })
+                .map(|candidate| (baseline, candidate))
+        })
+}
+
+pub(super) fn median(values: &mut [f64]) -> Option<f64> {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
     if values.is_empty() {

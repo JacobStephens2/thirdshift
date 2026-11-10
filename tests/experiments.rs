@@ -28,6 +28,9 @@ mod cost;
 #[path = "experiments/accounting.rs"]
 mod accounting;
 
+#[path = "experiments/ceilings.rs"]
+mod ceilings;
+
 #[path = "experiments/difficulty.rs"]
 mod difficulty;
 #[path = "experiments/discriminating.rs"]

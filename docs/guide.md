@@ -1366,6 +1366,16 @@ Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--se
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 
+Optional `--cost-ceiling 2` and `--time-ceiling 2` cap the paired median
+Candidate/Baseline ratios at 2×. Both are off by default and fixed with the Bar;
+a ratio above either set ceiling fails the Experiment. Unmeasured ceilings
+cannot pass. Quality statistics still follow ADR-0025. When quality passes,
+the Verdict adds "cheaper" or "faster" when the paired ratio's pass-level
+Bayesian bootstrap interval lies below 1 (at least two paired tasks), or says
+"costs more" or "takes longer" when its median exceeds 1. JSON `verdict.line`,
+the text view and the Console show the same line. See the
+[resource comparison rules](experiment-results.md#verdict-and-bar).
+
 The default pass level is the highest at which an A/A Experiment at the
 measured disagreement rate passes at least 80% of the time on each suite at
 its size, but never below 70% (#1268). #1370's A/A Experiment measured these
@@ -1571,7 +1581,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 6`.
+[Experiment results format](experiment-results.md), identified by `format: 7`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
