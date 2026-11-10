@@ -71,6 +71,9 @@ fn prepare_repository(
         &source,
         &["merge-base", "--is-ancestor", &task.base, &task.change],
     )?;
+    if trial.is_none() && task.session == Session::Process {
+        super::process_tasks::screen(&source, task)?;
+    }
     let object_format = git(&source, &["rev-parse", "--show-object-format"])?;
     let temporary = tempfile::Builder::new()
         .prefix(".thirdshift-eval-")

@@ -54,6 +54,8 @@ pub(super) struct Task {
     pub trial: Option<crate::trial::Inputs>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tests: Option<super::process_tasks::TestSelection>,
 }
 
 /// One replaceable A/A reading, with the setup that produced it.
@@ -121,6 +123,13 @@ impl Task {
         for (destination, source) in &task.inputs {
             relative_path(destination)?;
             relative_path(source)?;
+        }
+        if let Some(selection) = &task.process_tests {
+            anyhow::ensure!(
+                task.session == Session::Process,
+                "process_tests requires a process task"
+            );
+            selection.validate()?;
         }
         Ok(task)
     }

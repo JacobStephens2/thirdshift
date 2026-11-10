@@ -26,6 +26,8 @@ trials_per_arm = 3
 
 [dependencies]
 factory_skills = ["skills/thirdshift-code-review/"]
+# Optional for process suites; omitted by existing review suites.
+builtin_processes = ["processes/", "src/processes.rs", "src/processes/"]
 session_prompts = ["src/prompt.rs"]
 harness_defaults = ["src/harness/", "src/config.rs"]
 model_defaults = ["src/config.rs", "src/setup.rs"]
@@ -34,7 +36,8 @@ effort_defaults = ["src/config.rs", "src/setup.rs"]
 
 `trials_per_arm` is a positive integer **per Eval task**. For example, the
 code-review suite uses three and the Spec-review suite uses one. All five
-dependency categories must be declared; an unused category is `[]`. Each entry
+original dependency categories must be declared; an unused category is `[]`.
+`builtin_processes` is optional and defaults to `[]`. Each entry
 is a repository-relative path: an exact file, or a directory prefix ending in
 `/`. Wildcards, absolute paths, `.` and `..` components are refused. The example
 selects this suite for `src/prompt.rs` or `src/harness/codex.rs`, but not
@@ -109,7 +112,8 @@ effort = "high"
   `thirdshift evals` (also `evals list`, optionally `--json`) lists the table or
   `null`, plus `measured` and `discriminating` booleans for each Eval task.
 - `repository` names a local Git repository holding both commits, absolute or
-  relative to the Eval task's folder. Preparation never fetches from the network.
+  relative to the Eval task's folder. History import is local. Process screening
+  runs on the host with network access so test tools can install dependencies.
 - `base` and `change` are full commit object IDs (SHA-1 or SHA-256). The base must
   be an ancestor of the change. `base` is the last history visible to a Trial;
   `change` supplies the working-tree diff under review. They may be equal for a
@@ -117,7 +121,7 @@ effort = "high"
 - `criteria` is nonempty written success criteria for a model Grader. `checks`
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
-  executed by preparation. After a Trial, the Experiment runs each check with
+  executed by review-task preparation. After a Trial, the Experiment runs each check with
   an isolated copy of the prepared repository, captured before the session,
   as its working directory. Session edits and commits cannot change the code
   these checks grade. Exit zero
@@ -247,6 +251,47 @@ inspection contract: it expects the detached base, before the synthetic commit.
 These commands prepare data for the Experiment runner; they start no Harness,
 Trial or Grader. Isolation of the session's home, processes and network belongs
 to the runner's sandbox, not to this Git preparation step.
+
+## Process task preparation and proposals
+
+Process tasks record their separate tests and command-vector selectors:
+
+```toml
+[process_tests]
+overlay_files = ["tests/counter.rs"]
+shared_fakes = ["tests/support/mod.rs"]
+fail_to_pass = [["cargo", "test", "--test", "counter", "increments"]]
+pass_to_pass = [["cargo", "test", "--test", "counter"]]
+```
+
+`evals prepare` requires this selection for process tasks. In disposable
+checkouts it overlays these files from `change` onto both `base` and `change`,
+then requires every fail-to-pass selector to fail at the base and pass at the
+merge. A refusal names the selector and side. Each command has a ten-minute
+deadline and runs with host network access. A changed inline Rust test module
+in a source file is refused, naming the file; production edits outside an
+unchanged inline test module remain eligible. Separate overlays must be regular
+test files and may not cross symlinks. Screening leaves the source checkout
+untouched, and the prepared Trial still contains only base history and Ticket
+inputs, with neither the fix nor its test overlay exposed.
+
+`thirdshift evals propose-process <repository> [--limit <1..100>]` reads recent
+merged GitHub pull requests for a local repository's origin and drafts private
+`process` Eval tasks. It lists each qualifying pull request's bug or feature
+kind, non-test added/deleted line count, test files, shared fakes and selectors.
+Pull requests must close a Ticket (an issue with no sub-issues), change source,
+and have separate tests without changed inline tests. Rust integration tests
+and Python test scripts are recognized automatically; other layouts are reported
+as skipped for manual task authoring. Security fixes are excluded. The command
+keeps a private repository holding both commits and writes the Ticket title and
+body as `.thirdshift-issue.md` input. Proposals are not screened or approved
+automatically: review the selectors and issue input before approval and
+preparation. Repeating the command preserves existing proposals and approvals.
+
+The new suite has three Trials per Eval task. Its dependencies include the
+implement, tdd, codebase-design, code-review and security-audit Factory skills,
+Built-in process files and their Rust engine, and the other suites' Session
+prompt, Harness, Model and Effort sources. Selection remains manifest-driven.
 
 ## One-time import of #429's material
 
