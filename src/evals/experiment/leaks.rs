@@ -1,4 +1,4 @@
-//! Private transcript checks and immutable human decisions about the real fix.
+//! Private Session evidence checks and immutable decisions about the real fix.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -8,9 +8,10 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::evidence::Started;
 use super::session_evidence::Inventory;
 use super::store::{State, Stored};
-use super::trial_results::files::Native;
+use super::trial_results::files::{Native, metadata};
 use super::{Task, TrialResult, trial_sessions};
 use crate::trial::{Outcome, VoidCause};
 
@@ -22,11 +23,33 @@ pub(crate) struct Hit {
     pub trial_id: String,
     pub attempt: usize,
     pub session: String,
-    pub kind: String,
+    pub kind: Kind,
     pub identifier: String,
     pub line: usize,
     #[serde(default)]
     pub decision: Option<Decision>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Kind {
+    MergeCommit,
+    PullRequest,
+    Issue,
+    Branch,
+    Title,
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MergeCommit => "merge_commit",
+            Self::PullRequest => "pull_request",
+            Self::Issue => "issue",
+            Self::Branch => "branch",
+            Self::Title => "title",
+        })
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -63,9 +86,9 @@ impl Hit {
     }
 }
 
-fn identifiers(task: &Task) -> Result<Vec<(&'static str, String)>> {
+fn identifiers(task: &Task) -> Result<Vec<(Kind, String)>> {
     let manifest = &task.manifest;
-    let mut values = vec![("merge_commit", manifest.change.clone())];
+    let mut values = vec![(Kind::MergeCommit, manifest.change.clone())];
     let mut reference = |kind, url: &str| {
         if !url.is_empty() {
             values.push((kind, url.to_owned()));
@@ -79,22 +102,22 @@ fn identifiers(task: &Task) -> Result<Vec<(&'static str, String)>> {
         .as_ref()
         .and_then(|g| g.real_fix.as_ref())
     {
-        reference("pull_request", &fix.pull_request);
-        reference("issue", &fix.issue);
+        reference(Kind::PullRequest, &fix.pull_request);
+        reference(Kind::Issue, &fix.issue);
         values.extend([
-            ("branch", fix.branch.clone()),
-            ("title", fix.title.clone()),
-            ("title", fix.issue_title.clone()),
+            (Kind::Branch, fix.branch.clone()),
+            (Kind::Title, fix.title.clone()),
+            (Kind::Title, fix.issue_title.clone()),
         ]);
     } else {
         if let Some(inputs) = &manifest.trial {
-            reference("pull_request", &inputs.pr_url);
-            reference("issue", &inputs.issue_url);
-            values.push(("branch", inputs.branch.clone()));
+            reference(Kind::PullRequest, &inputs.pr_url);
+            reference(Kind::Issue, &inputs.issue_url);
+            values.push((Kind::Branch, inputs.branch.clone()));
         }
         let source = task.directory.join(&manifest.repository);
         values.push((
-            "title",
+            Kind::Title,
             super::super::repository::git(
                 &source,
                 &["show", "-s", "--format=%s", &manifest.change],
@@ -109,23 +132,25 @@ fn identifiers(task: &Task) -> Result<Vec<(&'static str, String)>> {
     Ok(values)
 }
 
-fn mentions(text: &str, kind: &str, identifier: &str) -> bool {
-    if kind == "merge_commit" {
-        return text.split(|c: char| !c.is_ascii_hexdigit()).any(|token| {
-            token.len() >= 7
-                && identifier
-                    .to_ascii_lowercase()
-                    .starts_with(&token.to_ascii_lowercase())
-        });
+impl Kind {
+    fn mentions(self, text: &str, identifier: &str) -> bool {
+        if self == Self::MergeCommit {
+            return text.split(|c: char| !c.is_ascii_hexdigit()).any(|token| {
+                token.len() >= 7
+                    && identifier
+                        .to_ascii_lowercase()
+                        .starts_with(&token.to_ascii_lowercase())
+            });
+        }
+        let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+        text.match_indices(identifier).any(|(start, _)| {
+            !text[..start].chars().next_back().is_some_and(word)
+                && !text[start + identifier.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(word)
+        })
     }
-    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-    text.match_indices(identifier).any(|(start, _)| {
-        !text[..start].chars().next_back().is_some_and(word)
-            && !text[start + identifier.len()..]
-                .chars()
-                .next()
-                .is_some_and(word)
-    })
 }
 
 // OTLP bodies contain JSON-encoded Harness events. Decode both layers so
@@ -155,58 +180,57 @@ fn strings(value: &serde_json::Value, texts: &mut Vec<String>, depth: usize) {
     }
 }
 
-pub(super) fn scan(
-    task: &Task,
-    directory: &Path,
-    attempt: &Path,
-    trial: &str,
-    index: usize,
-) -> Result<Vec<Hit>> {
+pub(super) fn scan(task: &Task, directory: &Path, trial: &str, index: usize) -> Result<Vec<Hit>> {
     if task.manifest.session != crate::evals::format::Session::Process {
         return Ok(Vec::new());
     }
     let identifiers = identifiers(task)?;
     let inventory = Inventory::new(&Native, directory)?;
-    let attempt = trial_sessions::attempt(&Native, attempt)?;
     let mut hits = Vec::new();
-    for selected in inventory.select(&Native, &attempt)? {
-        let mut seen = BTreeSet::new();
-        for (line, text) in BufReader::new(File::open(&selected.path)?)
-            .lines()
-            .enumerate()
-        {
-            let text = text?;
-            let mut texts = vec![text.clone()];
-            if let Ok(value) = serde_json::from_str(&text) {
-                strings(&value, &mut texts, 0);
-            }
-            for (kind, identifier) in &identifiers {
-                if seen.contains(&(*kind, identifier))
-                    || !texts.iter().any(|text| mentions(text, kind, identifier))
-                {
-                    continue;
+    // A Stop may retain a Session without producing protocol Output. Every
+    // completion checks the whole logical Trial, including those older Sessions.
+    for attempt in trial_sessions::trial(&Native, &directory.join("trials").join(trial))? {
+        let index = metadata::<Started>(&Native, &attempt.path.join("started.json"))?
+            .map_or(index, |started| started.index);
+        for selected in inventory.select(&Native, &attempt)? {
+            let mut seen = BTreeSet::new();
+            for (line, text) in BufReader::new(File::open(&selected.path)?)
+                .lines()
+                .enumerate()
+            {
+                let text = text?;
+                let mut texts = vec![text.clone()];
+                if let Ok(value) = serde_json::from_str(&text) {
+                    strings(&value, &mut texts, 0);
                 }
-                seen.insert((*kind, identifier));
-                let id = format!(
-                    "{:x}",
-                    Sha256::digest(serde_json::to_vec(&(
-                        trial,
-                        index,
-                        &selected.id,
-                        kind,
-                        identifier
-                    ))?)
-                );
-                hits.push(Hit {
-                    id,
-                    trial_id: trial.into(),
-                    attempt: index,
-                    session: selected.id.clone(),
-                    kind: (*kind).into(),
-                    identifier: identifier.clone(),
-                    line: line + 1,
-                    decision: None,
-                });
+                for (kind, identifier) in &identifiers {
+                    if seen.contains(&(*kind, identifier))
+                        || !texts.iter().any(|text| kind.mentions(text, identifier))
+                    {
+                        continue;
+                    }
+                    seen.insert((*kind, identifier));
+                    let id = format!(
+                        "{:x}",
+                        Sha256::digest(serde_json::to_vec(&(
+                            trial,
+                            index,
+                            &selected.id,
+                            kind,
+                            identifier
+                        ))?)
+                    );
+                    hits.push(Hit {
+                        id,
+                        trial_id: trial.into(),
+                        attempt: index,
+                        session: selected.id.clone(),
+                        kind: *kind,
+                        identifier: identifier.clone(),
+                        line: line + 1,
+                        decision: None,
+                    });
+                }
             }
         }
     }
@@ -226,8 +250,9 @@ pub(super) fn apply(results: &mut [TrialResult], history: &History) {
                 if let Some(attempt) = result.attempts.get_mut(hit.attempt) {
                     attempt.outcome = Outcome::Void;
                     attempt.void_cause = Some(VoidCause::FixLeaked);
-                    attempt.cause =
-                        Some("Day shift confirmed the real fix leaked into the transcript".into());
+                    attempt.cause = Some(
+                        "Day shift confirmed the real fix leaked into Session evidence".into(),
+                    );
                 }
             }
         }

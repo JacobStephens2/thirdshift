@@ -87,13 +87,17 @@ impl<'a> Runner<'a> {
                     },
                     Box::new(|attempt, output, score| {
                         let pause = pause_cause(&output);
-                        writer.progress.leaks.extend(super::leaks::scan(
+                        let hits = super::leaks::scan(
                             task,
                             self.directory,
-                            &attempt,
                             &identity.key(),
                             writer.progress.attempts.len(),
-                        )?);
+                        )?;
+                        for hit in hits {
+                            if !writer.progress.leaks.iter().any(|saved| saved.id == hit.id) {
+                                writer.progress.leaks.push(hit);
+                            }
+                        }
                         writer.record_attempt(&attempt, output, score)?;
                         // Terminal publication belongs to the same evidence lease.
                         if !writer.can_continue(self.bar) {

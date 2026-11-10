@@ -328,7 +328,7 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
 fn lead(view: &View) -> String {
     match view.verdict.as_ref().map(|v| &v.verdict) {
         Some(Conclusion::WaitingOnLeaks) => {
-            "Review the pending transcript leak hits before the Verdict is final.".into()
+            "Review the pending Session evidence leak hits before the Verdict is final.".into()
         }
         Some(Conclusion::WaitingOnRechecks) => format!(
             "Provisionally {}, until you recheck {} Scores.",
@@ -360,10 +360,10 @@ fn leaks(view: &View, csrf: &str, can_act: bool) -> String {
         return String::new();
     }
     let mut html = String::from(
-        "<section class=\"experiment-callout\" id=\"experiment-leaks\" aria-label=\"Transcript leak check\"><h2>Transcript leak check</h2><p>Review each match to the real fix. Dismiss false positives to keep the Trial; confirm a leak to make it Void. Decisions retain the reviewer and reason.</p><ul>",
+        "<section class=\"experiment-callout\" id=\"experiment-leaks\" aria-label=\"Session evidence leak check\"><h2>Session evidence leak check</h2><p>Review each match to the real fix. Dismiss false positives to keep the Trial; confirm a leak to make it Void. Decisions retain the reviewer and reason.</p><ul>",
     );
     for hit in &view.leak_hits {
-        html.push_str(&format!("<li><p><strong>{}</strong> · {} · <code>{}</code></p><p>Trial <code>{}</code> · attempt {} · <a href=\"/experiments/{}/sessions/{}\">Session evidence</a> · transcript line {}</p>", hit.status(), esc(&hit.kind), esc(&hit.identifier), esc(&hit.trial_id), hit.attempt + 1, esc(&view.description.id), esc(&hit.session), hit.line));
+        html.push_str(&format!("<li><p><strong>{}</strong> · {} · <code>{}</code></p><p>Trial <code>{}</code> · attempt {} · <a href=\"/experiments/{}/sessions/{}\">Session evidence</a> · Session evidence line {}</p>", hit.status(), hit.kind, esc(&hit.identifier), esc(&hit.trial_id), hit.attempt + 1, esc(&view.description.id), esc(&hit.session), hit.line));
         if let Some(decision) = &hit.decision {
             html.push_str(&format!(
                 "<p>{} · {} · {}</p>",

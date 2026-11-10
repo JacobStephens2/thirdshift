@@ -1,7 +1,23 @@
 use super::*;
 
 #[test]
-fn fix_commit_in_process_transcript_waits_for_a_leak_decision() {
+fn stopped_process_sessions_are_checked_for_leaks_on_resume() {
+    let output = std::process::Command::new("python3")
+        .arg("tests/experiments/regressions/interrupted_leak.py")
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn fix_commit_in_process_session_evidence_waits_for_a_leak_decision() {
     let fixture = fixture();
     let fix = fixture.scenario.launch_git(&["rev-parse", "reference-fix"]);
     let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
@@ -42,8 +58,9 @@ fn fix_commit_in_process_transcript_waits_for_a_leak_decision() {
 }
 
 #[test]
-fn process_transcripts_without_fix_identifiers_have_no_leak_hits() {
+fn process_session_evidence_without_fix_identifiers_have_no_leak_hits() {
     let fixture = fixture();
+    private_fix(&fixture);
     let run = fixture.run(&[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let view: Value = serde_json::from_str(&run.stdout).unwrap();
@@ -58,24 +75,10 @@ fn process_transcripts_without_fix_identifiers_have_no_leak_hits() {
 }
 
 #[test]
-fn process_transcripts_check_all_private_fix_identifiers_and_abbreviated_commits() {
+fn process_session_evidence_check_all_private_fix_identifiers_and_abbreviated_commits() {
     let fixture = fixture();
     let fix = fixture.scenario.launch_git(&["rev-parse", "reference-fix"]);
-    let task = fixture
-        .scenario
-        .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
-    let mut text = fs::read_to_string(&task).unwrap();
-    text.push_str(
-        r#"
-[process_grading.real_fix]
-pull_request = "https://github.com/acme/widgets/pull/421"
-issue = "https://github.com/acme/widgets/issues/422"
-branch = "fix/the-counter"
-title = 'Repair "quoted" counter'
-issue_title = "Counter fails twice"
-"#,
-    );
-    fs::write(task, text).unwrap();
+    private_fix(&fixture);
     let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
     fixture.scenario.agent_does(&format!(r#"{script}
 printf '%s' 'PR 421; issue 422; fix/the-counter; Repair "quoted" counter; {}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
@@ -114,6 +117,24 @@ printf '%s' 'PR 421; issue 422; fix/the-counter; Repair "quoted" counter; {}' > 
             }
         }
     }
+}
+
+fn private_fix(fixture: &Fixture) {
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");
+    let mut text = fs::read_to_string(&task).unwrap();
+    text.push_str(
+        r#"
+[process_grading.real_fix]
+pull_request = "https://github.com/acme/widgets/pull/421"
+issue = "https://github.com/acme/widgets/issues/422"
+branch = "fix/the-counter"
+title = 'Repair "quoted" counter'
+issue_title = "Counter fails twice"
+"#,
+    );
+    fs::write(task, text).unwrap();
 }
 
 #[test]

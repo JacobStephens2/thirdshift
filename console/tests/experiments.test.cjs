@@ -11,6 +11,8 @@ const fixture = require('./fixtures/experiments.cjs');
 
 test('leak decisions retain the reviewer and false positives, and confirmation voids the Trial', async t => {
   const value = fixture.finish(fixture.record());
+  value.bar.draws = 256;
+  value.bar.discriminating_tasks = { 'code-review': [] };
   value.verdict.verdict = 'waiting_on_leaks';
   const folder = await fixture.save(home, value);
   await fixture.results(home);
@@ -25,6 +27,7 @@ test('leak decisions retain the reviewer and false positives, and confirmation v
   assert.equal(dismissed.leak_hits[0].decision.decision, 'dismiss');
   assert.ok(dismissed.leak_hits[0].decision.reviewer.who);
   assert.equal(dismissed.leak_hits[0].decision.reviewer.from_console, false);
+  assert.equal(dismissed.verdict.verdict, 'waiting_on_leaks', 'measurement-only hits still hold the Verdict');
   assert.equal(dismissed.results.find(result => result.arm === 'candidate' && result.task === 'alpha' && result.trial === 0).outcome, 'succeeded');
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());
@@ -32,7 +35,7 @@ test('leak decisions retain the reviewer and false positives, and confirmation v
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${origin}/experiments/${fixture.id}`);
-  const leaks = page.getByRole('region', { name: 'Transcript leak check', exact: true });
+  const leaks = page.getByRole('region', { name: 'Session evidence leak check', exact: true });
   await leaks.getByText('Dismissed false positive', { exact: false }).waitFor();
   assert.match(await leaks.textContent(), /Fix <script>unsafe\(\)<\/script>/);
   await leaks.getByLabel('Reason').fill('The Session saw the real fix');

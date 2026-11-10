@@ -42,7 +42,7 @@ own formats, independently of the result format.
 Format 5 adds process Trial `leaks`, the `leak_hits` decision list,
 `waiting_on_leaks` Verdict and `fix_leaked` Void cause. Each hit retains its
 opaque ID, Trial ID, attempt index, Session ID, identifier kind and value, and
-one-based transcript line. `decision` is null while pending; otherwise it keeps
+one-based Session evidence line. `decision` is null while pending; otherwise it keeps
 `decision` (`confirm` or `dismiss`), `reason`, `reviewer` (the shared action
 Actor) and `recorded_at`. Dismissed hits form the auditable false-positive list.
 Confirmed hits overlay the Trial and matching attempt as Void in the view;
@@ -296,7 +296,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "LeakHit": {
     "id": "string", "trial_id": "string", "attempt": "integer", "session": "string",
-    "kind": "string", "identifier": "string", "line": "integer", "decision": "LeakDecision?"
+    "kind": "merge_commit|pull_request|issue|branch|title", "identifier": "string", "line": "integer", "decision": "LeakDecision?"
   },
   "LeakDecision": {
     "decision": "confirm|dismiss", "reason": "string", "recorded_at": "string",

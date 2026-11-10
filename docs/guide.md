@@ -1312,7 +1312,7 @@ and their failures name the selector in
 the Score's reason. The task's required `process_grading` table declares the
 files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
 
-After each process Trial, thirdshift searches its Session transcripts for the
+After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
 on the Console's Experiment page and in `thirdshift experiments <id> --json`.
@@ -1327,7 +1327,7 @@ thirdshift experiments <id> --leak <hit-id> confirm --reason 'Saw the real fix'
 
 Each decision retains the reviewer, time and reason. Dismissals keep the Trial
 and remain on the auditable list; confirmation makes the Trial Void and drops
-its paired Eval task from the Verdict. Original results and transcripts remain
+its paired Eval task from the Verdict. Original results and Session traces remain
 unchanged. Decisions require the Experiment to have stopped and cannot be
 overwritten. A confirmed leak is excluded when the Experiment resumes.
 

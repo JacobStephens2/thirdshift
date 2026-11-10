@@ -92,7 +92,7 @@ fn documented_format_matches_real_experiment_results() {
     let experiment = fixture.experiment();
     assert_eq!(
         experiment["format"], 5,
-        "format 5 adds transcript leak decisions"
+        "format 5 adds Session evidence leak decisions"
     );
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(

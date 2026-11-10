@@ -1394,7 +1394,7 @@ replace one. Selectors run offline in bwrap, each under the Bar&#39;s timeout,
 and their failures name the selector in
 the Score&#39;s reason. The task&#39;s required <code>process_grading</code> table declares the
 files and selectors; see <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task manifests</a>.</p>
-<p>After each process Trial, thirdshift searches its Session transcripts for the
+<p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
 on the Console&#39;s Experiment page and in <code>thirdshift experiments &lt;id&gt; --json</code>.
@@ -1406,7 +1406,7 @@ thirdshift experiments &lt;id&gt; --leak &lt;hit-id&gt; confirm --reason &#39;Sa
 </code></pre>
 <p>Each decision retains the reviewer, time and reason. Dismissals keep the Trial
 and remain on the auditable list; confirmation makes the Trial Void and drops
-its paired Eval task from the Verdict. Original results and transcripts remain
+its paired Eval task from the Verdict. Original results and Session traces remain
 unchanged. Decisions require the Experiment to have stopped and cannot be
 overwritten. A confirmed leak is excluded when the Experiment resumes.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, pass level <code>0.70</code>, fail level <code>0.95</code>,

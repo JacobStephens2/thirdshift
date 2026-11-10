@@ -489,7 +489,7 @@ proposals for its suites. Approve one there or with
 state and start no work. Approval affects future Experiments; an existing
 Experiment keeps its fixed Eval tasks on resume.
 
-Process Trial transcripts are checked for the real fix's identifiers. Pending
+Process Trial Session traces are checked for the real fix's identifiers. Pending
 hits appear on the Experiment page with a Session evidence link and hold the
 Verdict. Dismiss a false positive or confirm a leak with a reason there, or use
 `thirdshift experiments <id> --leak <hit-id> confirm|dismiss --reason '…'`.
