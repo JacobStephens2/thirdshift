@@ -517,8 +517,8 @@ impl HeldClaim<'_> {
 /// and the pull request a Continuation continues.
 fn before_steps_comment(selection: &Selection, error: &anyhow::Error) -> String {
     let pr_url = match selection {
-        Selection::Continuation { pr: Some(pr), .. } => Some(pr.url.as_str()),
-        _ => None,
+        Selection::Continuation { pr, .. } => pr.as_ref().map(|pr| pr.url.as_str()),
+        Selection::Fresh { .. } => None,
     };
     recovery::comment(
         None,
