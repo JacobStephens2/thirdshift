@@ -30,6 +30,35 @@ impl FailedRun {
     pub fn held(&self) -> bool {
         is_hold(&self.error)
     }
+
+    /// Whether it is a Spec run that ended only waiting, uninterrupted: every
+    /// Ticket not done waits on a person or on other work, and none failed.
+    pub fn waiting(&self) -> bool {
+        self.waiting_on().is_some()
+    }
+
+    /// The Tickets not done a Spec run that ended only waiting waits on.
+    fn waiting_on(&self) -> Option<&crate::spec_run::TicketsNotDone> {
+        self.error
+            .downcast_ref::<crate::spec_run::TicketsNotDone>()
+            .filter(|not_done| !self.interrupted && not_done.only_waiting)
+    }
+
+    /// The comment its Claim's ending posts on its issue, from the Issue
+    /// branch `branch` if known: a waiting Spec run's names each Ticket not
+    /// done and what it waits on, and any other's is its Recovery comment.
+    pub fn comment(&self, branch: Option<&str>) -> String {
+        if let Some(not_done) = self.waiting_on() {
+            return not_done.comment();
+        }
+        crate::recovery::comment(
+            self.recovery.as_deref(),
+            branch,
+            &crate::recovery::cause(&self.error),
+            self.pr_url.as_deref(),
+            crate::host::name().as_deref(),
+        )
+    }
 }
 
 /// Whether `error` is a policy, security or merge hold: a Self-merge held

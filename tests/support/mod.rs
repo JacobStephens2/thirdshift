@@ -1074,6 +1074,16 @@ test -f {root}/{COPY_REPLACED}
             .collect()
     }
 
+    /// The comments posted on issue `number` on the fake GitHub, oldest
+    /// first, as their bodies.
+    pub fn issue_comments(&self, number: u32) -> Vec<String> {
+        let comments = &self.gh_state()["comments"][number.to_string()];
+        let comments = comments.as_array().into_iter().flatten();
+        comments
+            .map(|comment| comment.as_str().unwrap().to_string())
+            .collect()
+    }
+
     /// Give the repository the labels `labels` on the fake GitHub.
     pub fn repo_has_labels(&self, labels: &[&str]) {
         let mut gh = self.gh_state();

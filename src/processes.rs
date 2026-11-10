@@ -476,6 +476,8 @@ struct IssueRun<'a> {
     process: &'a str,
     /// Delivery left a pull request ready for review, or merged it.
     delivered: bool,
+    /// Delivery merged this run's own pull request.
+    merged: bool,
     pull_request: PullRequest,
     reviews: Vec<crate::security::review::Outcome>,
     spec_tickets: Option<crate::spec_run::AccountedTickets>,

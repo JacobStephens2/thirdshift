@@ -204,7 +204,7 @@ fn a_clean_failed_acquisition_releases_its_claim_and_can_retry_without_starting_
     assert_eq!(retry.code, Some(0), "stderr: {}", retry.stderr);
     assert_eq!(retry.stdout, "https://github.com/acme/widgets/pull/1\n");
     assert_eq!(scenario.claude_calls().len(), 1);
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(scenario.issue_labels(7).is_empty());
     scenario.assert_cleaned_up("issue-7");
 }
 
@@ -539,7 +539,7 @@ fn label_requests(scenario: &Scenario) -> Vec<Vec<String>> {
 }
 
 #[test]
-fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
+fn a_run_that_ends_with_its_pr_ready_for_review_removes_its_claim_and_puts_nothing_back() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
@@ -552,8 +552,22 @@ fn a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: removing in-progress from issue #7\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.issue_labels(7).is_empty());
     assert_eq!(label_requests(&scenario).len(), 1);
+    let removals = scenario.gh_calls_of("api", "--method");
+    assert!(
+        removals.iter().any(|request| request
+            .iter()
+            .any(|arg| arg == "repos/acme/widgets/issues/7/labels/in-progress")),
+        "{removals:?}"
+    );
 }
 
 #[test]
@@ -617,7 +631,7 @@ fn a_repository_that_has_the_in_progress_label_keeps_it_as_it_is() {
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.repo_labels(), ["In-Progress"]);
     assert!(scenario.gh_calls_of("label", "create").is_empty());
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(scenario.issue_labels(7).is_empty());
 }
 
 #[test]

@@ -136,6 +136,20 @@ pub fn untrusted_edit(
     Check::new(reads).untrusted_edit(issue, since)
 }
 
+/// The first edit to `issue`'s body or title made since its last
+/// ready-for-agent labelling by a Trusted account, or ever if it has none, by
+/// an account that is not a Trusted account, if there is one. thirdshift
+/// checks this before putting `ready-for-agent` back on a waiting Spec, so its
+/// own labelling never launders an untrusted edit.
+pub fn untrusted_edit_since_ready(
+    reads: &impl Reads,
+    issue: &IssueUrl,
+) -> Result<Option<IssueText>> {
+    let mut check = Check::new(reads);
+    let since = check.trusted_ready_at(issue)?;
+    check.untrusted_edit(issue, since)
+}
+
 /// Whether an author's `authorAssociation` with the repository makes them a
 /// Trusted account: its owner, a member of the organization that owns it, or
 /// a collaborator on it.
@@ -392,6 +406,34 @@ mod tests {
 
         assert_eq!(issue_trust_of(&reads), Some(UntrustedIssue::ReadyLabel));
         assert!(reads.edits_read.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_waiting_spec_counts_edits_since_its_last_trusted_labelling_not_a_later_untrusted_one() {
+        let reads = InMemory::with(Issue {
+            labellings: vec![by("reader", 1), by("outsider", 3)],
+            body_edits: vec![by("outsider", 2)],
+            ..Issue::default()
+        });
+
+        assert_eq!(
+            untrusted_edit_since_ready(&reads, &url(ISSUE)).unwrap(),
+            Some(IssueText::Body)
+        );
+    }
+
+    #[test]
+    fn a_waiting_spec_ignores_edits_before_its_last_trusted_labelling() {
+        let reads = InMemory::with(Issue {
+            labellings: vec![by("reader", 2)],
+            title_edits: vec![by("outsider", 1), by("member", 3)],
+            ..Issue::default()
+        });
+
+        assert_eq!(
+            untrusted_edit_since_ready(&reads, &url(ISSUE)).unwrap(),
+            None
+        );
     }
 
     #[test]
