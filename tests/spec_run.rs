@@ -3877,3 +3877,21 @@ fn a_waiting_spec_runs_handback_does_not_let_an_earlier_untrusted_ticket_edit_st
         result.stderr
     );
 }
+
+#[test]
+fn a_spec_run_failed_for_an_untrusted_ticket_says_so_in_its_comment() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
+    scenario.issue_labelled(21, &["needs-info"]);
+    let mut state = scenario.gh_state();
+    state["edits"] = serde_json::json!({"21": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-02T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "agent-failed"]);
+    let comments = scenario.issue_comments(SPEC);
+    assert!(comments[0].contains("Trusted account"), "{}", comments[0]);
+}

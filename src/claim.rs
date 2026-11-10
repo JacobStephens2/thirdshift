@@ -420,6 +420,11 @@ impl<'a> Claimed<'a> {
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
             Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
+            // Pickup never takes a Security fix, so a waiting one stays with
+            // the Day shift as a failed one does, its details in its advisory.
+            Ending::Waiting | Ending::Failed if self.security_fix => {
+                self.label_failed(outside);
+            }
             Ending::Waiting => {
                 self.hand_back(outside);
                 return true;
@@ -429,9 +434,6 @@ impl<'a> Claimed<'a> {
             Ending::BeforeDelivery if self.security_fix => {}
             Ending::BeforeDelivery => {
                 self.release_if_nothing_on_origin(outside);
-            }
-            Ending::Failed if self.security_fix => {
-                self.label_failed(outside);
             }
             Ending::Failed => {
                 let not_released = self.release_if_nothing_on_origin(outside);
@@ -1341,6 +1343,18 @@ mod tests {
             issue.calls,
             labelling_failed(&["security-fix", "agent-failed"])
         );
+    }
+
+    #[test]
+    fn a_waiting_security_fix_spec_is_swapped_for_agent_failed_and_owes_no_comment() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["security-fix", "ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+
+        let owed = claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(labels(&issue), ["security-fix", "agent-failed"]);
+        assert!(!owed);
     }
 
     #[test]

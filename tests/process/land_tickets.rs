@@ -526,3 +526,51 @@ fn preserved_spec_proof(scenario: &Scenario) -> Option<String> {
         }
     })
 }
+
+#[test]
+fn a_custom_process_whose_spec_only_waits_posts_a_comment_matching_its_label() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "gather", LAND_TICKETS);
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[])]);
+    scenario.issue_labelled(8, &["needs-triage"]);
+    scenario.agent_does_for(9, &agent_lands_ticket(9, "issue-7"));
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let labels = scenario.issue_labels(7);
+    let comments = scenario.issue_comments(7);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    if labels.contains(&"agent-failed".to_string()) {
+        assert!(
+            comments[0].contains("Put `ready-for-agent` back to retry."),
+            "{}",
+            comments[0]
+        );
+        assert!(
+            !comments[0].contains("ended only waiting"),
+            "{}",
+            comments[0]
+        );
+    }
+}
+
+#[test]
+fn a_spec_branch_whose_tickets_only_wait_hands_the_spec_back() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "gather", LAND_TICKETS);
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[])]);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.issue_labelled(9, &["needs-info"]);
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "issue-7"));
+
+    let result = scenario.run(&["process", "gather", "issue", "7"]);
+
+    let labels = scenario.issue_labels(7);
+    assert!(
+        !labels.contains(&"agent-failed".to_string()),
+        "{labels:?}\n{}",
+        result.stderr
+    );
+    assert_eq!(labels, ["ready-for-agent"]);
+}

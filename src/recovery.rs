@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::harness::Harness;
+use crate::harness::interpretation::SessionFailure;
 
 // Shared by rendering and child Run accounting: one owner for the line protocol.
 const STOPPED: &str = "Stopped at: ";
@@ -335,6 +336,20 @@ pub fn comment(
         format!("{PRESERVED}{preserved}"),
     ];
     render(cause, facts, machine, RETRY_BY_LABEL)
+}
+
+/// `error` as a Recovery comment's cause, built only from factory-owned
+/// facts: a failed session's Harness diagnostic is left out, since the
+/// session's agent can write it.
+pub fn cause(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .map(|layer| match layer.downcast_ref::<SessionFailure>() {
+            Some(failure) => failure.without_diagnostic(),
+            None => layer.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 /// The comment's text: the attribution line, `cause` with local paths taken

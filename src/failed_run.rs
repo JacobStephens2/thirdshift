@@ -54,7 +54,7 @@ impl FailedRun {
         crate::recovery::comment(
             self.recovery.as_deref(),
             branch,
-            &format!("{:#}", self.error),
+            &crate::recovery::cause(&self.error),
             self.pr_url.as_deref(),
             crate::host::name().as_deref(),
         )

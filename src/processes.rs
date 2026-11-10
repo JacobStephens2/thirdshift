@@ -523,7 +523,7 @@ fn before_steps_comment(selection: &Selection, error: &anyhow::Error) -> String 
     recovery::comment(
         None,
         Some(selection.branch()),
-        &format!("{error:#}"),
+        &recovery::cause(error),
         pr_url,
         crate::host::name().as_deref(),
     )
@@ -1060,6 +1060,17 @@ fn run_issue_branch(
         (None, Err(error)) => Some(before_steps_comment(&selection, error)),
         (None, Ok(_)) => None,
     };
+    // A land-tickets Step whose Spec only waits ends the Claim as a waiting
+    // Spec run does, matching its comment.
+    let failed_ending = if completed
+        .failed_run
+        .as_ref()
+        .is_some_and(crate::failed_run::FailedRun::waiting)
+    {
+        claim::Ending::Waiting
+    } else {
+        claim::Ending::Failed
+    };
     drop(completed);
     if result.is_ok() && not_reproduced {
         claim.end(claim::Ending::NotReproduced, None);
@@ -1073,7 +1084,7 @@ fn run_issue_branch(
     } else if result.is_ok() {
         claim.end(claim::Ending::BeforeDelivery, None);
     } else {
-        claim.end(claim::Ending::Failed, comment);
+        claim.end(failed_ending, comment);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));

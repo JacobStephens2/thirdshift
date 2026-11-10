@@ -240,6 +240,20 @@ impl fmt::Display for SessionFailure {
 impl std::error::Error for SessionFailure {}
 
 impl SessionFailure {
+    /// How the session ended, without the Harness's diagnostic: the session's
+    /// agent can write that, so it stays off GitHub.
+    pub fn without_diagnostic(&self) -> String {
+        Self {
+            harness: self.harness,
+            diagnostic: None,
+            before_first_turn: self.before_first_turn,
+            session_id: None,
+            oom_killed: self.oom_killed,
+            status: self.status,
+        }
+        .to_string()
+    }
+
     /// The Harness never ran: before any turn, it exited with the shell's
     /// "cannot execute" (126) or "not found" (127). macOS runs a file it can't
     /// execute through `/bin/sh`, which reports either, where Linux refuses to

@@ -460,9 +460,15 @@ fn land_tickets(
         for line in &lines {
             outside.step(line.clone());
         }
+        let untrusted = if board.only_waiting() {
+            untrusted_ticket(outside, &board)
+        } else {
+            None
+        };
         Err(TicketsNotDone {
             not_done,
-            only_waiting: board.only_waiting() && tickets_trusted(outside, &board),
+            only_waiting: board.only_waiting() && untrusted.is_none(),
+            untrusted,
         }
         .into())
     });
@@ -552,26 +558,30 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
     Ok(())
 }
 
-/// Whether every open Ticket in the Spec's repository passes the
-/// Trusted-account check for Tickets, through `outside`. Handing a waiting
-/// Spec back labels it `ready-for-agent` again, which would excuse an untrusted
-/// edit of a Ticket made before then, so a Ticket that fails the check, or
-/// cannot be checked, fails the Spec run instead.
-fn tickets_trusted(outside: &mut impl Outside, board: &TicketBoard) -> bool {
+/// Why the first open Ticket in the Spec's repository that fails the
+/// Trusted-account check for Tickets, through `outside`, fails it, if one
+/// does. Handing a waiting Spec back labels it `ready-for-agent` again, which
+/// would excuse an untrusted edit of a Ticket made before then, so a Ticket
+/// that fails the check, or cannot be checked, fails the Spec run instead.
+fn untrusted_ticket(outside: &mut impl Outside, board: &TicketBoard) -> Option<String> {
     board
         .open_here()
-        .all(|ticket| match outside.ticket_trust(ticket) {
-            Ok(None) => true,
+        .find_map(|ticket| match outside.ticket_trust(ticket) {
+            Ok(None) => None,
             Ok(Some(check)) => {
-                outside.step(format!("Ticket #{}: {check}", ticket.number));
-                false
+                let reason = format!("Ticket #{}: {check}", ticket.number);
+                outside.step(reason.clone());
+                Some(reason)
             }
             Err(error) => {
                 outside.step(format!(
                     "could not check Ticket #{} against the Trusted account rule: {error:#}",
                     ticket.number
                 ));
-                false
+                Some(format!(
+                    "could not check Ticket #{} against the Trusted account rule",
+                    ticket.number
+                ))
             }
         })
 }
@@ -579,11 +589,13 @@ fn tickets_trusted(outside: &mut impl Outside, board: &TicketBoard) -> bool {
 /// A Spec run's Tickets not done, `not_done`, and whether the Spec run is
 /// `only_waiting`, on a person or on other work, with none failed or
 /// interrupted: its Claim then hands the Spec back instead of labelling it
-/// `agent-failed`. Both read alike.
+/// `agent-failed`. If it would have been, but a Ticket failed the
+/// Trusted-account check for Tickets, `untrusted` says why.
 #[derive(Debug)]
 pub(crate) struct TicketsNotDone {
     not_done: Vec<String>,
     pub(crate) only_waiting: bool,
+    untrusted: Option<String>,
 }
 
 impl TicketsNotDone {
@@ -608,7 +620,11 @@ impl std::error::Error for TicketsNotDone {}
 
 impl std::fmt::Display for TicketsNotDone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Tickets not done: {}", self.not_done.join(", "))
+        write!(f, "Tickets not done: {}", self.not_done.join(", "))?;
+        if let Some(untrusted) = &self.untrusted {
+            write!(f, "; not handed back, as {untrusted}")?;
+        }
+        Ok(())
     }
 }
 
