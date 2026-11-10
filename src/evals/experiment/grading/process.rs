@@ -26,29 +26,84 @@ pub(super) fn execute(
         .as_ref()
         .context("missing process_grading")?;
     let deadline = Instant::now() + timeout;
-    let snapshot = match snapshot(task, trial, deadline) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return Ok(vec![Check {
-                command: None,
-                passed: false,
-                reason: format!("could not prepare process Grader: {error:#}"),
-            }]);
-        }
-    };
     let commands: Vec<_> = grading
         .fail_to_pass
         .iter()
         .chain(&grading.pass_to_pass)
         .cloned()
         .collect();
+    let source = task.directory.join(&task.manifest.repository);
+    let paths: Vec<_> = grading
+        .test_files
+        .iter()
+        .chain(&grading.test_fakes)
+        .cloned()
+        .collect();
+    let code =
+        repository::bytes_until(trial, &["rev-parse", "--verify", "HEAD^{commit}"], deadline)
+            .and_then(|commit| Ok(std::str::from_utf8(&commit)?.trim().to_owned()));
+    let code = match code {
+        Ok(commit) => commit,
+        Err(error) => return Ok(vec![unprepared("process Grader", &error)]),
+    };
+    overlaid(
+        Source {
+            repository: trial,
+            commit: &code,
+        },
+        Source {
+            repository: &source,
+            commit: &task.manifest.change,
+        },
+        &paths,
+        &commands,
+        Run {
+            name: "process Grader",
+            deadline,
+            caps,
+        },
+    )
+}
+
+/// One commit in one repository.
+pub(in super::super) struct Source<'a> {
+    pub repository: &'a Path,
+    pub commit: &'a str,
+}
+
+/// One named code-Grader run, bounded by a deadline shared with its snapshot.
+pub(in super::super) struct Run<'a> {
+    pub name: &'a str,
+    pub deadline: Instant,
+    pub caps: &'a Caps,
+}
+
+/// Export `code`'s commit, lay `paths` from `tests`'s commit over it, and run
+/// `commands` offline in the code-Grader sandbox, all before the deadline.
+/// A snapshot that cannot be prepared is one failed check.
+pub(in super::super) fn overlaid(
+    code: Source<'_>,
+    tests: Source<'_>,
+    paths: &[String],
+    commands: &[Vec<String>],
+    run: Run<'_>,
+) -> Result<Vec<Check>> {
+    let Run {
+        name,
+        deadline,
+        caps,
+    } = run;
+    let snapshot = match snapshot(&code, &tests, paths, deadline) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return Ok(vec![unprepared(name, &error)]),
+    };
     let mut checks = code_grader::execute(
         &snapshot.path().join("repository"),
         &Reports {
             standards: None,
             spec: None,
         },
-        &commands,
+        commands,
         code_grader::Timeout::Deadline(deadline),
         caps,
         true,
@@ -65,35 +120,71 @@ pub(super) fn execute(
     Ok(checks)
 }
 
-fn snapshot(task: &Task, trial: &Path, deadline: Instant) -> Result<tempfile::TempDir> {
-    let grading = task
-        .manifest
-        .process_grading
-        .as_ref()
-        .context("missing process_grading")?;
+fn unprepared(what: &str, error: &anyhow::Error) -> Check {
+    Check {
+        command: None,
+        passed: false,
+        reason: format!("could not prepare {what}: {error:#}"),
+    }
+}
+
+/// Files a commit adds or changes since `base`, in path order.
+pub(in super::super) fn changed(
+    repository: &Path,
+    base: &str,
+    commit: &str,
+    deadline: Instant,
+) -> Result<Vec<String>> {
+    let names = repository::bytes_until(
+        repository,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=AM",
+            base,
+            commit,
+            "--",
+        ],
+        deadline,
+    )?;
+    names
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let name = std::str::from_utf8(name).context("changed paths must be UTF-8")?;
+            format::relative_path(name)?;
+            Ok(name.to_owned())
+        })
+        .collect()
+}
+
+fn snapshot(
+    code: &Source<'_>,
+    tests: &Source<'_>,
+    paths: &[String],
+    deadline: Instant,
+) -> Result<tempfile::TempDir> {
     let snapshot = tempfile::Builder::new()
         .prefix("process-grader-")
         .tempdir()?;
     let destination = snapshot.path().join("repository");
     fs::create_dir(&destination)?;
-    let commit =
-        repository::bytes_until(trial, &["rev-parse", "--verify", "HEAD^{commit}"], deadline)?;
-    let commit = std::str::from_utf8(&commit)?.trim();
-    for file in files(trial, commit, deadline)? {
-        file.write(trial, &destination, deadline)?;
+    for file in files(code.repository, code.commit, deadline)? {
+        file.write(code.repository, &destination, deadline)?;
     }
-    let source = task.directory.join(&task.manifest.repository);
-    let reference = files(&source, &task.manifest.change, deadline)?;
-    for path in grading.test_files.iter().chain(&grading.test_fakes) {
-        let file = reference
+    let overlay = files(tests.repository, tests.commit, deadline)?;
+    for path in paths {
+        let file = overlay
             .iter()
             .find(|file| &file.path == path)
-            .with_context(|| format!("reference fix has no test file {path}"))?;
+            .with_context(|| format!("test commit has no test file {path}"))?;
         ensure!(
             matches!(file.mode.as_str(), "100644" | "100755"),
-            "reference test must be a regular file: {path}"
+            "overlaid test must be a regular file: {path}"
         );
-        file.write(&source, &destination, deadline)?;
+        file.write(tests.repository, &destination, deadline)?;
     }
     Ok(snapshot)
 }

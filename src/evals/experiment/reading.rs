@@ -18,6 +18,7 @@ struct Observation {
     minutes: Minutes,
     voids: Voids,
     usage: usage::Arms,
+    pairs: Vec<super::pairs::Pair>,
 }
 
 pub(super) fn read(stored: &Stored) -> Result<View> {
@@ -89,6 +90,7 @@ impl Observation {
                 observation.voids.include(result);
             }
         }
+        observation.pairs = super::pairs::read(files, &stored.directory)?;
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions
@@ -100,7 +102,7 @@ impl Observation {
     // and the Experiment metadata already loaded by Stored.
     fn project(self, stored: &Stored) -> View {
         View {
-            format: 8,
+            format: 9,
             name: stored.name(),
             name_set: stored.name.is_some(),
             description: stored.description.clone(),
@@ -140,6 +142,7 @@ impl Observation {
             usage: self.usage,
             findings: self.voids.findings(),
             voids: self.voids,
+            pairs: self.pairs,
         }
     }
 }

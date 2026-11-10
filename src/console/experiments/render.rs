@@ -307,6 +307,7 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
         }
         html.push_str("</dl></section>");
     }
+    html.push_str(&pairs(view));
     for finding in &view.findings {
         html.push_str(&format!(
             "<p class=\"experiment-callout\">Finding: {}</p>",
@@ -322,6 +323,53 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
         html.push_str(&arms(view));
     }
     html.push_str(&bar(view));
+    html
+}
+
+/// Base-tests and cross-tests per pair, numbered from 1: evidence, not Scores.
+fn pairs(view: &View) -> String {
+    if view.pairs.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(
+        "<section aria-label=\"Pair evidence\"><h2>Pair evidence</h2><p>Each Arm's new tests, run offline on the unchanged base and on the other Arm's final commit. A cross-test failure is a disagreement to look into, not a defect, and changes no Score.</p><table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Arm</th><th scope=\"col\">New tests</th><th scope=\"col\">On the base</th><th scope=\"col\">On the other Arm</th></tr></thead><tbody>",
+    );
+    for pair in &view.pairs {
+        for (arm, side) in [("Baseline", &pair.baseline), ("Candidate", &pair.candidate)] {
+            let tests = if side.test_files.is_empty() {
+                "None".to_owned()
+            } else {
+                side.test_files
+                    .iter()
+                    .map(|file| format!("<code>{}</code>", esc(file)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let unknown = || {
+                side.error.as_deref().map_or_else(
+                    || "—".to_owned(),
+                    |error| format!("Unavailable: {}", esc(error)),
+                )
+            };
+            let base = match side.fails_on_base {
+                Some(true) => "Fails".to_owned(),
+                Some(false) => "Passes".to_owned(),
+                None => unknown(),
+            };
+            let other = match side.passes_on_other {
+                Some(true) => "Passes".to_owned(),
+                Some(false) => "Fails: disagreement".to_owned(),
+                None => unknown(),
+            };
+            html.push_str(&format!(
+                "<tr><td>{}/{} #{}</td><td>{arm}</td><td>{tests}</td><td>{base}</td><td>{other}</td></tr>",
+                esc(&pair.suite),
+                esc(&pair.task),
+                pair.trial + 1
+            ));
+        }
+    }
+    html.push_str("</tbody></table></section>");
     html
 }
 

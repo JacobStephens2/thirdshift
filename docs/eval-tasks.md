@@ -118,6 +118,27 @@ effort = "high"
   repository after the standard library, so a committed module cannot replace
   one. Process tasks use this table instead of `checks`; review tasks cannot
   use it.
+
+  The optional `[process_grading.new_tests]` table adds base-tests and
+  cross-tests for each pair of Trials, as evidence beside the Scores:
+
+  ```toml
+  [process_grading.new_tests]
+  paths = ["tests/*.rs"]
+  command = ["cargo", "test", "--offline", "--test", "{stem}"]
+  ```
+
+  `paths` is nonempty; each pattern is confined and relative to the
+  repository, and `*` matches within one path component. An Arm's new test
+  files are those its final commit adds or changes since `base` that match a
+  pattern. `command` is a nonempty argument vector run once per new test file,
+  with `{path}` replaced by the file's repository path and `{stem}` by its
+  name without the last extension. After both Trials of a pair finish, each
+  Arm's new test files are overlaid on `base`, then on the other Arm's final
+  commit, the same way as the reference tests above, and run offline in bwrap.
+  Each run shares the Bar's timeout with preparing its snapshot. Results go to
+  the Experiment's `pairs` ([Experiment results](experiment-results.md)); they
+  never change a Score.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the

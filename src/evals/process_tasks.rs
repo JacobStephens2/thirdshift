@@ -67,6 +67,7 @@ impl From<&TestSelection> for ProcessGrading {
             test_fakes: selection.shared_fakes.clone(),
             fail_to_pass: selection.fail_to_pass.clone(),
             pass_to_pass: selection.pass_to_pass.clone(),
+            new_tests: None,
         }
     }
 }

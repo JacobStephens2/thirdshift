@@ -32,6 +32,51 @@ fn console_experiment_does_not_claim_efficiency_is_outside_the_bar() {
 }
 
 #[test]
+fn console_experiment_shows_pair_evidence_as_disagreements_not_scores() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    fs::create_dir_all(directory.join("pairs")).unwrap();
+    let side = |files: &[&str], base: Option<bool>, other: Option<bool>| {
+        json!({"test_files": files, "fails_on_base": base, "passes_on_other": other,
+            "disagreement": other == Some(false), "base": [], "cross": [], "error": null})
+    };
+    fs::write(
+        directory.join("pairs/fixture--pair--0.json"),
+        serde_json::to_vec(&json!({
+            "suite": "process", "task": "fixture", "trial": 0,
+            "baseline": side(&["test_new_baseline.py"], Some(true), Some(true)),
+            "candidate": side(&["test_new_<candidate>.py"], Some(false), Some(false)),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    let section = html
+        .split_once("<section aria-label=\"Pair evidence\">")
+        .expect("pair evidence section")
+        .1
+        .split_once("</section>")
+        .unwrap()
+        .0;
+    assert!(section.contains("process/fixture #1"), "{section}");
+    assert!(
+        section.contains("<code>test_new_baseline.py</code>"),
+        "{section}"
+    );
+    assert!(
+        section.contains("test_new_&#60;candidate&#62;.py"),
+        "{section}"
+    );
+    assert!(section.contains("Fails"), "{section}");
+    assert!(section.contains("Passes"), "{section}");
+    assert!(section.contains("Fails: disagreement"), "{section}");
+    assert!(section.contains("changes no Score"), "{section}");
+}
+
+#[test]
 fn openapi_experiment_format_matches_served_list_and_detail() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

@@ -1342,6 +1342,19 @@ and their failures name the selector in
 the Score's reason. The task's required `process_grading` table declares the
 files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
 
+When the task's `process_grading.new_tests` table says how to find and run an
+Arm's own new tests, each pair of Trials (Baseline Trial *k* with Candidate
+Trial *k*) also gets base-tests and cross-tests once both Trials finish. Each
+Arm's new test files, those its final commit adds or changes that match the
+table's paths, run on the unchanged base and against the other Arm's final
+commit, offline in the code Grader's sandbox, each run within the Bar's
+timeout. New tests that pass on the base may not check the change. A
+cross-test failure is a disagreement to look into, not a defect: this evidence
+changes no Score and no Verdict. The Console's Experiment page lists it under
+Pair evidence, the text view adds a line for each disagreement or new test
+that passes on the base, and `thirdshift experiments <id> --json` keeps it
+under `pairs`.
+
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1585,7 +1598,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 8`.
+[Experiment results format](experiment-results.md), identified by `format: 9`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
