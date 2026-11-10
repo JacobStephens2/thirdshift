@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 const reproduceReviewFinding = require('../reproductions/span-tree-review.cjs');
 
 for (const mode of ['empty', 'chips', 'totals']) {
@@ -39,8 +40,8 @@ before(async () => {
     stages: [{ name: 'Tickets', began_at: new Date(start).toISOString(), session_log: null }]
   };
   recordPath = join(folder, '7-fixture.command.json');
-  await writeFile(recordPath, JSON.stringify(record));
-  await writeFile(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
+  await replaceRecord(recordPath, JSON.stringify(record));
+  await replaceRecord(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
     ...record, kind: 'Run', name: 'ticket-99', issue: { ...record.issue, number: 99 }, parent_record: recordPath,
     session_log: session, stages: [
       { name: 'implement', began_at: new Date(start + 1000).toISOString(), session_log: session },
@@ -166,12 +167,12 @@ test('refresh preserves folds, selected span, zoom and open Peek', async t => {
     // lives only in History. Move it into the recent Done group on other OSes.
     record.ended_at = new Date().toISOString();
   }
-  await writeFile(recordPath, JSON.stringify(record));
+  await replaceRecord(recordPath, JSON.stringify(record));
   await page.waitForFunction(() => document.querySelector('#span-tree')?.textContent.includes('Widgets refreshed'));
   assert.equal(await page.locator(`[data-span-id="${ids.session}"]`).getAttribute('aria-expanded'), 'true');
   assert.equal(await page.locator(`[data-span-id="${ids.model}"]`).getAttribute('aria-selected'), 'true');
   assert.match(await page.locator('#span-axis').textContent(), /Timeline zoomed around/);
   assert.equal(await page.locator('#peek').isVisible(), true);
   assert.equal(await page.locator('#peek-content details').filter({ hasText: /^Output/ }).getAttribute('open'), '');
-  await writeFile(recordPath, original);
+  await replaceRecord(recordPath, original);
 });

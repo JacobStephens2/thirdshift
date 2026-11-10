@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 let home, server, exited, browser, origin;
 const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
@@ -49,14 +50,14 @@ before(async () => {
       record.stages = [{ name: 'dispatched Run', began_at: time(170), session_log: null }];
       record.dispatched = [dispatched];
     }
-    await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify(record));
+    await replaceRecord(join(folder, `${number}-fixture.command.json`), JSON.stringify(record));
     await writeFile(join(folder, `${number}-fixture.log`), `Command ${number}\n`);
   }
   const security = JSON.parse(await readFile(join(folder, '3-fixture.command.json'), 'utf8'));
   security.kind = 'Security run';
   security.name = 'security-fixture';
   security.issue = null;
-  await writeFile(join(folder, '10-fixture.command.json'), JSON.stringify(security));
+  await replaceRecord(join(folder, '10-fixture.command.json'), JSON.stringify(security));
   // Different repository ranges must stay attributed to their own columns.
   const otherFolder = join(home, '.thirdshift/logs/aaa/first/commands/issue');
   await mkdir(otherFolder, { recursive: true });
@@ -70,7 +71,7 @@ before(async () => {
     other.stages[0].began_at = time(minutes);
     other.stages[1].began_at = time(minutes - 30);
     other.ended_at = time(minutes - 70);
-    await writeFile(join(otherFolder, `${number}-fixture.command.json`), JSON.stringify(other));
+    await replaceRecord(join(otherFolder, `${number}-fixture.command.json`), JSON.stringify(other));
   }
   await writeFile(join(home, '.thirdshift/logs/acme/widgets/activity.log'),
     '2026-10-01 12:00:00 Run #9 started: commands/issue/9-20261001T120000+0000.log\n2026-10-01 12:20:00 Run #9 ended: merged\n');
@@ -131,12 +132,12 @@ test('a live Lanes push preserves an unsubmitted hours selection', async t => {
   const fixture = JSON.parse(before);
   fixture.issue.title = 'Changed while the Lanes filter is being edited';
   try {
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.getByText(fixture.issue.title, { exact: true }).waitFor();
     assert.equal(await page.locator('[name="hours"]').inputValue(), '12');
     await page.getByRole('button', { name: 'Show', exact: true }).click();
     await page.waitForURL('**hours=12');
-  } finally { await writeFile(path, before); }
+  } finally { await replaceRecord(path, before); }
 });
 
 test('time headings distinguish a live Pickup run and its Run and name kinds once at 390 px', { skip: process.platform !== 'linux' }, async t => {
@@ -272,7 +273,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
         fixture.issue.title = `Live insertion ${index}`;
         fixture.started_at = new Date().toISOString();
         if (index === 0) delete fixture.parent_record;
-        await writeFile(path, JSON.stringify(fixture));
+        await replaceRecord(path, JSON.stringify(fixture));
         await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor();
         assert.ok(Math.abs((await ticket.boundingBox()).x - left) < 1, `${width} ${view} ${position}: insertion ${index} moved the Ticket`);
         assert.equal(await page.evaluate(() => document.activeElement?.className), 'peek-link');
@@ -314,14 +315,14 @@ test('Stages handles invalid or unavailable preferences and preserves selector f
       await page.waitForFunction(() => document.querySelectorAll('.stage-grid').length === 2);
       const fixture = JSON.parse(before);
       fixture.issue.title = `Focus during ${storage} preference storage`;
-      await writeFile(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
       await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor({ state: 'attached' });
       assert.equal(await page.evaluate(() => document.activeElement.id), 'stages-view');
       assert.equal(await selector.inputValue(), 'repository');
       assert.deepEqual(errors, []);
     } finally {
       await context.close();
-      await writeFile(path, before);
+      await replaceRecord(path, before);
     }
   }
 });
@@ -337,14 +338,14 @@ test('Stages orders starts within the same second by their recorded time', async
     for (const [index, path] of paths.entries()) {
       const fixture = JSON.parse(before[index]);
       fixture.started_at = new Date(second + [100, 900][index]).toISOString();
-      await writeFile(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
     }
     const page = await context.newPage();
     await page.goto(`${origin}/?page=stages`);
     const headings = await page.locator('thead .peek-link').allTextContents();
     assert.ok(headings.indexOf('Ticket run · acme/widgets#4') < headings.indexOf('Ticket run · acme/widgets#3'));
   } finally {
-    await Promise.all(paths.map((path, index) => writeFile(path, before[index])));
+    await Promise.all(paths.map((path, index) => replaceRecord(path, before[index])));
   }
 });
 
