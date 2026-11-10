@@ -76,8 +76,11 @@ pub struct AlreadyRunning {
 
 #[derive(Debug)]
 enum Why {
+    Experiment(String),
     /// `running` Commands are running, at or over the limit.
-    AtLimit { running: usize },
+    AtLimit {
+        running: usize,
+    },
     /// Another Pass of this one's kind is running.
     SameKind(PassKind),
     /// A thirdshift from before the Command limit is running an exclusive
@@ -88,11 +91,12 @@ enum Why {
 impl fmt::Display for AlreadyRunning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (repo, limit) = (self.repo.slug(), self.limit);
-        match self.why {
+        match &self.why {
+            Why::Experiment(id) => write!(f, "Experiment {id} is live on this machine"),
             Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
-                commands_running(running)
+                commands_running(*running)
             ),
             Why::SameKind(kind) => write!(f, "{} is already running on {repo}", kind.name()),
             Why::Older => write!(f, "an older thirdshift's Pass is running on {repo}"),
@@ -114,6 +118,15 @@ fn commands_running(n: usize) -> String {
 /// Command runs all the same, only Passes don't count it.
 pub fn hold_slot(repo: &Repo) {
     let taken = (|| {
+        hold(crate::host_work::hold_command()?);
+        if let Some(id) = crate::logs::live_commands()?
+            .into_iter()
+            .find_map(|command| command.experiment)
+        {
+            crate::progress::step(format!(
+                "warning: Experiment {id} is live on this machine; this Command will compete with its Trials"
+            ));
+        }
         let slots = Slots::of(repo)?;
         let _counting = slots.counting()?;
         let free = slots.count()?.free;
@@ -137,6 +150,17 @@ pub fn hold_pass(
     limit: NonZeroUsize,
     sharing: Sharing,
 ) -> Result<Option<AlreadyRunning>> {
+    let work = crate::host_work::hold_command()?;
+    if let Some(id) = crate::logs::live_commands()?
+        .into_iter()
+        .find_map(|command| command.experiment)
+    {
+        return Ok(Some(AlreadyRunning {
+            repo: repo.clone(),
+            limit,
+            why: Why::Experiment(id),
+        }));
+    }
     let slots = Slots::of(repo)?;
     let _counting = slots.counting()?;
     let skipped = |why| {
@@ -172,6 +196,7 @@ pub fn hold_pass(
         hold(lock);
     }
     hold(legacy);
+    hold(work);
     Ok(None)
 }
 

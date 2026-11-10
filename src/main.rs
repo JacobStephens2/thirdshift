@@ -50,6 +50,7 @@ mod github;
 mod harness;
 #[cfg(target_os = "linux")]
 mod host;
+mod host_work;
 #[cfg(target_os = "linux")]
 mod implement;
 #[cfg(target_os = "linux")]
@@ -196,6 +197,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
+         --no-wait                                  Skip the host wait; record competing Commands with the Verdict
        thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
@@ -234,6 +236,8 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
 Pass commands: architect, pickup, secure, review --author <login>, fix, triage (no supplied work). For architect, pickup, secure, fix and triage, base <branch> selects an origin branch; fix also accepts author <login>.
+Every Pass, including an issue-less Custom process, skips while an Experiment is live on this machine for this OS account.
+Commands on an Issue or pull request URL still run with a competition warning. Experiments wait for other live Commands before starting Trials; status and the Console name the wait. --no-wait bypasses it.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/

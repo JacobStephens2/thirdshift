@@ -30,6 +30,7 @@ use super::{Pass, activity};
 pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
+pub(super) use inbox::active_runs;
 pub(super) use inbox::{Departure, Group, InboxItem, NeedsYouKind, RowOrder};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};

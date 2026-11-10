@@ -162,6 +162,10 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn logs_directory(&self) -> Option<PathBuf> {
+        self.logs_dir.clone()
+    }
+
     /// Hand on the progress line `message`, to the terminal even while a
     /// quiet pass holds its other lines, and to the Command log as any
     /// other.
@@ -504,6 +508,13 @@ impl<O: Outside> Record<O> {
     pub(super) fn experiment(&mut self, description: &crate::evals::experiment::Description) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.experiment = Some(description.clone());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn waiting_for(&mut self, commands: &[String]) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.waiting_for = commands.to_vec();
             self.write_record();
         }
     }

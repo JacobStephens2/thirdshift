@@ -66,6 +66,9 @@ mod pairs;
 #[path = "experiments/panel.rs"]
 mod panel;
 
+#[path = "experiments/host.rs"]
+mod host;
+
 #[test]
 fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
     let fixture = Fixture::new();
@@ -1601,6 +1604,9 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(result.stdout.lines().count(), 1);
     let experiment: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(experiment["state"], "completed");
+    assert_eq!(experiment["commands_at_start"], 0);
+    assert_eq!(experiment["no_wait"], false);
+    assert_eq!(experiment["waiting_for"], json!([]));
     assert_eq!(experiment["baseline_ref"], "main (merge base)");
     assert_eq!(experiment["candidate_ref"], "candidate");
     assert_eq!(experiment["title"], "Candidate");

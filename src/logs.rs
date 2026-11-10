@@ -18,6 +18,8 @@ mod activity;
 mod command_record;
 pub mod dismiss;
 mod effects;
+mod live;
+pub(crate) use live::Command as LiveCommand;
 pub mod export;
 pub(crate) mod github;
 pub mod metrics;
@@ -55,6 +57,14 @@ pub use command_record::StageName as Stage;
 pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
+
+/// Live Commands of this OS account, across repositories, excluding this process.
+pub(crate) fn live_commands() -> anyhow::Result<Vec<LiveCommand>> {
+    let root = record()
+        .logs_directory()
+        .ok_or_else(|| anyhow::anyhow!("logs not configured"))?;
+    live::read(&root)
+}
 
 /// Find only a retained record owned by the process this Console just spawned.
 pub(crate) fn command_for_process(
@@ -389,6 +399,10 @@ pub fn issue_title(title: Option<String>) {
 /// Begin a stage, retaining its start time until the next transition.
 pub fn stage(stage: Stage) {
     record().stage(stage, None);
+}
+
+pub(crate) fn waiting_for(commands: &[String]) {
+    record().waiting_for(commands);
 }
 
 /// Keep the current Session trace, including a Resume's own log, as

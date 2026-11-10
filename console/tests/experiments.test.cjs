@@ -9,6 +9,32 @@ const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
 
+test('host waits and bypassed Command counts appear on Experiment pages and lists', async t => {
+  t.after(() => fixture.save(home, fixture.record()));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      const waiting = fixture.record();
+      waiting.waiting_for = ['Ticket run acme/widgets#7 <script>'];
+      await fixture.save(home, waiting);
+      await page.goto(`${origin}/experiments/${fixture.id}`);
+      assert.match(await page.locator('.experiment-lead').textContent(), /Waiting for Commands: Ticket run acme\/widgets#7 <script>/);
+      assert.equal(await page.locator('.experiment-lead script').count(), 0);
+      await page.goto(`${origin}/experiments`);
+      assert.match(await page.locator('.experiment-row .now').textContent(), /Waiting for Commands: Ticket run acme\/widgets#7/);
+      const completed = fixture.finish(fixture.record());
+      Object.assign(completed, { no_wait: true, commands_at_start: 2 });
+      await fixture.save(home, completed);
+      for (const route of [`/experiments/${fixture.id}`, '/experiments']) {
+        await page.goto(`${origin}${route}`);
+        assert.equal(await page.locator('.experiment-contention').textContent(), 'Started with --no-wait: 2 other Commands live at start');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      }
+    } finally { await context.close(); }
+  }
+});
+
 test('passing cheaper Candidates share the Verdict line with JSON and text on desktop and phone', async t => {
   const value = fixture.finish(fixture.record());
   Object.assign(value.bar, { margin: -1, draws: 1024, min_discriminating_tasks: 0, discriminating_tasks: { 'code-review': ['alpha', 'beta', 'gamma'] } });

@@ -271,12 +271,16 @@ pub(crate) fn active_runs_text(count: usize) -> String {
 }
 
 pub(super) fn stage_text(command: &Command) -> String {
-    stage_details(
+    let mut text = stage_details(
         command.record.outcome.as_deref(),
         command.state,
         command.stage.as_ref(),
         command.health.as_ref(),
-    )
+    );
+    if command.state == "live" && !command.record.waiting_for.is_empty() {
+        text.push_str(&format!(" · {}", command.record.waiting_for.join(", ")));
+    }
+    text
 }
 
 fn stage_details(
