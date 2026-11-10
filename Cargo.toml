@@ -27,7 +27,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 include_dir = "0.7.4"
 libc = "0.2.189"
 notify = "8.2.0"
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json", "form"] }
+scraper = { version = "0.29.0", default-features = false }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 rand = "=0.10.3"
 rand_distr = "=0.6.0"

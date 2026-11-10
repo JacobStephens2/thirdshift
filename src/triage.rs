@@ -14,6 +14,7 @@ use crate::labels::{self, Label};
 use crate::{command_limit, launch, logs, prompt, session, worktree};
 
 mod existing;
+mod images;
 mod pass;
 
 pub use pass::{Outcome, run as run_pass};
@@ -540,7 +541,7 @@ fn investigate(
             }
             Input::Issue(issue) => {
                 existing::check_trust(issue, &GitHub::new())?;
-                crate::delivery::hand_over_issue(issue, checkout.path())?;
+                images::hand_over(issue, checkout.path())?;
                 prompt::triage_issue(&skill.path, issue, options.read_machine)
             }
         };
