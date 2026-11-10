@@ -1697,11 +1697,34 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
 #[test]
 fn stop_and_resume_preserve_finished_trials_and_refuse_a_changed_bar() {
     let fixture = Fixture::new();
+    // Stop while one Trial has a Session and the other is still preparing its
+    // repository. The latter has an attempt directory but has not started.
+    let preparing = fixture.scenario.path("preparing-repository");
+    let release = fixture.scenario.path("release-preparation");
+    let git = fixture.scenario.path("bin/git");
+    fs::write(
+        &git,
+        format!(
+            r#"#!/bin/sh
+if [ ! -f {release:?} ]; then
+  case "$PWD" in *--candidate--1/attempt-*/*)
+    touch {preparing:?}
+    while [ ! -f {release:?} ]; do sleep 0.01; done
+    ;;
+  esac
+fi
+exec /usr/bin/git "$@"
+"#
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(git, fs::Permissions::from_mode(0o755)).unwrap();
     fixture.scenario.agent_does(&format!(
         r#"
 case "$PWD" in
   *--0/*) exit 0 ;;
 esac
+while [ ! -f {preparing:?} ]; do sleep 0.01; done
 touch '{}'
 while true; do sleep 0.05; done
 "#,
@@ -1731,10 +1754,22 @@ while true; do sleep 0.05; done
     let before = fixture.experiment();
     assert_eq!(before["state"], "interrupted");
     let attempts = retention::attempts(&fixture, &before);
+    let started_attempts: Vec<_> = attempts
+        .iter()
+        .filter(|attempt| attempt.join("started.json").is_file())
+        .collect();
+    assert!(!started_attempts.is_empty());
+    assert!(
+        started_attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     assert!(
         attempts
             .iter()
-            .all(|attempt| attempt.join("repository").is_dir())
+            .any(|attempt| !attempt.join("started.json").exists()
+                && !attempt.join("repository").exists()),
+        "the interrupted preparation must exercise an unstarted attempt"
     );
     let finished = before["results"].as_array().unwrap();
     assert!(!finished.is_empty());
@@ -1750,6 +1785,7 @@ while true; do sleep 0.05; done
         changed.stderr
     );
     assert_eq!(fixture.trial_calls().len(), calls_before);
+    fs::write(release, "").unwrap();
     fixture.scenario.agent_does("true");
     let resumed = fixture.run(&["--trials-per-task", "3"]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
@@ -1757,6 +1793,16 @@ while true; do sleep 0.05; done
     assert_eq!(after["state"], "completed");
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["results"].as_array().unwrap().len(), 6);
+    assert_eq!(
+        after["accounting"]["baseline"]["sessions"]
+            .as_u64()
+            .unwrap()
+            + after["accounting"]["candidate"]["sessions"]
+                .as_u64()
+                .unwrap(),
+        after["sessions"].as_array().unwrap().len() as u64,
+        "Every Session started before interruption must remain in Trial accounting"
+    );
     assert!(
         retention::attempts(&fixture, &after)
             .iter()

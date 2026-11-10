@@ -203,7 +203,7 @@ impl<'a> Execution<'a> {
             .as_nanos()
             .try_into()?;
         drop(caches);
-        interrupt::check()?;
+        let interruption = self.accounting_interruption()?;
         // A kernel kill in the Trial's scope is the outer launcher's evidence
         // the cap killed Trial work. The live watch catches slow kills; the
         // journal's `oom-kill` result covers fast ones, whose scope is already
@@ -211,52 +211,56 @@ impl<'a> Execution<'a> {
         // the Trial diagnosed them, so limit pauses keep pausing, and an
         // agent's own out-of-memory error leaves no kernel kill behind.
         let cap_killed = || launched.oom_killed();
-        let mut protocol = match output {
-            Ok(output) => {
-                fs::write(attempt.join("stdout"), &output.stdout)?;
-                fs::write(attempt.join("stderr"), &output.stderr)?;
-                // systemd-run reports its scope's signal death as an exit
-                // code, so a scoped SIGKILL arrives as 137, not as a signal.
-                let sigkilled = output.status.signal() == Some(libc::SIGKILL)
-                    || output.status.code() == Some(128 + libc::SIGKILL);
-                if sigkilled {
-                    Output::failed(
-                        started.elapsed().as_millis(),
-                        "Trial process killed (SIGKILL); external cause unknown",
-                    )
-                } else if !output.status.success() {
-                    if cap_killed() {
-                        void_memory_cap(started.elapsed().as_millis())
-                    } else {
-                        bail!(
-                            "Arm Trial protocol failed ({}): {}",
-                            output.status,
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-                    }
-                } else {
-                    match serde_json::from_slice::<Output>(&output.stdout) {
-                        Ok(protocol) => {
-                            ensure!(protocol.version == 1, "unsupported Trial result");
-                            protocol
+        let mut protocol = if let Some(error) = interruption {
+            void_interrupted(started.elapsed().as_millis(), &error)
+        } else {
+            match output {
+                Ok(output) => {
+                    fs::write(attempt.join("stdout"), &output.stdout)?;
+                    fs::write(attempt.join("stderr"), &output.stderr)?;
+                    // systemd-run reports its scope's signal death as an exit
+                    // code, so a scoped SIGKILL arrives as 137, not as a signal.
+                    let sigkilled = output.status.signal() == Some(libc::SIGKILL)
+                        || output.status.code() == Some(128 + libc::SIGKILL);
+                    if sigkilled {
+                        Output::failed(
+                            started.elapsed().as_millis(),
+                            "Trial process killed (SIGKILL); external cause unknown",
+                        )
+                    } else if !output.status.success() {
+                        if cap_killed() {
+                            void_memory_cap(started.elapsed().as_millis())
+                        } else {
+                            bail!(
+                                "Arm Trial protocol failed ({}): {}",
+                                output.status,
+                                String::from_utf8_lossy(&output.stderr)
+                            );
                         }
-                        Err(error) => {
-                            if cap_killed() {
-                                void_memory_cap(started.elapsed().as_millis())
-                            } else {
-                                return Err(error).context("invalid Trial result");
+                    } else {
+                        match serde_json::from_slice::<Output>(&output.stdout) {
+                            Ok(protocol) => {
+                                ensure!(protocol.version == 1, "unsupported Trial result");
+                                protocol
+                            }
+                            Err(error) => {
+                                if cap_killed() {
+                                    void_memory_cap(started.elapsed().as_millis())
+                                } else {
+                                    return Err(error).context("invalid Trial result");
+                                }
                             }
                         }
                     }
                 }
+                Err(error) if error.is::<process::TimedOut>() => {
+                    Output::failed(u128::from(self.timeout.as_secs()) * 1000, "Trial timed out")
+                }
+                Err(error) if error.is::<limits::Reached>() => monitor
+                    .into_inner()
+                    .cut_short(started.elapsed().as_millis()),
+                Err(error) => return Err(error),
             }
-            Err(error) if error.is::<process::TimedOut>() => {
-                Output::failed(u128::from(self.timeout.as_secs()) * 1000, "Trial timed out")
-            }
-            Err(error) if error.is::<limits::Reached>() => monitor
-                .into_inner()
-                .cut_short(started.elapsed().as_millis()),
-            Err(error) => return Err(error),
         };
         if protocol.outcome == Outcome::Failed && cap_killed() {
             protocol.outcome = Outcome::Void;
@@ -271,7 +275,8 @@ impl<'a> Execution<'a> {
                 protocol.steps = serde_json::from_slice(&fs::read(path)?)?;
             }
         }
-        let unchanged = task.manifest.session == crate::evals::format::Session::Process
+        let unchanged = protocol.void_cause == Some(VoidCause::Interrupted)
+            || task.manifest.session == crate::evals::format::Session::Process
             || before
                 .unchanged(&prepared_repo.repository)
                 .is_ok_and(|unchanged| unchanged);
@@ -279,7 +284,11 @@ impl<'a> Execution<'a> {
             integrity::tree_digest(&snapshot.repository)
                 .is_ok_and(|digest| digest == snapshot.digest)
         });
-        interrupt::check()?;
+        if let Some(error) = self.accounting_interruption()? {
+            protocol.outcome = Outcome::Void;
+            protocol.void_cause = Some(VoidCause::Interrupted);
+            protocol.cause = Some(format!("{error:#}"));
+        }
         // Keep known failures and external Void causes, including limit
         // stops. Repository changes invalidate an otherwise successful Trial,
         // including a process-shaped delivered outcome on a review session.
@@ -321,7 +330,18 @@ impl<'a> Execution<'a> {
         })?;
         trace.steps(&protocol.steps)?;
         trace.outcome(protocol.outcome);
-        complete(attempt, protocol, score)
+        let completed = complete(attempt, protocol, score)?;
+        interrupt::check()?;
+        Ok(completed)
+    }
+
+    // Priced Experiments must retain every started Session before propagating
+    // interruption. Legacy Experiments keep their original checkpoint policy.
+    fn accounting_interruption(&self) -> Result<Option<anyhow::Error>> {
+        match interrupt::check() {
+            Err(error) if self.pricing.is_some() => Ok(Some(error)),
+            result => result.map(|()| None),
+        }
     }
 
     fn command(
@@ -377,6 +397,13 @@ struct SealedSnapshot {
 /// A Trial its scope's cap killed: void with `memory_cap`, from the scope's
 /// `memory.events` or journal evidence. Only the outer launcher makes these,
 /// never the Trial itself.
+fn void_interrupted(total_ms: u128, error: &anyhow::Error) -> Output {
+    let mut output = Output::failed(total_ms, &format!("{error:#}"));
+    output.outcome = Outcome::Void;
+    output.void_cause = Some(VoidCause::Interrupted);
+    output
+}
+
 fn void_memory_cap(total_ms: u128) -> Output {
     let mut output = Output::failed(total_ms, crate::scope::OOM_KILL_CAUSE);
     output.outcome = Outcome::Void;
