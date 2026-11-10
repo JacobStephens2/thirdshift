@@ -31,18 +31,22 @@ pub(super) fn check_target(issue: &IssueUrl, github: &GitHub) -> Result<()> {
 }
 
 pub(super) fn check_trust(issue: &IssueUrl, github: &GitHub) -> Result<()> {
-    ensure!(
-        trust::trusted_association(&github.author_association(issue)?),
-        "issue #{} author is not a Trusted account",
-        issue.number
-    );
-    if let Some(text) = trust::untrusted_edit(github, issue, None)? {
-        anyhow::bail!(
-            "issue #{} {text} was edited by an account that is not a Trusted account",
-            issue.number
-        );
+    if let Some(reason) = trust_reason(issue, github)? {
+        anyhow::bail!("issue #{} {reason}", issue.number);
     }
     Ok(())
+}
+
+pub(super) fn trust_reason(issue: &IssueUrl, github: &GitHub) -> Result<Option<String>> {
+    if !trust::trusted_association(&github.author_association(issue)?) {
+        return Ok(Some("author is not a Trusted account".into()));
+    }
+    if let Some(text) = trust::untrusted_edit(github, issue, None)? {
+        return Ok(Some(format!(
+            "{text} was edited by an account that is not a Trusted account"
+        )));
+    }
+    Ok(None)
 }
 
 pub(super) struct Claim<'a> {
@@ -56,6 +60,10 @@ impl<'a> Claim<'a> {
     pub fn take(launch: &Git, issue: &'a IssueUrl) -> Result<Self> {
         let origin = crate::reservation::Reservation::take(launch, issue)?
             .with_context(|| format!("#{} is already reserved on origin", issue.number))?;
+        Self::reserved(issue, origin)
+    }
+
+    pub fn reserved(issue: &'a IssueUrl, origin: crate::reservation::Reservation) -> Result<Self> {
         let github = GitHub::new();
         check_target(issue, &github)?;
         let labels = github.issue_labels(issue)?;

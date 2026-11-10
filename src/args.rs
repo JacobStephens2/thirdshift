@@ -1403,7 +1403,7 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
-/// A Report to investigate, with only the choices a Triage session uses.
+/// A Report or issue to investigate, or an unattended Triage Pass.
 pub struct TriageArgs {
     pub issue: Option<IssueInput>,
     pub base: Option<String>,
@@ -1447,10 +1447,6 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     ensure!(
         parsed.issue.is_none() || parsed.file.is_none(),
         "cannot combine a triage Issue with --file <path>"
-    );
-    ensure!(
-        parsed.base.is_none() || parsed.issue.is_some(),
-        "triage base <branch> requires an Issue URL or number"
     );
     Ok(parsed)
 }
