@@ -44,7 +44,9 @@ impl Form {
         };
         self.repositories
             .iter()
-            .any(|choice| choice.repository == repository && choice.machine == machine)
+            .any(|choice| {
+                choice.repository.eq_ignore_ascii_case(&repository) && choice.machine == machine
+            })
             .then(|| Fix {
                 request: json!({"command":"fix", "repository":repository, "pull_request":pr.url})
                     .to_string(),

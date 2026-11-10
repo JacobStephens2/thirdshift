@@ -70,7 +70,7 @@ else:
         const logs = join(home, '.thirdshift/logs');
         const directory = join(logs, 'acme/widgets/commands/review');
         await mkdir(directory, { recursive: true });
-        const pull_request = `https://github.com/acme/widgets/pull/${number}`;
+        const pull_request = changes.pull_request ?? `https://github.com/acme/widgets/pull/${number}`;
         const now = new Date().toISOString();
         const path = join(directory, `${number}-fixture.command.json`);
         await replaceRecord(path, JSON.stringify({

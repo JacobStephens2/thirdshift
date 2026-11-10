@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { join } = require('node:path');
 const { startFixture } = require('./start-fixture.cjs');
+const { replaceRecord } = require('./records.cjs');
 const { hostname } = require('node:os');
 
 let fixture;
@@ -66,7 +67,7 @@ test('Start Fix run requires an eligible row, current run permission and a known
   const cronPath = join(fixture.home, 'crontab');
   const cron = await readFile(cronPath, 'utf8');
   t.after(async () => {
-    await writeFile(configPath, config);
+    await replaceRecord(configPath, config);
     await writeFile(cronPath, cron);
     fixture.scopes('read,security,act,run,admin');
     await fixture.readyPullRequest();
@@ -93,11 +94,27 @@ test('Start Fix run requires an eligible row, current run permission and a known
     assert.equal(await page.getByRole('button', { name: 'Start Fix run', exact: true }).count(), Number(scopes.includes('run')));
     assert.equal(await page.getByRole('button', { name: 'Copy fix command', exact: true }).count(), 1);
   }
-  await writeFile(configPath, config.replace(/^launch_directories = .*\n/, ''));
+  await replaceRecord(configPath, config.replace(/^launch_directories = .*\n/, ''));
   await writeFile(cronPath, '');
   await page.goto(fixture.origin);
   assert.equal(await page.getByRole('button', { name: 'Start Fix run', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Copy fix command', exact: true }).count(), 1);
+});
+
+test('Start Fix run recognizes GitHub repository identity across URL casing', async t => {
+  const pull_request = 'https://github.com/ACME/Widgets/pull/42';
+  await fixture.readyPullRequest(42, { pull_request });
+  t.after(() => fixture.readyPullRequest());
+  const page = await fixture.page();
+  t.after(() => page.context().close());
+  await page.getByRole('button', { name: 'Start Fix run', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'Confirm start', exact: true });
+  await confirm.waitFor();
+  assert.deepEqual(JSON.parse(await confirm.locator('pre').textContent()), {
+    command: 'fix', repository: 'ACME/Widgets', pull_request
+  });
+  await page.keyboard.press('Escape');
+  await confirm.waitFor({ state: 'hidden' });
 });
 
 test('Start Fix run works after live row and permission changes and preserves uncertain-response feedback', async t => {
