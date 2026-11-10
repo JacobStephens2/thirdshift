@@ -393,7 +393,9 @@ fn a_failed_fix_records_its_ending_and_is_never_retried_unattended() {
             .unwrap()
             .contains("Fix Run: failed")
     );
-    assert!(scenario.issue_labels(8).contains(&"in-progress".into()));
+    let labels = scenario.issue_labels(8);
+    assert!(labels.contains(&"agent-failed".into()), "{labels:?}");
+    assert!(!labels.contains(&"in-progress".into()), "{labels:?}");
     // Remove other pending findings: the failed fix itself must stay with the Day shift.
     state["advisories"].as_array_mut().unwrap().truncate(1);
     scenario.write_gh_state(&state);

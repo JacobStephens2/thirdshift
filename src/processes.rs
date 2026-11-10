@@ -996,9 +996,17 @@ fn run_issue_branch(
     // Issue branch. Release the Claim, as a run that published nothing does,
     // instead of removing it the way a finished Delivery does.
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
+    // A Self-merge that merged ends the Claim as a Ticket run's does: only
+    // once the issue is closed, so a closing that failed stays visible.
+    let merged = completed
+        .resolutions
+        .iter()
+        .any(|resolution| resolution.goal() == Some(Goal::Merged));
     drop(completed);
     if result.is_ok() && not_reproduced {
         claim.end(claim::Ending::NotReproduced);
+    } else if delivered && merged && result.is_ok() {
+        claim.end(claim::Ending::Reached(Goal::Merged));
     } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
     } else if result.is_ok() {

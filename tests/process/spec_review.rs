@@ -184,11 +184,9 @@ fn a_failed_spec_review_preserves_work_and_the_draft_checklist() {
             result.stderr
         );
     }
-    assert!(
-        scenario
-            .issue_labels(7)
-            .contains(&"in-progress".to_string())
-    );
+    let labels = scenario.issue_labels(7);
+    assert!(labels.contains(&"agent-failed".to_string()), "{labels:?}");
+    assert!(!labels.contains(&"in-progress".to_string()), "{labels:?}");
 }
 
 #[test]

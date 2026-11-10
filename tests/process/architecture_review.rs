@@ -231,7 +231,7 @@ fn a_strong_plan_starts_a_ticket_run_on_the_base_branch() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(scenario.claude_calls().len(), 2);
     let state = scenario.gh_state();
-    assert_eq!(scenario.issue_labels(8), ["architect-plan", "in-progress"]);
+    assert_eq!(scenario.issue_labels(8), ["architect-plan"]);
     assert_eq!(state["prs"][0]["base"], "main");
     assert_eq!(
         process_record(&scenario)["dispatched"][0]["issue"]["number"],

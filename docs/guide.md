@@ -1946,7 +1946,9 @@ issue, the run makes the Claim when it starts, labelling the issue
 `in-progress` in place of `ready-for-agent`, and holds it until the end. On an
 Issue-branch worktree, a pull request left ready for review removes the Claim and does not put
 `ready-for-agent` back, so Pickup does not take an issue that already has an
-open pull request. A Step that fails before Delivery keeps the Issue-branch
+open pull request. A Self-merge that merged takes the Claim off once the issue
+is closed, as a Ticket run's does, so an issue whose closing failed keeps
+`in-progress` until it is closed. A Step that fails before Delivery keeps the Issue-branch
 work as a Failed ticket run does, and the failure says where it stopped, what
 was preserved and the command `thirdshift process <name> issue <url>`. When
 that work reached origin, `agent-failed` takes the place of `in-progress` and the

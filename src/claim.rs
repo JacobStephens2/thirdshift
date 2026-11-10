@@ -356,8 +356,8 @@ impl<'a> Claimed<'a> {
             }
             Ending::Failed if self.security_fix => self.label_failed(outside),
             Ending::Failed => {
-                let claim_stays = self.release_if_nothing_on_origin(outside);
-                if claim_stays {
+                let not_released = self.release_if_nothing_on_origin(outside);
+                if not_released {
                     self.label_failed(outside);
                 }
             }
@@ -391,7 +391,7 @@ impl<'a> Claimed<'a> {
                 )
             } else {
                 format!(
-                    "removing {IN_PROGRESS} from #{}, already labelled {AGENT_FAILED}",
+                    "removing {IN_PROGRESS} from issue #{}, already labelled {AGENT_FAILED}",
                     issue.number
                 )
             });
@@ -448,9 +448,10 @@ impl<'a> Claimed<'a> {
     /// only `in-progress` comes off. An issue that is no longer
     /// `in-progress` is left as it is: someone took the Claim off meanwhile.
     /// A Claim that changed no label has nothing to put back, and makes no
-    /// request. Returns whether the Claim stays: the issue was started on
-    /// origin, or was Claimed before this Claim. One released, left as it
-    /// is, or whose release failed does not.
+    /// request. Returns whether the Claim was not released, so is left for
+    /// the ending to end otherwise: the issue was started on origin, or was
+    /// Claimed before this Claim. One released, left as it is, or whose
+    /// release failed was.
     fn release_if_nothing_on_origin(&self, outside: &mut impl Outside) -> bool {
         if !self.changed_any() {
             return true;
@@ -1220,7 +1221,7 @@ mod tests {
             issue.calls,
             [
                 Call::Labels,
-                step("removing in-progress from #7, already labelled agent-failed"),
+                step("removing in-progress from issue #7, already labelled agent-failed"),
                 edit(&["in-progress"], &[], &["Agent-Failed"]),
             ]
         );

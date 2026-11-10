@@ -4,8 +4,9 @@
 //! `ready-for-agent` before it, then that issue dispatched as a Spec run or
 //! a Run. One started while its repository is at its Command limit on this
 //! machine is skipped, before any search. One that runs first makes the
-//! Sweep, takes `agent-failed` off each open issue the Day shift has acted
-//! on, and is then skipped if it finds the repository at its Failure limit,
+//! Sweep, of closed issues and of `in-progress` on open ones labelled
+//! `agent-failed`, takes `agent-failed` off each open issue the Day shift
+//! handed back, and is then skipped if it finds the repository at its Failure limit,
 //! or with no Ready issue it can reserve: one another run reserved, a Pickup
 //! run, or an Architect run or Security run dispatching its own plan or fix,
 //! or whose selection went stale, is passed over for the next.
@@ -310,8 +311,9 @@ enum Decision {
 }
 
 /// The gates of a Pickup run on `repo`, reaching it through `outside`: the
-/// Sweep, of closed issues and then of open failed ones, then, if `limit` or more open issues still wait for the Day shift
-/// after the factory failed on them, a skip for the Failure limit, then the
+/// Sweep, of closed issues and then of open failed ones, then, if `limit`
+/// or more open issues still wait for the Day shift after the factory
+/// failed on them, a skip for the Failure limit, then the
 /// Ready issue search at `order`'s end of the issue numbers, a skip if it
 /// finds none. No gate is read once one skips.
 fn gates(
@@ -397,32 +399,24 @@ fn clear_and_count_failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
         if !labels.has(claim::AGENT_FAILED) {
             continue;
         }
-        let handed_back = labels.has(READY_FOR_AGENT);
-        if !handed_back {
-            failed.push(issue.number);
-        }
-        let off: &[Label] = if handed_back {
-            &SWEPT
+        let (off, why): (&[Label], String) = if labels.has(READY_FOR_AGENT) {
+            (&SWEPT, "the Day shift handed back".to_string())
         } else {
-            &[claim::IN_PROGRESS]
+            failed.push(issue.number);
+            (
+                &[claim::IN_PROGRESS],
+                format!("is labelled {}", claim::AGENT_FAILED),
+            )
         };
         let edit = Edit::of(&issue, labels, off, &[]);
-        let taken_off = labels::joined(SWEPT.into_iter().filter(|label| edit.takes_off(*label)));
+        let taken_off = labels::joined(off.iter().copied().filter(|label| edit.takes_off(*label)));
         if taken_off.is_empty() {
             continue;
         }
-        outside.step(if handed_back {
-            format!(
-                "taking {taken_off} off #{}, which the Day shift handed back",
-                issue.number
-            )
-        } else {
-            format!(
-                "taking {taken_off} off #{}, which is labelled {}",
-                issue.number,
-                claim::AGENT_FAILED
-            )
-        });
+        outside.step(format!(
+            "taking {taken_off} off #{}, which {why}",
+            issue.number
+        ));
         if let Err(error) = outside.apply(&edit) {
             outside.step(format!(
                 "warning: could not take {taken_off} off #{}: {error:#}",
@@ -709,12 +703,12 @@ mod tests {
         assert_eq!(decided, Ok((9, false)));
     }
 
-    /// The count taking `off` off open issue `number`, which the Day shift
-    /// handed back, leaving `labels`.
-    fn handed_back_off(number: u64, off: &[&'static str], labels: &[&str]) -> [Call; 2] {
+    /// The count taking `off` off open issue `number`, which `why`, leaving
+    /// `labels`.
+    fn taking_off(number: u64, off: &[&'static str], why: &str, labels: &[&str]) -> [Call; 2] {
         [
             Call::Step(format!(
-                "taking {} off #{number}, which the Day shift handed back",
+                "taking {} off #{number}, which {why}",
                 off.join(" and ")
             )),
             Call::Edit {
@@ -726,6 +720,12 @@ mod tests {
         ]
     }
 
+    /// The count taking `off` off open issue `number`, which the Day shift
+    /// handed back, leaving `labels`.
+    fn handed_back_off(number: u64, off: &[&'static str], labels: &[&str]) -> [Call; 2] {
+        taking_off(number, off, "the Day shift handed back", labels)
+    }
+
     /// The count taking `agent-failed` off open issue `number`, which the
     /// Day shift handed back, leaving `labels`.
     fn handed_back(number: u64, labels: &[&str]) -> [Call; 2] {
@@ -735,17 +735,7 @@ mod tests {
     /// The Sweep taking `in-progress` off open issue `number`, which is
     /// labelled `agent-failed`, leaving `labels`.
     fn swept_failed(number: u64, labels: &[&str]) -> [Call; 2] {
-        [
-            Call::Step(format!(
-                "taking in-progress off #{number}, which is labelled agent-failed"
-            )),
-            Call::Edit {
-                issue: number,
-                off: vec!["in-progress"],
-                on: vec![],
-                labels: labels.iter().map(|label| label.to_string()).collect(),
-            },
-        ]
+        taking_off(number, &["in-progress"], "is labelled agent-failed", labels)
     }
 
     #[test]
@@ -790,13 +780,15 @@ mod tests {
 
     #[test]
     fn the_sweep_takes_in_progress_off_each_open_failure_keeping_its_other_labels_and_counts_it() {
-        let repo = InMemory::default()
-            .issue(4, true, &["bug", "in-progress", "agent-failed"])
-            .issue(5, true, &["In-Progress", "Agent-Failed", "needs-triage"])
-            .issue(6, true, &["agent-failed"])
-            .ready(9, false);
+        let repo = || {
+            InMemory::default()
+                .issue(4, true, &["bug", "in-progress", "agent-failed"])
+                .issue(5, true, &["In-Progress", "Agent-Failed", "needs-triage"])
+                .issue(6, true, &["agent-failed"])
+                .ready(9, false)
+        };
 
-        let (decided, calls) = decide(repo, 4);
+        let (decided, calls) = decide(repo(), 4);
 
         assert_eq!(decided, Ok((9, false)));
         let mut expected = counted();
@@ -805,12 +797,7 @@ mod tests {
         expected.push(Call::ReadySearch);
         assert_eq!(calls, expected);
 
-        let repo = InMemory::default()
-            .issue(4, true, &["bug", "in-progress", "agent-failed"])
-            .issue(5, true, &["In-Progress", "Agent-Failed", "needs-triage"])
-            .issue(6, true, &["agent-failed"])
-            .ready(9, false);
-        let (decided, _) = decide(repo, 3);
+        let (decided, _) = decide(repo(), 3);
         assert!(decided.is_err(), "{decided:?}");
     }
 

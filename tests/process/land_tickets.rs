@@ -179,11 +179,9 @@ fn a_failed_ticket_stops_only_its_dependents_and_fails_the_process() {
         scenario.origin_git(&["show", "issue-7:issue-10.txt"]),
         "10\n"
     );
-    assert!(
-        scenario
-            .issue_labels(7)
-            .contains(&"in-progress".to_string())
-    );
+    let labels = scenario.issue_labels(7);
+    assert!(labels.contains(&"agent-failed".to_string()), "{labels:?}");
+    assert!(!labels.contains(&"in-progress".to_string()), "{labels:?}");
 }
 
 #[test]

@@ -5390,6 +5390,24 @@ fn self_merge_after_delivery_merges_when_asked_and_stays_ready_otherwise() {
 }
 
 #[test]
+fn a_self_merge_whose_issue_could_not_be_closed_keeps_in_progress_until_it_is_closed() {
+    let scenario = prepare_ship(LAND);
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["process", "ship", "issue", "7", "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        !result.stderr.contains("removing in-progress"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn self_merge_false_holds_the_merge_and_says_why() {
     let body = "\
 version = 1
