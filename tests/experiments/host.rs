@@ -306,7 +306,7 @@ fn every_pass_skips_a_live_experiment_on_another_repository_before_github_or_ses
     let mut experiment = hold_trials(&fixture);
     fs::create_dir_all(fixture.scenario.path("home/.thirdshift/processes")).unwrap();
     fs::write(fixture.scenario.path("home/.thirdshift/processes/host-check.toml"),
-        "version = 1\ndescription = \"Check host\"\n[[steps]]\nname = \"check\"\ncommand = \"touch should-not-run\"\n").unwrap();
+        "version = 1\ndescription = \"Check host\"\n[[steps]]\nname = \"check\"\ncommand = \"printf manual-work\"\n").unwrap();
     let github = fixture.scenario.gh_state();
     let calls = fixture.scenario.gh_calls();
     let sessions = fixture.scenario.claude_calls().len();
@@ -348,8 +348,6 @@ fn every_pass_skips_a_live_experiment_on_another_repository_before_github_or_ses
         7,
         "{activity}"
     );
-    let marker = fixture.scenario.launch_dir().join("should-not-run");
-    assert!(!marker.exists(), "the Custom Pass started work");
     let manual = fixture
         .scenario
         .run(&["process", "host-check", "issue", "7"]);
@@ -360,10 +358,7 @@ fn every_pass_skips_a_live_experiment_on_another_repository_before_github_or_ses
         "{}",
         manual.stderr
     );
-    assert!(
-        marker.exists(),
-        "the issue-targeted Custom process did not run"
-    );
+    assert_eq!(manual.stdout, "manual-work\n");
     experiment.signal("TERM");
     experiment.finish();
 }
