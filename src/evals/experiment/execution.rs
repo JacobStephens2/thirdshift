@@ -270,8 +270,11 @@ impl<'a> Execution<'a> {
         });
         interrupt::check()?;
         // Keep known failures and external Void causes, including limit
-        // stops. Repository changes invalidate an otherwise successful Trial.
-        if protocol.outcome == Outcome::Succeeded && (!unchanged || !snapshot_intact) {
+        // stops. Repository changes invalidate an otherwise successful Trial,
+        // including a process-shaped delivered outcome on a review session.
+        if matches!(protocol.outcome, Outcome::Succeeded | Outcome::Delivered)
+            && (!unchanged || !snapshot_intact)
+        {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
