@@ -428,7 +428,8 @@ fn a_base_fix_changes_no_label_on_its_issue_while_the_run_claims_its_own() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(scenario.issue_labels(8), ["base-fix", "ready-for-agent"]);
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    // The run ended ready for review, so its Claim came off.
+    assert!(scenario.issue_labels(7).is_empty());
     assert!(!result.stderr.contains("labelling #8"), "{}", result.stderr);
 }
 

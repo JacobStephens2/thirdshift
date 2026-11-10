@@ -81,6 +81,7 @@ pub(crate) fn run_custom(
         base_fix: delivery.base_fix,
         process: name,
         delivered: false,
+        merged: false,
         pull_request: {
             let mut pull_request =
                 PullRequest::new(delivery.issue, &branch, delivery.base, GitHub::new());

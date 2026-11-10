@@ -835,7 +835,7 @@ fn a_single_ticket_plan_starts_a_run_on_it_and_ends_as_that_run_does() {
     let pr = pr_from(&scenario, "issue-8");
     assert_ended_with_pr(&result, &pr, "ready for review");
     assert_eq!(pr["url"], PR_URL);
-    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN]);
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 2, "sessions: {calls:?}");
     let prompt = calls[1]["prompt"].as_str().unwrap();
@@ -870,7 +870,7 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 
     let pr = pr_from(&scenario, "issue-8");
     assert_ended_with_pr(&result, &pr, "ready for review");
-    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN]);
     assert_eq!(scenario.claude_calls().len(), 2);
     scenario.assert_cleaned_up("issue-8");
 }
@@ -886,7 +886,7 @@ fn a_plan_with_tickets_starts_a_spec_run_on_it_and_ends_as_that_spec_run_does() 
     assert_eq!(spec_pr["base"], "main");
     assert_eq!(spec_pr["state"], "OPEN");
     assert_eq!(spec_pr["isDraft"], false);
-    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN]);
     let dispatch = format!("dispatching the plan {PLAN_URL}, as thirdshift {PLAN_URL} would\n");
     let dispatched = result.stderr.find(&dispatch);
     let started = result.stderr.find("thirdshift: starting #9\n");
@@ -1133,11 +1133,9 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
         "stderr: {}",
         result.stderr
     );
-    // The plan's failed run kept its Claim, so the Failure limit counts it.
-    assert_eq!(
-        scenario.issue_labels(8),
-        [ARCHITECT_PLAN, IN_PROGRESS, "agent-failed"]
-    );
+    // The plan's failed run swapped its Claim for agent-failed, so the
+    // Failure limit counts it.
+    assert_eq!(scenario.issue_labels(8), [ARCHITECT_PLAN, "agent-failed"]);
 }
 
 /// A script that records the commit the session's worktree is at as

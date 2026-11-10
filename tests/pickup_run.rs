@@ -10,8 +10,8 @@
 //! its Failure limit, or while an Architect run or another Pickup run on the
 //! repository is still running, it is skipped. Each pass that gets the lock
 //! first sweeps `in-progress` and `agent-failed` off the repository's closed
-//! issues, then takes `agent-failed` off each open issue the Day shift has
-//! acted on.
+//! issues, then `in-progress` off each open issue labelled `agent-failed`,
+//! and takes `agent-failed` off each open one the Day shift handed back.
 //! Asked for a Run notification, a pass that took an issue sends one naming
 //! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
@@ -34,9 +34,12 @@ const READY_FOR_AGENT: &str = "ready-for-agent";
 /// `ready-for-agent` for.
 const IN_PROGRESS: &str = "in-progress";
 
-/// The label of an issue a failed run kept its Claim on, which the Failure
-/// limit counts.
+/// The label a failed run swaps its Claim's `in-progress` for, which the
+/// Failure limit counts.
 const AGENT_FAILED: &str = "agent-failed";
+
+/// No labels at all, as a run ready for review leaves on its issue.
+const NO_LABELS: [&str; 0] = [];
 
 /// Make issue `number` open and labelled `ready-for-agent` on the fake
 /// GitHub, with `more` labels after it.
@@ -123,7 +126,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     assert_ended_with_pr(&result, &pr, "ready for review");
     assert_eq!(pr["base"], "main");
     assert_eq!(pr["state"], "OPEN");
-    assert_eq!(scenario.issue_labels(7), ["bug", IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), ["bug"]);
     assert_eq!(scenario.issue_labels(9), [READY_FOR_AGENT, "bug"]);
     assert!(scenario.origin_log("issue-9").is_none());
     let calls = scenario.claude_calls();
@@ -141,6 +144,28 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
         scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
         ""
     );
+}
+
+#[test]
+fn an_issue_whose_run_ended_ready_for_review_with_no_label_left_is_not_taken_again() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &["bug"]);
+    scenario.agent_does_for(7, &agent_fixes_bug(7, "main"));
+    let first = scenario.run(&["pickup"]);
+    assert_ended_with_pr(&first, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), ["bug"]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        after_start(&result.stderr).ends_with(NO_READY_ISSUE),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(result.stdout, "");
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.issue_labels(7), ["bug"]);
 }
 
 /// With Ready issues #7 and #9, `pickup` with `extra` takes `taken` and
@@ -547,7 +572,7 @@ exec "$(dirname "$0")/real/gh" "$@"
             1,
             "{sessions:?}"
         );
-        assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+        assert_eq!(scenario.issue_labels(9), NO_LABELS);
         assert_eq!(resend.requests().len(), 1, "{}", stale.stderr);
     } else {
         assert!(stale.stdout.is_empty(), "{}", stale.stdout);
@@ -1126,7 +1151,7 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
     );
     assert!(!result.stderr.contains("#71"), "stderr: {}", result.stderr);
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
-    assert_eq!(scenario.issue_labels(70), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(70), NO_LABELS);
 }
 
 #[test]
@@ -1153,7 +1178,7 @@ fn a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines() {
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(20), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(20), NO_LABELS);
     for ticket in [7, 21] {
         let pr = pr_from(&scenario, &format!("issue-{ticket}"));
         assert_eq!(pr["base"], "issue-20");
@@ -1350,7 +1375,7 @@ fn a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_i
         result.stderr
     );
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
-    assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(9), NO_LABELS);
     assert_eq!(sessions(&scenario), ["9"]);
 }
 
@@ -1377,7 +1402,7 @@ fn a_spec_with_one_ticket_still_open_is_taken() {
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
     assert_eq!(sessions(&scenario), ["9", "7"]);
 }
 
@@ -1444,9 +1469,54 @@ fn a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken() {
         "stderr: {}",
         result.stderr
     );
-    // Ticket #8 can't start, so the Spec run fails and keeps its Claim.
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS, AGENT_FAILED]);
-    assert_eq!(sessions(&scenario).first().map(String::as_str), Some("9"));
+    // Ticket #8 only waits, so the Spec run hands its Spec back.
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(sessions(&scenario), ["9"]);
+}
+
+#[test]
+fn a_waiting_spec_is_passed_over_until_its_ticket_can_start_then_continued() {
+    let scenario = ready_spec("");
+    scenario.issue_labelled(8, &["needs-info"]);
+    let waited = scenario.run(&["pickup"]);
+    assert_eq!(waited.code, Some(1), "stderr: {}", waited.stderr);
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    // The Claim and its hand-back, as thirdshift's label edits recorded them,
+    // moved an hour back so the Spec has settled.
+    let mut gh = scenario.gh_state();
+    let events = gh["timeline"]["7"].as_array_mut().unwrap();
+    let names: Vec<_> = events
+        .iter()
+        .map(|event| format!("{} {}", event["event"], event["label"]))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            r#""unlabeled" "ready-for-agent""#,
+            r#""labeled" "in-progress""#,
+            r#""unlabeled" "in-progress""#,
+            r#""labeled" "ready-for-agent""#
+        ]
+    );
+    for event in events {
+        let at = chrono::DateTime::parse_from_rfc3339(event["at"].as_str().unwrap()).unwrap();
+        let earlier = at - chrono::TimeDelta::hours(1);
+        event["at"] = earlier.format("%Y-%m-%dT%H:%M:%SZ").to_string().into();
+    }
+    scenario.write_gh_state(&gh);
+
+    let passed_over = scenario.run(&["pickup"]);
+    assert_eq!(
+        after_start(&passed_over.stderr),
+        no_ready_issue_after(&["#7 has no Ticket that can start: #8 labelled needs-info"])
+    );
+
+    scenario.issue_labelled(8, &[READY_FOR_AGENT]);
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
+    assert_eq!(sessions(&scenario), ["9", "8", "7"]);
 }
 
 #[test]
@@ -1484,7 +1554,7 @@ fn once_its_ticket_is_no_longer_unready_the_next_pass_takes_the_spec() {
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
     assert_eq!(sessions(&scenario), ["8", "7"]);
 }
 
@@ -1537,7 +1607,7 @@ fn a_ready_issue_with_sub_issues_is_run_as_a_spec_run_and_ends_as_that_spec_run_
     assert_eq!(spec_pr["base"], "main");
     assert_eq!(spec_pr["state"], "OPEN");
     assert_eq!(spec_pr["isDraft"], false);
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
     let mut sessions = sessions(&scenario);
     assert_eq!(sessions.pop().as_deref(), Some("7"), "the Spec review");
     sessions.sort();
@@ -2695,12 +2765,12 @@ fn a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_c
     }
 }
 
-/// Make each of `issues` open and labelled `in-progress` and `agent-failed`
-/// on the fake GitHub: an issue a failed run kept its Claim on.
+/// Make each of `issues` open and labelled `agent-failed` on the fake
+/// GitHub: an issue a failed run swapped its Claim for `agent-failed` on.
 fn failed_issues(scenario: &Scenario, issues: &[u32]) {
     for issue in issues {
         scenario.issue_is(*issue, "OPEN");
-        scenario.issue_labelled(*issue, &[IN_PROGRESS, AGENT_FAILED]);
+        scenario.issue_labelled(*issue, &[AGENT_FAILED]);
     }
 }
 
@@ -2830,39 +2900,61 @@ fn a_closed_issue_labelled_agent_failed_does_not_count_and_is_swept() {
 }
 
 #[test]
-fn a_failure_the_day_shift_handed_back_or_took_over_loses_agent_failed_and_does_not_count() {
+fn a_failure_the_day_shift_handed_back_loses_agent_failed_and_does_not_count() {
     let scenario = ready_ticket();
     failed_issues(&scenario, &[11, 12, 13, 14]);
     // Handed back, with or without the Claim taken off: Ready, but above #7.
     scenario.issue_labelled(11, &[IN_PROGRESS, AGENT_FAILED, READY_FOR_AGENT]);
     scenario.issue_labelled(12, &[AGENT_FAILED, READY_FOR_AGENT]);
-    // Taken over: no Claim and no needs-triage left.
+    // Neither `in-progress` nor `needs-triage`, as a failure now leaves it:
+    // still counted.
     scenario.issue_labelled(13, &[AGENT_FAILED, "bug"]);
     // Still waiting for triage, so still counted.
     scenario.issue_labelled(14, &[AGENT_FAILED, "needs-triage"]);
-    scenario.user_config_is("[pickup]\nfailure_limit = 2\n");
+    scenario.user_config_is("[pickup]\nfailure_limit = 3\n");
 
     let result = scenario.run(&["pickup"]);
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
-    for (number, acted) in [(11, "handed back"), (12, "handed back"), (13, "took over")] {
+    for (number, off) in [(11, "in-progress and agent-failed"), (12, "agent-failed")] {
         let line =
-            format!("thirdshift: taking agent-failed off #{number}, which the Day shift {acted}\n");
+            format!("thirdshift: taking {off} off #{number}, which the Day shift handed back\n");
         assert!(result.stderr.contains(&line), "stderr: {}", result.stderr);
     }
-    assert_eq!(scenario.issue_labels(11), [IN_PROGRESS, READY_FOR_AGENT]);
+    assert!(!result.stderr.contains("#13"), "stderr: {}", result.stderr);
+    assert!(
+        !result.stderr.contains("took over"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(11), [READY_FOR_AGENT]);
     assert_eq!(scenario.issue_labels(12), [READY_FOR_AGENT]);
-    assert_eq!(scenario.issue_labels(13), ["bug"]);
+    assert_eq!(scenario.issue_labels(13), [AGENT_FAILED, "bug"]);
     assert_eq!(scenario.issue_labels(14), [AGENT_FAILED, "needs-triage"]);
+
+    // With #13 and #14 counted, a Failure limit of 2 stops the next pass.
+    scenario.user_config_is("[pickup]\nfailure_limit = 2\n");
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        after_start(&result.stderr).starts_with(
+            "thirdshift: at the Failure limit on acme/widgets: #13 and #14 are labelled \
+             agent-failed, pickup.failure_limit is 2\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(13), [AGENT_FAILED, "bug"]);
 }
 
 #[test]
 fn a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted() {
     let scenario = ready_ticket();
-    scenario.issue_is(1, "OPEN");
-    scenario.issue_labelled(1, &[AGENT_FAILED, "bug"]);
+    scenario.issue_is(31, "OPEN");
+    // Handed back: Ready, but above #7.
+    scenario.issue_labelled(31, &[AGENT_FAILED, READY_FOR_AGENT]);
     scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
-    scenario.gh_fails("api --method DELETE repos/acme/widgets/issues/1/labels/agent-failed");
+    scenario.gh_fails("api --method DELETE repos/acme/widgets/issues/31/labels/agent-failed");
 
     let result = scenario.run(&["pickup"]);
 
@@ -2870,11 +2962,65 @@ fn a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted() {
     assert!(
         result
             .stderr
-            .contains("thirdshift: warning: could not take agent-failed off #1: "),
+            .contains("thirdshift: warning: could not take agent-failed off #31: "),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(1), [AGENT_FAILED, "bug"]);
+    assert_eq!(scenario.issue_labels(31), [AGENT_FAILED, READY_FOR_AGENT]);
+}
+
+#[test]
+fn the_sweep_takes_in_progress_off_each_open_failure_keeping_its_other_labels_and_still_counts_it()
+{
+    let scenario = ready_ticket();
+    // Failed under the old rules, which kept the Claim beside agent-failed.
+    for number in [1, 2] {
+        scenario.issue_is(number, "OPEN");
+    }
+    scenario.issue_labelled(1, &["bug", IN_PROGRESS, AGENT_FAILED]);
+    scenario.issue_labelled(2, &[IN_PROGRESS, AGENT_FAILED, "needs-triage"]);
+    scenario.user_config_is("[pickup]\nfailure_limit = 2\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    for number in [1, 2] {
+        let line = format!(
+            "thirdshift: taking in-progress off #{number}, which is labelled agent-failed\n"
+        );
+        assert!(result.stderr.contains(&line), "stderr: {}", result.stderr);
+    }
+    assert!(
+        after_start(&result.stderr).ends_with(
+            "thirdshift: at the Failure limit on acme/widgets: #1 and #2 are labelled \
+             agent-failed, pickup.failure_limit is 2\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(1), ["bug", AGENT_FAILED]);
+    assert_eq!(scenario.issue_labels(2), [AGENT_FAILED, "needs-triage"]);
+}
+
+#[test]
+fn a_sweep_that_cannot_take_in_progress_off_an_open_failure_is_a_warning_and_the_pass_carries_on() {
+    let scenario = ready_ticket();
+    scenario.issue_is(1, "OPEN");
+    scenario.issue_labelled(1, &[IN_PROGRESS, AGENT_FAILED]);
+    scenario.gh_fails("api --method DELETE repos/acme/widgets/issues/1/labels/in-progress");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: warning: could not take in-progress off #1: "),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(1), [IN_PROGRESS, AGENT_FAILED]);
 }
 
 #[test]
@@ -2997,6 +3143,7 @@ fn a_sweep_that_fails_prints_a_warning_and_the_pass_carries_on() {
         );
     }
     assert_eq!(scenario.issue_labels(3), ["bug", IN_PROGRESS]);
+    // Taking the Claim off at ready for review failed too, only a warning.
     assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
 }
 
@@ -3483,7 +3630,7 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existi
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(scenario.issue_labels(7), NO_LABELS);
     assert_eq!(scenario.codex_calls().len(), 2);
     assert_eq!(scenario.claude_calls().len(), 1);
     assert!(

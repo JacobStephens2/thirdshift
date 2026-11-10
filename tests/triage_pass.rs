@@ -60,8 +60,8 @@ fn recommendation_only_pass_reserves_without_claiming_or_publishing_and_notifies
 }
 
 #[test]
-fn a_failed_triage_counts_until_the_day_shift_relabels_or_closes_it() {
-    for action in ["relabel", "close"] {
+fn a_failed_triage_counts_until_the_day_shift_retries_takes_over_or_closes_it() {
+    for action in ["retry", "take over", "close"] {
         let scenario = Scenario::new();
         scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
         scenario.issue_labelled(7, &["needs-triage"]);
@@ -83,10 +83,21 @@ fn a_failed_triage_counts_until_the_day_shift_relabels_or_closes_it() {
             scenario.issue_labels(7),
             ["ready-for-human", "agent-failed"]
         );
-        if action == "relabel" {
-            scenario.issue_labelled(7, &["needs-info", "agent-failed"]);
-        } else {
-            scenario.issue_is(7, "CLOSED");
+        // Removing ready-for-human alone does not acknowledge the failure.
+        scenario.issue_labelled(7, &["agent-failed"]);
+        let waiting = scenario.run(&["triage"]);
+        assert_eq!(waiting.code, Some(0), "{}", waiting.stderr);
+        assert!(
+            waiting.stderr.contains("at the Failure limit"),
+            "{}",
+            waiting.stderr
+        );
+        assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
+        match action {
+            "retry" => scenario.issue_labelled(7, &["ready-for-agent", "agent-failed"]),
+            "take over" => scenario.issue_labelled(7, &["needs-info"]),
+            "close" => scenario.issue_is(7, "CLOSED"),
+            _ => unreachable!(),
         }
         let handled = scenario.run(&["triage"]);
         assert_eq!(handled.code, Some(0), "{}", handled.stderr);
@@ -299,7 +310,7 @@ fn pass_uses_the_configured_issue_order() {
 }
 
 #[test]
-fn pass_sweeps_and_clears_acted_on_failures_before_checking_the_failure_limit() {
+fn pass_sweeps_and_clears_handed_back_failures_before_checking_the_failure_limit() {
     let scenario = Scenario::new();
     scenario.user_config_is("[pickup]\nfailure_limit = 1\n");
     scenario.issue_labelled(7, &["needs-triage"]);
@@ -320,17 +331,19 @@ fn pass_sweeps_and_clears_acted_on_failures_before_checking_the_failure_limit() 
         result.stderr
     );
     assert!(
-        result.stderr.contains("#11 is labelled agent-failed"),
+        result
+            .stderr
+            .contains("#10 and #11 are labelled agent-failed"),
         "{}",
         result.stderr
     );
     assert_eq!(scenario.issue_labels(8), ["bug"]);
     assert_eq!(scenario.issue_labels(9), ["bug", "ready-for-agent"]);
-    assert_eq!(scenario.issue_labels(10), ["bug", "needs-info"]);
     assert_eq!(
-        scenario.issue_labels(11),
-        ["bug", "in-progress", "agent-failed"]
+        scenario.issue_labels(10),
+        ["bug", "needs-info", "agent-failed"]
     );
+    assert_eq!(scenario.issue_labels(11), ["bug", "agent-failed"]);
     assert!(scenario.claude_calls().is_empty());
     assert!(!scenario.path(&format!("{LOGS}/commands/triage")).exists());
 }
