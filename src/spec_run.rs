@@ -454,10 +454,11 @@ fn land_tickets(
         for line in &lines {
             outside.step(line.clone());
         }
-        if board.only_waiting() {
-            return Err(OnlyWaiting { not_done }.into());
+        Err(TicketsNotDone {
+            not_done,
+            only_waiting: board.only_waiting(),
         }
-        bail!("Tickets not done: {}", not_done.join(", "));
+        .into())
     });
     Landing {
         lines,
@@ -545,18 +546,19 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
     Ok(())
 }
 
-/// A Spec run's Tickets not done, `not_done`, when every one of them is only
-/// waiting, on a person or on other work, and none failed or was
-/// interrupted: its Claim hands the Spec back instead of labelling it
-/// `agent-failed`. It reads as any other Tickets not done.
+/// A Spec run's Tickets not done, `not_done`, and whether the Spec run is
+/// `only_waiting`, on a person or on other work, with none failed or
+/// interrupted: its Claim then hands the Spec back instead of labelling it
+/// `agent-failed`. Both read alike.
 #[derive(Debug)]
-pub(crate) struct OnlyWaiting {
+pub(crate) struct TicketsNotDone {
     not_done: Vec<String>,
+    pub(crate) only_waiting: bool,
 }
 
-impl std::error::Error for OnlyWaiting {}
+impl std::error::Error for TicketsNotDone {}
 
-impl std::fmt::Display for OnlyWaiting {
+impl std::fmt::Display for TicketsNotDone {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Tickets not done: {}", self.not_done.join(", "))
     }

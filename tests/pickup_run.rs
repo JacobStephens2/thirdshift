@@ -1481,16 +1481,29 @@ fn a_waiting_spec_is_passed_over_until_its_ticket_can_start_then_continued() {
     let waited = scenario.run(&["pickup"]);
     assert_eq!(waited.code, Some(1), "stderr: {}", waited.stderr);
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
-    // The Claim and its hand-back, in the order thirdshift made them, long
-    // enough ago that the Spec has settled.
-    scenario.issue_timeline(
-        7,
-        &[
-            (TimelineEvent::Labelled(IN_PROGRESS), 90),
-            (TimelineEvent::Unlabelled(IN_PROGRESS), 60),
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
-        ],
+    // The Claim and its hand-back, as thirdshift's label edits recorded them,
+    // moved an hour back so the Spec has settled.
+    let mut gh = scenario.gh_state();
+    let events = gh["timeline"]["7"].as_array_mut().unwrap();
+    let names: Vec<_> = events
+        .iter()
+        .map(|event| format!("{} {}", event["event"], event["label"]))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            r#""unlabeled" "ready-for-agent""#,
+            r#""labeled" "in-progress""#,
+            r#""unlabeled" "in-progress""#,
+            r#""labeled" "ready-for-agent""#
+        ]
     );
+    for event in events {
+        let at = chrono::DateTime::parse_from_rfc3339(event["at"].as_str().unwrap()).unwrap();
+        let earlier = at - chrono::TimeDelta::hours(1);
+        event["at"] = earlier.format("%Y-%m-%dT%H:%M:%SZ").to_string().into();
+    }
+    scenario.write_gh_state(&gh);
 
     let passed_over = scenario.run(&["pickup"]);
     assert_eq!(

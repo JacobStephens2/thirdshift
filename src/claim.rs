@@ -119,12 +119,13 @@ impl Claim<'_> {
     ///   place of `in-progress` in one label edit.
     /// - Before Delivery: a successful Custom process releases its Claim if
     ///   nothing is on origin, except a Security fix, and adds no failure label.
-    /// - Waiting: a Spec run only waiting hands its Spec back, labelling it
-    ///   `ready-for-agent` in place of `in-progress`, so Pickup continues it
-    ///   once a Ticket can start. If an account that is not a Trusted account
-    ///   edited the Spec's title or body since its last `ready-for-agent`
-    ///   labelling by a Trusted account, it is labelled `needs-triage`
-    ///   instead.
+    /// - Waiting: a Spec run only waiting hands its Spec back, putting
+    ///   `ready-for-agent` back in place of `in-progress` if the Claim took it
+    ///   off, so Pickup continues it once a Ticket can start. If an account
+    ///   that is not a Trusted account edited the Spec's title or body since
+    ///   its last `ready-for-agent` labelling by a Trusted account, it is
+    ///   labelled `needs-triage` instead. A Claim that took no
+    ///   `ready-for-agent` off only takes `in-progress` off.
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
     ///   remains on origin, or is released even with work when asked to requeue.
     ///
@@ -430,39 +431,49 @@ impl<'a> Claimed<'a> {
         }
     }
 
-    /// [`Ending::Waiting`], through `outside`: label the Spec
-    /// `ready-for-agent` in place of `in-progress`, in one request that keeps
-    /// its other labels, or `needs-triage` if an account that is not a
-    /// Trusted account edited it since its last Trusted `ready-for-agent`
-    /// labelling. One no longer `in-progress` is left as it is. It finishes
-    /// after an interrupt, and a failure is a warning naming what to run by
-    /// hand.
+    /// [`Ending::Waiting`], through `outside`: put `ready-for-agent` back on
+    /// the Spec in place of `in-progress`, in one request that keeps its other
+    /// labels, or `needs-triage` if an account that is not a Trusted account
+    /// edited it since its last Trusted `ready-for-agent` labelling. A Claim
+    /// that took no `ready-for-agent` off has none to put back, so it only
+    /// takes `in-progress` off. One no longer `in-progress` is left as it is.
+    /// It finishes after an interrupt, and a failure is a warning naming what
+    /// to run by hand.
     fn hand_back(&self, outside: &mut impl Outside) {
+        if !self.removed_ready_for_agent {
+            self.remove(outside);
+            return;
+        }
         let issue = self.issue;
         if let Err(error) = retry_if_interrupted(outside, |outside| {
-            let untrusted = outside.untrusted_edit(issue)?;
-            let (off, on): (&[Label], &[Label]) = match untrusted {
-                None => (&[IN_PROGRESS], &[READY_FOR_AGENT]),
-                Some(_) => (&[IN_PROGRESS, READY_FOR_AGENT], &[labels::NEEDS_TRIAGE]),
-            };
+            let (off, on, line): (&[Label], &[Label], String) =
+                match outside.untrusted_edit(issue)? {
+                    None => (
+                        &[IN_PROGRESS],
+                        &[READY_FOR_AGENT],
+                        format!(
+                            "labelling #{} {READY_FOR_AGENT}, in place of {IN_PROGRESS}: its \
+                             Spec run is only waiting",
+                            issue.number
+                        ),
+                    ),
+                    Some(text) => (
+                        &[IN_PROGRESS, READY_FOR_AGENT],
+                        &[labels::NEEDS_TRIAGE],
+                        format!(
+                            "labelling #{} {}, in place of {IN_PROGRESS}: its Spec run is only \
+                             waiting, but its {text} was edited by an account that is not a \
+                             Trusted account since it was last labelled {READY_FOR_AGENT}",
+                            issue.number,
+                            labels::NEEDS_TRIAGE
+                        ),
+                    ),
+                };
             let edit = Edit::of(issue, outside.labels(issue)?, off, on);
             if !edit.takes_off(IN_PROGRESS) {
                 return Ok(());
             }
-            outside.step(match untrusted {
-                None => format!(
-                    "labelling #{} {READY_FOR_AGENT}, in place of {IN_PROGRESS}: its Spec run \
-                     is only waiting",
-                    issue.number
-                ),
-                Some(text) => format!(
-                    "labelling #{} {}, in place of {IN_PROGRESS}: its Spec run is only \
-                     waiting, but its {text} was edited by an account that is not a Trusted \
-                     account since it was last labelled {READY_FOR_AGENT}",
-                    issue.number,
-                    labels::NEEDS_TRIAGE
-                ),
-            });
+            outside.step(line);
             outside.apply(&edit)
         }) {
             outside.warn(
@@ -1340,6 +1351,18 @@ mod tests {
                 edit(&["in-progress"], &["needs-triage"], &["needs-triage"]),
             ]
         );
+    }
+
+    #[test]
+    fn a_waiting_spec_run_on_a_spec_never_labelled_ready_only_takes_in_progress_off() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["enhancement"]);
+        let claimed = claimed(&mut issue, &url);
+
+        claimed.end(&mut issue, Ending::Waiting);
+
+        assert_eq!(issue.calls, removing(&["enhancement"]));
+        assert_eq!(labels(&issue), ["enhancement"]);
     }
 
     #[test]

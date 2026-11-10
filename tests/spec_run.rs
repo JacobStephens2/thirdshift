@@ -2379,6 +2379,23 @@ fn a_spec_run_waiting_on_an_outside_blocker_or_a_foreign_ticket_hands_its_spec_b
 }
 
 #[test]
+fn a_waiting_spec_run_on_a_spec_never_labelled_ready_for_agent_does_not_label_it() {
+    let scenario = spec_of(&[(21, &[]), (22, &[])]);
+    scenario.issue_labelled(21, &["needs-info"]);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        !scenario
+            .issue_labels(SPEC)
+            .contains(&"ready-for-agent".to_string()),
+        "labels: {:?}",
+        scenario.issue_labels(SPEC)
+    );
+}
+
+#[test]
 fn a_spec_run_with_a_failed_ticket_is_labelled_agent_failed_though_others_only_wait() {
     let scenario = ready_spec_of(&[(21, &[]), (22, &[])]);
     scenario.issue_labelled(21, &["ready-for-human"]);

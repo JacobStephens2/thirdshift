@@ -34,7 +34,11 @@ impl FailedRun {
     /// Whether it is a Spec run that ended only waiting, uninterrupted: every
     /// Ticket not done waits on a person or on other work, and none failed.
     pub fn waiting(&self) -> bool {
-        !self.interrupted && self.error.is::<crate::spec_run::OnlyWaiting>()
+        !self.interrupted
+            && self
+                .error
+                .downcast_ref::<crate::spec_run::TicketsNotDone>()
+                .is_some_and(|not_done| not_done.only_waiting)
     }
 }
 
