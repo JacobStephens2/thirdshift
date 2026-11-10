@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 let home, server, exited, browser, origin, folder;
 async function firstLine(child) {
@@ -53,7 +54,7 @@ for (const requeue of [false, true]) {
       started_at: new Date().toISOString(), ended_at: null, stages: [], outcome: null
     };
     await rm(request, { force: true });
-    await writeFile(path, JSON.stringify(record));
+    await replaceRecord(path, JSON.stringify(record));
     await writeFile(join(folder, '7-fixture.log'), 'Waiting for Stop\n');
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: requeue ? 'reduce' : 'no-preference' });
     t.after(() => context.close());
@@ -132,7 +133,7 @@ for (const requeue of [false, true]) {
     record.ended_at = new Date().toISOString();
     record.issue_branch = 'issue-7';
     record.pull_request = 'https://github.com/acme/widgets/pull/10';
-    await writeFile(path, JSON.stringify(record));
+    await replaceRecord(path, JSON.stringify(record));
     await page.getByText('Issue branch left: issue-7', { exact: true }).waitFor();
     await page.getByText('Pull request left: https://github.com/acme/widgets/pull/10', { exact: true }).waitFor();
     await observer.getByRole('button', { name: 'Stop', exact: true }).waitFor({ state: 'hidden' });
@@ -154,7 +155,7 @@ test('Stop copy fallback does not move to another CLI when the Command ends', { 
     process_id: server.pid, process_start: identity, harness: 'codex',
     started_at: new Date().toISOString(), ended_at: null, stages: [], outcome: null
   };
-  await writeFile(path, JSON.stringify(record));
+  await replaceRecord(path, JSON.stringify(record));
   t.after(() => rm(path, { force: true }));
   await writeFile(join(folder, '8-fixture.log'), 'Working\n');
   const context = await browser.newContext();
@@ -173,7 +174,7 @@ test('Stop copy fallback does not move to another CLI when the Command ends', { 
   assert.equal(await page.evaluate(() => getSelection().toString()), expected);
   record.outcome = 'interrupted';
   record.ended_at = new Date().toISOString();
-  await writeFile(path, JSON.stringify(record));
+  await replaceRecord(path, JSON.stringify(record));
   await stop.waitFor({ state: 'hidden' });
   assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).count(), 1);
   assert.deepEqual(await page.locator('#peek .peek-cli [role="status"]').allTextContents(), ['']);

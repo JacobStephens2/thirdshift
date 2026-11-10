@@ -25,6 +25,8 @@ use crate::trial::accounting::Prices;
 use crate::trial::blind_diff;
 use crate::{interrupt, progress, prompt};
 
+mod retained_calls;
+
 /// The panel the Bar fixes before the first Trial.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -532,12 +534,6 @@ impl Response {
     }
 }
 
-fn call_path(root: &Path, pair: &str, seat: usize, order: usize) -> std::path::PathBuf {
-    root.join("panel")
-        .join(pair)
-        .join(format!("seat-{}-order-{order}.json", seat + 1))
-}
-
 /// The panel's spend, priced from the Experiment's frozen table and kept
 /// apart from the Arms' accounting.
 #[derive(Serialize)]
@@ -667,27 +663,14 @@ impl Spend {
 }
 
 /// The panel sessions still to run, by seat, and the pairs they read.
-pub(super) fn remaining(experiment: &store::Stored) -> Vec<(usize, usize)> {
-    let Some(panel) = &experiment.description.bar.panel else {
-        return Vec::new();
-    };
-    let mut remaining = vec![(0, 0); panel.seats.len()];
-    for task in &experiment.tasks {
-        if task.manifest.session != format::Session::Process {
-            continue;
-        }
-        for index in 0..experiment.description.bar.trials_per_task[&task.suite] {
-            let key = trial_results::pair_key(&task.suite, &task.name, index);
-            for (seat, (sessions, pairs)) in remaining.iter_mut().enumerate() {
-                let orders = (1..=2)
-                    .filter(|order| !call_path(&experiment.directory, &key, seat, *order).exists())
-                    .count();
-                *sessions += orders;
-                *pairs += usize::from(orders > 0);
-            }
-        }
-    }
-    remaining
+pub(super) fn remaining(experiment: &store::Stored) -> Result<Vec<(usize, usize)>> {
+    Ok(retained_calls::History::capture(
+        &Native,
+        &experiment.directory,
+        &experiment.description,
+        &experiment.tasks,
+    )?
+    .remaining())
 }
 
 /// Grade every finished pair of process Trials with every seat, in both
@@ -699,112 +682,92 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let Some(panel) = &bar.panel else {
         return Ok(());
     };
+    let mut history = retained_calls::History::capture(
+        &Native,
+        &experiment.directory,
+        &experiment.description,
+        &experiment.tasks,
+    )?;
     let seats: Vec<arms::FixedHarness> =
         serde_json::from_slice(&fs::read(experiment.directory.join("panel.json"))?)?;
     ensure!(seats.len() == panel.seats.len(), "panel seats changed");
     let timeout = Duration::from_secs(bar.timeout_seconds);
     let mut caps = None;
     let mut spent = 0.0;
-    for task in &experiment.tasks {
-        if task.manifest.session != format::Session::Process {
-            continue;
+    let mut prepared: Option<(String, Sides)> = None;
+    for work in history.executable() {
+        let task = work.task;
+        let index = work.trial;
+        let seat_index = work.seat;
+        let order = work.order;
+        let seat = &panel.seats[seat_index];
+        let harness = &seats[seat_index];
+        let key = work.key();
+        interrupt::check()?;
+        if let Some(limit) = panel.spending_limit {
+            ensure!(
+                spent < limit,
+                "Grader panel reached its ${limit:.6} spending limit for this run (${spent:.6} spent); resume the Experiment to grade the remaining pairs"
+            );
         }
-        for index in 0..bar.trials_per_task[&task.suite] {
-            let identities = [Arm::Baseline, Arm::Candidate].map(|arm| trial_results::Identity {
-                suite: &task.suite,
-                task: &task.name,
-                arm,
-                trial: index,
-            });
-            if identities
-                .iter()
-                .any(|identity| !trial_results::finished(&experiment.directory, identity))
-            {
-                continue;
-            }
-            let key = trial_results::pair_key(&task.suite, &task.name, index);
-            let mut sides = None;
-            for (seat_index, (seat, harness)) in panel.seats.iter().zip(&seats).enumerate() {
-                for order in 1..=2 {
-                    let path = call_path(&experiment.directory, &key, seat_index, order);
-                    if path.exists() {
-                        continue;
-                    }
-                    interrupt::check()?;
-                    if let Some(limit) = panel.spending_limit {
-                        ensure!(
-                            spent < limit,
-                            "Grader panel reached its ${limit:.6} spending limit for this run (${spent:.6} spent); resume the Experiment to grade the remaining pairs"
-                        );
-                    }
-                    let sides = match &mut sides {
-                        Some(sides) => sides,
-                        None => {
-                            sides.insert(Sides::read(experiment, task, &key, &identities, timeout)?)
-                        }
-                    };
-                    let caps = match &mut caps {
-                        Some(caps) => caps,
-                        None => {
-                            caps.insert(crate::config::UserConfig::load()?.trial_caps.with_env()?)
-                        }
-                    };
-                    let shown = if order == 1 {
-                        sides.first_order
-                    } else {
-                        [sides.first_order[1], sides.first_order[0]]
-                    };
-                    progress::step(format!(
-                        "Grader panel {}/{} #{}: seat {} ({}/{}), order {order}",
-                        task.suite,
-                        task.name,
-                        index + 1,
-                        seat_index + 1,
-                        seat.harness,
-                        seat.model
-                    ));
-                    let workspace = experiment
-                        .directory
-                        .join("graders")
-                        .join(format!("{key}--seat-{}--order-{order}", seat_index + 1));
-                    fs::create_dir_all(&workspace)?;
-                    let earlier = sessions(&Native, &workspace)?;
-                    let response: Response = model_grader::session(
-                        model_grader::Session {
-                            kind: "panel Grader",
-                            choice: &Choice {
-                                harness: seat.harness(),
-                                model: Some(seat.model.clone()),
-                                effort: seat.effort.clone(),
-                                chosen_by: ChosenBy::Command,
-                            },
-                            binary: &harness.path,
-                            directory: &workspace,
-                            prompt: prompt::panel_grader(),
-                            output: ("THIRDSHIFT_GRADER_CALLS", "calls.json", "calls"),
-                            timeout,
-                            caps,
-                        },
-                        &sides.packet(task, order, shown),
-                    )?;
-                    let call = response.call(shown)?;
-                    fs::create_dir_all(path.parent().context("panel call path")?)?;
-                    store::write(&path, &call)?;
-                    // Priced after the call is saved, so a pause keeps it.
-                    if panel.spending_limit.is_some() {
-                        for session in sessions(&Native, &workspace)? {
-                            if !earlier.contains(&session) {
-                                spent += session_cost(
-                                    &Native,
-                                    &session,
-                                    experiment.pricing.as_ref(),
-                                )
-                                .context(
-                                    "can't price a Grader panel session against the spending limit",
-                                )?;
-                            }
-                        }
-                    }
+        if prepared
+            .as_ref()
+            .is_none_or(|(previous, _)| previous != &key)
+        {
+            let sides = Sides::read(experiment, task, &key, &work.identities(), timeout)?;
+            prepared = Some((key.clone(), sides));
+        }
+        let sides = &prepared.as_ref().expect("prepared panel pair").1;
+        let caps = match &mut caps {
+            Some(caps) => caps,
+            None => caps.insert(crate::config::UserConfig::load()?.trial_caps.with_env()?),
+        };
+        let shown = if order == 1 {
+            sides.first_order
+        } else {
+            [sides.first_order[1], sides.first_order[0]]
+        };
+        progress::step(format!(
+            "Grader panel {}/{} #{}: seat {} ({}/{}), order {order}",
+            task.suite,
+            task.name,
+            index + 1,
+            seat_index + 1,
+            seat.harness,
+            seat.model
+        ));
+        let workspace = experiment
+            .directory
+            .join("graders")
+            .join(format!("{key}--seat-{}--order-{order}", seat_index + 1));
+        fs::create_dir_all(&workspace)?;
+        let earlier = sessions(&Native, &workspace)?;
+        let response: Response = model_grader::session(
+            model_grader::Session {
+                kind: "panel Grader",
+                choice: &Choice {
+                    harness: seat.harness(),
+                    model: Some(seat.model.clone()),
+                    effort: seat.effort.clone(),
+                    chosen_by: ChosenBy::Command,
+                },
+                binary: &harness.path,
+                directory: &workspace,
+                prompt: prompt::panel_grader(),
+                output: ("THIRDSHIFT_GRADER_CALLS", "calls.json", "calls"),
+                timeout,
+                caps,
+            },
+            &sides.packet(task, order, shown),
+        )?;
+        let call = response.call(shown)?;
+        history.publish(&work, call)?;
+        // Priced after the call is saved, so a pause keeps it.
+        if panel.spending_limit.is_some() {
+            for session in sessions(&Native, &workspace)? {
+                if !earlier.contains(&session) {
+                    spent += session_cost(&Native, &session, experiment.pricing.as_ref())
+                        .context("can't price a Grader panel session against the spending limit")?;
                 }
             }
         }
@@ -958,38 +921,19 @@ pub(super) fn read(
         return Ok(Vec::new());
     };
     let families = arm_families(description);
+    let history = retained_calls::History::capture(files, root, description, tasks)?;
     let mut reports = Vec::new();
-    for task in tasks {
-        if task.manifest.session != format::Session::Process {
-            continue;
-        }
-        'pairs: for index in 0..description.bar.trials_per_task[&task.suite] {
-            let key = trial_results::pair_key(&task.suite, &task.name, index);
-            let mut calls = Vec::new();
-            for seat in 0..panel.seats.len() {
-                let mut orders = Vec::new();
-                for order in 1..=2 {
-                    match files.read(&call_path(root, &key, seat, order)) {
-                        Ok(bytes) => orders.push(serde_json::from_slice(&bytes)?),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                            continue 'pairs;
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                calls.push(orders);
-            }
-            let (graders, votes, preference, merge) = tally(panel, &families, calls);
-            reports.push(PanelPair {
-                suite: task.suite.clone(),
-                task: task.name.clone(),
-                trial: index,
-                graders,
-                votes,
-                preference,
-                merge,
-            });
-        }
+    for (task, index, calls) in history.complete() {
+        let (graders, votes, preference, merge) = tally(panel, &families, calls);
+        reports.push(PanelPair {
+            suite: task.suite.clone(),
+            task: task.name.clone(),
+            trial: index,
+            graders,
+            votes,
+            preference,
+            merge,
+        });
     }
     Ok(reports)
 }

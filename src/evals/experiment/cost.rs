@@ -27,7 +27,8 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     let Some(plan) = Plan::new(
         experiment,
         &history(&Native, experiments, &experiment.description.id),
-    ) else {
+    )?
+    else {
         return Ok(());
     };
     for line in plan.lines() {
@@ -221,12 +222,12 @@ struct Group {
 impl Plan {
     /// `None` when every Trial already has a result and the Grader panel
     /// has made every call.
-    fn new(experiment: &store::Stored, history: &History) -> Option<Self> {
+    fn new(experiment: &store::Stored, history: &History) -> Result<Option<Self>> {
         let description = &experiment.description;
         let remaining = workers::remaining(experiment);
-        let seats = seats(experiment);
+        let seats = seats(experiment)?;
         if remaining.is_empty() && seats.is_empty() {
-            return None;
+            return Ok(None);
         }
         let mut groups = Vec::new();
         for suite in &description.suites {
@@ -258,7 +259,7 @@ impl Plan {
             .iter()
             .map(|task| 2 * description.bar.trials_per_task[&task.suite])
             .sum();
-        Some(Self {
+        Ok(Some(Self {
             id: description.id.clone(),
             total,
             timeout_minutes: description.bar.timeout_seconds as f64 / 60.0,
@@ -269,7 +270,7 @@ impl Plan {
                 .panel
                 .as_ref()
                 .and_then(|panel| panel.spending_limit),
-        })
+        }))
     }
 
     fn remaining(&self) -> usize {
@@ -375,9 +376,9 @@ impl Plan {
 /// Each panel seat with sessions still to run, priced from the frozen table:
 /// at this Experiment's measured mean once its sessions are all priced,
 /// otherwise at the assumed session size.
-fn seats(experiment: &store::Stored) -> Vec<SeatEstimate> {
+fn seats(experiment: &store::Stored) -> Result<Vec<SeatEstimate>> {
     let Some(panel) = &experiment.description.bar.panel else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let prices = experiment.pricing.as_ref();
     // Unreadable spend only loses the measured price, as unreadable history
@@ -390,11 +391,11 @@ fn seats(experiment: &store::Stored) -> Vec<SeatEstimate> {
     )
     .ok()
     .flatten();
-    let remaining = super::panel::remaining(experiment);
+    let remaining = super::panel::remaining(experiment)?;
     if remaining.iter().all(|(sessions, _)| *sessions == 0) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    panel
+    Ok(panel
         .seats
         .iter()
         .zip(remaining)
@@ -413,7 +414,7 @@ fn seats(experiment: &store::Stored) -> Vec<SeatEstimate> {
                     .or_else(|| assumed_session(prices, &seat.model).map(SessionPrice::Assumed)),
             }
         })
-        .collect()
+        .collect())
 }
 
 fn trials(count: usize) -> String {
