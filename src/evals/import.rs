@@ -176,6 +176,7 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
                 change: spec.pre_review_head,
                 criteria,
                 checks: Vec::new(),
+                process_grading: None,
                 inputs: inputs(),
                 trial: Some(crate::trial::Inputs {
                     issue_url: spec.spec_issue_url,
@@ -283,6 +284,7 @@ fn bug_task(
             change: pr.head_as_merged,
             criteria: format!("{criteria}\nReport no wrong findings."),
             checks: Vec::new(),
+            process_grading: None,
             inputs: inputs(),
             // These replay bugs all belong to this project. Code review is
             // read-only: its branch names are local and its PR URL is unused.

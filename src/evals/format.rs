@@ -50,10 +50,22 @@ pub(super) struct Task {
     pub criteria: String,
     #[serde(default)]
     pub checks: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_grading: Option<ProcessGrading>,
     pub inputs: BTreeMap<String, String>,
     pub trial: Option<crate::trial::Inputs>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProcessGrading {
+    pub test_files: Vec<String>,
+    #[serde(default)]
+    pub test_fakes: Vec<String>,
+    pub fail_to_pass: Vec<Vec<String>>,
+    pub pass_to_pass: Vec<Vec<String>>,
 }
 
 /// One replaceable A/A reading, with the setup that produced it.
@@ -90,6 +102,40 @@ impl Task {
             anyhow::ensure!(
                 task.provenance.is_some() && task.environment.is_some(),
                 "process tasks require provenance and environment"
+            );
+            anyhow::ensure!(
+                task.checks.is_empty(),
+                "process tasks use process_grading, not checks"
+            );
+            let grading = task
+                .process_grading
+                .as_ref()
+                .context("process tasks require process_grading")?;
+            anyhow::ensure!(
+                !grading.test_files.is_empty(),
+                "process_grading requires test_files"
+            );
+            for file in grading.test_files.iter().chain(&grading.test_fakes) {
+                relative_path(file)?;
+            }
+            for selectors in [&grading.fail_to_pass, &grading.pass_to_pass] {
+                anyhow::ensure!(
+                    !selectors.is_empty(),
+                    "process_grading requires fail_to_pass and pass_to_pass selectors"
+                );
+                for selector in selectors {
+                    anyhow::ensure!(
+                        selector
+                            .first()
+                            .is_some_and(|command| !command.trim().is_empty()),
+                        "process_grading selectors must be nonempty argument vectors"
+                    );
+                }
+            }
+        } else {
+            anyhow::ensure!(
+                task.process_grading.is_none(),
+                "only process tasks use process_grading"
             );
         }
         commit_id(&task.base)?;

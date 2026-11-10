@@ -98,6 +98,7 @@ pub(crate) fn propose(
             bug.url, reason
         ),
         checks: Vec::new(),
+        process_grading: None,
         inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(review.trial),
     };
