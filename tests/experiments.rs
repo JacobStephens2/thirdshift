@@ -712,6 +712,96 @@ sleep 20
     assert!(sessions.iter().all(|span| span["status"]["code"] == 2));
 }
 
+/// Issue #1495: a Trial writes no Command log line between its start and its
+/// outcome, so a long Trial made a healthy Experiment look Silent. Each running
+/// Trial now repeats a waiting line at the waiting-line interval.
+#[test]
+fn trials_write_waiting_lines_while_both_workers_are_mid_trial() {
+    let fixture = Fixture::new();
+    let started = fixture.scenario.path("waiting-trials-started");
+    fs::create_dir(&started).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{started}'/"$arm"
+while [ ! -f '{started}/baseline' ] || [ ! -f '{started}/candidate' ]; do sleep 0.01; done
+sleep 1.5
+"#,
+        started = started.display()
+    ));
+    // A 40 ms minute makes the default five-minute waiting line 200 ms.
+    let run = fixture.scenario.run_with_env(
+        &Fixture::experiment_args(&[]),
+        &[NO_SANDBOX[0], ("THIRDSHIFT_WAITING_MINUTE_MS", "40")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_trials_wait_until_their_outcomes(&fixture, 2);
+}
+
+#[test]
+fn a_timed_out_trial_stops_its_waiting_lines() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does("sleep 20");
+    let run = fixture.scenario.run_with_env(
+        &Fixture::experiment_args(&["--timeout", SHORT_TIMEOUT, "--void-retries", "0"]),
+        &[NO_SANDBOX[0], ("THIRDSHIFT_WAITING_MINUTE_MS", "40")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_trials_wait_until_their_outcomes(&fixture, 2);
+}
+
+#[test]
+fn trial_waiting_lines_fall_back_to_half_the_silent_time() {
+    let fixture = Fixture::new();
+    // Twenty minutes would be Silent first: half of one silent minute,
+    // 20 ms with a 40 ms minute, is used instead of 800 ms.
+    fixture
+        .scenario
+        .user_config_is("[logs]\nwaiting_line_minutes = 20\n[inbox]\nsilent_minutes = 1\n");
+    fixture.scenario.agent_does("sleep 1.5");
+    let run = fixture.scenario.run_with_env(
+        &Fixture::experiment_args(&[]),
+        &[NO_SANDBOX[0], ("THIRDSHIFT_WAITING_MINUTE_MS", "40")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_trials_wait_until_their_outcomes(&fixture, 10);
+}
+
+/// Each arm's Trial repeats its waiting line at least `repeats` times
+/// between its start and its outcome, and writes none after it.
+fn assert_trials_wait_until_their_outcomes(fixture: &Fixture, repeats: usize) {
+    let folder = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment";
+    let logs = fixture.scenario.log_files(folder, "log");
+    let log = fs::read_to_string(fixture.scenario.path(folder).join(&logs[0])).unwrap();
+    for arm in ["baseline", "candidate"] {
+        let lines: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains(&format!("--{arm}--")))
+            .collect();
+        let waiting = |line: &&str| line.ends_with("still running");
+        let start = lines
+            .iter()
+            .position(|line| line.ends_with("starting"))
+            .unwrap_or_else(|| panic!("no {arm} Trial start in:\n{log}"));
+        let end = lines
+            .iter()
+            .rposition(|line| !line.ends_with("starting") && !waiting(line))
+            .unwrap_or_else(|| panic!("no {arm} Trial outcome in:\n{log}"));
+        assert!(
+            lines[start..end]
+                .iter()
+                .filter(|line| waiting(line))
+                .count()
+                >= repeats,
+            "the {arm} Trial repeats its waiting line while it runs:\n{log}"
+        );
+        assert!(
+            !lines[end..].iter().any(waiting),
+            "the {arm} Trial's waiting lines end with it:\n{log}"
+        );
+    }
+}
+
 #[test]
 fn arm_usage_keeps_unreported_cost_and_model_unknown() {
     let fixture = Fixture::new();

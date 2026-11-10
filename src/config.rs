@@ -49,7 +49,7 @@ pub struct UserConfig {
     /// `otlp.endpoint`: optional full OTLP/HTTP traces URL; blank disables export.
     pub otlp_endpoint: Option<String>,
     /// `logs.waiting_line_minutes`: time between unchanged waiting lines,
-    /// by default five minutes.
+    /// including running Trials', by default five minutes.
     pub waiting_line_interval: Duration,
     /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
     pub silent_interval: Duration,
@@ -1152,7 +1152,7 @@ commands_by_repo = {}   # extra validation commands for each "owner/repo" in eve
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
-waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+waiting_line_minutes = 5   # repeat unchanged CI watch, Self-merge and Trial waiting lines; default 5 minutes
 
 [otlp]
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
