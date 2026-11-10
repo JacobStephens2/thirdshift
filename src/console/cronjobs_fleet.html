@@ -2,7 +2,7 @@
 <html lang="en" data-theme="{{ page.theme }}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fleet schedules · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
-<main><div class="page-title"><h1>Fleet schedules</h1><code>thirdshift cronjobs --fleet --json</code></div>
+<main class="fleet-machines"><div class="page-title"><h1>Fleet schedules</h1><code>thirdshift cronjobs --fleet --json</code></div>
 <p><a href="/cronjobs">This machine's Cron jobs</a> · <a href="/cronjobs?fleet=true" aria-current="page">Fleet schedules</a></p>
 <p>Configured thirdshift entries in the serving account's crontab on each Fleet machine. Schedules keep each machine's cron time zone; no conversion is applied. Reload to see changes.</p>
 <p>Other accounts, system crontabs and other schedulers are outside this view. Use each machine's Cron jobs for Run now and observed Pass starts.</p>

@@ -70,9 +70,13 @@ fn fleet_schedules_forward_the_person_and_require_read_on_each_owner() {
     assert!(refused.contains("refused"), "{refused}");
     assert!(!refused.contains("owner-schedule-marker"));
     // A run-only token also cannot read inventory, even with no forwarded person.
-    api::cli(
-        owner_home.path(),
-        &["console", "token", "revoke", "schedule-reader"],
+    assert!(
+        cli(
+            owner_home.path(),
+            &["console", "token", "revoke", "schedule-reader"]
+        )
+        .status
+        .success()
     );
     let runner = tokens::create(owner_home.path(), "schedule-runner", &["--scopes", "run"]);
     assert!(

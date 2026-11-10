@@ -6,9 +6,12 @@ const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
+const { createServer } = require('node:http');
 const { chromium } = require('./playwright.cjs');
 
-let home, server, exited, browser, origin, widgetsCommand, toolsCommand;
+const remoteName = 'R'.repeat(140);
+const remoteCommand = 'cd /remote/widgets && thirdshift secure base main';
+let home, server, owner, exited, browser, origin, widgetsCommand, toolsCommand;
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-cronjobs-'));
   await mkdir(join(home, '.thirdshift'));
@@ -24,6 +27,22 @@ before(async () => {
   widgetsCommand = `cd ${join(home, 'widgets')} && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/a-long-cron-output.log 2>&1`;
   toolsCommand = `cd ${join(home, 'tools')} && thirdshift architect base main`;
   await writeFile(join(home, 'crontab'), `*/5 * * * * ${widgetsCommand}\n0 2 * * * ${toolsCommand}\n*/10 * * * * ${widgetsCommand}\n@reboot thirdshift secure base main # <script>unsafe()</script>\n`);
+  owner = createServer((request, response) => {
+    const value = request.url.endsWith('/whoami')
+      ? { version: 1, api_version: 'v1', hostname: 'owner', thirdshift_version: 'fixture', scopes: ['read'] }
+      : request.url.endsWith('/cronjobs')
+        ? { jobs: [{ repository: 'acme/widgets', command_kind: 'Security run', schedule: '@daily', command: remoteCommand }], pass_starts: [] }
+        : { version: 2, hostname: 'owner', active_runs: 0, commands: [], pass_starts: [], machines: [] };
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify(value));
+  });
+  await new Promise(resolve => owner.listen(0, '127.0.0.1', resolve));
+  const pairing = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', 'fleet', 'add', remoteName, `http://127.0.0.1:${owner.address().port}`], {
+    env: { ...process.env, HOME: home }, stdio: ['pipe', 'ignore', 'inherit']
+  });
+  const paired = once(pairing, 'exit');
+  pairing.stdin.end('fixture-token\n');
+  assert.equal((await paired)[0], 0);
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', '--no-sign-in'], {
     env: { ...process.env, HOME: home, PATH: `${join(home, 'bin')}:${process.env.PATH}` },
     stdio: ['ignore', 'pipe', 'inherit']
@@ -38,6 +57,7 @@ after(async () => {
   await browser?.close();
   if (server && server.exitCode === null) server.kill();
   await exited;
+  if (owner) await new Promise(resolve => owner.close(resolve));
   if (home) await rm(home, { recursive: true, force: true });
 });
 
@@ -53,9 +73,12 @@ test('Fleet schedules show repository, machine and Command kind on desktop and p
         await page.getByRole('heading', { name: 'Fleet schedules', exact: true }).waitFor();
         assert.deepEqual(await page.locator('main h2').allTextContents(), ['Machines', 'acme/tools', 'acme/widgets', 'Other']);
         const widgets = page.getByRole('region', { name: 'acme/widgets Fleet schedules', exact: true });
-        assert.equal(await widgets.locator('h3').count(), 1);
+        assert.equal(await widgets.locator('h3').count(), 2);
+        await widgets.getByRole('heading', { name: remoteName, exact: true }).waitFor();
         assert.match(await widgets.textContent(), /Pickup run/);
-        assert.equal(await widgets.locator('.cron-command').first().textContent(), widgetsCommand);
+        const commands = await widgets.locator('.cron-command').allTextContents();
+        assert.ok(commands.includes(widgetsCommand));
+        assert.ok(commands.includes(remoteCommand));
         const other = page.getByRole('region', { name: 'Other Fleet schedules', exact: true });
         assert.match(await other.textContent(), /Security run/);
         assert.match(await other.textContent(), /<script>unsafe\(\)<\/script>/);
