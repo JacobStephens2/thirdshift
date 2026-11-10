@@ -524,6 +524,38 @@ for path in pathlib.Path(tempfile.gettempdir()).glob('prepared-grader-*/reposito
 }
 
 #[test]
+fn the_prepared_grader_snapshot_directory_is_private_to_its_owner() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(SUCCESS);
+    let tmp = fixture.root.join("grader-tmp");
+    fs::create_dir(&tmp).unwrap();
+    // SAFETY: the test process is single-threaded until the Arm is spawned,
+    // and this env is the snapshot directory both sides must share.
+    unsafe { std::env::set_var("TMPDIR", &tmp) };
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, _, _| {
+            let snapshots: Vec<_> = fs::read_dir(&tmp)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("prepared-grader-")
+                })
+                .collect();
+            assert_eq!(snapshots.len(), 1, "one prepared grader snapshot");
+            let mode = snapshots[0].metadata().unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "snapshot mode is {mode:03o}");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn input_symlink_to_a_fifo_voids_without_blocking_the_supervisor() {
     if isolated(&[]) {
         return;
