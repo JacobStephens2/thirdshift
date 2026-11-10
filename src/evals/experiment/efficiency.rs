@@ -46,20 +46,10 @@ impl Efficiency {
     pub(super) fn of(results: &[TrialResult], bar: &Bar, quality_verdict: Decision) -> Self {
         let mut costs = BTreeMap::new();
         let mut times = BTreeMap::new();
-        for (baseline, candidate) in accounting::pairs(results) {
-            let key = (baseline.suite.as_str(), baseline.task.as_str());
-            let baseline = accounting::trial_total(baseline);
-            let candidate = accounting::trial_total(candidate);
-            costs.entry(key).or_insert_with(Vec::new).push(
-                baseline
-                    .cost_usd
-                    .zip(candidate.cost_usd)
-                    .filter(|(base, _)| *base > 0.0)
-                    .map(|(base, cand)| cand / base),
-            );
-            times.entry(key).or_insert_with(Vec::new).push(
-                (baseline.time_ms > 0).then(|| candidate.time_ms as f64 / baseline.time_ms as f64),
-            );
+        for pair in accounting::paired_ratios(results) {
+            let key = (pair.suite, pair.task);
+            costs.entry(key).or_insert_with(Vec::new).push(pair.cost);
+            times.entry(key).or_insert_with(Vec::new).push(pair.time);
         }
         Self {
             quality_verdict,

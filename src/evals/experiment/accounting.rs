@@ -286,18 +286,10 @@ impl Report {
         }
         let mut costs = Vec::new();
         let mut times = Vec::new();
-        for (baseline, candidate) in pairs(results) {
-            let baseline = trial_total(baseline);
-            let candidate = trial_total(candidate);
+        for pair in paired_ratios(results) {
             report.paired_median_ratios.pairs += 1;
-            if let Some((base, cand)) = baseline.cost_usd.zip(candidate.cost_usd)
-                && base > 0.0
-            {
-                costs.push(cand / base);
-            }
-            if baseline.time_ms > 0 {
-                times.push(candidate.time_ms as f64 / baseline.time_ms as f64);
-            }
+            costs.extend(pair.cost);
+            times.extend(pair.time);
         }
         report.paired_median_ratios.cost = median(&mut costs);
         report.paired_median_ratios.time = median(&mut times);
@@ -305,7 +297,14 @@ impl Report {
     }
 }
 
-pub(super) fn pairs(results: &[TrialResult]) -> impl Iterator<Item = (&TrialResult, &TrialResult)> {
+pub(super) struct PairedRatios<'a> {
+    pub suite: &'a str,
+    pub task: &'a str,
+    pub cost: Option<f64>,
+    pub time: Option<f64>,
+}
+
+pub(super) fn paired_ratios(results: &[TrialResult]) -> impl Iterator<Item = PairedRatios<'_>> {
     results
         .iter()
         .filter(|result| result.arm == super::Arm::Baseline && result.outcome != Outcome::Void)
@@ -319,7 +318,20 @@ pub(super) fn pairs(results: &[TrialResult]) -> impl Iterator<Item = (&TrialResu
                         && result.trial == baseline.trial
                         && result.outcome != Outcome::Void
                 })
-                .map(|candidate| (baseline, candidate))
+                .map(|candidate| {
+                    let base = trial_total(baseline);
+                    let cand = trial_total(candidate);
+                    PairedRatios {
+                        suite: &baseline.suite,
+                        task: &baseline.task,
+                        cost: base
+                            .cost_usd
+                            .zip(cand.cost_usd)
+                            .filter(|(base, _)| *base > 0.0)
+                            .map(|(base, cand)| cand / base),
+                        time: (base.time_ms > 0).then(|| cand.time_ms as f64 / base.time_ms as f64),
+                    }
+                })
         })
 }
 
