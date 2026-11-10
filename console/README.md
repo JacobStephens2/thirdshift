@@ -35,6 +35,11 @@ show Inbox with Command details and Waterfall with every call expanded.
 
 ## Development and behavior
 
+Inbox rows without an issue or pull request show the repository above the
+Command name, including Security runs, Triage runs and Custom processes.
+Long repository names wrap on desktop and phone; the full Command subject
+remains available on hover and in Command details.
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh

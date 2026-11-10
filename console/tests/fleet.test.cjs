@@ -126,7 +126,7 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   const added = JSON.parse(await readFile(remotePath, 'utf8'));
   added.kind = 'Process'; added.process_name = 'custom-build';
   await writeFile(remotePath, JSON.stringify(added));
-  await remoteRows.locator('.subject').filter({ hasText: 'Process custom-build on acme/widgets' }).waitFor();
+  await remoteRows.locator('.subject[title="Process custom-build on acme/widgets"]').waitFor();
   added.name = 'another-remote-command'; added.cause = 'Another remote problem';
   await writeFile(remotePath.replace('1-fixture', '2-fixture'), JSON.stringify(added));
   await page.waitForFunction(() => notices.length === 1);
