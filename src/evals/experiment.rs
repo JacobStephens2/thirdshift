@@ -15,6 +15,7 @@ mod names;
 mod options;
 pub(crate) mod pairs;
 pub(crate) mod pairwise;
+mod panel;
 mod reading;
 mod rechecks;
 mod release;
@@ -85,6 +86,9 @@ pub(crate) struct Bar {
     )]
     pub time_ceiling: Option<f64>,
     pub void_rules: VoidRules,
+    /// Absent when no Grader panel grades the pairs of Trials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<panel::Panel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -122,6 +126,7 @@ impl Default for Bar {
                 ]
                 .into(),
             },
+            panel: None,
         }
     }
 }
@@ -450,9 +455,12 @@ pub fn run(options: Options) -> Result<()> {
         }
         logs::stage(logs::Stage::EvalTasks);
         model_grader::prepare(&experiment, &config.harness)?;
+        panel::prepare(&experiment)?;
         workers::run(&experiment)?;
         pairs::run(&experiment)?;
+        // The panel grades last, so a pause in it holds back no model Score.
         model_grader::run(&experiment)?;
+        panel::run(&experiment)?;
         experiment.refresh_verdict()?;
         experiment.state = State::Completed;
         Ok(())

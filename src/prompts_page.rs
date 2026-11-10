@@ -179,6 +179,13 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::grader(),
         },
         Prompt {
+            id: "prompt-panel-grader",
+            title: "Panel Grader",
+            when: "In an Experiment whose Bar names a Grader panel, starts a fresh session for each seat on each pair of process Trials, once in each presentation order.",
+            sender: Experiment,
+            text: prompt::panel_grader(),
+        },
+        Prompt {
             id: "prompt-fresh",
             title: "Fresh",
             when: "Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.",

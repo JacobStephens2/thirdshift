@@ -628,7 +628,15 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
 
 /// The retained pair named by `key`, which must be one of the Experiment's.
 fn find(stored: &Stored, key: &str) -> Result<Pair> {
-    pairs::read(&Native, &stored.directory)?
+    let mut pairs = pairs::read(&Native, &stored.directory)?;
+    let panel = super::panel::read(
+        &Native,
+        &stored.directory,
+        &stored.description,
+        &stored.tasks,
+    )?;
+    super::panel::attach(&mut pairs, &panel);
+    pairs
         .into_iter()
         .find(|pair| pair.key() == key)
         .context("pair not found; pairs exist once both Trials have finished")

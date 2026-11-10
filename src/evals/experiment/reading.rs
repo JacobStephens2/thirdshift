@@ -19,6 +19,7 @@ struct Observation {
     voids: Voids,
     usage: usage::Arms,
     pairs: Vec<super::pairs::Pair>,
+    panel: Vec<super::panel::PanelPair>,
     people: super::pairwise::People,
 }
 
@@ -92,6 +93,9 @@ impl Observation {
             }
         }
         observation.pairs = super::pairs::read(files, &stored.directory)?;
+        observation.panel =
+            super::panel::read(files, &stored.directory, &stored.description, &stored.tasks)?;
+        super::panel::attach(&mut observation.pairs, &observation.panel);
         observation.people = super::pairwise::people(
             files,
             &stored.directory,
@@ -150,6 +154,7 @@ impl Observation {
             findings: self.voids.findings(),
             voids: self.voids,
             pairs: self.pairs,
+            panel: self.panel,
             people: self.people,
         }
     }

@@ -18,7 +18,7 @@ use crate::{config::UserConfig, git::Git, interrupt, prompt, skills};
 
 pub(crate) mod accounting;
 mod reports;
-pub(crate) use reports::Reports;
+pub(crate) use reports::{Reports, blind_diff};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

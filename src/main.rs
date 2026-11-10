@@ -279,7 +279,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::Experiment(options)) => {
-            return match evals::experiment::run(options) {
+            return match evals::experiment::run(*options) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

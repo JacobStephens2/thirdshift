@@ -79,9 +79,31 @@ look into, not a defect. Pairs are evidence,
 never Scores: they change no Score, Verdict or Void cause. Experiments
 without `new_tests`, and pairs not yet finished, have none.
 
-Format 10 adds each `PairSide`'s `diff`, the Grader panel's optional `panel`
-calls per `Pair`, and `people`. `diff` lists every file the Arm's final commit
-changes since the base, code files before tests (`test` is true for a file
+Format 10 adds the Grader panel: the Bar's optional `panel` and the
+Experiment's `panel` reports. `bar.panel` lists the `seats` (Harness, Model and
+optional Effort), the `vote` unit (`family`, the default, or `model`) and
+`arm_family_rule` (on by default). Each seat reads every pair of process
+Trials in a blind packet, once in each presentation order, with the sides
+swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
+its `family` (its provider: the Harness's own, or the provider an OpenCode
+Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
+the Arm `shown_as_a`, gives each Arm's per-criterion `rubric`, merge
+reason and `ready_to_merge` call, then the comparison's `reason` and
+`preference`. A Grader's `preference` and `merge` calls stand only when both
+orders agree; a call that flips with the order is `tie`. With
+`arm_family_rule`, a seat from either Arm's family does not vote while a seat
+from another family sits on the panel. `votes` lists the units that counted:
+one per family, each taking its own majority first, or one per Model (seats
+naming the same Model at different Efforts or on different Harnesses take
+their own majority first, as a family does). A call
+needs more than half of the votes, otherwise it is `tie`; the panel's tied
+merge call is `not_ready`. Pairs appear once every seat has called both
+orders. The panel is reported beside the Verdict and changes no Score,
+Verdict or Void cause. Experiments without a panel have none.
+
+Format 10 also adds each `PairSide`'s `diff`, the Grader panel's optional
+`panel` calls per `Pair`, and `people`. `diff` lists every file the Arm's
+final commit changes since the base, code files before tests (`test` is true for a file
 matching `new_tests.paths` or in a test location), each with its `git diff`
 text: the blind pairwise page reads this copy once the Trial repositories are
 gone. `panel`, when present, is the panel's merge call per Arm (a tied call is
@@ -385,6 +407,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pending_rechecks": ["Pending"],
     "leak_hits": ["LeakHit"],
     "pairs": ["Pair"],
+    "panel": ["PanelPair"],
     "people": {"reviews": ["PairReview"], "agreement": {"compared": "integer", "agreed": "integer"}},
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
@@ -421,7 +444,12 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "discriminating_tasks?": {"*": ["string"]},
     "min_discriminating_tasks?": "integer",
     "cost_ceiling?": "number", "time_ceiling?": "number",
-    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
+    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]},
+    "panel?": "Panel"
+  },
+  "Panel": {
+    "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
+    "vote": "family|model", "arm_family_rule": "boolean"
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
@@ -484,6 +512,24 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
     "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
   },
+  "PanelPair": {
+    "suite": "string", "task": "string", "trial": "integer", "graders": ["PanelGrader"],
+    "votes": [{"name": "string", "preference": "ArmPreference", "merge": "MergeCalls"}],
+    "preference": "ArmPreference", "merge": {"baseline": "ready|not_ready", "candidate": "ready|not_ready"}
+  },
+  "PanelGrader": {
+    "harness": "string", "model": "string", "effort": "string?", "family": "string",
+    "votes": "boolean", "orders": ["PanelCall"], "preference": "ArmPreference", "merge": "MergeCalls"
+  },
+  "PanelCall": {
+    "shown_as_a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
+    "reason": "string", "preference": "ArmPreference"
+  },
+  "PanelSide": {
+    "rubric": [{"criterion": "string", "met": "boolean", "evidence": "string"}],
+    "merge_reason": "string", "ready_to_merge": "boolean"
+  },
+  "MergeCalls": {"baseline": "ready|not_ready|tie", "candidate": "ready|not_ready|tie"},
   "Command": ["string"],
   "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},
   "Recheck": {"passed": "boolean", "reason": "string", "wrong_finding": "boolean?", "recorded_at": "string"},
