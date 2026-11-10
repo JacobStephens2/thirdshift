@@ -5,9 +5,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
+
+# The full suite starts helpers that import tomllib; refuse before selecting.
+if sys.version_info < (3, 11):
+    sys.exit("Python 3.11 or later is required; found Python "
+             f"{'.'.join(map(str, sys.version_info[:3]))} at {sys.executable}")
 
 
 # Markdown read by builds or tests must retain its consumers' checks.

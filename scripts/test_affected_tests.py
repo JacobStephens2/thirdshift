@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from test_python_minimum import rejection, run_as
+
 
 SELECTOR = Path(__file__).with_name("affected-tests").resolve()
 
@@ -110,6 +112,11 @@ class AffectedTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return result, calls
 
+    def run_selector_as(self, version):
+        result = run_as(version, SELECTOR, "base", cwd=self.root, env=self.env)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return result, calls
+
     def select_for_only(self, path):
         self.git("branch", "-f", "base", "HEAD")
         self.change(path)
@@ -127,6 +134,22 @@ class AffectedTests(unittest.TestCase):
             ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
             ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
         ])
+
+    def test_python_older_than_3_11_is_rejected_before_any_check(self):
+        self.change("src/main.rs")
+        for version in [(3, 9, 18), (3, 10, 14)]:
+            with self.subTest(version=version):
+                result, calls = self.run_selector_as(version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, rejection(version))
+
+    def test_python_3_11_selects_as_before(self):
+        self.change("src/main.rs")
+        result, calls = self.run_selector_as((3, 11, 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["cargo", "nextest", "run"]])
 
     def test_go_prototype_only_runs_go_in_its_module(self):
         self.change("prototype/go/main.go")
