@@ -1,6 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
@@ -8,14 +8,22 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 
-let home, server, exited, browser, origin;
+let home, server, exited, browser, origin, widgetsCommand, toolsCommand;
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-cronjobs-'));
   await mkdir(join(home, '.thirdshift'));
   await mkdir(join(home, 'bin'));
   await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
   await writeFile(join(home, 'bin/crontab'), '#!/bin/sh\n[ "$1" = -l ] || exit 99\ncat "$HOME/crontab"\n', { mode: 0o755 });
-  await writeFile(join(home, 'crontab'), '*/5 * * * * cd /srv/a-repository-with-a-long-name && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/cron.log 2>&1\n@reboot thirdshift secure base main # <script>unsafe()</script>\n');
+  for (const name of ['widgets', 'tools']) {
+    const path = join(home, name);
+    await mkdir(path);
+    execFileSync('git', ['init', '-q', path]);
+    execFileSync('git', ['-C', path, 'remote', 'add', 'origin', `https://github.com/acme/${name}.git`]);
+  }
+  widgetsCommand = `cd ${join(home, 'widgets')} && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/a-long-cron-output.log 2>&1`;
+  toolsCommand = `cd ${join(home, 'tools')} && thirdshift architect base main`;
+  await writeFile(join(home, 'crontab'), `*/5 * * * * ${widgetsCommand}\n0 2 * * * ${toolsCommand}\n*/10 * * * * ${widgetsCommand}\n@reboot thirdshift secure base main # <script>unsafe()</script>\n`);
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', '--no-sign-in'], {
     env: { ...process.env, HOME: home, PATH: `${join(home, 'bin')}:${process.env.PATH}` },
     stdio: ['ignore', 'pipe', 'inherit']
@@ -37,13 +45,20 @@ test('Cron jobs reads like terminal crontab lines on desktop and phone, with or 
   for (const javaScriptEnabled of [true, false]) {
     for (const width of [1440, 390]) {
       await t.test(`${width}px, JavaScript ${javaScriptEnabled}`, async t => {
-        const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height: 900 } });
+        const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height: width === 390 ? 844 : 900 } });
         t.after(() => context.close());
         const page = await context.newPage();
         await page.goto(`${origin}/cronjobs`);
-        const crontab = page.getByRole('region', { name: 'thirdshift crontab entries', exact: true });
+        await page.getByRole('heading', { name: 'acme/tools', exact: true }).waitFor();
+        assert.deepEqual(await page.locator('main h2:visible').allTextContents(), ['acme/tools', 'acme/widgets', 'Other', 'Run Passes now', 'Last fired by repository']);
+        const tools = page.getByRole('region', { name: 'acme/tools crontab entries', exact: true });
+        assert.equal(await tools.textContent(), `0 2 * * *  ${toolsCommand}\n`);
+        const other = page.getByRole('region', { name: 'Other crontab entries', exact: true });
+        assert.equal(await other.textContent(), '@reboot  thirdshift secure base main # <script>unsafe()</script>\n');
+        assert.equal(await other.locator('script').count(), 0);
+        const crontab = page.getByRole('region', { name: 'acme/widgets crontab entries', exact: true });
         await crontab.waitFor();
-        assert.equal(await crontab.textContent(), '*/5 * * * *  cd /srv/a-repository-with-a-long-name && /home/owner/.cargo/bin/thirdshift pickup base main >> /home/owner/.thirdshift/logs/cron.log 2>&1\n@reboot  thirdshift secure base main # <script>unsafe()</script>\n');
+        assert.equal(await crontab.textContent(), `*/5 * * * *  ${widgetsCommand}\n*/10 * * * *  ${widgetsCommand}\n`);
         assert.equal(await crontab.locator('script').count(), 0);
         assert.equal(await crontab.evaluate(el => getComputedStyle(el).whiteSpace), 'pre');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

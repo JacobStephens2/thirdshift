@@ -233,7 +233,9 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             "id": text, "trace": {"type": "boolean"}, "contents": text
         })),
         View::CronJobs => object(json!({
-            "jobs": array(object(json!({"schedule": text, "command": text}))), "pass_starts": array(record)
+            "jobs": array(object(json!({
+                "schedule": text, "command": text, "repository": {"type": ["string", "null"]}
+            }))), "pass_starts": array(record)
         })),
         View::LaunchDirectories => object(json!({
             "directories": array(object(json!({"repository": text, "path": text})))
