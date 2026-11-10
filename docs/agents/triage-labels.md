@@ -2,17 +2,31 @@
 
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+| Label in mattpocock/skills | Label in our tracker | Meaning                                                                                      |
+| -------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| `needs-triage`             | `needs-triage`       | Queued for evaluation, which a scheduled **Triage Pass** may do unattended                   |
+| `needs-info`               | `needs-info`         | Waiting on the reporter for more information                                                 |
+| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent                                                      |
+| `ready-for-human`          | `ready-for-human`    | Needs a person before an agent can finish it: a decision, shaping, access or the work itself |
+| `wontfix`                  | `wontfix`            | Will not be actioned                                                                         |
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-Edit the right-hand column to match whatever vocabulary you actually use.
+## Choosing between `needs-triage` and `ready-for-human`
+
+A **Triage Pass** (`thirdshift triage` on a schedule) takes open `needs-triage` issues one at a time. Where `triage.allow_ready_for_agent` is on, it can label one `ready-for-agent`, and a **Pickup run** with Self-merge then takes it to the Base branch with no person reading it. So label an issue `needs-triage` only when that outcome would be acceptable.
+
+Label it `ready-for-human` instead, saying in the issue what the person has to do, when it:
+
+- asks for a decision, a grilling session or an Experiment before the work can be shaped;
+- has only a title, or otherwise leaves its intent to guesswork;
+- touches a trust or security boundary, or contacts people outside the repository;
+- needs credentials, a particular machine or host, or a judgement about a production server;
+- needs splitting into a Spec.
+
+A Triage run reaches `ready-for-human` on its own for most of these, but each one costs a session. Taking `ready-for-human` off and putting `needs-triage` back hands an issue to the Triage Pass once the person's part is done.
+
+A Triage Pass does not yet wait for an issue to settle (#1965). While a scheduled Triage Pass runs on the repository, an issue still being written, or a Spec whose Tickets are not yet attached (step 1 below), can be triaged early.
 
 ## `ready-for-agent` on a Spec
 
