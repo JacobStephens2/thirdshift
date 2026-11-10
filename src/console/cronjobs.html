@@ -8,8 +8,10 @@
 <p>thirdshift entries in this account's crontab (<code>crontab -l</code>). Schedules use cron's time zone. Reload to see changes.</p>
 <p>Other accounts, system crontabs and other schedulers are outside this view.</p>
 {% if show_jobs %}
-{% if !inventory.jobs.is_empty() %}<pre class="crontab" tabindex="0" role="region" aria-label="thirdshift crontab entries"><code>{% for job in inventory.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi>
-{% endfor %}</code></pre>{% endif %}
+{% for group in inventory.groups() %}<section class="cron-repository" aria-label="{{ group.heading }} cron jobs">
+<h2>{{ group.heading }}</h2>
+<pre class="crontab" tabindex="0" role="region" aria-label="{{ group.heading }} crontab entries"><code>{% for job in group.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi>
+{% endfor %}</code></pre></section>{% endfor %}
 {% if inventory.jobs.is_empty() %}<p>No thirdshift cron jobs in this account's crontab.</p>{% endif %}
 {% endif %}
 {% if can_run %}
