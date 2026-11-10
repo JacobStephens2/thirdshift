@@ -173,9 +173,11 @@ fn manager_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 static UNIT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// A scope name unique to this process, for `kind` Trial or Grader `detail`.
+/// A scope name that cannot be reused when a later process gets the same PID
+/// and counter. Keep the kind prefix for operators listing units.
 fn unit_name(kind: &str, detail: &str) -> String {
     let count = UNIT_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let nonce = rand::random::<u128>();
     let detail: String = detail
         .chars()
         .map(|char| {
@@ -187,7 +189,7 @@ fn unit_name(kind: &str, detail: &str) -> String {
         })
         .collect();
     format!(
-        "thirdshift-{kind}-{}-{count}-{detail}.scope",
+        "thirdshift-{kind}-{}-{count}-{nonce:032x}-{detail}.scope",
         std::process::id()
     )
 }
@@ -274,6 +276,19 @@ impl Scope {
     }
 }
 
+impl Drop for Scope {
+    fn drop(&mut self) {
+        // Callers inspect OOM evidence before releasing the owner. Borrowed
+        // Trial membership and memory-only fixtures own no unit to unload.
+        if let Err(error) = self.observation.unload(&self.unit) {
+            crate::progress::step(format_args!(
+                "warning: could not unload scope {}: {error:#}",
+                self.unit
+            ));
+        }
+    }
+}
+
 /// Native manager/filesystem access, substituted privately by deterministic
 /// execution tests. Observation never participates in execution error policy.
 trait Observation {
@@ -289,6 +304,9 @@ trait Observation {
         Ok(Vec::new())
     }
     fn signal(&self, _unit: &str, _signal: libc::c_int) -> Result<()> {
+        Ok(())
+    }
+    fn unload(&self, _unit: &str) -> Result<()> {
         Ok(())
     }
 }
@@ -339,10 +357,31 @@ impl Observation for Native {
         let Some(group) = read_control_group(unit)? else {
             return Ok(Vec::new());
         };
-        let directory = events_path(&group).parent().unwrap().to_path_buf();
-        let mut pids = Vec::new();
-        read_group_processes(&directory, &mut pids)?;
-        Ok(pids)
+        group_processes(&group)
+    }
+
+    fn unload(&self, unit: &str) -> Result<()> {
+        let Some(group) = read_control_group(unit)? else {
+            return Ok(());
+        };
+        // The existing supervisor owns survivor handling. Never use stop as
+        // a replacement for its TERM/KILL sweep, or stop a borrowed Trial.
+        if !group_processes(&group)?.is_empty() {
+            return Ok(());
+        }
+        let output = manager_command("systemctl")
+            .args(["--user", "stop", unit])
+            .output()
+            .context("could not stop the empty scope")?;
+        // --collect can race this stop. An already unloaded unit is success.
+        if !output.status.success() && read_control_group(unit)?.is_some() {
+            anyhow::bail!(
+                "could not stop scope {unit}: {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(())
     }
 
     fn signal(&self, unit: &str, signal: libc::c_int) -> Result<()> {
@@ -454,7 +493,10 @@ fn kill_count(events: &Path) -> Option<u64> {
 /// One scope's cgroup path, as the user manager reports it while the scope
 /// runs. `None` once the scope is gone.
 fn control_group(unit: &str) -> Option<String> {
-    read_control_group(unit).ok().flatten()
+    read_control_group(unit)
+        .ok()
+        .flatten()
+        .filter(|group| !group.is_empty())
 }
 
 fn read_control_group(unit: &str) -> Result<Option<String>> {
@@ -481,7 +523,18 @@ fn read_control_group(unit: &str) -> Result<Option<String>> {
         .lines()
         .find_map(|line| line.strip_prefix("ControlGroup="))
         .context("scope response has no ControlGroup")?;
-    Ok((!group.is_empty()).then(|| group.to_owned()))
+    // A loaded but empty scope can have an empty ControlGroup. Keep it
+    // distinct from not-found so disposal still stops that retained unit.
+    Ok(Some(group.to_owned()))
+}
+
+fn group_processes(group: &str) -> Result<Vec<libc::pid_t>> {
+    let mut pids = Vec::new();
+    if !group.is_empty() {
+        let directory = events_path(group).parent().unwrap().to_path_buf();
+        read_group_processes(&directory, &mut pids)?;
+    }
+    Ok(pids)
 }
 
 fn read_group_processes(directory: &Path, pids: &mut Vec<libc::pid_t>) -> Result<()> {
@@ -786,6 +839,9 @@ pub const OOM_KILL_CAUSE: &str = "scope memory.events reported an oom_kill";
 pub(crate) mod testing;
 
 #[cfg(test)]
+mod lifecycle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -806,7 +862,8 @@ mod tests {
                 assert!(args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=kill")));
                 assert!(!args.contains(&std::ffi::OsStr::new("--property=OOMPolicy=continue")));
             }
-            let _session = trial_session_command("unused");
+            drop(trial_session_command("unused"));
+            drop(session);
             let manager = Path::new(&directory).join("systemctl");
             std::fs::write(&manager, "#!/bin/sh\nexit 1\n").unwrap();
             assert!(!available(), "an unreachable manager must still be refused");
@@ -816,7 +873,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         for name in ["systemd-run", "systemctl"] {
             let program = directory.path().join(name);
-            crate::test_support::write_executable(&program, "#!/bin/sh\nexit 0\n");
+            crate::test_support::write_executable(
+                &program,
+                "#!/bin/sh\ncase \"$*\" in *SystemState*) echo running ;; *) printf 'LoadState=not-found\\nControlGroup=\\n' ;; esac\n",
+            );
         }
         crate::test_support::assert_test_without_warnings(
             "scope::tests::availability_and_oom_policies_are_explicit_on_every_platform",
