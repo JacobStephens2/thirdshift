@@ -392,3 +392,70 @@ fn the_people_flags_keep_the_old_setting_unless_named() {
         assert_eq!(parse(args, readers).unwrap_err().to_string(), error);
     }
 }
+
+#[test]
+fn a_sample_only_verdict_leaves_other_suites_statistics_alone() {
+    let mut tasks = tasks();
+    for index in 0..4 {
+        tasks.push(
+            serde_json::from_value(json!({
+                "suite": "review", "name": format!("review-{index}"), "directory": "/unused",
+                "manifest": {"format": 1, "state": "approved", "session": "code-review",
+                    "repository": "fixture", "base": "a".repeat(40), "change": "b".repeat(40),
+                    "criteria": "find the bug", "inputs": {}, "trial": null}
+            }))
+            .unwrap(),
+        );
+    }
+    let mut bar = bar(Role::Beside, people(Role::Counted, &["ann"], Some(12), 0));
+    bar.trials_per_task.insert("review".into(), 3);
+    let mut results = results(|_| false);
+    for index in 0..4 {
+        for trial in 0..3 {
+            for arm in [Arm::Baseline, Arm::Candidate] {
+                results.push(TrialResult {
+                    suite: "review".into(),
+                    task: format!("review-{index}"),
+                    arm,
+                    trial,
+                    outcome: Outcome::Delivered,
+                    score: Some(Score {
+                        passed: true,
+                        wrong_finding: false,
+                        borderline: false,
+                        model: None,
+                        checks: Vec::new(),
+                        rechecks: Vec::new(),
+                    }),
+                    attempts: Vec::new(),
+                    leaks: Vec::new(),
+                });
+            }
+        }
+    }
+    let decided = decide(
+        &bar,
+        &tasks,
+        &panel_against_candidate(),
+        &read_queues(&bar, true, true),
+    )
+    .unwrap();
+    let setup = Setup {
+        commit: "a".repeat(40),
+        harness: "claude".into(),
+        model: None,
+        effort: None,
+        process: None,
+        process_digest: None,
+    };
+    let verdict =
+        serde_json::to_value(assess(&tasks, &results, &bar, &setup, &decided).unwrap().0).unwrap();
+    assert_eq!(
+        verdict["suites"]["review"]["bar"]["trials_per_task"], 3,
+        "{verdict}"
+    );
+    assert_eq!(
+        verdict["suites"]["review"]["retained_tasks"], 4,
+        "{verdict}"
+    );
+}

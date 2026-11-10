@@ -455,8 +455,14 @@ fn evaluate(
     let mut deciders = decided.report.clone();
     for (suite, &trials) in &bar.trials_per_task {
         let advisory = bar.advisory(suite);
-        // A Verdict on the people's sample alone takes each pair as a unit.
-        let unit = if decided.sample_only { 1 } else { trials };
+        // A Verdict on the people's sample alone takes each pair of process
+        // Trials as a unit; other suites keep their statistics.
+        let sampled = decided.sample_only
+            && tasks.iter().any(|task| {
+                &task.suite == suite
+                    && task.manifest.session == crate::evals::format::Session::Process
+            });
+        let unit = if sampled { 1 } else { trials };
         let statistics = verdict::Bar {
             margin: bar.margin,
             levels: bar.levels,
@@ -594,7 +600,7 @@ fn evaluate(
                 paired
                     .candidate
                     .push(candidate.expect("checked Trial pair"));
-                if decided.sample_only {
+                if sampled {
                     scores.push(std::mem::replace(
                         &mut paired,
                         TaskScores {
@@ -605,7 +611,7 @@ fn evaluate(
                     ));
                 }
             }
-            if !decided.sample_only {
+            if !sampled {
                 scores.push(paired);
             }
         }

@@ -584,3 +584,31 @@ fn with_people_off_no_merge_call_is_taken() {
         "{html}"
     );
 }
+
+#[test]
+fn identifying_lines_and_paths_stay_off_the_blind_page() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let (id, pair) = fixture(home.path());
+    let path = home
+        .path()
+        .join(".thirdshift/evals/experiments")
+        .join(&id)
+        .join("pairs")
+        .join(format!("{pair}.json"));
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["baseline"]["diff"][1]["patch"] = json!(format!(
+        "+# Notes\n+Model: {BASELINE_MODEL}\n+Kept as evidence.\n"
+    ));
+    saved["candidate"]["error"] =
+        json!("other Arm: Eval git failed: fatal: /h/trials/abc--baseline--0/attempt-1/repository");
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console
+        .get(&format!("/experiments/{id}/pairs/{pair}"))
+        .text()
+        .unwrap();
+    assert!(html.contains("Kept as evidence."), "{html}");
+    assert!(!html.contains(BASELINE_MODEL), "{html}");
+    assert!(!html.contains("baseline"), "{html}");
+}

@@ -639,3 +639,29 @@ EOF
         );
     }
 }
+
+#[test]
+fn the_model_grader_comes_from_another_family_than_either_arm() {
+    let fixture = Fixture::new();
+    // Both Arms run on Claude; a Claude Model of another name is still the
+    // Arms' family, so Codex's Model grades.
+    fixture.scenario.user_config_is(
+        "[harness.claude]\nmodel = \"judge-claude\"\n\n[harness.codex]\nmodel = \"judge-gpt\"\n",
+    );
+    fs::write(fixture.scenario.path("claude-script.sh.grader"), "exit 1\n").unwrap();
+    fs::write(fixture.scenario.path("codex-script.sh.grader"), "exit 1\n").unwrap();
+    fixture.run(&[
+        "--baseline-model",
+        "arm-claude-one",
+        "--candidate-model",
+        "arm-claude-two",
+    ]);
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    let grader: Value =
+        serde_json::from_slice(&fs::read(directory.join("grader.json")).unwrap()).unwrap();
+    assert_eq!(grader["model"], "judge-gpt", "{grader}");
+}

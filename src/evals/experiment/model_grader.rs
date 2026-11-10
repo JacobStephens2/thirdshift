@@ -12,7 +12,7 @@ use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{Task, arms, store, trial_results};
+use super::{Task, arms, panel, store, trial_results};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
 use crate::session::private;
 use crate::{interrupt, progress, prompt};
@@ -60,19 +60,16 @@ pub(super) fn prepare(experiment: &store::Stored, settings: &Settings) -> Result
     }
     let description = &experiment.description;
     let default = Choice::of(&Asked::default(), settings);
+    // The Grader panel's family rule: a Model from either Arm's family
+    // grades only when no other family is configured.
+    let arm_families = panel::arm_families(description);
     let choice = std::iter::once(default.harness)
         .chain(Harness::ALL)
         .find_map(|harness| {
             let configured = settings.of(harness);
             let model = configured.model.as_ref()?;
-            let different = [&description.baseline, &description.candidate]
-                .iter()
-                .all(|arm| {
-                    arm.model
-                        .as_ref()
-                        .is_none_or(|arm| !arm.eq_ignore_ascii_case(model))
-                });
-            (different && harness.installed()).then(|| Choice {
+            let other_family = !arm_families.contains(&panel::family(harness, Some(model)));
+            (other_family && harness.installed()).then(|| Choice {
                 harness,
                 model: Some(model.clone()),
                 effort: configured.effort.clone(),

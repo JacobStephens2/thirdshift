@@ -1394,7 +1394,7 @@ the Bar, one `--panel-seat` per Harness and Model, several per family allowed:
 ```sh
 thirdshift experiment <candidate> \
   --panel-seat harness=codex,model=gpt-5.5,effort=high \
-  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
   --panel-seat harness=claude,model=claude-opus-5-5
 ```
 
@@ -1432,7 +1432,7 @@ readers when a process Eval task has no pair evidence to read:
 ```sh
 thirdshift experiment <candidate> \
   --panel-seat harness=codex,model=gpt-5.5 \
-  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
   --panel counted --people counted \
   --people-reader ann@example.com --people-reader bo@example.com \
   --people-sample 7 --people-overlap 4
@@ -1594,8 +1594,9 @@ For review Trials, a fresh model Grader then scores one blind packet per Eval ta
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.
-When an installed Harness has a configured Model different from both Arms,
-that Model grades; otherwise the User config's default choice grades. The
+When an installed Harness has a configured Model from a family neither Arm
+runs on, as the Grader panel's family rule reads it, that Model grades;
+otherwise the User config's default choice grades. The
 Grader choice and executable are fixed before Trials start. Model Graders run
 in the same sandbox, seeing only their packet workspace. Code Graders run
 offline with their report packet and prepared repository. Neither can read

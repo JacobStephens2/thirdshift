@@ -99,7 +99,8 @@ their own majority first, as a family does). A call
 needs more than half of the votes, otherwise it is `tie`; the panel's tied
 merge call is `not_ready`. Pairs appear once every seat has called both
 orders. The panel is reported beside the Verdict and changes no Score,
-Verdict or Void cause. Experiments without a panel have none.
+Verdict or Void cause, unless the Bar counts it. Experiments without a panel
+have none.
 `bar.panel.spending_limit`, when set, is the USD each run of the Experiment
 may spend on panel sessions before grading pauses; a resume gets it afresh
 and keeps every saved call. `panel_spend` prices every retained panel session,
@@ -126,7 +127,9 @@ per side, on pairs the panel has read; `compared` is zero when there are none.
 `thirdshift experiments <id> --pair <pair-id> --json`, and its `--merge` and
 `--prefer` forms, emit `PairPage`: what the calling reader may see of one pair.
 `a` and `b` are the two `PairSide`s on the sides drawn for the pair from the
-Bar's seed, with no Arm named. `ticket` is null when the Eval task's Ticket
+Bar's seed, with no Arm named: their diffs leave out added lines that would
+identify the Arm, as the panel's packets do, and `error` gives no detail.
+`ticket` is null when the Eval task's Ticket
 input can't be read; `checklist` holds the items under its "Acceptance
 criteria" heading. `next` is the reader's next call. `mine` lists the reader's
 records and `revealed` stays null until the reader has given a preference;
@@ -158,8 +161,9 @@ gains `deciders`. The people's call on a pair is each reader's latest blind
 merge call; on a pair several readers share, an Arm is ready only if every
 reader calls it ready. With only the panel counted, the panel decides every
 pair. With only people counted on a sample, the Verdict rests on the sampled
-pairs alone, each pair a unit of the statistics (the suite's `bar` then has one
-Trial per Eval task), and `left_out_pairs` counts the rest. With people counted
+pairs alone, each pair a unit of the statistics (a suite of process Eval
+tasks then has one Trial per Eval task in its `bar`; other suites keep theirs),
+and `left_out_pairs` counts the rest. With people counted
 on every pair, they decide every pair. With both counted, people decide the
 pairs they read and the panel stands in on the others; the Bar is refused
 before the first Trial when the voting panel spans fewer than `families`

@@ -1,6 +1,7 @@
 //! The Grader panel: the Bar's model seats, each reading every pair of
 //! process Trials blind in both presentation orders. Every seat's calls and
-//! the panel's vote are reported beside the Verdict, never in it.
+//! the panel's vote are reported beside the Verdict, which they decide only
+//! when the Bar counts the panel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -250,7 +251,7 @@ pub(super) fn check_stand_in(description: &Description) -> Result<()> {
 
 /// A Model's family is its provider: the Harness's own, or the provider an
 /// OpenCode Model names.
-fn family(harness: Harness, model: Option<&str>) -> String {
+pub(super) fn family(harness: Harness, model: Option<&str>) -> String {
     match harness {
         Harness::Claude => "anthropic",
         Harness::Codex => "openai",
@@ -264,7 +265,7 @@ fn family(harness: Harness, model: Option<&str>) -> String {
 }
 
 /// Every family either Arm's sessions run on, Process Steps included.
-fn arm_families(description: &Description) -> BTreeSet<String> {
+pub(super) fn arm_families(description: &Description) -> BTreeSet<String> {
     let mut families = BTreeSet::new();
     for arm in [Arm::Baseline, Arm::Candidate] {
         let setup = description.setup(arm);
@@ -832,8 +833,8 @@ impl Sides {
         let ticket = task
             .manifest
             .inputs
-            .get(prompt::ISSUE_FILE)
-            .map(|source| fs::read_to_string(task.directory.join(source)))
+            .contains_key(prompt::ISSUE_FILE)
+            .then(|| super::pairwise::ticket(task))
             .transpose()?;
         let digest = Sha256::digest(key.as_bytes());
         let seed = experiment.description.bar.seed ^ u64::from_le_bytes(digest[..8].try_into()?);

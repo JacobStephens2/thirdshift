@@ -20,6 +20,7 @@ use super::store::Stored;
 use super::trial_results::files::{Files, Native, directory};
 use super::{Arm, Setup};
 use crate::logs::Actor;
+use crate::trial::blind_diff;
 
 /// What a reader may grade both changes on once their merge calls are sealed.
 pub(crate) const RUBRIC: [(&str, &str); 3] = [
@@ -649,6 +650,14 @@ fn build(stored: &Stored, key: &str, reader: &Actor) -> Result<Page> {
     let (mut a, mut b) = (take(sides[0]), take(sides[1]));
     for side in [&mut a, &mut b] {
         side.diff.sort_by_key(|file| file.test);
+        // Blinded as the panel's packet is: added lines that would name the
+        // Arm go, and so does error text, which can name retained paths.
+        for file in &mut side.diff {
+            file.patch = blind_diff(&file.patch);
+        }
+        if side.error.is_some() {
+            side.error = Some("the evidence could not run".into());
+        }
     }
     Ok(Page {
         experiment: stored.description.id.clone(),
@@ -724,7 +733,7 @@ fn next(mine: &[Record]) -> Next {
 
 /// The Ticket the Trials started from: the task's `.thirdshift-issue.md`
 /// input, read from inside its task folder.
-fn ticket(task: &super::Task) -> Result<String> {
+pub(super) fn ticket(task: &super::Task) -> Result<String> {
     let source = task
         .manifest
         .inputs
