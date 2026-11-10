@@ -84,32 +84,8 @@ fn draft(
     suite: &Path,
     pr: &Candidate,
 ) -> Result<Vec<Proposal>> {
-    ensure!(
-        !pr.closing_issues_references.page_info.has_next_page,
-        "closing issues are incomplete"
-    );
-    let tickets: Vec<_> = pr
-        .closing_issues_references
-        .nodes
-        .iter()
-        .filter(|ticket| ticket.sub_issues.total_count == 0)
-        .collect();
-    ensure!(!tickets.is_empty(), "pull request closes no Ticket");
-    for ticket in &pr.closing_issues_references.nodes {
-        ensure!(
-            !ticket.labels.page_info.has_next_page,
-            "Ticket labels are incomplete"
-        );
-        ensure!(
-            !ticket
-                .labels
-                .nodes
-                .iter()
-                .any(|label| label.name.eq_ignore_ascii_case("security-fix")),
-            "Security fixes cannot become process Eval tasks"
-        );
-    }
-    format::commit_id(&pr.merge_commit.oid)?;
+    let tickets = pr.tickets()?;
+    format::commit_id(&pr.merge)?;
     let staging = tempfile::Builder::new()
         .prefix(".process-proposal-")
         .tempdir_in(suite)?;
@@ -132,7 +108,7 @@ fn draft(
             "--no-tags",
             "--no-write-fetch-head",
             source.to_str().context("non-UTF-8 source path")?,
-            &pr.merge_commit.oid,
+            &pr.merge,
         ],
     )
     .is_err()
@@ -140,26 +116,15 @@ fn draft(
         crate::interrupt::check()?;
         // Unlike local preparation, discovery may fetch a recent merge not yet
         // present in the operator's clone, using the host's Git credentials.
-        crate::git::Git::new(&retained).run(&[
-            "fetch",
-            "--no-tags",
-            origin,
-            &pr.merge_commit.oid,
-        ])?;
+        crate::git::Git::new(&retained).run(&["fetch", "--no-tags", origin, &pr.merge])?;
     }
-    let base = git(
-        &retained,
-        &["rev-parse", &format!("{}^1", pr.merge_commit.oid)],
-    )?;
-    layout::reject_inline_changes(&retained, &base, &pr.merge_commit.oid)?;
-    let (tests, non_test_lines) = layout::selection(&retained, &base, &pr.merge_commit.oid)?;
+    let base = super::history::base(&retained, source, origin, pr)?;
+    layout::reject_inline_changes(&retained, &base, &pr.merge)?;
+    let (tests, non_test_lines) = layout::selection(&retained, &base, &pr.merge)?;
     tests.validate()?;
     ensure!(non_test_lines > 0, "pull request changes no source");
     git(&retained, &["update-ref", "refs/heads/base", &base])?;
-    git(
-        &retained,
-        &["update-ref", "refs/heads/change", &pr.merge_commit.oid],
-    )?;
+    git(&retained, &["update-ref", "refs/heads/change", &pr.merge])?;
     let mut proposals = Vec::new();
     for ticket in tickets {
         let issue = IssueUrl::parse(&ticket.url)?;
@@ -170,16 +135,6 @@ fn draft(
             issue.number
         );
         let destination = suite.join("tasks").join(&name);
-        let kind = if ticket
-            .labels
-            .nodes
-            .iter()
-            .any(|label| label.name.eq_ignore_ascii_case("bug"))
-        {
-            "bug"
-        } else {
-            "feature"
-        };
         if destination.try_exists()? {
             Task::load(&destination)?;
         } else {
@@ -189,7 +144,7 @@ fn draft(
             number: pr.number,
             url: pr.url.clone(),
             task: name,
-            kind,
+            kind: ticket.kind,
             non_test_lines,
             tests: tests.clone(),
         });
@@ -219,15 +174,12 @@ fn publish(
         retained.to_str().context("non-UTF-8 task path")?,
     ])?;
     git(&retained, &["update-ref", "refs/heads/base", base])?;
-    git(
-        &retained,
-        &["update-ref", "refs/heads/change", &pr.merge_commit.oid],
-    )?;
+    git(&retained, &["update-ref", "refs/heads/change", &pr.merge])?;
     git(&retained, &["remote", "remove", "origin"])?;
     let task = Task {
         format: 1, state: State::Proposed, session: Session::Process,
         provenance: Some(Provenance::Real), environment: Some(Environment::Host),
-        repository: "repository".into(), base: base.into(), change: pr.merge_commit.oid.clone(),
+        repository: "repository".into(), base: base.into(), change: pr.merge.clone(),
         criteria: "Implement the Ticket and pass its reference tests. Review the draft selectors before approval.".into(),
         checks: Vec::new(), inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(crate::trial::Inputs { issue_url: ticket.url.clone(), base: pr.base_ref_name.clone(), branch: pr.head_ref_name.clone(), pr_url: String::new() }),

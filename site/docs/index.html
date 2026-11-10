@@ -791,6 +791,11 @@ The response is the CLI twin&#39;s JSON. Stop waits for cleanup to finish.</p>
 <td>none</td>
 <td><code>evals import-replays</code> (already JSON)</td>
 </tr>
+<tr>
+<td><code>/evals/propose-process</code></td>
+<td><code>repository</code> (known owner/repo), optional <code>limit</code> (1–100)</td>
+<td><code>evals propose-process &lt;repository&gt;</code>; requires <code>admin</code></td>
+</tr>
 </tbody></table>
 <p>Additional CLI twins use these scopes and bodies. All paths are under <code>/api/v1</code>;
 JSON bodies use <code>Content-Type: application/json</code>. GET calls take no body.</p>

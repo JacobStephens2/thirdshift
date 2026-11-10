@@ -1,5 +1,30 @@
 use super::*;
 
+fn reviewer_regression(name: &str) {
+    let output = Command::new("python3")
+        .arg(format!("tests/evals/regressions/{name}.py"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("THIRDSHIFT_TEST_BINARY", env!("CARGO_BIN_EXE_thirdshift"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn preparation_preserves_executable_test_overlay_permissions() {
+    reviewer_regression("executable_overlay");
+}
+
+#[test]
+fn proposals_keep_the_complete_rebase_merged_ticket_range() {
+    reviewer_regression("rebase_merge");
+}
+
 fn process_task(fixture: &mut Fixture, base_passes: bool) -> PathBuf {
     fs::create_dir_all(fixture.source.join("src")).unwrap();
     fs::write(

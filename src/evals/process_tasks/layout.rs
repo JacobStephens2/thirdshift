@@ -67,6 +67,10 @@ pub(super) fn reject_inline_changes(source: &Path, base: &str, change: &str) -> 
 
 fn inline_tests(items: &[syn::Item], prefix: &str, found: &mut BTreeMap<String, String>) {
     for item in items {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only modules and test functions contain inline tests; unrelated Rust items are ignored"
+        )]
         match item {
             syn::Item::Mod(module) => {
                 if let Some((_, children)) = &module.content {
@@ -255,6 +259,10 @@ fn rust_target(source: &Path, change: &str, path: &str) -> Result<Option<(String
 
 fn test_functions(items: &[syn::Item], prefix: &str, found: &mut BTreeMap<String, String>) {
     for item in items {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only modules and test functions contribute test selectors; unrelated Rust items are ignored"
+        )]
         match item {
             syn::Item::Fn(function) if is_test(function) => {
                 found.insert(

@@ -271,7 +271,7 @@ merge. A refusal names the selector and side. Each command has a ten-minute
 deadline and runs with host network access. A changed inline Rust test module
 in a source file is refused, naming the file; production edits outside an
 unchanged inline test module remain eligible. Separate overlays must be regular
-test files and may not cross symlinks. Screening leaves the source checkout
+test files and may not cross symlinks; executable modes are preserved. Screening leaves the source checkout
 untouched, and the prepared Trial still contains only base history and Ticket
 inputs, with neither the fix nor its test overlay exposed.
 
@@ -287,6 +287,11 @@ keeps a private repository holding both commits and writes the Ticket title and
 body as `.thirdshift-issue.md` input. Proposals are not screened or approved
 automatically: review the selectors and issue input before approval and
 preparation. Repeating the command preserves existing proposals and approvals.
+Merge, squash and rebase ranges include the entire Ticket's change. For rewritten
+linear history, discovery compares the original PR's patch with the merged
+range; an ambiguous range is skipped for manual task authoring. The API twin,
+`POST /api/v1/evals/propose-process`, requires `admin` and accepts a known Launch
+directory's `owner/repo` plus an optional `limit`, rather than a filesystem path.
 
 The new suite has three Trials per Eval task. Its dependencies include the
 implement, tdd, codebase-design, code-review and security-audit Factory skills,

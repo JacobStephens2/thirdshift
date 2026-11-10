@@ -182,6 +182,7 @@ enum View {
     Update,
     RunUpdate,
     ImportReplays,
+    ProposeProcess,
     Config,
     ConfigSetting,
     SetConfig,
@@ -256,6 +257,7 @@ impl PageRoute {
                 | View::Update
                 | View::RunUpdate
                 | View::ImportReplays
+                | View::ProposeProcess
                 | View::Config
                 | View::ConfigSetting
                 | View::SetConfig
@@ -487,6 +489,14 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift evals import-replays"],
         method: Method::POST,
         view: View::ImportReplays,
+    },
+    PageRoute {
+        path: "/evals/propose-process",
+        api: "/api/v1/evals/propose-process",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift evals propose-process repository"],
+        method: Method::POST,
+        view: View::ProposeProcess,
     },
     PageRoute {
         path: "/config",
@@ -1017,6 +1027,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Update, Method::GET) => get(update::show),
             (View::RunUpdate, Method::POST) => post(update::run),
             (View::ImportReplays, Method::POST) => post(evals::import_replays),
+            (View::ProposeProcess, Method::POST) => post(evals::propose_process),
             (View::Config, Method::GET) => get(user_config::show),
             (View::ConfigSetting, Method::GET) => get(user_config::one),
             (View::SetConfig, Method::POST) => post(user_config::set),

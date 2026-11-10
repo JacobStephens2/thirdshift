@@ -743,6 +743,7 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
 | `/update` | none | `update` |
 | `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+| `/evals/propose-process` | `repository` (known owner/repo), optional `limit` (1–100) | `evals propose-process <repository>`; requires `admin` |
 
 Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
 JSON bodies use `Content-Type: application/json`. GET calls take no body.

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -14,6 +15,7 @@ use super::format::{self, Task};
 use super::repository::{bytes, git};
 use crate::process::{self, Control, Interruption};
 
+mod history;
 mod layout;
 mod proposals;
 pub(super) use proposals::propose;
@@ -163,7 +165,15 @@ fn overlay(source: &Path, commit: &str, selection: &TestSelection, checkout: &Pa
             );
         }
         fs::create_dir_all(target.parent().context("overlay has no parent")?)?;
-        fs::write(target, contents)?;
+        fs::write(&target, contents)?;
+        fs::set_permissions(
+            target,
+            fs::Permissions::from_mode(if entry.starts_with("100755 ") {
+                0o755
+            } else {
+                0o644
+            }),
+        )?;
     }
     Ok(())
 }
