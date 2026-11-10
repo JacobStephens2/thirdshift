@@ -163,7 +163,7 @@ For each repository and kind of Pass whose latest Activity log line is a skip, s
 Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
 ```
 
-`status` and the Console Inbox also show `Pickup last fired <age> ago on <owner>/<repo>` (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in `<logs.dir>/<owner>/<repo>/<pickup|architect|secure>.last-fired`. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.
+`status` and the Console Inbox also show `Pickup last fired <age> ago on <owner>/<repo>` (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in `<logs.dir>/<owner>/<repo>/<pickup|architect|secure|review|fix|triage>.last-fired`. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.
 
 When no Commands are running, each bullet in the Inbox's **Last recorded skipped Passes** and **Last fired Passes** starts with its recorded date and time. A skipped reason uses its Activity log time, which repeated skips do not advance; a last-fired entry uses the saved Pass start and keeps its relative age. An unreadable skip time shows **Time unknown**.
 
@@ -3505,11 +3505,11 @@ Concurrent hosts serialize evidence reads, re-running, filing and commenting wit
 
 ### The Failure limit
 
-A Pickup run takes nothing while the repository is at its **Failure limit**: as many open issues the factory failed on, labelled `agent-failed`, as the limit, which is 3 unless you set it. Three failures in a row on one repository usually mean a broken Base branch or Harness, not three bad issues, so the factory stops spending sessions on the rest of the backlog until you look. A pull request that is ready for review, or merged, never counts: the factory keeps working while reviews wait.
+A Pickup run or Triage Pass takes nothing while the repository is at its **Failure limit**: as many open issues the factory failed on, labelled `agent-failed`, as the limit, which is 3 unless you set it. Three failures in a row on one repository usually mean a broken Base branch or Harness, not three bad issues, so the factory stops spending sessions on the rest of the backlog until you look. A failed Triage run leaves `ready-for-human` and `agent-failed`; that still waits for you until you put `ready-for-agent` back, remove `agent-failed`, or close it. A pull request that is ready for review, or merged, never counts: the factory keeps working while reviews wait.
 
 - thirdshift labels an issue `agent-failed` when a [Failed ticket run](#failed-ticket-runs) or a Failed spec run [keeps its Claim](#when-the-claim-ends), whoever started it: a Pickup run, an Architect run, a Security run, or you on its Issue URL. A failed Security fix is labelled too, as is an issue a failed [Custom process](#custom-processes) run on it keeps its Claim on. stderr says `labelling #<n> agent-failed, so it waits for the Day shift`. The label is added to the repository if it lacks it, and labelling finishes after Ctrl-C, as ending the Claim does; a failure is a `warning:` naming the command to run by hand.
 - Nothing is labelled when the Claim is released because nothing of the run is on `origin`, when a [Stop](#stopping-a-command) ended the run, when a policy, security or merge hold held a Self-merge and left its pull request ready, or when a bug Ticket run ended with `needs-info`.
-- The label comes off when you act on the failure. Before it counts, each Pickup run takes it off every open issue that has `ready-for-agent` again, handed back, or has neither `in-progress` nor `needs-triage`, taken over, and doesn't count that issue: stderr says `taking agent-failed off #<n>, which the Day shift handed back` or `took over`. The [Sweep](#the-sweep) takes it off closed issues, the issue's next Claim takes it off, and you can take it off by hand. A failure to take it off is a `warning:` line, and the issue is still not counted.
+- To acknowledge a failure, put `ready-for-agent` back, take `agent-failed` off by hand, or close the issue. Removing `ready-for-human` alone is not acknowledgement. Each Pickup run or Triage Pass clears the label when readiness is restored; the [Sweep](#the-sweep) clears closed issues and a new Claim clears it too. Until the coordinated Claim-ending change in [#1902](https://github.com/JacobStephens2/thirdshift/issues/1902) lands, the legacy takeover check remains, with `ready-for-human` treated as a waiting state so factory cleanup does not erase a Triage failure. Use the explicit actions above rather than relying on that interim inference. A failure to take the label off is a `warning:` line.
 - `pickup.failure_limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. `failure_limit = 1` stops at the first failure. There is no command-line flag for it.
 - At or over the limit, the pass is skipped: exit `0`, stdout empty, no Run notification, and the reason on stderr names every counted issue, lowest number first, along with the limit, such as `at the Failure limit on acme/widgets: #924, #936 and #953 are labelled agent-failed, pickup.failure_limit is 3`. No Ready issue is looked for, and no session is started.
 - If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
@@ -3517,7 +3517,7 @@ A Pickup run takes nothing while the repository is at its **Failure limit**: as 
 
 ### The Sweep
 
-In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
+In the **Sweep**, each Pickup run or Triage Pass, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
 
 - Only `in-progress` and `agent-failed` are removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`, or `taking in-progress and agent-failed off #<n>, which is closed`.
 - It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.
@@ -3610,6 +3610,35 @@ When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](htt
 
 ## Triage runs
 
+With no issue or `--file`, `thirdshift triage [base <branch>]` is an unattended **Pass** when stdin is a terminal or reaches EOF without non-whitespace text. This includes `/dev/null` under cron. Non-empty piped stdin remains a Report, read before command startup. An explicitly named empty Report file is an error.
+
+```sh
+thirdshift triage
+thirdshift triage base release </dev/null
+# In crontab, from the repository's Launch directory:
+*/5 * * * * cd /srv/widgets && thirdshift triage base main
+```
+
+A Triage Pass checks the [Command limit](#the-command-limit), runs the [Sweep](#the-sweep), clears `agent-failed` from open issues the Day shift has acted on, and checks `pickup.failure_limit`. It then selects one open `needs-triage` issue in `pickup.order` (lowest number first by default). Each issue passed over gets a progress line explaining why: another triage state (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), `in-progress`, `agent-failed`, sub-issues of its own, or an untrusted author or title/body edit. It reserves the first eligible issue on origin and rechecks its state and trust; a reserved or stale issue is passed over for the next candidate. The selected issue is triaged in place as below. With `--recommend-only`, a Pass still reserves its selection but makes no Claim or publication.
+
+A skipped Triage Pass exits `0`, prints nothing on stdout and sends no Run notification. Its reason is recorded in the Activity log only when it changes; `activity.quiet_skips` also suppresses terminal output. A Pass that takes an issue keeps its Command log and Session trace, records the Triage run in the Activity log and sends the configured Run notification.
+
+To investigate an existing open issue in place, name its Issue URL or number, optionally followed by `base <branch>`:
+
+```sh
+thirdshift triage 123
+thirdshift triage https://github.com/acme/widgets/issues/123 base release
+thirdshift triage 123 --recommend-only
+```
+
+The Base branch defaults to the Launch directory's checked-out branch. The issue must belong to that repository, have a Trusted-account author and have no title or body edits by other accounts. Any current triage state is accepted. The session receives `.thirdshift-issue.md` with the title, body and only Trusted-account comments. Combining an issue with `--file` is refused.
+
+Before the session starts, thirdshift downloads up to ten unique images from Markdown images and HTML `img` tags in the trusted body and comments. Only HTTPS URLs on `github.com` or subdomains of `githubusercontent.com` are eligible. Each download has a 30-second timeout and a 20 MiB limit; failures and excess images produce warnings and the investigation continues. Successful images are kept under `.thirdshift-issue-images/` in the throwaway worktree, with their original URLs and local paths appended to `.thirdshift-issue.md`, so the session can inspect them with `--read-machine` too.
+
+Unless `--recommend-only` is given, thirdshift reserves the issue on origin and replaces its prior triage state and `agent-failed` with an `in-progress` Claim. It posts one AI-attributed comment with the Agent Brief, investigation and questionnaire, or wontfix explanation, preserves existing category labels (adding the recommendation's category only when none exists), and replaces the Claim with the resulting state. `wontfix` closes the issue. A duplicate can also get a cross-reference comment on the other open issue. Splits into several Tickets or a Spec go to `ready-for-human` with a questionnaire proposing the split. Without readiness permission, recommended `ready-for-agent` becomes `ready-for-human` with a notice in the Agent Brief. The recommendation's issue entry and Run notification name the existing issue's URL.
+
+An error or interruption ends that Claim with `ready-for-human` and `agent-failed`. `thirdshift stop` instead uses `ready-for-human` without `agent-failed`; `thirdshift stop --requeue` uses `needs-triage` without `agent-failed`. The origin reservation is released after cleanup. `--recommend-only` checks the recommendation against GitHub and prints its JSON without reserving, claiming or publishing.
+
 Give a Report on standard input or with `--file` from the repository's Launch directory:
 
 ```sh
@@ -3618,6 +3647,8 @@ thirdshift triage --file report.txt
 thirdshift triage --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
+
+Both Report forms also accept `base <branch>`, for example `thirdshift triage --file report.txt base release` or `printf '%s\n' 'Investigate cache misses.' | thirdshift triage base release`. Without it, the Base branch is the Launch directory's checked-out branch.
 
 For a pasted multi-line Report, such as a chat thread or email, use a single-quoted heredoc:
 
@@ -3638,11 +3669,13 @@ For a `needs-info` or `ready-for-human` issue, the embedded `thirdshift-to-quest
 
 By default, a recommendation of `ready-for-agent` becomes `needs-triage`, with a note saying what was recommended. Give `--allow-ready-for-agent` to keep it, or enable the default in `thirdshift setup`, which sets `allow_ready_for_agent = true` under `[triage]` in the User config. thirdshift enforces this permission when filing. This can make the issue eligible for a later Pickup run; the Triage run itself only files it.
 
-Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state. After filing completes, the final progress lines on stderr list every issue filed or commented on, one link per line; the Run notification includes the same readable list. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The Run notification presents the investigation, issue titles with their category and state, comment target URLs and any questionnaires as readable text. It omits the full recommendation JSON and issue and comment bodies; the full result remains on stdout. The notification is saved locally and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
+Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state. After filing completes, the final progress lines on stderr list every issue filed or commented on, one link per line; the Run notification includes the same readable list. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The Run notification presents the investigation, issue titles with their category and state, comment target URLs and any questionnaires as readable text. It omits the full recommendation JSON and issue and comment bodies; the full result remains on stdout. The notification is saved locally and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An explicitly named empty Report file explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
 
 If publication fails partway, links to issues already filed or commented on still appear after the failure diagnostics and in the Run notification. Proposed writes that failed get no link in that list.
 
-The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
+When triaging an existing issue labelled `security-finding`, the Run notification carries only its recorded title and link. Investigation text, questionnaires and failure diagnostics stay on the private issue or in local output and logs, including when triage fails; they are not emailed through Resend.
+
+The Command record, Activity log, `status` and Run notification name it a **Triage run**. A Report or explicitly named issue always takes a Command slot, even above the Command limit; unattended Triage Passes honour that limit. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
 Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 

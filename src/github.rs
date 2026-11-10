@@ -303,6 +303,17 @@ impl GitHub {
         ])
     }
 
+    /// Close after the Triage comment, without posting a second comment.
+    pub(crate) fn close_triaged_issue(&self, issue: &IssueUrl) -> Result<()> {
+        self.gh(&[
+            "issue",
+            "close",
+            &issue.number.to_string(),
+            "--repo",
+            &issue.repo_slug(),
+        ])
+    }
+
     /// Comment on `issue`, leaving its state and labels unchanged.
     pub fn comment_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[

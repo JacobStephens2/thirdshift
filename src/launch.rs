@@ -378,8 +378,14 @@ pub fn repo() -> Result<Repo> {
 /// slot, and it does not offer `base <branch>`, which this command
 /// cannot name.
 pub fn checked_out_base() -> Result<BaseBranch> {
+    selected_base(None)
+}
+
+/// The named origin branch, or the Launch directory's checked-out branch,
+/// without taking a Command slot.
+pub fn selected_base(named: Option<&str>) -> Result<BaseBranch> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Run)?;
-    directory.prepare_base_branch(None)
+    directory.prepare_base_branch(named)
 }
 
 /// Resolve a Run's shorthand before command startup. A full URL passes

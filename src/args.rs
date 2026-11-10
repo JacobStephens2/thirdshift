@@ -6,7 +6,7 @@ use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
@@ -1403,8 +1403,10 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
     })
 }
 
-/// A Report to investigate, with only the choices a Triage session uses.
+/// A Report or issue to investigate, or an unattended Triage Pass.
 pub struct TriageArgs {
+    pub issue: Option<IssueInput>,
+    pub base: Option<String>,
     pub file: Option<String>,
     pub read_machine: bool,
     pub recommend_only: bool,
@@ -1415,6 +1417,8 @@ pub struct TriageArgs {
 
 fn parse_triage(args: &[String]) -> Result<TriageArgs> {
     let mut parsed = TriageArgs {
+        issue: None,
+        base: None,
         file: None,
         read_machine: false,
         recommend_only: false,
@@ -1431,11 +1435,19 @@ fn parse_triage(args: &[String]) -> Result<TriageArgs> {
                 parsed.allow_ready_for_agent = true
             }
             "--file" => ask_word(&mut parsed.file, arg, rest.next(), "a Report path")?,
+            "base" => ask_word(&mut parsed.base, arg, rest.next(), "a Base branch")?,
             _ if take_email_flag(&mut parsed.email, arg, &mut rest)? => {}
             _ if take_harness_flag(&mut parsed.harness, arg, &mut rest)? => {}
+            _ if parsed.issue.is_none() && !arg.starts_with('-') => {
+                parsed.issue = Some(IssueInput::parse(arg)?)
+            }
             _ => bail!("unexpected argument after triage: {arg}"),
         }
     }
+    ensure!(
+        parsed.issue.is_none() || parsed.file.is_none(),
+        "cannot combine a triage Issue with --file <path>"
+    );
     Ok(parsed)
 }
 
