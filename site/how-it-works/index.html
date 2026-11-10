@@ -81,7 +81,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
     <details class="wrap guide-section fold">
       <summary class="sec-head"><p class="eyebrow">02 / Where the work happens</p><h2 id="checkout-title">Give the Ticket run its own checkout</h2></summary>
       <div class="guide-content" id="checkout">
-      <p>thirdshift checks that the Issue URL matches the clone's <code>origin</code>, that the issue is open, and that the Base branch, Harness and Git identity are usable. It selects an <strong>Issue branch</strong>, marks the issue <code>in-progress</code> (its <strong>Claim</strong>, on only while the Run is live), then acquires a sibling Git <strong>Worktree</strong>. A fresh Issue branch starts from the fetched Base branch on <code>origin</code>.</p>
+      <p>thirdshift checks that the Issue URL matches the clone's <code>origin</code>, that the issue is open, and that the Base branch, Harness and Git identity are usable. It selects an <strong>Issue branch</strong>, marks the issue <code>in-progress</code> (its <strong>Claim</strong>, on only while the run is live), then acquires a sibling Git <strong>Worktree</strong>. A fresh Issue branch starts from the fetched Base branch on <code>origin</code>.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Example: two checkouts, one Git repository</figcaption>
         <div class="guide-pair">

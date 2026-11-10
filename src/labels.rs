@@ -197,10 +197,21 @@ impl<'a> Edit<'a> {
         (off.collect(), on.collect())
     }
 
-    /// The issue's labels once it is made, against its labels as read.
+    /// The issue's labels once it is made, against its labels as read: a
+    /// single label taken off leaves the rest as the issue spells them.
     #[cfg(test)]
     pub fn labels_after(&self) -> Labels {
-        self.labels.swapped(&self.off, &self.on)
+        match request(&self.labels, &self.off, &self.on) {
+            Request::None => self.labels.clone(),
+            Request::Delete(taken_off) => Labels(
+                self.labels
+                    .names()
+                    .filter(|name| *name != taken_off)
+                    .map(String::from)
+                    .collect(),
+            ),
+            Request::Put { labels, .. } => labels,
+        }
     }
 
     /// Make the change, in one request, having first added each label it
