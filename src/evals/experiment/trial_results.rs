@@ -46,6 +46,8 @@ pub(crate) struct TrialResult {
     #[serde(default)]
     pub score: Option<grading::Score>,
     pub attempts: Vec<Output>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leaks: Vec<super::leaks::Hit>,
 }
 
 impl TrialResult {

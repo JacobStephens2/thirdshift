@@ -288,6 +288,13 @@ fail_to_pass = [["cargo", "test", "--test", "counter", "increments"]]
 pass_to_pass = [["cargo", "test", "--test", "counter"]]
 ```
 
+The optional `[process_grading.real_fix]` table retains private leak-check
+identifiers: `pull_request` and `issue` URLs, `branch`, `title`, and `issue_title`. Proposals
+populate these from the source Ticket and pull request. The merge commit is
+always `change`. Older manually authored tasks also check their available
+`trial` references and the reference commit's title. This data stays outside the
+Trial request and prepared repository.
+
 `evals prepare` requires this selection for process tasks. In disposable
 checkouts it overlays these files from `change` onto both `base` and `change`,
 then requires every fail-to-pass selector to fail at the base and pass at the

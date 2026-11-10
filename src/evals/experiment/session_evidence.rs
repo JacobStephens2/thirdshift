@@ -53,10 +53,10 @@ fn read_from(files: &impl Files, root: &Path, id: &str, session: &str) -> Result
     anyhow::bail!("Session not found")
 }
 
-struct Selected {
-    id: String,
+pub(super) struct Selected {
+    pub id: String,
     trace: bool,
-    path: PathBuf,
+    pub path: PathBuf,
 }
 
 /// One canonical root for every evidence selection within an observation.
@@ -93,7 +93,7 @@ impl<'a> Inventory<'a> {
             .collect())
     }
 
-    fn select(&self, files: &impl Files, attempt: &Attempt) -> Result<Vec<Selected>> {
+    pub fn select(&self, files: &impl Files, attempt: &Attempt) -> Result<Vec<Selected>> {
         let mut readable = attempt
             .sessions
             .iter()

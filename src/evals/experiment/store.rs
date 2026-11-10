@@ -34,6 +34,8 @@ pub(super) struct Stored {
     pub rechecks: super::rechecks::History,
     #[serde(default)]
     pub pending_rechecks: Vec<super::grading::Pending>,
+    #[serde(default)]
+    pub leak_decisions: super::leaks::History,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -65,6 +67,7 @@ pub(crate) struct View {
     pub voids: Voids,
     pub outcomes: Outcomes,
     pub findings: Vec<String>,
+    pub leak_hits: Vec<super::leaks::Hit>,
 }
 
 /// Facts for readers; these never participate in Experiment identity or the Bar.
@@ -314,6 +317,7 @@ impl Stored {
                 verdict: None,
                 rechecks: BTreeMap::new(),
                 pending_rechecks: Vec::new(),
+                leak_decisions: BTreeMap::new(),
                 directory: PathBuf::new(),
                 lock: None,
             }
@@ -361,19 +365,23 @@ impl Stored {
     }
 
     pub fn results(&self) -> Result<Vec<TrialResult>> {
-        Ok(trial_results::effective(
-            trial_results::terminal(&self.directory)?,
-            &self.rechecks,
-        ))
+        let mut results =
+            trial_results::effective(trial_results::terminal(&self.directory)?, &self.rechecks);
+        super::leaks::apply(&mut results, &self.leak_decisions);
+        Ok(results)
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
-        let (verdict, pending) = super::grading::assess(
+        let results = self.results()?;
+        let (mut verdict, pending) = super::grading::assess(
             &self.tasks,
-            &self.results()?,
+            &results,
             &self.description.bar,
             &self.description.baseline,
         )?;
+        if super::leaks::pending(&results) {
+            verdict.verdict = super::Conclusion::WaitingOnLeaks;
+        }
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
         Ok(())
@@ -514,6 +522,7 @@ Candidate: {}{}{}",
                             .iter()
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
+                    .chain(view.leak_hits.iter().map(|hit| format!("\nLeak hit {}: {} · {} · {} · Session {} line {}{}", hit.id, hit.status(), hit.kind, hit.identifier, hit.session, hit.line, hit.decision.as_ref().map_or_else(|| format!("\nthirdshift experiments {} --leak {} confirm|dismiss --reason '…'", self.description.id, hit.id), |decision| format!(" · {} · {} · {}", decision.reviewer, decision.recorded_at, decision.reason)))))
                     .collect::<String>(),
                 selection
             ))

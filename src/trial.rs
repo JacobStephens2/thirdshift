@@ -137,6 +137,7 @@ pub(crate) enum VoidCause {
     HostKilled,
     MemoryCap,
     AccountingGap,
+    FixLeaked,
 }
 
 impl std::fmt::Display for VoidCause {
@@ -151,6 +152,7 @@ impl std::fmt::Display for VoidCause {
             Self::HostKilled => "host_killed",
             Self::MemoryCap => "memory_cap",
             Self::AccountingGap => "accounting_gap",
+            Self::FixLeaked => "fix_leaked",
         })
     }
 }
