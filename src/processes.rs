@@ -494,16 +494,29 @@ impl HeldClaim<'_> {
         }
     }
 
-    fn end(&mut self, ending: claim::Ending) {
+    fn end(&mut self, ending: claim::Ending, comment: Option<String>) {
         if let Some(claim) = self.claim.take() {
-            claim.end(ending);
+            claim.end(ending, comment);
         }
+    }
+
+    /// End the Claim as failed by `error` before any Step ran on the Issue
+    /// branch `branch`, with its Recovery comment if the ending owes one.
+    fn fail(&mut self, branch: &str, error: &anyhow::Error) {
+        let comment = recovery::comment(
+            None,
+            Some(branch),
+            &format!("{error:#}"),
+            None,
+            crate::host::name().as_deref(),
+        );
+        self.end(claim::Ending::Failed, Some(comment));
     }
 }
 
 impl Drop for HeldClaim<'_> {
     fn drop(&mut self) {
-        self.end(claim::Ending::Failed);
+        self.end(claim::Ending::Failed, None);
     }
 }
 
@@ -920,14 +933,20 @@ fn run_issue_branch(
     };
     let checkout = match checkout {
         Ok(checkout) => checkout,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            claim.fail(&branch, &error);
+            return Err(failed_before_steps(notification, error));
+        }
     };
     let commit = if base == base_branch.name() {
         base_branch.origin_commit().to_string()
     } else {
         match launch_git.run(&["rev-parse", &format!("origin/{base}")]) {
             Ok(commit) => commit,
-            Err(error) => return Err(failed_before_steps(notification, error)),
+            Err(error) => {
+                claim.fail(&branch, &error);
+                return Err(failed_before_steps(notification, error));
+            }
         }
     };
     let prepared = match prepare_from(
@@ -945,14 +964,21 @@ fn run_issue_branch(
         },
     ) {
         Ok(prepared) => prepared,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            claim.fail(&branch, &error);
+            return Err(failed_before_steps(notification, error));
+        }
     };
     if let Err(error) = refuse_unstartable(&prepared) {
+        claim.fail(&branch, &error);
         return Err(failed_before_steps(notification, error));
     }
     let repo = match launch::repo() {
         Ok(repo) => repo,
-        Err(error) => return Err(failed_before_steps(notification, error)),
+        Err(error) => {
+            claim.fail(&branch, &error);
+            return Err(failed_before_steps(notification, error));
+        }
     };
     let mut held = Some(checkout);
     // Session traces ask for the log root, which exists once this command is
@@ -1001,20 +1027,31 @@ fn run_issue_branch(
     // Issue branch. Release the Claim, as a run that published nothing does,
     // instead of removing it the way a finished Delivery does.
     let ended_before_delivery = completed.architecture_end.is_some() && !delivered;
+    let comment = match (&completed.failed_run, &result) {
+        (Some(failed), _) => Some(failed.comment(Some(&branch))),
+        (None, Err(error)) => Some(recovery::comment(
+            None,
+            Some(&branch),
+            &format!("{error:#}"),
+            None,
+            crate::host::name().as_deref(),
+        )),
+        (None, Ok(_)) => None,
+    };
     drop(completed);
     if result.is_ok() && not_reproduced {
-        claim.end(claim::Ending::NotReproduced);
+        claim.end(claim::Ending::NotReproduced, None);
     } else if delivered && merged && result.is_ok() {
         // A Self-merge that merged ends the Claim as a Ticket run's does:
         // only once the issue is closed, so a closing that failed stays
         // visible.
-        claim.end(claim::Ending::Reached(Goal::Merged));
+        claim.end(claim::Ending::Reached(Goal::Merged), None);
     } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
     } else if result.is_ok() {
-        claim.end(claim::Ending::BeforeDelivery);
+        claim.end(claim::Ending::BeforeDelivery, None);
     } else {
-        claim.end(claim::Ending::Failed);
+        claim.end(claim::Ending::Failed, comment);
     }
     let (outcome, cause) = classify(&result);
     let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));

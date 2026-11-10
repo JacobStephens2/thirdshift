@@ -129,18 +129,25 @@ impl Claim<'_> {
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
     ///   remains on origin, or is released even with work when asked to requeue.
     ///
+    /// An ending that labels the issue `agent-failed`, other than a failed
+    /// Security fix's, and a waiting ending, then post `comment`, if given, on
+    /// the issue: the Recovery comment, or the waiting Spec's. Released,
+    /// stopped and every other ending post nothing.
+    ///
     /// The run has ended as it has, so this never fails: a failure is a
     /// warning naming what to run by hand, and an interrupt doesn't stop it.
-    pub fn end(self, ending: Ending) {
+    pub fn end(self, ending: Ending, comment: Option<String>) {
         let launch = self.launch.completion();
-        self.claimed.end(
-            &mut OnGitHub {
-                launch: &launch,
-                github: GitHub::new().completion(),
-                branch: &self.branch,
-            },
-            ending,
-        );
+        let outside = &mut OnGitHub {
+            launch: &launch,
+            github: GitHub::new().completion(),
+            branch: &self.branch,
+        };
+        if self.claimed.end(outside, ending)
+            && let Some(comment) = comment
+        {
+            self.claimed.post(outside, &comment);
+        }
     }
 
     /// Take `in-progress` off the issue, whether or not it is open, and put
@@ -177,6 +184,8 @@ trait Outside {
     fn untrusted_edit(&mut self, issue: &IssueUrl) -> Result<Option<IssueText>>;
     /// Make `edit`.
     fn apply(&mut self, edit: &Edit) -> Result<()>;
+    /// Post `body` as a comment on `issue`.
+    fn comment(&mut self, issue: &IssueUrl, body: &str) -> Result<()>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
     /// The requested Stop ending, if this Command is handling a Stop.
@@ -235,6 +244,10 @@ impl Outside for OnGitHub<'_> {
 
     fn apply(&mut self, edit: &Edit) -> Result<()> {
         edit.apply(&self.github)
+    }
+
+    fn comment(&mut self, issue: &IssueUrl, body: &str) -> Result<()> {
+        self.github.comment_issue(issue, body)
     }
 
     fn interrupted(&mut self) -> bool {
@@ -356,33 +369,64 @@ impl<'a> Claimed<'a> {
         }
     }
 
-    /// [`Claim::end`], through `outside`.
-    fn end(&self, outside: &mut impl Outside, ending: Ending) {
+    /// [`Claim::end`], through `outside`. Returns whether the ending owes the
+    /// issue a comment: it labelled the issue `agent-failed`, or tried to,
+    /// other than a failed Security fix, whose details stay in its private
+    /// advisory, or it handed a waiting Spec back. A released Claim owes
+    /// none, so a retry loop can't fill the issue with comments.
+    fn end(&self, outside: &mut impl Outside, ending: Ending) -> bool {
         if let Ending::NotReproduced = ending {
             self.needs_info(outside);
-            return;
+            return false;
         }
         if let Some(stop) = outside.stop() {
             self.stopped(outside, stop);
-            return;
+            return false;
         }
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
             Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
-            Ending::Waiting => self.hand_back(outside),
+            Ending::Waiting => {
+                self.hand_back(outside);
+                return true;
+            }
             // A NotReproduced ending was dealt with above.
             Ending::NotReproduced => {}
             Ending::BeforeDelivery if self.security_fix => {}
             Ending::BeforeDelivery => {
                 self.release_if_nothing_on_origin(outside);
             }
-            Ending::Failed if self.security_fix => self.label_failed(outside),
+            Ending::Failed if self.security_fix => {
+                self.label_failed(outside);
+            }
             Ending::Failed => {
                 let not_released = self.release_if_nothing_on_origin(outside);
                 if not_released {
-                    self.label_failed(outside);
+                    return self.label_failed(outside);
                 }
             }
+        }
+        false
+    }
+
+    /// Post `comment` on the issue. The run has ended as it has, so a failure
+    /// is a warning, and an interrupt doesn't stop it.
+    fn post(&self, outside: &mut impl Outside, comment: &str) {
+        let issue = self.issue;
+        outside.step(format!(
+            "commenting on #{} with how its run ended",
+            issue.number
+        ));
+        if let Err(error) = retry_if_interrupted(outside, |outside| outside.comment(issue, comment))
+        {
+            outside.warn(
+                &error,
+                format!(
+                    "could not comment on #{} with how its run ended; the run's outcome is \
+                     unchanged",
+                    issue.number
+                ),
+            );
         }
     }
 
@@ -393,9 +437,11 @@ impl<'a> Claimed<'a> {
     /// already labelled `agent-failed` only has `in-progress` taken off, and
     /// one no longer `in-progress` is left as it is. It finishes after an
     /// interrupt, and a failure is a warning naming what to run by hand.
-    fn label_failed(&self, outside: &mut impl Outside) {
+    /// Returns whether it labelled the issue `agent-failed`, found it so
+    /// labelled, or failed trying: all but an issue left as it is.
+    fn label_failed(&self, outside: &mut impl Outside) -> bool {
         let issue = self.issue;
-        if let Err(error) = retry_if_interrupted(outside, |outside| {
+        match retry_if_interrupted(outside, |outside| {
             let edit = Edit::of(
                 issue,
                 outside.labels(issue)?,
@@ -403,7 +449,7 @@ impl<'a> Claimed<'a> {
                 &[AGENT_FAILED],
             );
             if !edit.takes_off(IN_PROGRESS) {
-                return Ok(());
+                return Ok(false);
             }
             outside.step(if edit.puts_on(AGENT_FAILED) {
                 format!(
@@ -417,17 +463,21 @@ impl<'a> Claimed<'a> {
                     issue.number
                 )
             });
-            outside.apply(&edit)
+            outside.apply(&edit).map(|()| true)
         }) {
-            outside.warn(
-                &error,
-                format!(
-                    "could not label #{} {AGENT_FAILED} in place of {IN_PROGRESS}, so do it by \
-                     hand: {}",
-                    issue.number,
-                    labels::by_hand(issue, &[IN_PROGRESS], &[AGENT_FAILED])
-                ),
-            );
+            Ok(labelled) => labelled,
+            Err(error) => {
+                outside.warn(
+                    &error,
+                    format!(
+                        "could not label #{} {AGENT_FAILED} in place of {IN_PROGRESS}, so do it \
+                         by hand: {}",
+                        issue.number,
+                        labels::by_hand(issue, &[IN_PROGRESS], &[AGENT_FAILED])
+                    ),
+                );
+                true
+            }
         }
     }
 
@@ -698,6 +748,7 @@ mod in_memory {
         Started,
         Trust,
         Edit,
+        Comment,
     }
 
     /// A call the Claim made, in the order it made it.
@@ -719,6 +770,8 @@ mod in_memory {
             on: Vec<&'static str>,
             labels: Vec<String>,
         },
+        /// It posted this comment on the issue, or tried to.
+        Comment(String),
         /// It asked whether the run was interrupted.
         Interrupted,
         /// It handed on this progress line.
@@ -831,6 +884,11 @@ mod in_memory {
             self.fail_if(Fails::Edit)?;
             self.labels = after.names().map(String::from).collect();
             Ok(())
+        }
+
+        fn comment(&mut self, _: &IssueUrl, body: &str) -> Result<()> {
+            self.calls.push(Call::Comment(body.to_string()));
+            self.fail_if(Fails::Comment)
         }
 
         fn interrupted(&mut self) -> bool {
@@ -1653,5 +1711,97 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// Whether ending a Claim made on an issue labelled `before` owes it a
+    /// comment, when the run started on origin `started`, a Stop asked for
+    /// `stop`, and the run ended `ending`.
+    fn owes_comment(
+        before: &[&str],
+        started: bool,
+        stop: Option<crate::logs::stop::Ending>,
+        ending: Ending,
+    ) -> bool {
+        let url = seven();
+        let mut issue = InMemory::labelled(before);
+        let claimed = claimed(&mut issue, &url);
+        issue.started = started;
+        issue.stop = stop;
+        claimed.end(&mut issue, ending)
+    }
+
+    #[test]
+    fn only_an_agent_failed_ending_other_than_a_security_fix_and_a_waiting_one_owe_a_comment() {
+        use crate::logs::stop::Ending::Triage;
+        let ready = &["ready-for-agent"][..];
+        for (before, started, stop, ending, owed) in [
+            (ready, true, None, Ending::Failed, true),
+            (&["in-progress"][..], false, None, Ending::Failed, true),
+            (ready, false, None, Ending::Failed, false),
+            (
+                &["security-fix", "ready-for-agent"][..],
+                true,
+                None,
+                Ending::Failed,
+                false,
+            ),
+            (ready, true, Some(Triage), Ending::Failed, false),
+            (ready, false, None, Ending::Waiting, true),
+            (ready, false, Some(Triage), Ending::Waiting, false),
+            (ready, true, None, Ending::Held, false),
+            (
+                ready,
+                true,
+                None,
+                Ending::Reached(Goal::ReadyForReview),
+                false,
+            ),
+            (ready, true, None, Ending::BeforeDelivery, false),
+            (ready, true, None, Ending::NotReproduced, false),
+        ] {
+            assert_eq!(
+                owes_comment(before, started, stop, ending),
+                owed,
+                "{before:?}, started {started}, stopped {}, {ending:?}",
+                stop.is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_label_edit_still_owes_the_recovery_comment() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["in-progress"]).failing(Fails::Edit);
+        let claimed = claimed(&mut issue, &url);
+
+        assert!(claimed.end(&mut issue, Ending::Failed));
+    }
+
+    #[test]
+    fn a_comment_that_cannot_be_posted_is_a_warning_and_changes_no_label() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["in-progress"]);
+        let claimed = claimed(&mut issue, &url);
+        claimed.end(&mut issue, Ending::Failed);
+        issue = issue.failing(Fails::Comment);
+        issue.calls.clear();
+
+        claimed.post(&mut issue, "Recovery");
+
+        assert_eq!(
+            issue.calls,
+            [
+                step("commenting on #7 with how its run ended"),
+                Call::Comment("Recovery".to_string()),
+                Call::Interrupted,
+                Call::Warn {
+                    error: "gh: Comment failed: HTTP 502".to_string(),
+                    warning: "could not comment on #7 with how its run ended; the run's outcome \
+                              is unchanged"
+                        .to_string(),
+                },
+            ]
+        );
+        assert_eq!(labels(&issue), ["agent-failed"]);
     }
 }

@@ -586,6 +586,24 @@ pub(crate) struct TicketsNotDone {
     pub(crate) only_waiting: bool,
 }
 
+impl TicketsNotDone {
+    /// The comment a waiting Spec run posts on its Spec: each Ticket not
+    /// done and what it waits on.
+    pub(crate) fn comment(&self) -> String {
+        let mut text = format!(
+            "{}\n\nthirdshift's Spec run on this Spec ended only waiting: no Ticket failed, \
+             and each Ticket not done waits on a person or on other work.\n\n",
+            crate::recovery::GENERATED
+        );
+        for ticket in &self.not_done {
+            text += &format!("- {ticket}\n");
+        }
+        text += "\nWhile the Spec is labelled `ready-for-agent`, Pickup continues it once a \
+                 Ticket can start.\n";
+        text
+    }
+}
+
 impl std::error::Error for TicketsNotDone {}
 
 impl std::fmt::Display for TicketsNotDone {

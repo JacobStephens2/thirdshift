@@ -40,6 +40,24 @@ impl FailedRun {
                 .downcast_ref::<crate::spec_run::TicketsNotDone>()
                 .is_some_and(|not_done| not_done.only_waiting)
     }
+
+    /// The comment its Claim's ending posts on its issue, from the Issue
+    /// branch `branch` if known: a waiting Spec run's names each Ticket not
+    /// done and what it waits on, and any other's is its Recovery comment.
+    pub fn comment(&self, branch: Option<&str>) -> String {
+        if self.waiting()
+            && let Some(not_done) = self.error.downcast_ref::<crate::spec_run::TicketsNotDone>()
+        {
+            return not_done.comment();
+        }
+        crate::recovery::comment(
+            self.recovery.as_deref(),
+            branch,
+            &format!("{:#}", self.error),
+            self.pr_url.as_deref(),
+            crate::host::name().as_deref(),
+        )
+    }
 }
 
 /// Whether `error` is a policy, security or merge hold: a Self-merge held
