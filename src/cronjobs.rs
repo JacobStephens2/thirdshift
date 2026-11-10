@@ -13,16 +13,68 @@ pub(crate) struct CronJobs {
     pub pass_starts: Vec<PassStart>,
 }
 
+pub(crate) struct JobGroup<'a> {
+    pub heading: &'a str,
+    pub jobs: &'a [CronJob],
+}
+
+impl CronJobs {
+    /// Inventories arrive in repository order; older inventories form one Other group.
+    pub(crate) fn groups(&self) -> Vec<JobGroup<'_>> {
+        self.jobs
+            .chunk_by(|a, b| a.repository == b.repository)
+            .map(|jobs| JobGroup {
+                heading: jobs[0].repository.as_deref().unwrap_or("Other"),
+                jobs,
+            })
+            .collect()
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
+    /// Absent on older inventories. A label with a control character is not a
+    /// repository: an origin URL can contain a newline, and printing that as a
+    /// heading would add a line to the schedule listing.
+    #[serde(default, deserialize_with = "deserialize_repository")]
+    pub repository: Option<String>,
+}
+
+fn repository_label(repository: Option<String>) -> Option<String> {
+    repository.filter(|label| {
+        !label
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    })
+}
+
+fn deserialize_repository<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(repository_label(Option::<String>::deserialize(
+        deserializer,
+    )?))
 }
 
 pub(crate) fn load() -> Result<CronJobs> {
     let config = UserConfig::load()?;
+    let home = crate::config::home()?;
+    let mut jobs = jobs()?;
+    for job in &mut jobs {
+        job.repository = repository_label(
+            crate::launch_directories::from_cron(&job.command, &home)
+                .map(|directory| directory.repository),
+        );
+    }
+    // Stable sorting retains crontab order and duplicates within each repository.
+    jobs.sort_by(|a, b| {
+        (a.repository.is_none(), &a.repository).cmp(&(b.repository.is_none(), &b.repository))
+    });
     Ok(CronJobs {
-        jobs: jobs()?,
+        jobs,
         pass_starts: pass_starts::load(&config.logs_dir)?,
     })
 }
@@ -61,12 +113,15 @@ pub fn show(json: bool) -> Result<String> {
     if inventory.jobs.is_empty() {
         lines.push("No thirdshift cron jobs in this account's crontab.".into());
     }
-    lines.extend(
-        inventory
-            .jobs
-            .iter()
-            .map(|job| format!("{}  {}", job.schedule, job.command)),
-    );
+    for group in inventory.groups() {
+        lines.push(group.heading.into());
+        lines.extend(
+            group
+                .jobs
+                .iter()
+                .map(|job| format!("{}  {}", job.schedule, job.command)),
+        );
+    }
     lines.extend(inventory.pass_starts.iter().map(PassStart::line));
     if inventory.pass_starts.is_empty() {
         lines.push("No Pass start times recorded on this host.".into());
@@ -98,6 +153,7 @@ fn entry(line: &str) -> Option<CronJob> {
     mentions_thirdshift.then(|| CronJob {
         schedule: schedule.join(" "),
         command: command.into(),
+        repository: None,
     })
 }
 
@@ -113,4 +169,26 @@ pub(crate) fn shell_command(command: &str) -> &str {
         })
         .unwrap_or(command.len());
     &command[..command_end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_repository_label_with_a_newline_is_unresolved() {
+        let forged: CronJob = serde_json::from_str(
+            "{\"schedule\":\"@daily\",\"command\":\"thirdshift\",\"repository\":\"acme/widgets\\n@reboot echo forged\"}",
+        )
+        .unwrap();
+        assert_eq!(forged.repository, None);
+        let legacy: CronJob =
+            serde_json::from_str("{\"schedule\":\"@daily\",\"command\":\"thirdshift\"}").unwrap();
+        assert_eq!(legacy.repository, None);
+        let kept: CronJob = serde_json::from_str(
+            "{\"schedule\":\"@daily\",\"command\":\"thirdshift\",\"repository\":\"acme/widgets\"}",
+        )
+        .unwrap();
+        assert_eq!(kept.repository.as_deref(), Some("acme/widgets"));
+    }
 }
