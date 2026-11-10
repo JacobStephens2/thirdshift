@@ -5,8 +5,9 @@
 //! the key it is given here too. A broken Credentials file can't block a Run
 //! that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
-//! The same Credentials also keep `claude.setup_token` and `opencode.api_key`,
-//! reserved for Trials; ordinary Runs never receive them.
+//! The same Credentials also keep `claude.setup_token`, `opencode.api_key`
+//! and per-provider OpenCode keys under `[opencode.keys]`, reserved for
+//! Trials; ordinary Runs never receive them.
 //! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name.
 
 use std::collections::BTreeMap;
@@ -312,7 +313,8 @@ fn path() -> Result<PathBuf> {
 
 /// `resend.key` in `text`, the contents of `file`, if it is there and not
 /// empty. Also accepts `claude.setup_token`, `opencode.api_key` and the
-/// `[opencode.keys]` table, reserved for Trials. Any other section or key is an error, as in the User config.
+/// `[opencode.keys]` table, reserved for Trials. Any other section or key is
+/// an error, as in the User config.
 fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let table: Table = text
         .parse()

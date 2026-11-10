@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::harness::Harness;
 use crate::proxy;
@@ -1209,12 +1209,11 @@ impl Drop for GrokGuard {
 /// production's `opencode.db`, which holds its credentials beside its
 /// sessions. The key is the one the Credentials hold for the provider the
 /// Model names, under `[opencode.keys]`, else their single `opencode.api_key`,
-/// so seats with different providers each get their own. The Trial's config
-/// sets that provider's `apiKey` to `{env:…}` naming the variable that
-/// carries it. Without a key, the Trial fails before its session starts.
+/// so OpenCode sessions on different providers each get their own. The
+/// Trial's config sets that provider's `apiKey` to `{env:…}` naming the
+/// variable that carries it. Without a key, the Trial fails before its session starts.
 fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
-    let config = provider_config(request.model)?;
-    let provider = proxy::opencode_provider(request.model).unwrap_or_default();
+    let provider = trial_provider(request.model)?;
     let Some(key) = request.secrets.opencode_keys.for_provider(provider) else {
         let path = config::home()
             .map(|home| home.join(".thirdshift/credentials.toml"))
@@ -1229,7 +1228,7 @@ fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result
         }));
     };
     environment.set_str(OPENCODE_API_KEY_ENV, key);
-    environment.set_str(OPENCODE_CONFIG_ENV, &config);
+    environment.set_str(OPENCODE_CONFIG_ENV, &provider_config(provider));
     Ok(())
 }
 
@@ -1268,17 +1267,22 @@ fn kimi_into(request: &Request<'_>, environment: &mut Environment) -> Result<()>
     Ok(())
 }
 
-/// The Trial's OpenCode config for `model`: the provider's `apiKey` set to
-/// `{env:…}` naming the variable that carries the key, with web search and
-/// web fetch denied, since a Trial runs behind the allowlisting proxy.
-fn provider_config(model: Option<&str>) -> Result<String> {
-    let Some(provider) = proxy::opencode_provider(model) else {
-        bail!(
+/// The provider an OpenCode Trial's `model` names, which its key and config
+/// are for. A Model without one fails before the session starts.
+fn trial_provider(model: Option<&str>) -> Result<&str> {
+    proxy::opencode_provider(model).ok_or_else(|| {
+        anyhow!(
             "OpenCode Trial login failed: the Model must name its provider as \
              <provider>/<model>, so the Trial's config can set that provider's apiKey"
-        );
-    };
-    Ok(serde_json::json!({
+        )
+    })
+}
+
+/// The Trial's OpenCode config for `provider`: its `apiKey` set to `{env:…}`
+/// naming the variable that carries the key, with web search and web fetch
+/// denied, since a Trial runs behind the allowlisting proxy.
+fn provider_config(provider: &str) -> String {
+    serde_json::json!({
         "provider": {
             provider: { "apiKey": format!("{{env:{OPENCODE_API_KEY_ENV}}}") }
         },
@@ -1287,7 +1291,7 @@ fn provider_config(model: Option<&str>) -> Result<String> {
             "websearch": "deny",
         }
     })
-    .to_string())
+    .to_string()
 }
 
 /// The Harness binaries' directory inside the sandbox, outside every home.
@@ -2117,7 +2121,7 @@ mod tests {
             (Some("model-without-provider"), None),
             (Some("/model"), None),
         ] {
-            match (provider_config(model), provider) {
+            match (trial_provider(model).map(provider_config), provider) {
                 (Ok(config), Some(provider)) => {
                     let config: serde_json::Value = serde_json::from_str(&config).unwrap();
                     assert_eq!(

@@ -143,8 +143,8 @@ the provider its Model names, else `opencode.api_key`. It never sees
 production's `opencode.db`. Its proxy allows `opencode.ai`,
 `models.opencode.ai` and that provider's hosts, so a `fireworks-ai/...` Model
 reaches `api.fireworks.ai` and a `baseten/...` Model `inference.baseten.co`.
-The Trial's config sets that provider's `apiKey` to `{env:…}` naming the variable, so the Trial's Model names its provider as
-`<provider>/<model>`. A Kimi Code Trial must name its Model, an alias in
+The Trial's config sets that provider's `apiKey` to `{env:…}` naming the
+variable, so the Trial's Model names its provider as `<provider>/<model>`. A Kimi Code Trial must name its Model, an alias in
 Kimi Code's config: its provider's base URL chooses the proxy's hosts, so a
 Fireworks Model reaches `api.fireworks.ai` alone and the managed provider its
 API and sign-in hosts, and an unknown provider fails before the session. Its
