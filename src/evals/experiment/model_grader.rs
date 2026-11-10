@@ -218,38 +218,77 @@ fn grade(
     timeout: u64,
     caps: &crate::scope::Caps,
 ) -> Result<Response> {
+    session(
+        Session {
+            kind: "model Grader",
+            choice: &grader.choice(),
+            binary: &grader.harness.path,
+            directory,
+            prompt: prompt::grader(),
+            output: ("THIRDSHIFT_GRADER_SCORES", "scores.json", "Scores"),
+            timeout: Duration::from_secs(timeout),
+            caps,
+        },
+        packet,
+    )
+}
+
+/// One fresh private Grader session over a blind packet.
+pub(super) struct Session<'a> {
+    pub kind: &'a str,
+    pub choice: &'a Choice,
+    pub binary: &'a Path,
+    /// Each session gets a new `session-*` workspace here.
+    pub directory: &'a Path,
+    pub prompt: String,
+    /// The variable naming the response file, its name, and what it holds.
+    pub output: (&'a str, &'a str, &'a str),
+    pub timeout: Duration,
+    pub caps: &'a crate::scope::Caps,
+}
+
+/// Run the session on `packet` and decode the response it writes.
+pub(super) fn session<T: serde::de::DeserializeOwned>(
+    session: Session<'_>,
+    packet: &impl Serialize,
+) -> Result<T> {
+    let Session {
+        kind,
+        choice,
+        binary,
+        directory,
+        prompt,
+        output: (variable, file, holds),
+        timeout,
+        caps,
+    } = session;
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
         .keep();
     let input = workspace.join("packet.json");
-    let scores = workspace.join("scores.json");
+    let response = workspace.join(file);
     store::write(&input, packet)?;
-    let prompt = prompt::grader();
     fs::write(workspace.join("prompt.md"), &prompt)?;
-    let choice = grader.choice();
     private::run(private::Request {
-        kind: "model Grader",
-        choice: &choice,
-        binary: &grader.harness.path,
+        kind,
+        choice,
+        binary,
         workspace: &workspace,
         artifacts: &workspace,
         prompt: &prompt,
-        timeout: Duration::from_secs(timeout),
+        timeout,
         caps,
-        environment: &[
-            ("THIRDSHIFT_GRADER_PACKET", &input),
-            ("THIRDSHIFT_GRADER_SCORES", &scores),
-        ],
+        environment: &[("THIRDSHIFT_GRADER_PACKET", &input), (variable, &response)],
     })?;
     let bytes =
-        private::read_session_file(&scores, private::SESSION_OUTPUT_MAX).map_err(|error| {
+        private::read_session_file(&response, private::SESSION_OUTPUT_MAX).map_err(|error| {
             if private::is_missing_file(&error) {
-                anyhow::anyhow!("model Grader left no Scores")
+                anyhow::anyhow!("{kind} left no {holds}")
             } else {
                 error
             }
         })?;
     serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
+        .map_err(|_| anyhow::anyhow!("invalid {kind} response; see private Grader artifacts"))
 }

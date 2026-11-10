@@ -14,11 +14,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::trial_results::files::Files;
-use super::{Arm, Description, Task, arms, pairs, store, trial_results};
+use super::{Arm, Description, Task, arms, model_grader, pairs, store, trial_results};
 use crate::evals::{format, repository};
 use crate::harness::{Choice, ChosenBy, Harness};
 use crate::sandbox::code_grader::Check;
-use crate::session::private;
+use crate::trial::blind_diff;
 use crate::{interrupt, progress, prompt};
 
 /// The panel the Bar fixes before the first Trial.
@@ -273,7 +273,18 @@ impl<'a> From<&'a pairs::Side> for Evidence<'a> {
 struct Response {
     sides: Vec<ResponseSide>,
     reason: String,
-    preference: String,
+    preference: Picked,
+}
+
+/// A preference as the Grader writes it, by label.
+#[derive(Clone, Copy, Deserialize)]
+enum Picked {
+    A,
+    B,
+    #[serde(rename = "tie")]
+    Tie,
+    #[serde(rename = "both_bad")]
+    BothBad,
 }
 
 #[derive(Deserialize)]
@@ -296,8 +307,7 @@ pub(crate) struct Rating {
 /// One Grader's validated reading of one pair in one order, by Arm.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Call {
-    /// The Arm shown as side A.
-    pub a: Arm,
+    pub shown_as_a: Arm,
     pub baseline: SideCall,
     pub candidate: SideCall,
     pub reason: String,
@@ -383,17 +393,17 @@ impl Response {
                 "duplicate Grader label"
             );
         }
-        let preference = match self.preference.as_str() {
-            "A" | "B" => match shown[usize::from(self.preference == "B")] {
+        let preference = match self.preference {
+            Picked::A | Picked::B => match shown[usize::from(matches!(self.preference, Picked::B))]
+            {
                 Arm::Baseline => Preference::Baseline,
                 Arm::Candidate => Preference::Candidate,
             },
-            "tie" => Preference::Tie,
-            "both_bad" => Preference::BothBad,
-            other => bail!("invalid Grader preference {other}"),
+            Picked::Tie => Preference::Tie,
+            Picked::BothBad => Preference::BothBad,
         };
         Ok(Call {
-            a: shown[0],
+            shown_as_a: shown[0],
             baseline: sides.remove("baseline").context("missing Grader side")?,
             candidate: sides.remove("candidate").context("missing Grader side")?,
             reason: self.reason,
@@ -418,6 +428,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let seats: Vec<arms::FixedHarness> =
         serde_json::from_slice(&fs::read(experiment.directory.join("panel.json"))?)?;
     ensure!(seats.len() == panel.seats.len(), "panel seats changed");
+    let timeout = Duration::from_secs(bar.timeout_seconds);
     let mut caps = None;
     for task in &experiment.tasks {
         if task.manifest.session != format::Session::Process {
@@ -447,7 +458,9 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                     interrupt::check()?;
                     let sides = match &mut sides {
                         Some(sides) => sides,
-                        None => sides.insert(Sides::read(experiment, task, &key, &identities)?),
+                        None => {
+                            sides.insert(Sides::read(experiment, task, &key, &identities, timeout)?)
+                        }
                     };
                     let caps = match &mut caps {
                         Some(caps) => caps,
@@ -456,9 +469,9 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                         }
                     };
                     let shown = if order == 1 {
-                        sides.first
+                        sides.first_order
                     } else {
-                        [sides.first[1], sides.first[0]]
+                        [sides.first_order[1], sides.first_order[0]]
                     };
                     progress::step(format!(
                         "Grader panel {}/{} #{}: seat {} ({}/{}), order {order}",
@@ -473,14 +486,26 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                         .directory
                         .join("graders")
                         .join(format!("{key}--seat-{}--order-{order}", seat_index + 1));
-                    let call = grade(
-                        Seated { seat, harness },
-                        &workspace,
+                    fs::create_dir_all(&workspace)?;
+                    let response: Response = model_grader::session(
+                        model_grader::Session {
+                            kind: "panel Grader",
+                            choice: &Choice {
+                                harness: seat.harness(),
+                                model: Some(seat.model.clone()),
+                                effort: seat.effort.clone(),
+                                chosen_by: ChosenBy::Command,
+                            },
+                            binary: &harness.path,
+                            directory: &workspace,
+                            prompt: prompt::panel_grader(),
+                            output: ("THIRDSHIFT_GRADER_CALLS", "calls.json", "calls"),
+                            timeout,
+                            caps,
+                        },
                         &sides.packet(task, order, shown),
-                        Duration::from_secs(bar.timeout_seconds),
-                        caps,
-                    )?
-                    .call(shown)?;
+                    )?;
+                    let call = response.call(shown)?;
                     fs::create_dir_all(path.parent().context("panel call path")?)?;
                     store::write(&path, &call)?;
                 }
@@ -494,7 +519,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
 struct Sides {
     ticket: Option<String>,
     /// The Arms in the first order's A and B.
-    first: [Arm; 2],
+    first_order: [Arm; 2],
     outcomes: [crate::trial::Outcome; 2],
     diffs: [Option<String>; 2],
     evidence: Option<pairs::Pair>,
@@ -506,6 +531,7 @@ impl Sides {
         task: &Task,
         key: &str,
         identities: &[trial_results::Identity<'_>; 2],
+        timeout: Duration,
     ) -> Result<Self> {
         let ticket = task
             .manifest
@@ -515,14 +541,15 @@ impl Sides {
             .transpose()?;
         let digest = Sha256::digest(key.as_bytes());
         let seed = experiment.description.bar.seed ^ u64::from_le_bytes(digest[..8].try_into()?);
-        let mut first = [Arm::Baseline, Arm::Candidate];
-        first.shuffle(&mut Pcg64::seed_from_u64(seed));
+        let mut first_order = [Arm::Baseline, Arm::Candidate];
+        first_order.shuffle(&mut Pcg64::seed_from_u64(seed));
         let mut outcomes = [crate::trial::Outcome::Void; 2];
         let mut diffs = [None, None];
         for (at, identity) in identities.iter().enumerate() {
             outcomes[at] = pairs::trial_result(&experiment.directory, identity)?.outcome;
-            // A Trial whose repository is gone is shown without a diff: its
-            // error names retained paths, which would identify the Arm.
+            // A diff that cannot be read, as when the Trial's repository is
+            // gone, is shown as null: its error names retained paths, which
+            // would identify the Arm.
             diffs[at] = pairs::last_commit(&experiment.directory, identity)
                 .and_then(|commit| {
                     let bytes = repository::bytes_until(
@@ -537,9 +564,9 @@ impl Sides {
                             &commit.commit,
                             "--",
                         ],
-                        Instant::now() + Duration::from_secs(60),
+                        Instant::now() + timeout,
                     )?;
-                    Ok(String::from_utf8_lossy(&bytes).into_owned())
+                    Ok(blind_diff(&String::from_utf8_lossy(&bytes)))
                 })
                 .ok();
         }
@@ -554,7 +581,7 @@ impl Sides {
         };
         Ok(Self {
             ticket,
-            first,
+            first_order,
             outcomes,
             diffs,
             evidence,
@@ -587,76 +614,22 @@ impl Sides {
     }
 }
 
-struct Seated<'a> {
-    seat: &'a Seat,
-    harness: &'a arms::FixedHarness,
-}
-
-fn grade(
-    seated: Seated<'_>,
-    directory: &Path,
-    packet: &Packet<'_>,
-    timeout: Duration,
-    caps: &crate::scope::Caps,
-) -> Result<Response> {
-    fs::create_dir_all(directory)?;
-    let workspace = tempfile::Builder::new()
-        .prefix("session-")
-        .tempdir_in(directory)?
-        .keep();
-    let input = workspace.join("packet.json");
-    let calls = workspace.join("calls.json");
-    store::write(&input, packet)?;
-    let prompt = prompt::panel_grader();
-    fs::write(workspace.join("prompt.md"), &prompt)?;
-    let choice = Choice {
-        harness: seated.seat.harness(),
-        model: Some(seated.seat.model.clone()),
-        effort: seated.seat.effort.clone(),
-        chosen_by: ChosenBy::Command,
-    };
-    private::run(private::Request {
-        kind: "panel Grader",
-        choice: &choice,
-        binary: &seated.harness.path,
-        workspace: &workspace,
-        artifacts: &workspace,
-        prompt: &prompt,
-        timeout,
-        caps,
-        environment: &[
-            ("THIRDSHIFT_GRADER_PACKET", &input),
-            ("THIRDSHIFT_GRADER_CALLS", &calls),
-        ],
-    })?;
-    let bytes =
-        private::read_session_file(&calls, private::SESSION_OUTPUT_MAX).map_err(|error| {
-            if private::is_missing_file(&error) {
-                anyhow::anyhow!("panel Grader left no calls")
-            } else {
-                error
-            }
-        })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("invalid panel Grader response; see private Grader artifacts"))
-}
-
 /// One pair's panel report: every seat's calls and the panel's vote.
 #[derive(Serialize)]
 pub(crate) struct PanelPair {
     pub suite: String,
     pub task: String,
     pub trial: usize,
-    pub graders: Vec<Grader>,
+    pub graders: Vec<SeatCalls>,
     /// The vote units that counted, each with its own call.
-    pub votes: Vec<Unit>,
+    pub votes: Vec<Ballot>,
     pub preference: Preference,
     /// A tied merge call is not ready.
     pub merge: Merges,
 }
 
 #[derive(Serialize)]
-pub(crate) struct Grader {
+pub(crate) struct SeatCalls {
     pub harness: String,
     pub model: String,
     pub effort: Option<String>,
@@ -670,7 +643,7 @@ pub(crate) struct Grader {
 }
 
 #[derive(Serialize)]
-pub(crate) struct Unit {
+pub(crate) struct Ballot {
     /// A family, or a Model when each Model votes.
     pub name: String,
     pub preference: Preference,
@@ -725,7 +698,8 @@ pub(super) fn read(
 }
 
 /// The call more than half of `calls` make, or `tie` without one.
-fn majority<T: Copy + Eq>(calls: &[T], tie: T) -> T {
+fn majority<T: Copy + Eq>(calls: impl IntoIterator<Item = T>, tie: T) -> T {
+    let calls: Vec<T> = calls.into_iter().collect();
     calls
         .iter()
         .copied()
@@ -733,10 +707,9 @@ fn majority<T: Copy + Eq>(calls: &[T], tie: T) -> T {
         .unwrap_or(tie)
 }
 
-fn merges(calls: &[Merges]) -> Merges {
-    let arm = |pick: fn(&Merges) -> Merge| {
-        majority(&calls.iter().map(pick).collect::<Vec<_>>(), Merge::Tie)
-    };
+fn merges(calls: impl IntoIterator<Item = Merges>) -> Merges {
+    let calls: Vec<Merges> = calls.into_iter().collect();
+    let arm = |pick: fn(&Merges) -> Merge| majority(calls.iter().map(pick), Merge::Tie);
     Merges {
         baseline: arm(|merges| merges.baseline),
         candidate: arm(|merges| merges.candidate),
@@ -747,10 +720,10 @@ fn tally(
     panel: &Panel,
     arm_families: &BTreeSet<String>,
     calls: Vec<Vec<Call>>,
-) -> (Vec<Grader>, Vec<Unit>, Preference, Merges) {
+) -> (Vec<SeatCalls>, Vec<Ballot>, Preference, Merges) {
     let families: Vec<String> = panel.seats.iter().map(Seat::family).collect();
     let other_family = families.iter().any(|family| !arm_families.contains(family));
-    let graders: Vec<Grader> = panel
+    let graders: Vec<SeatCalls> = panel
         .seats
         .iter()
         .zip(families)
@@ -761,7 +734,7 @@ fn tally(
                 (false, false) => Merge::NotReady,
                 _ => Merge::Tie,
             };
-            Grader {
+            SeatCalls {
                 harness: seat.harness.clone(),
                 model: seat.model.clone(),
                 effort: seat.effort.clone(),
@@ -780,38 +753,30 @@ fn tally(
             }
         })
         .collect();
-    let mut units: BTreeMap<String, Vec<&Grader>> = BTreeMap::new();
+    let mut units: BTreeMap<String, Vec<&SeatCalls>> = BTreeMap::new();
     for grader in graders.iter().filter(|grader| grader.votes) {
         let name = match panel.vote {
             Vote::Family => grader.family.clone(),
-            Vote::Model => format!("{}/{}", grader.harness, grader.model),
+            Vote::Model => grader.model.clone(),
         };
         units.entry(name).or_default().push(grader);
     }
-    let votes: Vec<Unit> = units
+    let votes: Vec<Ballot> = units
         .into_iter()
-        .map(|(name, graders)| Unit {
+        .map(|(name, graders)| Ballot {
             name,
             preference: majority(
-                &graders
-                    .iter()
-                    .map(|grader| grader.preference)
-                    .collect::<Vec<_>>(),
+                graders.iter().map(|grader| grader.preference),
                 Preference::Tie,
             ),
-            merge: merges(
-                &graders
-                    .iter()
-                    .map(|grader| grader.merge)
-                    .collect::<Vec<_>>(),
-            ),
+            merge: merges(graders.iter().map(|grader| grader.merge)),
         })
         .collect();
     let preference = majority(
-        &votes.iter().map(|unit| unit.preference).collect::<Vec<_>>(),
+        votes.iter().map(|ballot| ballot.preference),
         Preference::Tie,
     );
-    let mut merge = merges(&votes.iter().map(|unit| unit.merge).collect::<Vec<_>>());
+    let mut merge = merges(votes.iter().map(|ballot| ballot.merge));
     for call in [&mut merge.baseline, &mut merge.candidate] {
         if *call == Merge::Tie {
             *call = Merge::NotReady;

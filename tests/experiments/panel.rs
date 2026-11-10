@@ -130,7 +130,8 @@ fn a_three_seat_panel_reports_each_graders_calls_in_both_orders_and_its_majority
     assert_eq!(order["reason"], "Compared both diffs.");
     assert_eq!(order["candidate"]["rubric"].as_array().unwrap().len(), 4);
     assert_ne!(
-        pair["graders"][0]["orders"][0]["a"], pair["graders"][0]["orders"][1]["a"],
+        pair["graders"][0]["orders"][0]["shown_as_a"],
+        pair["graders"][0]["orders"][1]["shown_as_a"],
         "the second order swaps the sides"
     );
     // Per Model, the two same-family seats are two of three votes.
@@ -363,5 +364,28 @@ fn panel_settings_need_a_seat_and_named_values() {
         let run = fixture.run(&args);
         assert_eq!(run.code, Some(2), "{args:?}");
         assert!(run.stderr.contains(error), "{args:?}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn identifying_lines_an_arm_commits_stay_out_of_the_packet() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&script.replace(
+        "git add extra.txt test_new_candidate.py",
+        "printf '# Notes\\nModel: secret-model\\nKept as evidence.\\n' > notes.md\n    git add extra.txt test_new_candidate.py notes.md",
+    ));
+    panel_graders(&fixture, &["candidate"]);
+    let run = fixture.run(&["--panel-seat", "harness=codex,model=judge-one"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = fixture.grader_calls();
+    assert_eq!(calls.len(), 2);
+    for call in calls {
+        let packet =
+            fs::read_to_string(PathBuf::from(call["cwd"].as_str().unwrap()).join("packet.json"))
+                .unwrap();
+        assert!(packet.contains("+Kept as evidence."), "{packet}");
+        assert!(!packet.contains("secret-model"), "{packet}");
     }
 }

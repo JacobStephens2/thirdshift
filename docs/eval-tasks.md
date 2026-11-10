@@ -204,8 +204,9 @@ effort = "high"
   `order` (1 or 2), `ticket` (the input copied to `.thirdshift-issue.md`, or
   null), `criteria`, the `rubric` (each criterion's `name` and `question`) and
   two `sides`, labelled `A` and `B` at random and swapped in the second order.
-  Each side has its `outcome`, its `diff` against `base` (null when the Trial's
-  repository is no longer retained) and its Pair `evidence` without error text
+  Each side has its `outcome`, its `diff` against `base` (null when it cannot
+  be read within the Bar's timeout, as when the Trial's repository is no longer
+  retained; added lines a report would lose as identifying are removed) and its Pair `evidence` without error text
   (null without `new_tests`). The Grader writes `calls.json` with exactly
   `sides`, `reason` and `preference`: each side has `label`, a `rubric` rating
   per criterion (`criterion`, boolean `met`, nonempty `evidence`), a nonempty

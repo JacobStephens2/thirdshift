@@ -87,13 +87,15 @@ Trials in a blind packet, once in each presentation order, with the sides
 swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
 its `family` (its provider: the Harness's own, or the provider an OpenCode
 Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
-the Arm shown as side `a`, gives each Arm's per-criterion `rubric`, merge
+the Arm `shown_as_a`, gives each Arm's per-criterion `rubric`, merge
 reason and `ready_to_merge` call, then the comparison's `reason` and
 `preference`. A Grader's `preference` and `merge` calls stand only when both
 orders agree; a call that flips with the order is `tie`. With
 `arm_family_rule`, a seat from either Arm's family does not vote while a seat
 from another family sits on the panel. `votes` lists the units that counted:
-one per family, each taking its own majority first, or one per Model. A call
+one per family, each taking its own majority first, or one per Model (seats
+naming the same Model at different Efforts or on different Harnesses take
+their own majority first, as a family does). A call
 needs more than half of the votes, otherwise it is `tie`; the panel's tied
 merge call is `not_ready`. Pairs appear once every seat has called both
 orders. The panel is reported beside the Verdict and changes no Score,
@@ -464,7 +466,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "votes": "boolean", "orders": ["PanelCall"], "preference": "Preference", "merge": "MergeCalls"
   },
   "PanelCall": {
-    "a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
+    "shown_as_a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
     "reason": "string", "preference": "Preference"
   },
   "PanelSide": {

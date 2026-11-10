@@ -85,11 +85,9 @@ pub(super) fn arguments(options: Option<&BTreeMap<String, Value>>) -> Result<Vec
                 args.push(format!("--{key}"));
             }
         } else if let Some(items) = value.as_array() {
+            let flag = format!("--{}", key.replace('_', "-"));
             for item in items {
-                args.extend([
-                    format!("--{}", key.replace('_', "-")),
-                    item.as_str().unwrap().into(),
-                ]);
+                args.extend([flag.clone(), item.as_str().unwrap().into()]);
             }
         } else {
             args.extend([

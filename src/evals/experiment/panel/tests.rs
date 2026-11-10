@@ -21,7 +21,7 @@ fn orders(first: Preference, second: Preference, ready: [bool; 2]) -> Vec<Call> 
     [first, second]
         .into_iter()
         .map(|preference| Call {
-            a: Arm::Baseline,
+            shown_as_a: Arm::Baseline,
             baseline: side(ready[0]),
             candidate: side(ready[1]),
             reason: "Reason.".into(),

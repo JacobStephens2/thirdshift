@@ -457,8 +457,9 @@ pub fn run(options: Options) -> Result<()> {
         panel::prepare(&experiment)?;
         workers::run(&experiment)?;
         pairs::run(&experiment)?;
-        panel::run(&experiment)?;
+        // The panel grades last, so a pause in it holds back no model Score.
         model_grader::run(&experiment)?;
+        panel::run(&experiment)?;
         experiment.refresh_verdict()?;
         experiment.state = State::Completed;
         Ok(())

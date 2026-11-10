@@ -1376,7 +1376,8 @@ evidence and makes a merge call, then gives its reason and a preference: A, B,
 tie or both bad. A call that flips with the order is a tie. A seat's family is
 its provider: the Harness's own, or the provider an OpenCode Model names.
 The panel votes one vote per family by default, each family taking its own
-majority first; `--panel-vote model` gives each Model a vote. A seat from
+majority first; `--panel-vote model` gives each Model a vote, with seats
+naming the same Model taking their own majority first. A seat from
 either Arm's family is reported but doesn't vote while a seat from another
 family sits on the panel; `--panel-arm-family-rule off` lets it vote. A call
 needs more than half the votes, otherwise it is a tie, and a tied merge call is
