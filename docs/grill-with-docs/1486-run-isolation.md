@@ -11,7 +11,7 @@ Research: [run-isolation.md](../research/run-isolation.md) (PR #1515), [eval-san
 
 *Recommended:* (a). Option (b) is only alive if Q1.3 picks a clone per Run, and the note already says to revisit at that point.
 
-*Answer:* 
+*Answer:* (a), decided in [run-capacity.md](run-capacity.md) Q1.2: decline hosted providers for Runs. One stays a possible later backend for Trials, reopened only if one host stops being enough.
 
 **Q1.2 - The push credential, first and on its own.** A per-Run GitHub App installation token lasts one hour and is scoped to one repository, with `contents: write` and `pull_requests: write`. It bounds a leaked token, and no sandbox can do that. thirdshift's own deterministic steps keep your `gh` login, including the Pickup reservation (ADR-0017). It does mean a GitHub App to register and run. The options:
 - (a) File it as its own issue now, independent of the sandbox work, so it can land first.

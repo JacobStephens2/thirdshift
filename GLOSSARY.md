@@ -146,7 +146,7 @@ _Avoid_: intake
 
 **Pass**:
 An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
-Every Pass is skipped while an Experiment is live on its machine for the same OS account, including one still waiting for live Runs to end. A Command started on an Issue URL still runs, with a warning that it competes with the Experiment's Trials.
+Every Pass is skipped while an **Experiment** is live on its machine for the same OS account, including one still waiting for live Runs to end. A Command started on an Issue URL still runs, with a warning that it competes with the Experiment's Trials.
 _Avoid_: tick, cycle
 
 **Process**:

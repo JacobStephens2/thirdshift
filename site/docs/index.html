@@ -1573,6 +1573,12 @@ limit is set, since the limit can&#39;t count it; its call is kept. Resuming get
 the limit afresh and continues from the calls already made; none is graded
 again. When every Trial has run and only panel calls remain, the estimate lists
 just the panel and a terminal asks <code>Run the remaining Grader panel sessions?</code>.</p>
+<p>Before that estimate or any new paid work, resume reads every expected saved
+panel call, including later seats and orders behind a missing call. An unreadable
+or malformed call stops the command with its pair, seat and order, even with
+<code>--yes</code>; only a missing file is pending work. Correct the retained-call problem
+before resuming. Reports use the same completion facts and show a pair only
+once every seat has both saved orders.</p>
 <p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
