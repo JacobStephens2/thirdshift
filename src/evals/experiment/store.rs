@@ -382,6 +382,7 @@ impl Stored {
             &results,
             &self.description.bar,
             &self.description.baseline,
+            &self.decided()?,
         )?;
         if super::leaks::pending(&results) {
             verdict.verdict = super::Conclusion::WaitingOnLeaks;
@@ -389,6 +390,34 @@ impl Stored {
         }
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
+        Ok(())
+    }
+
+    fn decided(&self) -> Result<super::deciders::Decided> {
+        super::deciders::read(&Native, &self.directory, &self.description, &self.tasks)
+    }
+
+    /// Recalculate a completed Experiment's Verdict after a people's call
+    /// that counts in it. A running Experiment recalculates as it completes.
+    pub(super) fn refresh_completed(root: &Path, id: &str) -> Result<()> {
+        let directory = Self::directory(root, id)?;
+        if Self::metadata(&Native, directory.clone(), id)?.state != State::Completed {
+            return Ok(());
+        }
+        // Rechecks and leak decisions hold this lock only briefly.
+        let lock = File::create(directory.join("lock"))?;
+        lock.lock()?;
+        let mut stored = Self::metadata(&Native, directory, id)?;
+        stored.lock = Some(lock);
+        stored.refresh_verdict()?;
+        stored.save()?;
+        if let (Some(log), Some(verdict)) = (&stored.details.command_log, &stored.verdict)
+            && let Err(error) = crate::logs::experiment_rechecked(log, id, verdict.outcome())
+        {
+            crate::progress::step(format!(
+                "warning: could not update the Command record: {error:#}"
+            ));
+        }
         Ok(())
     }
 
@@ -406,6 +435,7 @@ impl Stored {
                     &self.results()?,
                     &self.description.bar,
                     &self.description.baseline,
+                    &self.decided()?,
                 )?;
                 self.pending_rechecks = pending;
             }
@@ -519,9 +549,14 @@ Candidate: {}{}{}",
                 view.usage.candidate(),
                 view.voids.baseline,
                 view.voids.candidate,
-                view.findings
+                self.verdict
+                    .as_ref()
+                    .and_then(|verdict| verdict.deciders.as_ref())
+                    .map(|deciders| format!("\n{}", deciders.line()))
+                    .into_iter()
+                    .chain(view.findings
                     .iter()
-                    .map(|finding| format!("\nFinding: {finding}"))
+                    .map(|finding| format!("\nFinding: {finding}")))
                     .chain(
                         view.pending_rechecks
                             .iter()

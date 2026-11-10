@@ -1384,8 +1384,9 @@ thirdshift experiments <id> --pair <pair-id> --prefer a --rubric scope=tie
 ```
 
 People's calls, in Arm terms, and their agreement with the panel's merge calls
-show beside the Verdict on the Experiment page, in the text view, and under
-`people` in `--json`. They change no Score and no Verdict.
+and with each other show beside the Verdict on the Experiment page, in the text
+view, and under `people` in `--json`. They change no Score, and change the
+Verdict only when the Bar counts them.
 
 A Grader panel can also grade each pair of process Trials. Name its seats in
 the Bar, one `--panel-seat` per Harness and Model, several per family allowed:
@@ -1413,7 +1414,47 @@ family sits on the panel; `--panel-arm-family-rule off` lets it vote. A call
 needs more than half the votes, otherwise it is a tie, and a tied merge call is
 not ready. Every seat's calls and the panel's result are reported beside the
 Verdict, in the text view and under `panel` in
-`thirdshift experiments <id> --json`; they change no Score and no Verdict.
+`thirdshift experiments <id> --json`; they change no Score and no Verdict
+unless the Bar counts them.
+
+The Bar fixes who decides the Verdict before the first Trial. The panel and
+the people are each off, beside the Verdict or counted in it: `--panel off`,
+`beside` (the default with seats) or `counted`, and `--people off`, `beside`
+(the default) or `counted`. Name each reader with `--people-reader`, as the
+Console or the CLI names them (a Console address, a token's person, or a Unix
+user). `--people-sample <n>` gives each reader `n` pairs drawn from the Bar's
+seed, and `--people-overlap <n>` how many of those every reader shares; with
+no sample, every reader reads every pair. Each reader's queue lists their pairs
+on the Experiment page, in the text view and under `people.queues` in
+`--json`, and the Experiment refuses a sample larger than it has pairs, or
+readers when a process Eval task has no pair evidence to read:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5 \
+  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel counted --people counted \
+  --people-reader ann@example.com --people-reader bo@example.com \
+  --people-sample 7 --people-overlap 4
+```
+
+When the panel or the people are counted, a process Trial passes only if its
+Score passes and whoever decides its pair calls it ready to merge. People's
+call is each reader's latest blind merge call; on a pair two readers share, it
+is ready only if both say so. With only the panel counted, its calls decide
+every pair and people's calls calibrate it. With only the people counted on a
+sample, the Verdict rests on the sampled pairs alone, each pair a unit, and a
+small sample usually comes out inconclusive rather than wrong. With people
+counted on every pair, their calls decide every pair. With both counted, the
+panel stands in on the pairs people didn't read. That needs a voting panel
+spanning `--panel-families` families (two by default), or the Experiment
+refuses to start, and people–panel agreement on the sample of at least
+`--panel-agreement` (0.8 by default) of the merge calls compared, or the
+Verdict is inconclusive and says why. While a reader has a pair still to call,
+the Verdict is `waiting_on_people`; each call recalculates it once the
+Experiment has completed. The Verdict says who decided it and on how many
+pairs. People–people agreement on shared pairs and people–panel agreement are
+reported in every mode.
 
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
@@ -1440,8 +1481,11 @@ Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
 timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
-The Grader panel's `--panel-seat`, `--panel-vote` and `--panel-arm-family-rule`
-are part of the Bar too; it has no panel by default.
+The Grader panel's `--panel-seat`, `--panel-vote`, `--panel-arm-family-rule`,
+`--panel`, `--panel-families` and `--panel-agreement`, and the people's
+`--people`, `--people-reader`, `--people-sample` and `--people-overlap`, are
+part of the Bar too; it has no panel by default, and anyone may read any pair
+beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 

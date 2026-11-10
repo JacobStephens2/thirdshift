@@ -1471,8 +1471,9 @@ thirdshift experiments &lt;id&gt; --pair &lt;pair-id&gt; --merge ready not-ready
 thirdshift experiments &lt;id&gt; --pair &lt;pair-id&gt; --prefer a --rubric scope=tie
 </code></pre>
 <p>People&#39;s calls, in Arm terms, and their agreement with the panel&#39;s merge calls
-show beside the Verdict on the Experiment page, in the text view, and under
-<code>people</code> in <code>--json</code>. They change no Score and no Verdict.</p>
+and with each other show beside the Verdict on the Experiment page, in the text
+view, and under <code>people</code> in <code>--json</code>. They change no Score, and change the
+Verdict only when the Bar counts them.</p>
 <p>A Grader panel can also grade each pair of process Trials. Name its seats in
 the Bar, one <code>--panel-seat</code> per Harness and Model, several per family allowed:</p>
 <pre><code class="language-sh">thirdshift experiment &lt;candidate&gt; \
@@ -1496,7 +1497,43 @@ family sits on the panel; <code>--panel-arm-family-rule off</code> lets it vote.
 needs more than half the votes, otherwise it is a tie, and a tied merge call is
 not ready. Every seat&#39;s calls and the panel&#39;s result are reported beside the
 Verdict, in the text view and under <code>panel</code> in
-<code>thirdshift experiments &lt;id&gt; --json</code>; they change no Score and no Verdict.</p>
+<code>thirdshift experiments &lt;id&gt; --json</code>; they change no Score and no Verdict
+unless the Bar counts them.</p>
+<p>The Bar fixes who decides the Verdict before the first Trial. The panel and
+the people are each off, beside the Verdict or counted in it: <code>--panel off</code>,
+<code>beside</code> (the default with seats) or <code>counted</code>, and <code>--people off</code>, <code>beside</code>
+(the default) or <code>counted</code>. Name each reader with <code>--people-reader</code>, as the
+Console or the CLI names them (a Console address, a token&#39;s person, or a Unix
+user). <code>--people-sample &lt;n&gt;</code> gives each reader <code>n</code> pairs drawn from the Bar&#39;s
+seed, and <code>--people-overlap &lt;n&gt;</code> how many of those every reader shares; with
+no sample, every reader reads every pair. Each reader&#39;s queue lists their pairs
+on the Experiment page, in the text view and under <code>people.queues</code> in
+<code>--json</code>, and the Experiment refuses a sample larger than it has pairs, or
+readers when a process Eval task has no pair evidence to read:</p>
+<pre><code class="language-sh">thirdshift experiment &lt;candidate&gt; \
+  --panel-seat harness=codex,model=gpt-5.5 \
+  --panel-seat harness=opencode,model=fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro \
+  --panel counted --people counted \
+  --people-reader ann@example.com --people-reader bo@example.com \
+  --people-sample 7 --people-overlap 4
+</code></pre>
+<p>When the panel or the people are counted, a process Trial passes only if its
+Score passes and whoever decides its pair calls it ready to merge. People&#39;s
+call is each reader&#39;s latest blind merge call; on a pair two readers share, it
+is ready only if both say so. With only the panel counted, its calls decide
+every pair and people&#39;s calls calibrate it. With only the people counted on a
+sample, the Verdict rests on the sampled pairs alone, each pair a unit, and a
+small sample usually comes out inconclusive rather than wrong. With people
+counted on every pair, their calls decide every pair. With both counted, the
+panel stands in on the pairs people didn&#39;t read. That needs a voting panel
+spanning <code>--panel-families</code> families (two by default), or the Experiment
+refuses to start, and people–panel agreement on the sample of at least
+<code>--panel-agreement</code> (0.8 by default) of the merge calls compared, or the
+Verdict is inconclusive and says why. While a reader has a pair still to call,
+the Verdict is <code>waiting_on_people</code>; each call recalculates it once the
+Experiment has completed. The Verdict says who decided it and on how many
+pairs. People–people agreement on shared pairs and people–panel agreement are
+reported in every mode.</p>
 <p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1518,8 +1555,11 @@ Advisory minimum of <code>20</code> discriminating Eval tasks, an <code>1800</co
 timeout, and up to two fresh retries for Void Trials.
 Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fail-level</code>, <code>--prior</code>, <code>--seed</code>,
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--min-discriminating-tasks</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
-The Grader panel&#39;s <code>--panel-seat</code>, <code>--panel-vote</code> and <code>--panel-arm-family-rule</code>
-are part of the Bar too; it has no panel by default.
+The Grader panel&#39;s <code>--panel-seat</code>, <code>--panel-vote</code>, <code>--panel-arm-family-rule</code>,
+<code>--panel</code>, <code>--panel-families</code> and <code>--panel-agreement</code>, and the people&#39;s
+<code>--people</code>, <code>--people-reader</code>, <code>--people-sample</code> and <code>--people-overlap</code>, are
+part of the Bar too; it has no panel by default, and anyone may read any pair
+beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.</p>
 <p>Optional <code>--cost-ceiling 2</code> and <code>--time-ceiling 2</code> cap the paired median

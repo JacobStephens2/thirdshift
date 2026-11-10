@@ -13,6 +13,7 @@ use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::deciders::Role;
 use super::trial_results::files::Files;
 use super::{Arm, Description, Task, arms, model_grader, pairs, store, trial_results};
 use crate::evals::{format, repository};
@@ -30,6 +31,27 @@ pub(crate) struct Panel {
     /// A seat from either Arm's family doesn't vote while a seat from
     /// another family sits on the panel.
     pub arm_family_rule: bool,
+    /// Beside the Verdict or counted in it.
+    #[serde(default)]
+    pub role: Role,
+    /// Families the voting panel must span to stand in for people.
+    #[serde(default = "default_families")]
+    pub families: usize,
+    /// The least people–panel agreement on the people's sample, as a share
+    /// of merge calls, that lets the panel stand in for people.
+    #[serde(
+        default = "default_agreement",
+        deserialize_with = "crate::verdict::decimal"
+    )]
+    pub agreement: f64,
+}
+
+fn default_families() -> usize {
+    2
+}
+
+fn default_agreement() -> f64 {
+    0.8
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,15 +117,28 @@ impl Seat {
 }
 
 impl Panel {
+    /// The panel's flags, removed from `flags` as they are read.
     pub(super) fn parse(
         seats: Vec<Seat>,
-        vote: Option<&str>,
-        arm_family_rule: Option<&str>,
+        flags: &mut BTreeMap<&str, &str>,
     ) -> Result<Option<Self>> {
-        if seats.is_empty() {
+        let role = flags
+            .remove("--panel")
+            .map(|text| Role::parse("--panel", text))
+            .transpose()?;
+        let vote = flags.remove("--panel-vote");
+        let arm_family_rule = flags.remove("--panel-arm-family-rule");
+        let families = flags.remove("--panel-families");
+        let agreement = flags.remove("--panel-agreement");
+        if seats.is_empty() || role == Some(Role::Off) {
+            ensure!(seats.is_empty(), "--panel off takes no --panel-seat");
             ensure!(
-                vote.is_none() && arm_family_rule.is_none(),
-                "--panel-vote and --panel-arm-family-rule need at least one --panel-seat"
+                role.is_none_or(|role| role == Role::Off)
+                    && vote.is_none()
+                    && arm_family_rule.is_none()
+                    && families.is_none()
+                    && agreement.is_none(),
+                "--panel, --panel-vote, --panel-arm-family-rule, --panel-families and --panel-agreement need at least one --panel-seat"
             );
             return Ok(None);
         }
@@ -115,6 +150,26 @@ impl Panel {
                 seat.model
             );
         }
+        let families = match families {
+            None => default_families(),
+            Some(text) => text
+                .parse()
+                .ok()
+                .filter(|families| *families > 0)
+                .with_context(|| {
+                    format!("invalid --panel-families {text}: expected a positive number")
+                })?,
+        };
+        let agreement = match agreement {
+            None => default_agreement(),
+            Some(text) => text
+                .parse()
+                .ok()
+                .filter(|level: &f64| (0.0..=1.0).contains(level))
+                .with_context(|| {
+                    format!("invalid --panel-agreement {text}: expected a share from 0 to 1")
+                })?,
+        };
         Ok(Some(Self {
             seats,
             vote: match vote {
@@ -127,8 +182,53 @@ impl Panel {
                 Some("off") => false,
                 Some(other) => bail!("invalid --panel-arm-family-rule {other}: expected on or off"),
             },
+            role: role.unwrap_or(Role::Beside),
+            families,
+            agreement,
         }))
     }
+
+    /// Each seat's family and whether it votes. With the arm-family rule, a
+    /// seat from either Arm's family doesn't vote while another family sits.
+    fn voting(&self, arm_families: &BTreeSet<String>) -> Vec<(String, bool)> {
+        let families: Vec<String> = self.seats.iter().map(Seat::family).collect();
+        let other_family = families.iter().any(|family| !arm_families.contains(family));
+        families
+            .into_iter()
+            .map(|family| {
+                let votes =
+                    !(self.arm_family_rule && other_family && arm_families.contains(&family));
+                (family, votes)
+            })
+            .collect()
+    }
+}
+
+/// With both the panel and the people counted, the panel stands in for
+/// people on the pairs they don't read: refuse a voting panel that spans
+/// fewer families than the Bar needs.
+pub(super) fn check_stand_in(description: &Description) -> Result<()> {
+    let bar = &description.bar;
+    let Some(panel) = &bar.panel else {
+        return Ok(());
+    };
+    if panel.role != Role::Counted || super::deciders::people_role(bar) != Role::Counted {
+        return Ok(());
+    }
+    let voting: BTreeSet<String> = panel
+        .voting(&arm_families(description))
+        .into_iter()
+        .filter_map(|(family, votes)| votes.then_some(family))
+        .collect();
+    ensure!(
+        voting.len() >= panel.families,
+        "the voting Grader panel spans {} famil{} ({}), but standing in for people needs {}",
+        voting.len(),
+        if voting.len() == 1 { "y" } else { "ies" },
+        voting.into_iter().collect::<Vec<_>>().join(", "),
+        panel.families
+    );
+    Ok(())
 }
 
 /// A Model's family is its provider: the Harness's own, or the provider an
@@ -173,6 +273,8 @@ pub(super) fn prepare(experiment: &store::Stored) -> Result<()> {
     let Some(panel) = &experiment.description.bar.panel else {
         return Ok(());
     };
+    // Process Steps can add Arm families once the Arms are prepared.
+    check_stand_in(&experiment.description)?;
     let path = experiment.directory.join("panel.json");
     if path.exists() {
         return Ok(());
@@ -742,14 +844,12 @@ fn tally(
     arm_families: &BTreeSet<String>,
     calls: Vec<Vec<Call>>,
 ) -> (Vec<SeatCalls>, Vec<Ballot>, Preference, Merges) {
-    let families: Vec<String> = panel.seats.iter().map(Seat::family).collect();
-    let other_family = families.iter().any(|family| !arm_families.contains(family));
     let graders: Vec<SeatCalls> = panel
         .seats
         .iter()
-        .zip(families)
+        .zip(panel.voting(arm_families))
         .zip(calls)
-        .map(|((seat, family), orders)| {
+        .map(|((seat, (family, votes)), orders)| {
             let agreed = |merge: fn(&Call) -> bool| match (merge(&orders[0]), merge(&orders[1])) {
                 (true, true) => Merge::Ready,
                 (false, false) => Merge::NotReady,
@@ -759,7 +859,7 @@ fn tally(
                 harness: seat.harness.clone(),
                 model: seat.model.clone(),
                 effort: seat.effort.clone(),
-                votes: !(panel.arm_family_rule && other_family && arm_families.contains(&family)),
+                votes,
                 family,
                 preference: if orders[0].preference == orders[1].preference {
                     orders[0].preference

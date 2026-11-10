@@ -20,6 +20,8 @@ pub(in crate::console) fn properties() -> Value {
         "prices",
         "panel_vote",
         "panel_arm_family_rule",
+        "panel",
+        "people",
     ] {
         properties.insert(key.into(), json!({"type":"string"}));
     }
@@ -30,6 +32,7 @@ pub(in crate::console) fn properties() -> Value {
         "prior",
         "cost_ceiling",
         "time_ceiling",
+        "panel_agreement",
     ] {
         properties.insert(key.into(), json!({"type":"number"}));
     }
@@ -40,13 +43,16 @@ pub(in crate::console) fn properties() -> Value {
         "timeout",
         "void_retries",
         "trials_per_task",
+        "panel_families",
+        "people_sample",
+        "people_overlap",
     ] {
         properties.insert(key.into(), json!({"type":"integer"}));
     }
     for key in ["release", "yes"] {
         properties.insert(key.into(), json!({"type":"boolean"}));
     }
-    for key in ["suite", "panel_seat"] {
+    for key in ["suite", "panel_seat", "people_reader"] {
         properties.insert(
             key.into(),
             json!({"type":"array","items":{"type":"string"}}),
@@ -120,12 +126,18 @@ mod tests {
             ),
             ("panel_vote".to_owned(), json!("model")),
             ("panel_arm_family_rule".to_owned(), json!("off")),
+            ("panel".to_owned(), json!("counted")),
+            ("people".to_owned(), json!("counted")),
+            ("people_reader".to_owned(), json!(["ann@example.com"])),
+            ("people_sample".to_owned(), json!(3)),
         ]);
         assert_eq!(
             arguments(Some(&options)).unwrap(),
             [
                 "--json",
                 "HEAD",
+                "--panel",
+                "counted",
                 "--panel-arm-family-rule",
                 "off",
                 "--panel-seat",
@@ -134,6 +146,12 @@ mod tests {
                 "harness=codex,model=judge-two",
                 "--panel-vote",
                 "model",
+                "--people",
+                "counted",
+                "--people-reader",
+                "ann@example.com",
+                "--people-sample",
+                "3",
             ]
         );
     }

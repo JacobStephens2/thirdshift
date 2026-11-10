@@ -50,6 +50,11 @@ fn status(view: &View) -> Status {
             tone: "look",
             group: 1,
         },
+        Some(Conclusion::WaitingOnPeople) => Status {
+            label: "Waiting on people",
+            tone: "look",
+            group: 1,
+        },
         None if active(view) => Status {
             label: "Running",
             tone: "working",
@@ -330,25 +335,67 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
 /// People's blind pairwise calls beside the Verdict, with links to read each
 /// pair blind. They change no Score.
 fn people(view: &View) -> String {
-    use crate::evals::experiment::pairwise;
+    use crate::evals::experiment::{deciders, pairwise};
     if view.pairs.is_empty() {
         return String::new();
     }
     let id = esc(&view.description.id);
-    let mut html = String::from(
-        "<section aria-label=\"People's calls\"><h2>People's calls</h2><p>Blind pairwise calls, reported beside the Verdict. They change no Score. Read a pair blind:</p><ul>",
-    );
-    for pair in &view.pairs {
-        html.push_str(&format!(
-            "<li><a href=\"/experiments/{id}/pairs/{}\">{}/{} #{}</a></li>",
-            esc(&pair.key()),
-            esc(&pair.suite),
-            esc(&pair.task),
-            pair.trial + 1
-        ));
-    }
-    html.push_str("</ul>");
     let people = &view.people;
+    let mut html = String::from("<section aria-label=\"People's calls\"><h2>People's calls</h2>");
+    html.push_str(match deciders::people_role(&view.description.bar) {
+        deciders::Role::Off => {
+            "<p>The Bar has people off: no one grades these pairs.</p></section>"
+        }
+        deciders::Role::Beside => {
+            "<p>Blind pairwise calls, reported beside the Verdict. They change no Score.</p>"
+        }
+        deciders::Role::Counted => {
+            "<p>Blind pairwise calls, counted in the Verdict: a Trial passes only if the code Grader passes and its pair is called ready. On a shared pair, every reader must call it ready.</p>"
+        }
+    });
+    if deciders::people_role(&view.description.bar) == deciders::Role::Off {
+        return html;
+    }
+    let link = |key: &str| {
+        view.pairs
+            .iter()
+            .find(|pair| pair.key() == key)
+            .map_or_else(
+                || format!("{} (not finished)", esc(key)),
+                |pair| {
+                    format!(
+                        "<a href=\"/experiments/{id}/pairs/{}\">{}/{} #{}</a>",
+                        esc(key),
+                        esc(&pair.suite),
+                        esc(&pair.task),
+                        pair.trial + 1
+                    )
+                },
+            )
+    };
+    if people.queues.is_empty() {
+        html.push_str("<p>Read a pair blind:</p><ul>");
+        for pair in &view.pairs {
+            html.push_str(&format!("<li>{}</li>", link(&pair.key())));
+        }
+        html.push_str("</ul>");
+    } else {
+        html.push_str("<h3>Queues</h3><p>The pairs the Bar's seed gives each reader.</p>");
+        for queue in &people.queues {
+            html.push_str(&format!("<h4>{}</h4><ul>", esc(&queue.reader)));
+            for key in &queue.pairs {
+                let called = people.reviews.iter().any(|review| {
+                    review.pair == *key && review.blind && review.reader.who() == queue.reader
+                });
+                html.push_str(&format!(
+                    "<li>{} · {}</li>",
+                    link(key),
+                    if called { "called" } else { "to read" }
+                ));
+            }
+            html.push_str("</ul>");
+        }
+    }
     if people.reviews.is_empty() {
         html.push_str("<p>No calls yet.</p></section>");
         return html;
@@ -375,8 +422,9 @@ fn people(view: &View) -> String {
         ));
     }
     html.push_str(&format!(
-        "</tbody></table><p>{}</p></section>",
-        esc(&pairwise::agreement(&people.agreement))
+        "</tbody></table><p>{}</p><p>{}</p></section>",
+        esc(&pairwise::agreement(&people.agreement)),
+        esc(&pairwise::people_agreement(&people.people_agreement))
     ));
     html
 }
@@ -450,9 +498,32 @@ fn lead(view: &View) -> String {
         Some(Conclusion::Fail) => {
             "Fail: the Candidate is worse than the Baseline under the Bar.".into()
         }
-        Some(Conclusion::Inconclusive) => {
-            "Inconclusive: these Trials cannot settle whether the Candidate is worse.".into()
-        }
+        Some(Conclusion::WaitingOnPeople) => format!(
+            "Provisionally {}, until each reader makes their blind merge calls on {} pairs.",
+            decision(
+                view.verdict
+                    .as_ref()
+                    .unwrap()
+                    .provisional_verdict
+                    .decision()
+                    .unwrap_or(Decision::Inconclusive)
+            ),
+            view.verdict
+                .as_ref()
+                .and_then(|verdict| verdict.deciders.as_ref())
+                .map_or(0, |deciders| deciders.waiting_pairs)
+        ),
+        Some(Conclusion::Inconclusive) => match view
+            .verdict
+            .as_ref()
+            .and_then(|verdict| verdict.deciders.as_ref())
+            .and_then(|deciders| deciders.inconclusive.as_ref())
+        {
+            Some(reason) => format!("Inconclusive: {reason}."),
+            None => {
+                "Inconclusive: these Trials cannot settle whether the Candidate is worse.".into()
+            }
+        },
         None => now(view),
     }
 }
@@ -568,6 +639,9 @@ fn verdict(view: &View) -> String {
             "<p class=\"experiment-resource-verdict\">{}</p>",
             esc(line)
         ));
+    }
+    if let Some(deciders) = &verdict.deciders {
+        html.push_str(&format!("<p>{}</p>", esc(&deciders.line())));
     }
     for (name, suite) in &verdict.suites {
         let advisory = suite.advisory == Some(true);
@@ -1371,8 +1445,43 @@ fn bar(view: &View) -> String {
                 .collect::<String>()
         })
         .unwrap_or_default();
+    let deciders = {
+        use crate::evals::experiment::deciders;
+        let panel = b.panel.as_ref().map_or_else(
+            || "Off".to_owned(),
+            |panel| {
+                format!(
+                    "{} · {} seats · stands in for people only with {} voting families and people–panel agreement of at least {}",
+                    deciders::panel_role(b).name(),
+                    panel.seats.len(),
+                    panel.families,
+                    panel.agreement
+                )
+            },
+        );
+        let people = b.people.as_ref().map_or_else(
+            || "Beside · anyone may read any pair".to_owned(),
+            |people| {
+                format!(
+                    "{} · readers: {} · {} · {} shared",
+                    people.role.name(),
+                    people.readers.join(", "),
+                    people.sample.map_or_else(
+                        || "every pair".to_owned(),
+                        |sample| format!("{sample} pairs each, drawn from the seed")
+                    ),
+                    people.overlap
+                )
+            },
+        );
+        format!(
+            "<dt>Grader panel</dt><dd>{}</dd><dt>People</dt><dd>{}</dd>",
+            esc(&panel),
+            esc(&people)
+        )
+    };
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}{ceilings}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}{ceilings}{deciders}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
         b.prior,
         b.seed,

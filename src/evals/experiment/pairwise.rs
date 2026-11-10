@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::deciders::Role;
 use super::pairs::{self, Pair};
 use super::store::Stored;
 use super::trial_results::files::{Files, Native, directory};
@@ -174,6 +175,11 @@ pub(crate) struct Reveal {
 pub(crate) struct People {
     pub reviews: Vec<Review>,
     pub agreement: Agreement,
+    /// Readers' latest blind merge calls compared per side, two readers at a
+    /// time, on pairs more than one has read.
+    pub people_agreement: Agreement,
+    /// The pairs the Bar gives each named reader.
+    pub queues: Vec<super::deciders::Queue>,
 }
 
 /// One sealed merge call with the preference the reader then gave, if any.
@@ -194,9 +200,9 @@ pub(crate) struct Review {
     pub rubric: BTreeMap<String, ArmPreference>,
 }
 
-/// People–panel agreement on merge calls: each reader's latest blind call per
-/// side on pairs the panel has read.
-#[derive(Default, Serialize)]
+/// Agreement on merge calls, per side: people–panel agreement compares each
+/// reader's latest blind call with the panel's on pairs the panel has read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Agreement {
     pub compared: usize,
     pub agreed: usize,
@@ -328,6 +334,21 @@ pub(super) fn people(files: &impl Files, root: &Path, pairs: &[Pair], seed: u64)
                 }
             }
         }
+        let latest: Vec<&Review> = blind
+            .values()
+            .map(|index| &people.reviews[*index])
+            .collect();
+        for (at, first) in latest.iter().enumerate() {
+            for second in &latest[at + 1..] {
+                for (one, other) in [
+                    (first.baseline_ready, second.baseline_ready),
+                    (first.candidate_ready, second.candidate_ready),
+                ] {
+                    people.people_agreement.compared += 1;
+                    people.people_agreement.agreed += usize::from(one == other);
+                }
+            }
+        }
         if let Some(panel) = &pair.panel {
             for index in blind.values() {
                 let review = &people.reviews[*index];
@@ -441,8 +462,20 @@ pub(super) fn lines(people: &People) -> String {
             text.push_str(" · after the reveal");
         }
     }
+    for queue in &people.queues {
+        text.push_str(&format!(
+            "\nQueue {} · {} pairs: {}",
+            queue.reader,
+            queue.pairs.len(),
+            queue.pairs.join(", ")
+        ));
+    }
     if !people.reviews.is_empty() {
-        text.push_str(&format!("\n{}", agreement(&people.agreement)));
+        text.push_str(&format!(
+            "\n{}\n{}",
+            agreement(&people.agreement),
+            people_agreement(&people.people_agreement)
+        ));
     }
     text
 }
@@ -453,6 +486,17 @@ pub(crate) fn agreement(agreement: &Agreement) -> String {
     } else {
         format!(
             "People–panel agreement: {}/{} merge calls",
+            agreement.agreed, agreement.compared
+        )
+    }
+}
+
+pub(crate) fn people_agreement(agreement: &Agreement) -> String {
+    if agreement.compared == 0 {
+        "People–people agreement: no pair read by two readers".into()
+    } else {
+        format!(
+            "People–people agreement: {}/{} merge calls",
             agreement.agreed, agreement.compared
         )
     }
@@ -538,6 +582,11 @@ fn append(
     call: impl FnOnce(&[Record]) -> Result<Call>,
 ) -> Result<Page> {
     let stored = Stored::load(&root()?, id, false)?;
+    let role = super::deciders::people_role(&stored.description.bar);
+    ensure!(
+        role != Role::Off,
+        "this Experiment's Bar has people off: no one grades its pairs"
+    );
     find(&stored, pair)?;
     let folder = stored.directory.join("reviews").join(pair);
     fs::create_dir_all(&folder)?;
@@ -565,6 +614,9 @@ fn append(
         }
     }
     drop(lock);
+    if role == Role::Counted {
+        Stored::refresh_completed(&root()?, id)?;
+    }
     build(&stored, pair, &reader)
 }
 

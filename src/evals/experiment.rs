@@ -3,6 +3,7 @@
 
 mod accounting;
 mod cost;
+pub(crate) mod deciders;
 mod difficulty;
 mod efficiency;
 mod evidence;
@@ -89,6 +90,9 @@ pub(crate) struct Bar {
     /// Absent when no Grader panel grades the pairs of Trials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<panel::Panel>,
+    /// Absent when anyone may read any pair, beside the Verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<deciders::People>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +131,7 @@ impl Default for Bar {
                 .into(),
             },
             panel: None,
+            people: None,
         }
     }
 }
@@ -320,6 +325,7 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    panel::check_stand_in(&description)?;
     let fresh = !root
         .join("experiments")
         .join(&description.id)
@@ -330,6 +336,7 @@ pub fn run(options: Options) -> Result<()> {
             // The release Baseline probe can build an Arm too. Check new
             // Experiments first; resumes keep the tasks already recorded.
             let tasks = tasks(&suites_root, &description.suites)?;
+            deciders::check(&description.bar, &tasks)?;
             if options.release
                 && !release::supports_trials(&repository, &root, &description.baseline.commit)?
             {

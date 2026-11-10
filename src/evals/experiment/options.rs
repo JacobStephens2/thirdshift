@@ -107,6 +107,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();
     let mut seats = Vec::new();
+    let mut readers = Vec::new();
     let mut candidate = None;
     let mut json = false;
     let mut release = false;
@@ -135,6 +136,8 @@ pub fn parse(args: &[String]) -> Result<Options> {
                     ensure!(suites.insert(value.clone()), "repeated suite {value}");
                 } else if arg == "--panel-seat" {
                     seats.push(super::panel::Seat::parse(value)?);
+                } else if arg == "--people-reader" {
+                    readers.push(value.clone());
                 } else {
                     ensure!(
                         flags.insert(arg.as_str(), value.as_str()).is_none(),
@@ -225,11 +228,8 @@ pub fn parse(args: &[String]) -> Result<Options> {
             *target = Some(ratio);
         }
     }
-    bar.panel = super::panel::Panel::parse(
-        seats,
-        flags.remove("--panel-vote"),
-        flags.remove("--panel-arm-family-rule"),
-    )?;
+    bar.panel = super::panel::Panel::parse(seats, &mut flags)?;
+    bar.people = super::deciders::People::parse(&mut flags, readers)?;
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
         bar.void_rules.retries <= 2,
