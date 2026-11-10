@@ -1,5 +1,6 @@
 """Fleet schedules share CLI/page data and isolate failures at owning APIs."""
 import http.server
+from html import unescape
 import json
 import os
 from pathlib import Path
@@ -112,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix="cronjobs-fleet-") as temp:
                      "Other", "empty", "No thirdshift cron jobs", "incompatible", "refused",
                      "unavailable", "link-only", "https://link.example.test"]:
             assert text in html, (text, html)
-        assert "&lt;script&gt;" in html and "<script>" not in html, html
+        assert 'thirdshift "<script>"' in unescape(html) and "<script>" not in html, html
         assert "Last fired" not in html, html
         calls.clear()
         for query in ["?fleet=true", "?machine=east", "?fleet=true&machine=east"]:
