@@ -300,7 +300,7 @@ fn a_missing_other_arm_keeps_the_base_test_and_names_the_error() {
 }
 
 #[test]
-fn unpreparable_base_test_is_an_error_not_a_failure() {
+fn an_unpreparable_snapshot_decides_nothing() {
     let fixture = super::process::fixture();
     pair_fixture(&fixture, CANDIDATE_TEST);
     let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();

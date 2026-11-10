@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use super::Task;
 use crate::evals::{format, repository};
-use crate::sandbox::code_grader::{self, Check, Ran};
+use crate::sandbox::code_grader::{self, Check, CheckRun};
 use crate::scope::Caps;
 use crate::trial::Reports;
 
@@ -88,14 +88,14 @@ pub(in super::super) struct GraderRun<'a> {
 
 /// Export `code`'s commit, lay `paths` from `tests`'s commit over it, and run
 /// `commands` offline in the code-Grader sandbox, all before the deadline.
-/// A snapshot that cannot be prepared is one failed, unconcluded check.
+/// A snapshot that cannot be prepared is one failed check that never exited.
 pub(in super::super) fn overlaid(
     code: Source<'_>,
     tests: Source<'_>,
     paths: &[String],
     commands: &[Vec<String>],
     run: GraderRun<'_>,
-) -> Result<Vec<Ran>> {
+) -> Result<Vec<CheckRun>> {
     let GraderRun {
         name,
         deadline,
@@ -116,7 +116,7 @@ pub(in super::super) fn overlaid(
         caps,
         true,
     )?;
-    for Ran { check, .. } in &mut ran {
+    for CheckRun { check, .. } in &mut ran {
         if let Some(command) = &check.command {
             check.reason = format!(
                 "{}: {}",
@@ -128,14 +128,14 @@ pub(in super::super) fn overlaid(
     Ok(ran)
 }
 
-fn unprepared(what: &str, error: &anyhow::Error) -> Ran {
-    Ran {
+fn unprepared(what: &str, error: &anyhow::Error) -> CheckRun {
+    CheckRun {
         check: Check {
             command: None,
             passed: false,
             reason: format!("could not prepare {what}: {error:#}"),
         },
-        concluded: false,
+        exited: false,
     }
 }
 

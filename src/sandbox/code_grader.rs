@@ -28,11 +28,12 @@ pub(crate) struct Check {
     pub reason: String,
 }
 
-/// A check and whether its command ran to an exit status. A check that timed
-/// out, or never started, failed without saying anything about the code.
-pub(crate) struct Ran {
+/// A check and whether its command reached an exit status. A check that did
+/// not (it timed out, never started or could not be collected) failed without
+/// saying anything about the code.
+pub(crate) struct CheckRun {
     pub check: Check,
-    pub concluded: bool,
+    pub exited: bool,
 }
 
 pub(crate) enum Timeout {
@@ -105,7 +106,7 @@ pub(crate) fn execute_runs(
     timeout: Timeout,
     caps: &Caps,
     guard_imports: bool,
-) -> Result<Vec<Ran>> {
+) -> Result<Vec<CheckRun>> {
     let packet = tempfile::Builder::new()
         .prefix("grader-")
         .permissions(fs::Permissions::from_mode(0o700))
@@ -129,13 +130,13 @@ pub(crate) fn execute_runs(
     let mut checks = Vec::new();
     for command in commands {
         if matches!(&timeout, Timeout::Deadline(deadline) if *deadline <= Instant::now()) {
-            checks.push(Ran {
+            checks.push(CheckRun {
                 check: Check {
                     command: Some(command.clone()),
                     passed: false,
                     reason: "code Grader timed out before starting the next check".into(),
                 },
-                concluded: false,
+                exited: false,
             });
             break;
         }
@@ -158,7 +159,7 @@ pub(crate) fn execute_runs(
             bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
         }
         child.check_started(&result)?;
-        let (passed, reason, concluded) = match result {
+        let (passed, reason, exited) = match result {
             Ok(result) => (
                 result.status.success(),
                 format!(
@@ -171,13 +172,13 @@ pub(crate) fn execute_runs(
             ),
             Err(error) => (false, format!("{error:#}"), false),
         };
-        checks.push(Ran {
+        checks.push(CheckRun {
             check: Check {
                 command: Some(command.clone()),
                 passed,
                 reason,
             },
-            concluded,
+            exited,
         });
     }
     Ok(checks)

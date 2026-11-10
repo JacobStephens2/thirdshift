@@ -14,7 +14,7 @@ use super::grading::process::{self, GraderRun, Source};
 use super::trial_results::files::{Files, Native, directory, metadata};
 use super::{Arm, Task, TrialResult, store, trial_results, trial_sessions};
 use crate::evals::format;
-use crate::sandbox::code_grader::{Check, Ran};
+use crate::sandbox::code_grader::{Check, CheckRun};
 use crate::{interrupt, progress};
 
 #[derive(Serialize, Deserialize)]
@@ -204,11 +204,11 @@ struct Evidence<'a> {
 /// What a run's checks say about the tests: `Some(false)` when one ran to a
 /// failing exit, `Some(true)` when all ran and passed, and `None` when the
 /// rest timed out or never started, which says nothing about the code.
-fn outcome(ran: &[Ran]) -> Option<bool> {
-    if ran.iter().any(|ran| ran.concluded && !ran.check.passed) {
+fn outcome(ran: &[CheckRun]) -> Option<bool> {
+    if ran.iter().any(|ran| ran.exited && !ran.check.passed) {
         Some(false)
     } else {
-        ran.iter().all(|ran| ran.concluded).then_some(true)
+        ran.iter().all(|ran| ran.exited).then_some(true)
     }
 }
 
