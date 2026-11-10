@@ -91,8 +91,8 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 9,
-        "format 9 adds base-tests and cross-tests for each pair of Trials"
+        experiment["format"], 10,
+        "format 10 adds each pair's diffs, the panel's calls and people's blind pairwise calls"
     );
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(

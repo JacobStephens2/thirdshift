@@ -667,9 +667,9 @@ by later Console API tickets appear when they are served.</p>
 <td><code>scores [&lt;selector&gt;]</code>, <code>bug-origins</code></td>
 </tr>
 <tr>
-<td>Experiments and Trial Session evidence</td>
-<td><code>/api/v1/experiments</code>, <code>/api/v1/experiments/&lt;id&gt;</code>, <code>/api/v1/experiments/&lt;id&gt;/sessions/&lt;session&gt;</code></td>
-<td><code>experiments [&lt;id&gt;] [--session &lt;session&gt;]</code></td>
+<td>Experiments, Trial Session evidence and blind pairs</td>
+<td><code>/api/v1/experiments</code>, <code>/api/v1/experiments/&lt;id&gt;</code>, <code>/api/v1/experiments/&lt;id&gt;/sessions/&lt;session&gt;</code>, <code>/api/v1/experiments/&lt;id&gt;/pairs/&lt;pair&gt;</code></td>
+<td><code>experiments [&lt;id&gt;] [--session &lt;session&gt; | --pair &lt;pair&gt;]</code></td>
 </tr>
 <tr>
 <td>Cron jobs, Resources, Console log, Theme export</td>
@@ -879,6 +879,18 @@ JSON bodies use <code>Content-Type: application/json</code>. GET calls take no b
 <td><code>read</code></td>
 <td>none</td>
 <td><code>recheck &lt;id&gt; --pending --json</code></td>
+</tr>
+<tr>
+<td>POST <code>/experiments/&lt;id&gt;/pairs/&lt;pair&gt;/merge</code></td>
+<td><code>act</code></td>
+<td>form <code>a</code> and <code>b</code>, each <code>ready</code> or <code>not-ready</code></td>
+<td><code>experiments &lt;id&gt; --pair &lt;pair&gt; --merge &lt;a&gt; &lt;b&gt; --json</code></td>
+</tr>
+<tr>
+<td>POST <code>/experiments/&lt;id&gt;/pairs/&lt;pair&gt;/preference</code></td>
+<td><code>act</code></td>
+<td>form <code>preference</code> (<code>a</code>, <code>b</code>, <code>tie</code> or <code>both-bad</code>), optional <code>rubric_&lt;criterion&gt;</code></td>
+<td><code>experiments &lt;id&gt; --pair &lt;pair&gt; --prefer &lt;preference&gt; [--rubric &lt;criterion&gt;=&lt;value&gt;]... --json</code></td>
 </tr>
 <tr>
 <td>POST <code>/experiments/&lt;id&gt;/rechecks</code></td>
@@ -1436,7 +1448,28 @@ snapshot could not be prepared, decides nothing either way. The Console&#39;s
 Experiment page lists it under Pair evidence. The text view adds a line for
 each disagreement, new test that passes on the base, run that did not finish
 and evidence that could not run. <code>thirdshift experiments &lt;id&gt; --json</code> keeps it
-under <code>pairs</code>.</p>
+under <code>pairs</code>, with each Arm&#39;s whole change since the base.</p>
+<p>Each pair with evidence can also be read blind, one person at a time. The
+Experiment page&#39;s <strong>People&#39;s calls</strong> section links each pair&#39;s page, which shows
+the Ticket, its acceptance checklist numbered from 1, the two changes side by
+side with code before tests, and each change&#39;s evidence. The sides, A and B, are
+drawn for each pair from the Bar&#39;s seed, and the page names no Arm, build,
+Harness or Model and shows no model call. First make a sealed merge call for
+each side, ready or not ready; then give a preference (A, B, tie or both bad)
+and, optionally, the rubric: which change better does what the Ticket asks
+(<code>correctness</code>), has proportionate tests that check the change (<code>tests</code>) and
+keeps to what was asked (<code>scope</code>). The preference and rubric are refused until
+both merge calls are sealed. Every call is a new record, attributed to you and
+never changed, so reading a pair again adds a second review. Once you have given
+a preference, the page shows which Arm made each side, the Grader panel&#39;s calls
+when it has read the pair, and every reader&#39;s calls. In the shell:</p>
+<pre><code class="language-sh">thirdshift experiments &lt;id&gt; --pair &lt;pair-id&gt;
+thirdshift experiments &lt;id&gt; --pair &lt;pair-id&gt; --merge ready not-ready
+thirdshift experiments &lt;id&gt; --pair &lt;pair-id&gt; --prefer a --rubric scope=tie
+</code></pre>
+<p>People&#39;s calls, in Arm terms, and their agreement with the panel&#39;s merge calls
+show beside the Verdict on the Experiment page, in the text view, and under
+<code>people</code> in <code>--json</code>. They change no Score and no Verdict.</p>
 <p>After each process Trial, thirdshift searches its Session traces for the
 real fix&#39;s merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits

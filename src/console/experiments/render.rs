@@ -294,6 +294,7 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     }
     html.push_str(&leaks(view, csrf, can_act));
     html.push_str(&verdict(view));
+    html.push_str(&people(view));
     if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
         html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
         for (label, counts) in [
@@ -323,6 +324,55 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
         html.push_str(&arms(view));
     }
     html.push_str(&bar(view));
+    html
+}
+
+/// People's blind pairwise calls beside the Verdict, with links to read each
+/// pair blind. They change no Score.
+fn people(view: &View) -> String {
+    use crate::evals::experiment::pairwise;
+    if view.pairs.is_empty() {
+        return String::new();
+    }
+    let id = esc(&view.description.id);
+    let mut html = String::from(
+        "<section aria-label=\"People's calls\"><h2>People's calls</h2><p>Blind pairwise calls, reported beside the Verdict. They change no Score. Read a pair blind:</p><ul>",
+    );
+    for pair in &view.pairs {
+        html.push_str(&format!(
+            "<li><a href=\"/experiments/{id}/pairs/{}\">{}/{} #{}</a></li>",
+            esc(&pair.key()),
+            esc(&pair.suite),
+            esc(&pair.task),
+            pair.trial + 1
+        ));
+    }
+    html.push_str("</ul>");
+    let people = &view.people;
+    if people.reviews.is_empty() {
+        html.push_str("<p>No calls yet.</p></section>");
+        return html;
+    }
+    html.push_str("<table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Reader</th><th scope=\"col\">Recorded</th><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th><th scope=\"col\">Preference</th></tr></thead><tbody>");
+    for review in &people.reviews {
+        html.push_str(&format!(
+            "<tr><td>{}/{} #{}</td><td>{}</td><td><time>{}</time></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(&review.suite),
+            esc(&review.task),
+            review.trial + 1,
+            esc(review.reader.who()),
+            esc(&review.recorded_at),
+            pairwise::ready(review.baseline_ready),
+            pairwise::ready(review.candidate_ready),
+            review
+                .preference
+                .map_or("—", pairwise::arm_preference)
+        ));
+    }
+    html.push_str(&format!(
+        "</tbody></table><p>{}</p></section>",
+        esc(&pairwise::agreement(&people.agreement))
+    ));
     html
 }
 

@@ -70,6 +70,39 @@ fn each_arms_new_tests_run_on_the_base_and_the_other_arms_commit() {
     assert_eq!(pair["task"], "fixture", "{pair}");
     assert_eq!(pair["trial"], 0, "{pair}");
 
+    // Each side keeps its whole change, code before tests, for the blind
+    // pairwise page: the Trial repositories are gone once the Experiment ends.
+    let paths = |side: &Value| -> Vec<(String, bool)> {
+        side["diff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["path"].as_str().unwrap().to_owned(),
+                    file["test"] == true,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        paths(&pair["baseline"]),
+        [
+            ("feature.txt".to_owned(), false),
+            ("test_new_baseline.py".to_owned(), true)
+        ]
+    );
+    assert_eq!(
+        paths(&pair["candidate"]),
+        [
+            ("extra.txt".to_owned(), false),
+            ("feature.txt".to_owned(), false),
+            ("test_new_candidate.py".to_owned(), true)
+        ]
+    );
+    let feature = pair["baseline"]["diff"][0]["patch"].as_str().unwrap();
+    assert!(feature.contains("+implemented"), "{feature}");
+
     let baseline = &pair["baseline"];
     assert_eq!(baseline["test_files"], json!(["test_new_baseline.py"]));
     assert_eq!(baseline["fails_on_base"], true, "{baseline}");

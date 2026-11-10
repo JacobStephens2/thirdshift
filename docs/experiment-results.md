@@ -1,4 +1,4 @@
-# Experiment results (format 9)
+# Experiment results (format 10)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 9` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 9.
+`format: 10` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 10.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -78,6 +78,20 @@ already decided stays when only the other Arm's commit is missing.
 look into, not a defect. Pairs are evidence,
 never Scores: they change no Score, Verdict or Void cause. Experiments
 without `new_tests`, and pairs not yet finished, have none.
+
+Format 10 adds each `PairSide`'s `diff`, the Grader panel's optional `panel`
+calls per `Pair`, and `people`. `diff` lists every file the Arm's final commit
+changes since the base, code files before tests (`test` is true for a file
+matching `new_tests.paths` or in a test location), each with its `git diff`
+text: the blind pairwise page reads this copy once the Trial repositories are
+gone. `panel`, when present, is the panel's merge call per Arm (a tied call is
+not ready) and its preference. `people` holds the Day shift's blind pairwise
+calls ([guide](guide.md#experiments)): one `PairReview` per sealed pair of
+merge calls, in Arm terms, with the preference and optional rubric the reader
+then gave (`preference` is null until given), in record order per pair.
+`agreement` compares each reader's latest merge calls with the panel's, per
+side, on pairs the panel has read; `compared` is zero when there are none.
+People's calls are reported beside the Verdict and change no Score.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -165,7 +179,8 @@ Private artifacts live under `~/.thirdshift/evals/experiments/<id>/`:
 experiment.json                  # fixed inputs, state, Verdict, recheck history
 results/<trial-id>.json           # one terminal TrialResult
 trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
-pairs/<pair-id>.json             # one pair's base-tests and cross-tests (evidence)
+pairs/<pair-id>.json             # one pair's diffs, base-tests and cross-tests (evidence)
+reviews/<pair-id>/<n>.json       # one append-only blind pairwise record
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
 ```
 
@@ -326,7 +341,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 9,
+    "format": 10,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -356,6 +371,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "pending_rechecks": ["Pending"],
     "leak_hits": ["LeakHit"],
     "pairs": ["Pair"],
+    "people": {"reviews": ["PairReview"], "agreement": {"compared": "integer", "agreed": "integer"}},
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -423,8 +439,17 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "label": "string", "passed": "boolean", "reason": "string",
     "wrong_finding": "boolean", "borderline": "boolean"
   },
-  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide"},
+  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide", "panel?": "PanelCalls"},
+  "PanelCalls": {"baseline_ready": "boolean", "candidate_ready": "boolean", "preference": "ArmPreference"},
+  "ArmPreference": "baseline|candidate|tie|both_bad",
+  "PairReview": {
+    "pair": "string", "suite": "string", "task": "string", "trial": "integer",
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "baseline_ready": "boolean", "candidate_ready": "boolean",
+    "preference": "ArmPreference?", "rubric": {"*": "ArmPreference"}
+  },
   "PairSide": {
+    "diff": [{"path": "string", "test": "boolean", "patch": "string"}],
     "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
     "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
   },
