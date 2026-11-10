@@ -387,8 +387,12 @@ impl OwnedRun {
     fn record(&mut self, status: Option<i32>) {
         if let Some(status) = status {
             self.status = Some(ExitStatus::from_raw(status));
-            // Lets the guardian reap the Run, as waiting on a Child would.
-            self.report = None;
+            // Lets the guardian reap the Run, as waiting on a Child would,
+            // and waits until it has.
+            let mut report = self.report.take().unwrap();
+            report.set_nonblocking(false).unwrap();
+            report.shutdown(std::net::Shutdown::Write).unwrap();
+            let _ = std::io::Read::read_to_end(&mut report, &mut Vec::new());
         }
     }
 }
@@ -424,7 +428,12 @@ fn start_guarded([lease, report, done]: [libc::c_int; 3]) -> std::io::Result<()>
 
 /// The guardian's loop. It allocates nothing and takes no locks: it is a
 /// fork of a multithreaded process that never execs.
-unsafe fn guard(run: libc::pid_t, lease: libc::c_int, report: libc::c_int, done: libc::c_int) -> ! {
+unsafe fn guard(
+    run: libc::pid_t,
+    lease: libc::c_int,
+    mut report: libc::c_int,
+    done: libc::c_int,
+) -> ! {
     unsafe {
         // Outside the harness's process group, a signal to that group or
         // terminal leaves the guardian to clean up after it.
@@ -464,10 +473,15 @@ unsafe fn guard(run: libc::pid_t, lease: libc::c_int, report: libc::c_int, done:
                     send(report, status);
                     reported = true;
                 }
-                if reported && released {
-                    libc::waitpid(run, std::ptr::null_mut(), libc::WNOHANG);
-                }
             });
+            if reported && released && report != -1 {
+                // Reaped before the harness hears EOF, so the Run's process
+                // id is free once its wait returns, as with a Child.
+                libc::waitpid(run, std::ptr::null_mut(), 0);
+                libc::close(report);
+                report = -1;
+                continue;
+            }
             if !owned {
                 libc::_exit(0);
             }
@@ -487,8 +501,8 @@ unsafe fn guard(run: libc::pid_t, lease: libc::c_int, report: libc::c_int, done:
                 if fds[0].revents != 0 {
                     break;
                 }
-                // The harness writes nothing; it closes its end once it has
-                // read the Run's status, or drops it.
+                // The harness writes nothing; it shuts down its end once it
+                // has read the Run's status, or drops it.
                 released |= fds[1].revents != 0;
             }
         }
