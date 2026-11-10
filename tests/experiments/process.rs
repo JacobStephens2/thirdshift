@@ -1,6 +1,6 @@
 use super::*;
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let fixture = Fixture::with_session("process", 1);
     let task = fixture
         .scenario

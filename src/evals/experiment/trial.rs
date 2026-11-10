@@ -48,7 +48,8 @@ impl<'a> Runner<'a> {
             [&description.baseline, &description.candidate],
             Duration::from_secs(description.bar.timeout_seconds),
             signal,
-        )?;
+        )?
+        .with_pricing(experiment.pricing.as_ref());
         Ok(Self {
             directory: &experiment.directory,
             bar: &description.bar,
@@ -173,9 +174,23 @@ impl Writer {
     fn record_attempt(
         &mut self,
         attempt: &Path,
-        output: Output,
-        score: grading::Score,
+        mut output: Output,
+        mut score: grading::Score,
     ) -> Result<()> {
+        // Earlier attempts belong to this same Trial, even across a plan pause.
+        if output.outcome != Outcome::Void
+            && let Some(gap) = self
+                .progress
+                .attempts
+                .iter()
+                .filter_map(|attempt| attempt.accounting.as_ref())
+                .find_map(|accounting| accounting.gap())
+        {
+            output.outcome = Outcome::Void;
+            output.void_cause = Some(VoidCause::AccountingGap);
+            output.cause = Some(gap.into());
+            score.passed = false;
+        }
         store::write(&attempt.join("result.json"), &output)?;
         self.progress.outcome = output.outcome;
         self.progress.score = Some(score);

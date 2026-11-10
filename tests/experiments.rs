@@ -25,6 +25,9 @@ mod code_graders;
 #[path = "experiments/cost.rs"]
 mod cost;
 
+#[path = "experiments/accounting.rs"]
+mod accounting;
+
 #[path = "experiments/difficulty.rs"]
 mod difficulty;
 #[path = "experiments/discriminating.rs"]
@@ -721,7 +724,10 @@ fn arm_usage_keeps_unreported_cost_and_model_unknown() {
     );
     assert!(usage["baseline"]["models"]["requested-only"].is_null());
     assert!(usage["baseline"]["cost_usd"].is_null());
-    assert_eq!(usage["candidate"]["models"], json!({}));
+    assert_eq!(
+        usage["candidate"]["models"]["claude-sonnet-5-5"]["input_tokens"],
+        10
+    );
     assert!(usage["candidate"]["cost_usd"].is_null());
 }
 
@@ -1041,6 +1047,38 @@ PY
             let fixed = scenario.path(&format!("versions/v1/{name}"));
             fs::create_dir_all(fixed.parent().unwrap()).unwrap();
             fs::copy(real, &fixed).unwrap();
+            if name == "claude" {
+                let delegate = fixed.parent().unwrap().join("delegate/claude");
+                fs::create_dir_all(delegate.parent().unwrap()).unwrap();
+                fs::rename(&fixed, &delegate).unwrap();
+                fs::write(&fixed, format!(r#"#!/usr/bin/python3
+import json, os, subprocess, sys
+if '--output-format' not in sys.argv:
+    os.execv({delegate:?}, [{delegate:?}, *sys.argv[1:]])
+child = subprocess.Popen([{delegate:?}, *sys.argv[1:]], stdout=subprocess.PIPE)
+measured = False
+ending = []
+for line in child.stdout:
+    measured |= b'"usage"' in line or b'"modelUsage"' in line
+    try:
+        result = json.loads(line).get('type') == 'result'
+    except (ValueError, AttributeError):
+        result = False
+    if result or ending:
+        ending.append(line)
+    else:
+        sys.stdout.buffer.write(line)
+        sys.stdout.buffer.flush()
+code = child.wait()
+if not measured:
+    print(json.dumps({{"type":"assistant","message":{{"id":"fixture-usage","model":"claude-sonnet-5-5","usage":{{"input_tokens":10,"output_tokens":2}},"content":[]}}}}), flush=True)
+for line in ending:
+    sys.stdout.buffer.write(line)
+sys.stdout.buffer.flush()
+sys.exit(code)
+"#)).unwrap();
+                fs::set_permissions(&fixed, fs::Permissions::from_mode(0o755)).unwrap();
+            }
             fs::remove_file(&harness).unwrap();
             std::os::unix::fs::symlink(fixed, &harness).unwrap();
         }
@@ -1127,6 +1165,12 @@ harness = "claude"
             ),
         )
         .unwrap();
+        fs::write(scenario.launch_dir().join(".fixture-prices.json"), json!({
+            "date":"2026-11-09", "source":"Experiment fixture",
+            "models": (["claude-sonnet-5-5", "fixture-model", "observed", "observed-a", "observed-b", "gemini-observed"]
+                .into_iter().map(|name| (name.to_owned(), json!({"input":2,"output":10,"cache_read":0.2,"cache_write":2.5})))
+                .collect::<serde_json::Map<_, _>>())
+        }).to_string()).unwrap();
         Self {
             scenario,
             baseline,
@@ -1136,6 +1180,9 @@ harness = "claude"
 
     fn experiment_args<'a>(extra: &[&'a str]) -> Vec<&'a str> {
         let mut args = vec!["experiment", "candidate", "--json"];
+        if !extra.contains(&"--prices") {
+            args.extend(["--prices", ".fixture-prices.json"]);
+        }
         // These tiny fixtures exercise deciding suites. Advisory tests invoke
         // the default minimum through the CLI explicitly.
         if !extra.contains(&"--min-discriminating-tasks") {
@@ -2078,6 +2125,7 @@ fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     let escaped = fixture.scenario.path("escaped-after-timeout");
     fixture.scenario.agent_does(&format!(
         r#"
+echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
 printf changed > changed-by-agent.txt
 (sleep 7; echo escaped > '{}') &
 while true; do sleep 0.05; done
@@ -2209,7 +2257,10 @@ fn an_unexplained_trial_process_kill_fails_without_a_retry() {
 #[test]
 fn an_agent_killing_its_own_harness_fails_without_a_retry() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does("kill -KILL \"$PPID\"");
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
+kill -KILL "$PPID"
+"#);
     let run = fixture.run(&[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();

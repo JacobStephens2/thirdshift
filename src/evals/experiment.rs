@@ -1,6 +1,7 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod accounting;
 mod cost;
 mod difficulty;
 mod evidence;
@@ -307,6 +308,16 @@ pub fn run(options: Options) -> Result<()> {
         );
     };
     drop(suite_locks);
+    if let Some(path) = &options.prices {
+        let prices = crate::trial::accounting::Prices::load(path)?;
+        ensure!(
+            !experiment.directory.join("started").exists()
+                || experiment.pricing.as_ref() == Some(&prices),
+            "price table cannot change after the first Trial"
+        );
+        experiment.pricing = Some(prices);
+        experiment.save()?;
+    }
     if let Some(name) = options.name {
         experiment.rename(Some(name))?;
     }

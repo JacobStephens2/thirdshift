@@ -17,6 +17,7 @@ pub(in crate::console) fn properties() -> Value {
         "baseline_process",
         "candidate_process",
         "name",
+        "prices",
     ] {
         properties.insert(key.into(), json!({"type":"string"}));
     }

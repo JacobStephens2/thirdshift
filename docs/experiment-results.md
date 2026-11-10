@@ -76,13 +76,43 @@ IDs are opaque: use the returned ID rather than constructing a filename.
 
 `results` holds terminal Trials. `unfinished_trials` holds checkpointed attempts
 awaiting continuation; a paused Experiment can have both. `minutes` sums each
-Arm's completed attempt durations, including voids and timeouts. `voids` counts
+Arm's completed attempt durations, including voids and timeouts. Time spent
+paused between invocations at a usage limit is outside those durations.
+`voids` counts
 completed Void attempts and groups them by cause, including unfinished Trials.
 `findings` contains human-readable resource diagnostics, currently repeated
 memory-cap kills. `usage` groups observed tokens and USD costs by Arm and Model;
 unreported Model identity uses the key `unknown`. Input tokens include cache
 reads and writes; cache counters are also reported separately. Partial totals
 follow the [guide's Session usage rules](guide.md#experiments).
+
+`pricing` is the frozen, dated token price table for this Experiment. New
+Experiments copy the bundled standard-rate snapshot; `experiment ... --prices
+<file.json>` supplies a replacement with `date`, `source` and `models` (exact
+observed Model names). Each rate has `input`, `output`, `cache_read` and
+`cache_write` in USD per million tokens. These are comparison prices, separate
+from the Harness-reported costs in `usage`. The bundled snapshot uses the
+shortest cache-write TTL; provide a table for your billing tier or other Models.
+After any Trial starts, prices cannot change. Resuming without `--prices` keeps
+the saved table; passing it again checks that the contents still match.
+
+`accounting` reports each Trial's cost and active attempt time, its sessions with
+their attempt indices, observed Models, and the role of the Step that started
+them. Resumes and fallback sessions belong to that same Step. Arm totals and
+`roles` include all spent attempts, including Voids. A missing session usage
+measurement (input or output), unknown observed Model, or missing frozen price
+leaves cost null and makes a Trial Void with an `accounting_gap` cause naming
+the gap. Existing external Void causes retain their cause and pause behavior;
+an accounting gap in an earlier attempt still voids a later completed Trial.
+
+`paired_median_ratios` pairs terminal, non-Void Trials by suite, task and Trial
+index, divides Candidate by Baseline within each pair, then takes the median.
+It includes failed quality outcomes when their accounting is complete. Zero
+Baseline denominators are omitted for that metric; no eligible ratios means
+null. Old Experiments without a price table keep their original outcomes and
+show unknown priced costs. Pre-run estimates use the suite and the exact Arm
+setup (build, Harness, Model, Effort and Process) from earlier non-Void Trials,
+including every attempt's time and any complete priced cost.
 
 ## Trial files and Scores
 
@@ -241,6 +271,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "bar": "Bar",
     "prepared": "Prepared?",
     "state": "prepared|running|completed|interrupted|paused",
+    "pricing": "Prices?",
+    "accounting": "Accounting",
     "baseline_ref": "string?",
     "candidate_ref": "string?",
     "title": "string?",
@@ -263,6 +295,16 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "outcomes": {"baseline": "OutcomeCounts", "candidate": "OutcomeCounts"},
     "findings": ["string"]
   },
+  "Prices": {"date":"string", "source":"string", "models":{"*":"Rate"}},
+  "Rate": {"input":"number", "output":"number", "cache_read":"number", "cache_write":"number"},
+  "Accounting": {
+    "baseline":"ArmAccounting", "candidate":"ArmAccounting", "trials":["TrialAccounting"],
+    "paired_median_ratios":{"cost":"number?", "time":"number?", "pairs":"integer"}
+  },
+  "TotalAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer"},
+  "ArmAccounting": {"sessions":"integer", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}},
+  "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
+  "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
   "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
   "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
@@ -278,7 +320,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "min_discriminating_tasks?": "integer",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
-  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap",
+  "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
     "outcome": "succeeded|delivered|stopped_to_ask|failed|void", "score": "Score?", "attempts": ["Attempt"]
@@ -289,7 +331,8 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "void_cause": "VoidCause?", "cause": "string?", "session_id": "string?",
     "log": "string?", "model_evidence": "string?",
     "reports": {"standards": "string?", "spec": "string?"},
-    "steps?": [{"name": "string", "outcome": "string", "started_at": "string", "ended_at": "string", "elapsed_ms": "integer"}]
+    "steps?": [{"name": "string", "outcome": "string", "started_at": "string", "ended_at": "string", "elapsed_ms": "integer"}],
+    "accounting?": {"sessions":["SessionAccounting"]}
   },
   "Score": {
     "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean",

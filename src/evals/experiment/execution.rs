@@ -29,6 +29,7 @@ pub(super) struct Execution<'a> {
     timeout: Duration,
     signal: &'a Path,
     toolchains: toolchains::Toolchains,
+    pricing: Option<&'a crate::trial::accounting::Prices>,
 }
 
 pub(super) struct Request<'a> {
@@ -65,7 +66,13 @@ impl<'a> Execution<'a> {
             timeout,
             signal,
             toolchains: toolchains::Toolchains::new(directory),
+            pricing: None,
         })
+    }
+
+    pub fn with_pricing(mut self, pricing: Option<&'a crate::trial::accounting::Prices>) -> Self {
+        self.pricing = pricing;
+        self
     }
 
     /// Invoke completion exactly once after classification and grading.
@@ -280,6 +287,23 @@ impl<'a> Execution<'a> {
             protocol.cause = Some("Trial repository changed during its session".into());
         }
         let score = trace.grade(|| {
+            if let Some(prices) = self.pricing {
+                let role = serde_json::to_value(&task.manifest.session)?;
+                let accounting = super::accounting::capture(
+                    &attempt,
+                    &protocol,
+                    role.as_str().unwrap(),
+                    prices,
+                )?;
+                if protocol.outcome != Outcome::Void
+                    && let Some(gap) = accounting.gap()
+                {
+                    protocol.outcome = Outcome::Void;
+                    protocol.void_cause = Some(VoidCause::AccountingGap);
+                    protocol.cause = Some(gap.into());
+                }
+                protocol.accounting = Some(accounting);
+            }
             match grading::score(task, &grading_repository, &protocol, self.timeout) {
                 Err(error) if error.is::<crate::sandbox::Unavailable>() => {
                     protocol.outcome = Outcome::Void;

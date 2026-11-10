@@ -20,6 +20,7 @@ pub struct Options {
     pub(super) release: bool,
     pub(super) yes: bool,
     pub(super) name: Option<String>,
+    pub(super) prices: Option<std::path::PathBuf>,
 }
 
 #[derive(Default)]
@@ -166,6 +167,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let baseline_setup = arm("baseline")?;
     let candidate_setup = arm("candidate")?;
     let baseline = flags.remove("--baseline").map(String::from);
+    let prices = flags.remove("--prices").map(std::path::PathBuf::from);
     let name = flags
         .remove("--name")
         .map(|name| super::names::parse(name)?.context("Experiment name must not be empty"))
@@ -244,5 +246,6 @@ pub fn parse(args: &[String]) -> Result<Options> {
         release,
         yes,
         name,
+        prices,
     })
 }
