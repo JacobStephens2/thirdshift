@@ -114,18 +114,8 @@ fn command_kind(command: &str) -> Option<CommandKind> {
     {
         return None;
     }
-    let arguments: Vec<_> = arguments
-        .iter()
-        .take_while(|word| {
-            let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
-            !matches!(
-                operator,
-                ">" | ">>" | "&>" | "&>>" | "<" | ">&" | "<&" | "#"
-            )
-        })
-        .cloned()
-        .collect();
-    if arguments.is_empty() || arguments.iter().any(|word| word.contains(['$', '`'])) {
+    let arguments = crate::launch_directories::literal_cli_arguments(arguments)?;
+    if arguments.is_empty() {
         return None;
     }
     Some(match args::parse(&arguments).ok()? {
