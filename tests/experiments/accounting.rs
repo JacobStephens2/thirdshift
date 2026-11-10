@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn a_hard_killed_process_session_keeps_its_elapsed_role_time() {
+    let fixture = process::fixture();
+    fixture.scenario.agent_does(
+        r#"
+python3 - <<'PY'
+import os
+from pathlib import Path
+import signal
+import time
+
+# Do measurable session work before killing the owning fixture Arm.
+began = time.monotonic()
+while time.monotonic() - began < 0.05:
+    sum(range(10000))
+pid = os.getppid()
+for _ in range(32):
+    if pid <= 1:
+        break
+    args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    if b'--trial' in args:
+        os.kill(pid, signal.SIGKILL)
+        break
+    status = Path(f'/proc/{pid}/status').read_text().splitlines()
+    pid = int(next(line.split()[1] for line in status if line.startswith('PPid:')))
+else:
+    raise AssertionError('Trial ancestor search exceeded its bound')
+if pid <= 1:
+    raise AssertionError('No fixture Trial ancestor found')
+PY
+"#,
+    );
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let trials = view["accounting"]["trials"].as_array().unwrap();
+    assert_eq!(trials.len(), 2, "{view}");
+    for trial in trials {
+        assert!(trial["time_ms"].as_u64().unwrap() > 0, "{trial}");
+        let sessions = trial["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1, "{trial}");
+        assert_eq!(sessions[0]["role"], "implement", "{trial}");
+        assert!(
+            sessions[0]["time_ms"].as_u64().unwrap() > 0,
+            "The active session was retained as zero time: {trial}"
+        );
+        assert!(trial["roles"]["implement"]["time_ms"].as_u64().unwrap() > 0);
+    }
+}
+
+#[test]
 fn architecture_describes_the_exact_arm_history_used_for_estimates() {
     let text = include_str!("../../site/architecture/index.html");
     assert!(

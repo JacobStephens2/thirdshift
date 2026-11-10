@@ -6,11 +6,11 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::trial_results::files::Native;
+use super::trial_results::files::{Native, metadata};
 use super::{TrialResult, trial_sessions};
 use crate::otlp_jsonl::{AnyValue, Reader, Spans};
 use crate::session::usage;
-use crate::trial::accounting::{Attempt, Prices, Session};
+use crate::trial::accounting::{Attempt, Prices, Session, SessionStart};
 use crate::trial::{Outcome, Output};
 
 pub(super) fn capture(
@@ -18,9 +18,12 @@ pub(super) fn capture(
     output: &Output,
     role: &str,
     prices: &Prices,
+    stopped_at: u64,
 ) -> Result<Attempt> {
     let mut accounting = Attempt::default();
     for session in trial_sessions::attempt(&Native, path)?.sessions {
+        let launched: Option<SessionStart> =
+            metadata(&Native, &SessionStart::path(&session.original))?;
         let bytes = session.spans.as_ref().map(std::fs::read).transpose()?;
         let summary = bytes
             .as_ref()
@@ -30,6 +33,7 @@ pub(super) fn capture(
         let mut started = 0;
         let mut time_ms = 0;
         let mut recorded_role = None;
+        let mut ended = false;
         if let Some(bytes) = &bytes {
             for request in Reader::<_, Spans>::new(Cursor::new(bytes)) {
                 for span in request?
@@ -40,6 +44,7 @@ pub(super) fn capture(
                     .filter(|span| span.name.starts_with("invoke_agent "))
                 {
                     started = span.start_time_unix_nano;
+                    ended = span.status.is_some();
                     recorded_role = span.attributes.iter().find_map(|attribute| {
                         match (&*attribute.key, &attribute.value) {
                             ("thirdshift.trial.role", Some(AnyValue::String(role))) => {
@@ -53,23 +58,30 @@ pub(super) fn capture(
                 }
             }
         }
-        let role = recorded_role.as_deref().unwrap_or_else(|| {
-            output
-                .steps
-                .iter()
-                .find(|step| {
-                    let nanos = |text: &str| {
-                        chrono::DateTime::parse_from_rfc3339(text)
-                            .ok()
-                            .and_then(|date| date.timestamp_nanos_opt())
-                            .and_then(|n| u64::try_from(n).ok())
-                    };
-                    nanos(&step.started_at)
-                        .zip(nanos(&step.ended_at))
-                        .is_some_and(|(begin, end)| begin <= started && started <= end)
-                })
-                .map_or(role, |step| step.name.as_str())
-        });
+        if !ended && let Some(launched) = &launched {
+            time_ms = (u128::from(stopped_at.saturating_sub(launched.at_unix_nano)) / 1_000_000)
+                .min(output.timings.total_ms);
+        }
+        let role = recorded_role
+            .as_deref()
+            .or_else(|| launched.as_ref().map(|start| start.role.as_str()))
+            .unwrap_or_else(|| {
+                output
+                    .steps
+                    .iter()
+                    .find(|step| {
+                        let nanos = |text: &str| {
+                            chrono::DateTime::parse_from_rfc3339(text)
+                                .ok()
+                                .and_then(|date| date.timestamp_nanos_opt())
+                                .and_then(|n| u64::try_from(n).ok())
+                        };
+                        nanos(&step.started_at)
+                            .zip(nanos(&step.ended_at))
+                            .is_some_and(|(begin, end)| begin <= started && started <= end)
+                    })
+                    .map_or(role, |step| step.name.as_str())
+            });
         let priced = prices.cost(&summary);
         let gap = priced.as_ref().err().map(|error| {
             format!(

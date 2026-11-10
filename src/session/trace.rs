@@ -140,16 +140,19 @@ impl Trace {
 
     pub(super) fn with_trial_role(mut self, role: Option<&str>) -> io::Result<Self> {
         if let Some(role) = role {
-            let role = attribute("thirdshift.trial.role", role);
-            set(&mut self.resource.attributes, role.clone());
-            set(&mut self.session.attributes, role);
-            // Publish ownership before starting the Harness. A SIGKILL may
-            // prevent both the first event and the Step's completion record.
-            let mut started = self.session.clone();
-            started.trace_id = Some(self.context.trace);
-            started.parent_span_id = Some(self.context.stage);
-            started.end_time_unix_nano = started.start_time_unix_nano;
-            self.write_span(started)?;
+            let attr = attribute("thirdshift.trial.role", role);
+            set(&mut self.resource.attributes, attr.clone());
+            set(&mut self.session.attributes, attr);
+            // Keep ownership before launch without publishing an ended span.
+            // A SIGKILL can prevent all events and the Step completion record.
+            let started = crate::trial::accounting::SessionStart {
+                role: role.into(),
+                at_unix_nano: self.session.start_time_unix_nano,
+            };
+            std::fs::write(
+                crate::trial::accounting::SessionStart::path(&self.spans_path),
+                serde_json::to_vec(&started)?,
+            )?;
         }
         Ok(self)
     }

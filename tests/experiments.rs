@@ -2286,35 +2286,23 @@ fn an_unexplained_trial_process_kill_fails_without_a_retry() {
 }
 
 #[test]
-fn an_agent_killing_its_own_harness_fails_without_a_retry() {
+fn a_harness_killed_before_reporting_usage_is_void_without_a_retry() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(r#"
-echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
-python3 - <<'PY'
-import os, time
-from pathlib import Path
-session = Path(os.environ['HOME']).parent
-deadline = time.monotonic() + 120
-while not any('input_tokens' in path.read_text() for path in session.glob('*.logs.jsonl')):
-    if time.monotonic() > deadline:
-        raise AssertionError('Session usage was not retained before the agent action')
-    time.sleep(0.01)
-PY
-kill -KILL "$PPID"
-"#);
+    fixture.scenario.agent_does("kill -KILL \"$PPID\"");
     let run = fixture.run(&[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(
-            result["outcome"], "failed",
-            "agent action must count against its Arm: {result}"
+            result["outcome"], "void",
+            "missing Session usage must void the Trial: {result}"
         );
+        assert_eq!(result["attempts"][0]["void_cause"], "accounting_gap");
         assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
     }
     assert_eq!(
         experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
-        0
+        1
     );
 }
 

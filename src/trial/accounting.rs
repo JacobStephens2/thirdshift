@@ -7,6 +7,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::session::usage::{Measurement, Summary};
 
+/// Durable ownership and clock observation, separate from ended trace spans.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SessionStart {
+    pub role: String,
+    pub at_unix_nano: u64,
+}
+
+impl SessionStart {
+    pub fn path(log: &Path) -> std::path::PathBuf {
+        crate::logs::session::original(log).with_extension("trial-start.json")
+    }
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Prices {

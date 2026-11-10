@@ -198,6 +198,10 @@ impl<'a> Execution<'a> {
             Instant::now() + self.timeout,
             &|| monitor.borrow_mut().check(self.signal),
         );
+        let stopped_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+            .try_into()?;
         drop(caches);
         interrupt::check()?;
         // A kernel kill in the Trial's scope is the outer launcher's evidence
@@ -294,6 +298,7 @@ impl<'a> Execution<'a> {
                     &protocol,
                     role.as_str().unwrap(),
                     prices,
+                    stopped_at,
                 )?;
                 if protocol.outcome != Outcome::Void
                     && let Some(gap) = accounting.gap()
