@@ -18,6 +18,10 @@ struct Observation {
     minutes: Minutes,
     voids: Voids,
     usage: usage::Arms,
+    pairs: Vec<super::pairs::Pair>,
+    panel: Vec<super::panel::PanelPair>,
+    panel_spend: Option<super::panel::Spend>,
+    people: super::pairwise::People,
 }
 
 pub(super) fn read(stored: &Stored) -> Result<View> {
@@ -89,6 +93,23 @@ impl Observation {
                 observation.voids.include(result);
             }
         }
+        observation.pairs = super::pairs::read(files, &stored.directory)?;
+        observation.panel =
+            super::panel::read(files, &stored.directory, &stored.description, &stored.tasks)?;
+        super::panel::attach(&mut observation.pairs, &observation.panel);
+        observation.panel_spend = super::panel::spend(
+            files,
+            &stored.directory,
+            &stored.description,
+            stored.pricing.as_ref(),
+        )?;
+        observation.people = super::pairwise::people(
+            files,
+            &stored.directory,
+            &observation.pairs,
+            stored.description.bar.seed,
+        )?;
+        observation.people.queues = super::deciders::queues(&stored.description.bar, &stored.tasks);
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions
@@ -100,7 +121,7 @@ impl Observation {
     // and the Experiment metadata already loaded by Stored.
     fn project(self, stored: &Stored) -> View {
         View {
-            format: 8,
+            format: 10,
             name: stored.name(),
             name_set: stored.name.is_some(),
             description: stored.description.clone(),
@@ -140,6 +161,10 @@ impl Observation {
             usage: self.usage,
             findings: self.voids.findings(),
             voids: self.voids,
+            pairs: self.pairs,
+            panel: self.panel,
+            panel_spend: self.panel_spend,
+            people: self.people,
         }
     }
 }

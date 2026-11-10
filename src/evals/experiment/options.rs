@@ -103,9 +103,23 @@ pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> O
     Some(crate::args::shell_command(updated))
 }
 
+/// `value` of `flag` as a positive finite number, such as a ratio or amount.
+pub(super) fn positive(flag: &str, value: &str, what: &str) -> Result<f64> {
+    let number: f64 = value
+        .parse()
+        .with_context(|| format!("invalid {flag}: {value}"))?;
+    ensure!(
+        number.is_finite() && number > 0.0,
+        "{flag} must be a positive finite {what}"
+    );
+    Ok(number)
+}
+
 pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();
+    let mut seats = Vec::new();
+    let mut readers = Vec::new();
     let mut candidate = None;
     let mut json = false;
     let mut release = false;
@@ -132,6 +146,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
                 if arg == "--suite" {
                     crate::evals::format::name(value)?;
                     ensure!(suites.insert(value.clone()), "repeated suite {value}");
+                } else if arg == "--panel-seat" {
+                    seats.push(super::panel::Seat::parse(value)?);
+                } else if arg == "--people-reader" {
+                    readers.push(value.clone());
                 } else {
                     ensure!(
                         flags.insert(arg.as_str(), value.as_str()).is_none(),
@@ -212,16 +230,11 @@ pub fn parse(args: &[String]) -> Result<Options> {
         ("--time-ceiling", &mut bar.time_ceiling),
     ] {
         if let Some(value) = flags.remove(flag) {
-            let ratio: f64 = value
-                .parse()
-                .with_context(|| format!("invalid {flag}: {value}"))?;
-            ensure!(
-                ratio.is_finite() && ratio > 0.0,
-                "{flag} must be a positive finite Candidate/Baseline ratio"
-            );
-            *target = Some(ratio);
+            *target = Some(positive(flag, value, "Candidate/Baseline ratio")?);
         }
     }
+    bar.panel = super::panel::Panel::parse(seats, &mut flags)?;
+    bar.people = super::deciders::PeopleSetting::parse(&mut flags, readers)?;
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
         bar.void_rules.retries <= 2,

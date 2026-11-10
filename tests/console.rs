@@ -80,6 +80,9 @@ mod cronjobs;
 #[path = "console/experiments.rs"]
 mod experiments;
 
+#[path = "console/pairwise.rs"]
+mod pairwise;
+
 #[path = "console/scoring.rs"]
 mod scoring;
 

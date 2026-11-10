@@ -118,6 +118,27 @@ effort = "high"
   repository after the standard library, so a committed module cannot replace
   one. Process tasks use this table instead of `checks`; review tasks cannot
   use it.
+
+  The optional `[process_grading.new_tests]` table adds base-tests and
+  cross-tests for each pair of Trials, as evidence beside the Scores:
+
+  ```toml
+  [process_grading.new_tests]
+  paths = ["tests/*.rs"]
+  command = ["cargo", "test", "--offline", "--test", "{stem}"]
+  ```
+
+  `paths` is nonempty; each pattern is confined and relative to the
+  repository, and `*` matches within one path component. An Arm's new test
+  files are those its final commit adds or changes since `base` that match a
+  pattern. `command` is a nonempty argument vector run once per new test file,
+  with `{path}` replaced by the file's repository path and `{stem}` by its
+  name without the last extension. After both Trials of a pair finish, each
+  Arm's new test files are overlaid on `base`, then on the other Arm's final
+  commit, the same way as the reference tests above, and run offline in bwrap.
+  Each run shares the Bar's timeout with preparing its snapshot. Results go to
+  the Experiment's `pairs` ([Experiment results](experiment-results.md)); they
+  never change a Score.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the
@@ -177,6 +198,22 @@ effort = "high"
   Experiment's other files. An unavailable Grader pauses grading without
   publishing Scores; resuming reuses completed Trials. Code Graders run offline
   in bwrap, with only their report packet and the prepared repository.
+
+  When the Bar names a Grader panel, each seat reads each pair of process
+  Trials in its own `packet.json`, once per presentation order. It contains
+  `order` (1 or 2), `ticket` (the input copied to `.thirdshift-issue.md`, or
+  null), `criteria`, the `rubric` (each criterion's `name` and `question`) and
+  two `sides`, labelled `A` and `B` at random and swapped in the second order.
+  Each side has its `outcome`, its `diff` against `base` (null when it cannot
+  be read within the Bar's timeout, as when the Trial's repository is no longer
+  retained; added lines a report would lose as identifying are removed) and its Pair `evidence` without error text
+  (null without `new_tests`). The Grader writes `calls.json` with exactly
+  `sides`, `reason` and `preference`: each side has `label`, a `rubric` rating
+  per criterion (`criterion`, boolean `met`, nonempty `evidence`), a nonempty
+  `merge_reason` and boolean `ready_to_merge`, and `preference` is `A`, `B`,
+  `tie` or `both_bad`. `THIRDSHIFT_GRADER_PACKET` and `THIRDSHIFT_GRADER_CALLS`
+  name those two files. An invalid response pauses grading; each validated call
+  is saved, so resuming asks only for the calls still missing.
 - `inputs` maps destination paths in the prepared repository to files relative
   to the Eval task's folder. Use, for example, a Spec's body **as first
   published**, not its revised answer. The table is required but may be empty.

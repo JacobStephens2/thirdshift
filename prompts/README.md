@@ -23,6 +23,7 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 | Scoring Grader | A Scoring run asks an independent Model to score one blind packet on Correct, Scoped, Tested, Honest and Standards. | [scoring-grader.md](scoring-grader.md) |
 | Bug-origin proposal | In a Scoring run, inspects a closed bug's fix and history in the Eval sandbox, proposing a commit only when history establishes one. | [bug-origin.md](bug-origin.md) |
 | Grader | In an Experiment, starts a fresh model Grader for one Eval task's blind packet after code checks finish. | [grader.md](grader.md) |
+| Panel Grader | In an Experiment whose Bar names a Grader panel, starts a fresh session for each seat on each pair of process Trials, once in each presentation order. | [panel-grader.md](panel-grader.md) |
 | Fresh | Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch. | [fresh.md](fresh.md) |
 | Continuation, with no pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
 | Continuation, with an open pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |

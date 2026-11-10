@@ -303,6 +303,7 @@ fn unsuccessful(value: &Value) -> bool {
                     | "inconclusive"
                     | "waiting_on_rechecks"
                     | "waiting_on_leaks"
+                    | "waiting_on_people"
             )
     })
 }
@@ -558,6 +559,7 @@ mod tests {
             "inconclusive",
             "waiting_on_rechecks",
             "waiting_on_leaks",
+            "waiting_on_people",
         ] {
             let html = render_peek(json!({
                 "state": "ended", "outcome": outcome, "cause": "Command could not finish"

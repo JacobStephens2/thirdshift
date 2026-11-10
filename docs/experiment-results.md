@@ -1,4 +1,4 @@
-# Experiment results (format 8)
+# Experiment results (format 10)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 8` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 8.
+`format: 10` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 10.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -59,6 +59,124 @@ Format 8 adds optional `Setup.process_digest`, the content digest of a Custom
 process and its referenced home skills. It identifies the Arm for Experiment
 reuse and cost-estimate history. Built-in processes are identified by the build
 and omit this field. Older saved setups also omit it.
+
+Format 9 adds `pairs`: base-tests and cross-tests for process tasks whose
+`process_grading.new_tests` names how to find and run an Arm's own new tests
+([Eval task format](eval-tasks.md)). Baseline Trial *k* is paired with
+Candidate Trial *k*. Each `PairSide` lists the Arm's `test_files`, the files its
+final commit adds or changes since the base that match `new_tests.paths`. `base`
+holds their checks on the unchanged base and `cross` their checks on the other
+Arm's final commit, each with the code Grader's check shape. Only checks
+whose command ran to an exit status decide the results. `fails_on_base` is
+true when a base check failed that way and false when all passed;
+`passes_on_other` is true when every cross check passed and false when one
+failed. Each is null when the Arm has no new tests, when its run did not
+finish (a timeout or a snapshot that could not be prepared, named in its
+checks), or when `error` says why that run could not start. A base result
+already decided stays when only the other Arm's commit is missing.
+`disagreement` is true exactly when `passes_on_other` is false: something to
+look into, not a defect. Pairs are evidence,
+never Scores: they change no Score, Verdict or Void cause. Experiments
+without `new_tests`, and pairs not yet finished, have none.
+
+Format 10 adds the Grader panel: the Bar's optional `panel` and the
+Experiment's `panel` reports. `bar.panel` lists the `seats` (Harness, Model and
+optional Effort), the `vote` unit (`family`, the default, or `model`) and
+`arm_family_rule` (on by default). Each seat reads every pair of process
+Trials in a blind packet, once in each presentation order, with the sides
+swapped in the second. Each `PanelPair` lists every seat as a `PanelGrader`:
+its `family` (its provider: the Harness's own, or the provider an OpenCode
+Model names), whether it `votes`, and its two `orders`. Each `PanelCall` names
+the Arm `shown_as_a`, gives each Arm's per-criterion `rubric`, merge
+reason and `ready_to_merge` call, then the comparison's `reason` and
+`preference`. A Grader's `preference` and `merge` calls stand only when both
+orders agree; a call that flips with the order is `tie`. With
+`arm_family_rule`, a seat from either Arm's family does not vote while a seat
+from another family sits on the panel. `votes` lists the units that counted:
+one per family, each taking its own majority first, or one per Model (seats
+naming the same Model at different Efforts or on different Harnesses take
+their own majority first, as a family does). A call
+needs more than half of the votes, otherwise it is `tie`; the panel's tied
+merge call is `not_ready`. Pairs appear once every seat has called both
+orders. The panel is reported beside the Verdict and changes no Score,
+Verdict or Void cause, unless the Bar counts it. Experiments without a panel
+have none.
+`bar.panel.spending_limit`, when set, is the USD each run of the Experiment
+may spend on panel sessions before grading pauses; a resume gets it afresh
+and keeps every saved call. `panel_spend` prices every retained panel session,
+retries included, from the Experiment's frozen `pricing`, in total and per
+seat; `cost_usd` is null while any of those sessions can't be priced. It is
+null without a panel. Panel spend is never in `accounting`, an Arm's cost or
+the Bar's `cost_ceiling`.
+
+Format 10 also adds each `PairSide`'s `diff`, the Grader panel's optional
+`panel` calls per `Pair`, and `people`. `diff` lists every file the Arm's
+final commit changes since the base, code files before tests (`test` is true for a file
+matching `new_tests.paths` or in a test location), each with its `git diff`
+text: the blind pairwise page reads this copy once the Trial repositories are
+gone. `panel`, when present, is the panel's merge call per Arm (a tied call is
+not ready) and its preference. `people` holds the Day shift's blind pairwise
+calls ([guide](guide.md#experiments)): one `PairReview` per sealed pair of
+merge calls, in Arm terms, with the preference and optional rubric the reader
+then gave (`preference` is null until given), in record order per pair.
+A reader's merge calls are sealed until their preference; a review begun after
+that reader's own preference, once the Arms were revealed, has `blind` false.
+`agreement` compares each reader's latest blind merge calls with the panel's,
+per side, on pairs the panel has read; `compared` is zero when there are none.
+
+`thirdshift experiments <id> --pair <pair-id> --json`, and its `--merge` and
+`--prefer` forms, emit `PairPage`: what the calling reader may see of one pair.
+`a` and `b` are the two `PairSide`s on the sides drawn for the pair from the
+Bar's seed, with no Arm named: their diffs leave out added lines that would
+identify the Arm, as the panel's packets do, and `error` gives no detail.
+`ticket` is null when the Eval task's Ticket
+input can't be read; `checklist` holds the items under its "Acceptance
+criteria" heading. `next` is the reader's next call. `mine` lists the reader's
+records and `revealed` stays null until the reader has given a preference;
+it then names the Arm on each side with its `Setup`, the panel's calls, and
+every reader's records. Each record is kept as
+`reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
+ever added, numbered from `000000`, beside a `lock` file.
+People's calls are reported beside the Verdict and change no Score, unless
+the Bar counts them.
+
+Format 10 also adds who decides a Verdict ([ADR 0028](adr/0028-who-decides-a-verdict-is-fixed-in-the-bar.md)).
+`bar.panel.role` is `beside` (the default) or `counted`; `families` (2 by
+default) is how many families the voting panel must span to stand in for
+people, and `agreement` (0.8 by default) the least people–panel agreement, as
+a share of merge calls on the people's sample, at which it may. `bar.people`,
+absent when anyone may read any pair beside the Verdict, sets the people's
+`role` (`off`, `beside` or `counted`), the `readers`, the `sample` of pairs per
+reader (null when every reader reads every pair) and the `overlap` every
+reader's sample shares. The sample is drawn from the judged pairs of process
+Trials by the Bar's seed: the first `overlap` pairs drawn go to every reader,
+then each reader takes the next pairs alone. `people.queues` lists each
+reader's pairs. Readers need every judged process Eval task to name
+`process_grading.new_tests`, since people read pairs on their pair page. With
+the people `off`, merge calls are refused.
+
+When either is counted, a Trial of a judged process Eval task passes only if
+its Score passes and whoever decides its pair calls it ready, and the Verdict
+gains `deciders`. The people's call on a pair is each reader's latest blind
+merge call; on a pair several readers share, an Arm is ready only if every
+reader calls it ready. With only the panel counted, the panel decides every
+pair. With only people counted on a sample, the Verdict rests on the sampled
+pairs alone, each pair a unit of the statistics (a suite of process Eval
+tasks then has one Trial per Eval task in its `bar`; other suites keep theirs),
+and `left_out_pairs` counts the rest. With people counted
+on every pair, they decide every pair. With both counted, people decide the
+pairs they read and the panel stands in on the others; the Bar is refused
+before the first Trial when the voting panel spans fewer than `families`
+families, and the Verdict is `inconclusive` when `sample_agreement`, people–panel
+agreement on the sample counted per reader and side over the readers given each
+pair once all have called it, is below the Bar's level,
+with `inconclusive` saying why. `people_pairs`, `panel_pairs` and
+`waiting_pairs` count the judged pairs, outside Void-dropped tasks, each
+decided. The Verdict is `waiting_on_people` while a reader has not called a
+pair given to them; its `provisional_verdict` counts such pairs on their
+Scores alone. A reader's call recalculates a completed Experiment's Verdict.
+`people.people_agreement` compares readers' latest blind merge calls per side,
+two readers at a time, on pairs more than one has read.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -146,6 +264,8 @@ Private artifacts live under `~/.thirdshift/evals/experiments/<id>/`:
 experiment.json                  # fixed inputs, state, Verdict, recheck history
 results/<trial-id>.json           # one terminal TrialResult
 trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
+pairs/<pair-id>.json             # one pair's diffs, base-tests and cross-tests (evidence)
+reviews/<pair-id>/<n>.json       # one append-only blind pairwise record
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
 ```
 
@@ -306,7 +426,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 8,
+    "format": 10,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -335,6 +455,13 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "verdict": "Verdict?",
     "pending_rechecks": ["Pending"],
     "leak_hits": ["LeakHit"],
+    "pairs": ["Pair"],
+    "panel": ["PanelPair"],
+    "panel_spend": "PanelSpend?",
+    "people": {
+      "reviews": ["PairReview"], "agreement": "Agreement", "people_agreement": "Agreement",
+      "queues": [{"reader": "string", "pairs": ["string"]}]
+    },
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -370,8 +497,22 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "discriminating_tasks?": {"*": ["string"]},
     "min_discriminating_tasks?": "integer",
     "cost_ceiling?": "number", "time_ceiling?": "number",
-    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
+    "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]},
+    "panel?": "Panel", "people?": "People"
   },
+  "Panel": {
+    "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
+    "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number",
+    "role": "beside|counted", "families": "integer", "agreement": "number"
+  },
+  "PanelSpend": {"sessions": "integer", "cost_usd": "number?", "seats": ["PanelSeatSpend"]},
+  "PanelSeatSpend": {
+    "harness": "string", "model": "string", "effort": "string?", "sessions": "integer", "cost_usd": "number?"
+  },
+  "People": {
+    "role": "off|beside|counted", "readers": ["string"], "sample": "integer?", "overlap": "integer"
+  },
+  "Agreement": {"compared": "integer", "agreed": "integer"},
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
     "suite": "string", "task": "string", "arm": "baseline|candidate", "trial": "integer",
@@ -402,6 +543,55 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "label": "string", "passed": "boolean", "reason": "string",
     "wrong_finding": "boolean", "borderline": "boolean"
   },
+  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide", "panel?": "PanelCalls"},
+  "PanelCalls": {"baseline_ready": "boolean", "candidate_ready": "boolean", "preference": "ArmPreference"},
+  "ArmPreference": "baseline|candidate|tie|both_bad",
+  "PairReview": {
+    "pair": "string", "suite": "string", "task": "string", "trial": "integer",
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "blind": "boolean", "baseline_ready": "boolean", "candidate_ready": "boolean",
+    "preference": "ArmPreference?", "rubric": {"*": "ArmPreference"}
+  },
+  "PairPage": {
+    "experiment": "string", "pair": "string", "suite": "string", "task": "string", "number": "integer",
+    "ticket": "string?", "checklist": ["string"], "a": "PairSide", "b": "PairSide",
+    "rubric": [{"name": "string", "question": "string"}], "reader": "string",
+    "next": "merge|preference", "mine": ["PairRecord"], "revealed": "PairReveal?"
+  },
+  "PairReveal": {
+    "a": "baseline|candidate", "b": "baseline|candidate", "a_setup": "Setup", "b_setup": "Setup",
+    "panel": "PanelCalls?", "records": ["PairRecord"]
+  },
+  "PairRecord": {
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "call": "merge|preference",
+    "a_ready?": "boolean", "b_ready?": "boolean",
+    "preference?": "Preference", "rubric?": {"*": "Preference"}
+  },
+  "Preference": "a|b|tie|both_bad",
+  "PairSide": {
+    "diff": [{"path": "string", "test": "boolean", "patch": "string"}],
+    "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
+    "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
+  },
+  "PanelPair": {
+    "suite": "string", "task": "string", "trial": "integer", "graders": ["PanelGrader"],
+    "votes": [{"name": "string", "preference": "ArmPreference", "merge": "MergeCalls"}],
+    "preference": "ArmPreference", "merge": {"baseline": "ready|not_ready", "candidate": "ready|not_ready"}
+  },
+  "PanelGrader": {
+    "harness": "string", "model": "string", "effort": "string?", "family": "string",
+    "votes": "boolean", "orders": ["PanelCall"], "preference": "ArmPreference", "merge": "MergeCalls"
+  },
+  "PanelCall": {
+    "shown_as_a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
+    "reason": "string", "preference": "ArmPreference"
+  },
+  "PanelSide": {
+    "rubric": [{"criterion": "string", "met": "boolean", "evidence": "string"}],
+    "merge_reason": "string", "ready_to_merge": "boolean"
+  },
+  "MergeCalls": {"baseline": "ready|not_ready|tie", "candidate": "ready|not_ready|tie"},
   "Command": ["string"],
   "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},
   "Recheck": {"passed": "boolean", "reason": "string", "wrong_finding": "boolean?", "recorded_at": "string"},
@@ -412,9 +602,14 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "decisive_verdicts": {"passed?": "Decision", "wrong_finding?": "Decision"}
   },
   "Verdict": {
-    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks",
+    "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks|waiting_on_people",
     "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer",
-    "efficiency?": "Efficiency", "line?": "string"
+    "efficiency?": "Efficiency", "line?": "string", "deciders?": "Deciders"
+  },
+  "Deciders": {
+    "panel": "off|beside|counted", "people": "off|beside|counted",
+    "people_pairs": "integer", "panel_pairs": "integer", "waiting_pairs": "integer", "left_out_pairs": "integer",
+    "sample_agreement?": "Agreement", "inconclusive?": "string"
   },
   "Efficiency": {
     "quality_verdict": "Decision", "method": "string", "cost": "Comparison", "time": "Comparison"

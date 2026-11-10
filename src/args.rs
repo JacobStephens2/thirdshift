@@ -79,7 +79,7 @@ pub enum Command {
     },
     BugOrigins(crate::scoring::origins::Options),
     Evals(crate::evals::Action),
-    Experiment(crate::evals::experiment::Options),
+    Experiment(Box<crate::evals::experiment::Options>),
     Experiments(Vec<String>),
     Recheck(Vec<String>),
     CronJobs {
@@ -482,7 +482,8 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
         }
         Some("experiment") => {
-            return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
+            return crate::evals::experiment::parse(&args[1..])
+                .map(|options| Command::Experiment(Box::new(options)));
         }
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),

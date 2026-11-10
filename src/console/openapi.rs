@@ -127,7 +127,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
         View::RecordDifficulty => array(record),
-        View::RenameExperiment | View::PendingRechecks | View::Recheck | View::DecideLeak => record,
+        View::RenameExperiment
+        | View::PendingRechecks
+        | View::Recheck
+        | View::DecideLeak
+        | View::ExperimentPair
+        | View::MergeCalls
+        | View::PairPreference => record,
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
@@ -331,6 +337,24 @@ fn action_body(view: View) -> Value {
                 "type":"object", "properties":{"decision":{"enum":["confirm","dismiss"]},"reason":text},"required":["decision","reason"]
             }}}});
         }
+        View::MergeCalls => {
+            let call = json!({"enum": ["ready", "not-ready"]});
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"a":call,"b":call},"required":["a","b"]
+            }}}});
+        }
+        View::PairPreference => {
+            use crate::evals::experiment::pairwise::Preference;
+            let values: Vec<_> = Preference::ALL.iter().map(|(_, value, _)| *value).collect();
+            let preference = json!({"enum": values});
+            let mut properties = json!({"preference": preference});
+            for (name, _) in crate::evals::experiment::pairwise::RUBRIC {
+                properties[format!("rubric_{name}")] = preference.clone();
+            }
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":properties,"required":["preference"]
+            }}}});
+        }
         View::StartRun => {
             return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
         }
@@ -386,6 +410,7 @@ fn action_body(view: View) -> Value {
         | View::Experiments
         | View::Experiment
         | View::ExperimentSession
+        | View::ExperimentPair
         | View::CronJobs
         | View::LaunchDirectories
         | View::StartOptions
@@ -507,7 +532,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 8}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 10}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))

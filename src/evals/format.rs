@@ -68,6 +68,56 @@ pub(super) struct ProcessGrading {
     pub test_fakes: Vec<String>,
     pub fail_to_pass: Vec<Vec<String>>,
     pub pass_to_pass: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_tests: Option<NewTests>,
+}
+
+/// How to find and run an Arm's own new tests for pair evidence.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NewTests {
+    /// Repository-relative patterns; `*` matches within one path component.
+    pub paths: Vec<String>,
+    /// Run once per new test file, with `{path}` and `{stem}` replaced.
+    pub command: Vec<String>,
+}
+
+impl NewTests {
+    /// Whether `path` names one of an Arm's test files.
+    pub fn matches(&self, path: &str) -> bool {
+        self.paths.iter().any(|pattern| {
+            let mut parts = path.split('/');
+            pattern.split('/').all(|expected| {
+                parts
+                    .next()
+                    .is_some_and(|part| component_matches(expected, part))
+            }) && parts.next().is_none()
+        })
+    }
+
+    /// The argument vector that runs one new test file.
+    pub fn command_for(&self, path: &str) -> Vec<String> {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        self.command
+            .iter()
+            .map(|argument| argument.replace("{path}", path).replace("{stem}", stem))
+            .collect()
+    }
+}
+
+fn component_matches(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((prefix, rest)) => {
+            let Some(text) = text.strip_prefix(prefix) else {
+                return false;
+            };
+            (0..=text.len())
+                .filter(|index| text.is_char_boundary(*index))
+                .any(|index| component_matches(rest, &text[index..]))
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -144,6 +194,22 @@ impl Task {
                         "process_grading selectors must be nonempty argument vectors"
                     );
                 }
+            }
+            if let Some(new_tests) = &grading.new_tests {
+                anyhow::ensure!(
+                    !new_tests.paths.is_empty(),
+                    "process_grading.new_tests requires paths"
+                );
+                for pattern in &new_tests.paths {
+                    relative_path(pattern)?;
+                }
+                anyhow::ensure!(
+                    new_tests
+                        .command
+                        .first()
+                        .is_some_and(|command| !command.trim().is_empty()),
+                    "process_grading.new_tests requires a nonempty command"
+                );
             }
         } else {
             anyhow::ensure!(
@@ -241,4 +307,44 @@ pub(super) fn relative_path(path: &str) -> Result<()> {
         bail!("expected a confined relative Eval path: {path}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NewTests;
+
+    fn new_tests(paths: &[&str]) -> NewTests {
+        NewTests {
+            paths: paths.iter().map(|path| (*path).into()).collect(),
+            command: ["cargo", "test", "--test", "{stem}", "--", "{path}"]
+                .map(String::from)
+                .into(),
+        }
+    }
+
+    #[test]
+    fn new_test_patterns_match_within_one_component() {
+        let tests = new_tests(&["tests/*.rs", "test_*.py"]);
+        assert!(tests.matches("tests/counter.rs"));
+        assert!(tests.matches("test_feature.py"));
+        assert!(!tests.matches("tests/support/mod.rs"));
+        assert!(!tests.matches("src/test_feature.py"));
+        assert!(!tests.matches("tests/counter.rs.orig"));
+        assert!(new_tests(&["tests/*/*.rs"]).matches("tests/support/mod.rs"));
+    }
+
+    #[test]
+    fn new_test_commands_name_the_file_and_its_stem() {
+        assert_eq!(
+            new_tests(&["tests/*.rs"]).command_for("tests/counter.rs"),
+            [
+                "cargo",
+                "test",
+                "--test",
+                "counter",
+                "--",
+                "tests/counter.rs"
+            ]
+        );
+    }
 }

@@ -68,6 +68,12 @@ pub(crate) struct View {
     pub outcomes: Outcomes,
     pub findings: Vec<String>,
     pub leak_hits: Vec<super::leaks::Hit>,
+    pub pairs: Vec<super::pairs::Pair>,
+    pub panel: Vec<super::panel::PanelPair>,
+    /// The Grader panel's spend, apart from the Arms' `accounting`.
+    pub panel_spend: Option<super::panel::Spend>,
+    /// People's blind pairwise calls, beside the Verdict.
+    pub people: super::pairwise::People,
 }
 
 /// Facts for readers; these never participate in Experiment identity or the Bar.
@@ -378,6 +384,7 @@ impl Stored {
             &results,
             &self.description.bar,
             &self.description.baseline,
+            &self.decided()?,
         )?;
         if super::leaks::pending(&results) {
             verdict.verdict = super::Conclusion::WaitingOnLeaks;
@@ -385,6 +392,42 @@ impl Stored {
         }
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
+        Ok(())
+    }
+
+    fn decided(&self) -> Result<super::deciders::Decided> {
+        super::deciders::read(&Native, &self.directory, &self.description, &self.tasks)
+    }
+
+    /// Recalculate a completed Experiment's Verdict after a people's call
+    /// that counts in it. A running Experiment recalculates as it completes.
+    pub(super) fn refresh_completed(root: &Path, id: &str) -> Result<()> {
+        let directory = Self::directory(root, id)?;
+        if Self::metadata(&Native, directory.clone(), id)?.state != State::Completed {
+            return Ok(());
+        }
+        // Rechecks and leak decisions hold this lock only briefly.
+        let lock = File::create(directory.join("lock"))?;
+        lock.lock()?;
+        let mut stored = Self::metadata(&Native, directory, id)?;
+        stored.lock = Some(lock);
+        stored.refresh_verdict()?;
+        stored.publish_decided()
+    }
+
+    /// Save a stopped Experiment after a human decision, release its Trial
+    /// repositories once the Verdict is final, and update its Command record.
+    pub(super) fn publish_decided(&mut self) -> Result<()> {
+        self.save()?;
+        super::retention::repositories(self);
+        if let (Some(log), Some(verdict)) = (&self.details.command_log, &self.verdict)
+            && let Err(error) =
+                crate::logs::experiment_rechecked(log, &self.description.id, verdict.outcome())
+        {
+            crate::progress::step(format!(
+                "warning: could not update the Command record: {error:#}"
+            ));
+        }
         Ok(())
     }
 
@@ -402,6 +445,7 @@ impl Stored {
                     &self.results()?,
                     &self.description.bar,
                     &self.description.baseline,
+                    &self.decided()?,
                 )?;
                 self.pending_rechecks = pending;
             }
@@ -487,6 +531,9 @@ impl Stored {
             if self.pricing.is_some() {
                 selection.push_str(&view.accounting.render());
             }
+            if let Some(spend) = &view.panel_spend {
+                selection.push_str(&spend.render());
+            }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
 Baseline: {}
@@ -515,15 +562,23 @@ Candidate: {}{}{}",
                 view.usage.candidate(),
                 view.voids.baseline,
                 view.voids.candidate,
-                view.findings
+                self.verdict
+                    .as_ref()
+                    .and_then(|verdict| verdict.deciders.as_ref())
+                    .map(|deciders| format!("\n{}", deciders.line()))
+                    .into_iter()
+                    .chain(view.findings
                     .iter()
-                    .map(|finding| format!("\nFinding: {finding}"))
+                    .map(|finding| format!("\nFinding: {finding}")))
                     .chain(
                         view.pending_rechecks
                             .iter()
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
                     .chain(view.leak_hits.iter().map(|hit| format!("\nLeak hit {}: {} · {} · {} · Session {} line {}{}", hit.id, hit.status(), hit.kind, hit.identifier, hit.session, hit.line, hit.decision.as_ref().map_or_else(|| format!("\nthirdshift experiments {} --leak {} confirm|dismiss --reason '…'", self.description.id, hit.id), |decision| format!(" · {} · {} · {}", decision.reviewer, decision.recorded_at, decision.reason)))))
+                    .chain(std::iter::once(super::pairs::lines(&view.pairs)))
+                    .chain(std::iter::once(super::panel::lines(&view.panel)))
+                    .chain(std::iter::once(super::pairwise::lines(&view.people)))
                     .collect::<String>(),
                 selection
             ))

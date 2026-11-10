@@ -152,7 +152,9 @@ test('the architecture page distinguishes Triage stdout JSON from its notificati
 
 test('the workflow page identifies the current Experiment result contract', async () => {
   const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
-  assert.match(page, /contract with <code>format: 8<\/code>/);
+  const contract = await readFile(join(__dirname, '..', '..', 'docs', 'experiment-results.md'), 'utf8');
+  const format = contract.match(/^# Experiment results \(format (\d+)\)/)[1];
+  assert.ok(page.includes(`contract with <code>format: ${format}</code>`), format);
 });
 
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {

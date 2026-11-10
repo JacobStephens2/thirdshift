@@ -702,7 +702,7 @@ by later Console API tickets appear when they are served.
 | Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
 | Run metrics | `/api/v1/metrics` (`command`, `from`, `through`, repeated `repo`) | `metrics` |
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
-| Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
+| Experiments, Trial Session evidence and blind pairs | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>`, `/api/v1/experiments/<id>/pairs/<pair>` | `experiments [<id>] [--session <session> \| --pair <pair>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
 | Known Launch directories | `/api/v1/launch-directories` | `launch-directories` |
 | Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
@@ -762,6 +762,8 @@ JSON bodies use `Content-Type: application/json`. GET calls take no body.
 | POST `/experiments/<id>/name` | `admin` | JSON `name` | `experiments <id> --name <name> --json` |
 | POST `/experiments/<id>/difficulty` | `admin` | none | `experiments <id> --record-difficulty --json` |
 | GET `/experiments/<id>/rechecks` | `read` | none | `recheck <id> --pending --json` |
+| POST `/experiments/<id>/pairs/<pair>/merge` | `act` | form `a` and `b`, each `ready` or `not-ready` | `experiments <id> --pair <pair> --merge <a> <b> --json` |
+| POST `/experiments/<id>/pairs/<pair>/preference` | `act` | form `preference` (`a`, `b`, `tie` or `both-bad`), optional `rubric_<criterion>` | `experiments <id> --pair <pair> --prefer <preference> [--rubric <criterion>=<value>]... --json` |
 | POST `/experiments/<id>/rechecks` | `act` | JSON `trial` or `fingerprint`, `decision` (`pass` or `fail`), `reason`, optional `wrong_finding` | `recheck <id> <trial> <decision> --reason <reason> --json`, or `--batch <fingerprint>` |
 
 See OpenAPI for each CLI twin's response and full argument schema. The route
@@ -1342,6 +1344,136 @@ and their failures name the selector in
 the Score's reason. The task's required `process_grading` table declares the
 files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
 
+When the task's `process_grading.new_tests` table says how to find and run an
+Arm's own new tests, each pair of Trials (Baseline Trial *k* with Candidate
+Trial *k*) also gets base-tests and cross-tests once both Trials finish. Each
+Arm's new test files, those its final commit adds or changes that match the
+table's paths, run on the unchanged base and against the other Arm's final
+commit, offline in the code Grader's sandbox, each run within the Bar's
+timeout. New tests that pass on the base may not check the change. A
+cross-test failure is a disagreement to look into, not a defect: this evidence
+changes no Score and no Verdict. A run cut short by the timeout, or whose
+snapshot could not be prepared, decides nothing either way. The Console's
+Experiment page lists it under Pair evidence. The text view adds a line for
+each disagreement, new test that passes on the base, run that did not finish
+and evidence that could not run. `thirdshift experiments <id> --json` keeps it
+under `pairs`, with each Arm's whole change since the base.
+
+Each pair with evidence can also be read blind, one person at a time. The
+Experiment page's **People's calls** section links each pair's page, which shows
+the Ticket, its acceptance checklist numbered from 1, the two changes side by
+side with code before tests, and each change's evidence. The sides, A and B, are
+drawn for each pair from the Bar's seed, and the page names no Arm, build,
+Harness or Model and shows no model call. First make a sealed merge call for
+each side, ready or not ready; then give a preference (A, B, tie or both bad)
+and, optionally, the rubric: which change better does what the Ticket asks
+(`correctness`), has proportionate tests that check the change (`tests`) and
+keeps to what was asked (`scope`). The preference and rubric are refused until
+both merge calls are sealed, and sealed calls can't be made again until you
+have given that preference. Every call is a new record, attributed to you and
+never changed, so reading a pair again adds a second review; one begun after
+your reveal is marked as not blind and left out of people–panel agreement.
+Once you have given
+a preference, the page shows which Arm made each side, the Grader panel's calls
+when it has read the pair, and every reader's calls. In the shell:
+
+```sh
+thirdshift experiments <id> --pair <pair-id>
+thirdshift experiments <id> --pair <pair-id> --merge ready not-ready
+thirdshift experiments <id> --pair <pair-id> --prefer a --rubric scope=tie
+```
+
+People's calls, in Arm terms, and their agreement with the panel's merge calls
+and with each other show beside the Verdict on the Experiment page, in the text
+view, and under `people` in `--json`. They change no Score, and change the
+Verdict only when the Bar counts them.
+
+A Grader panel can also grade each pair of process Trials. Name its seats in
+the Bar, one `--panel-seat` per Harness and Model, several per family allowed:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5,effort=high \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
+  --panel-seat harness=claude,model=claude-opus-5-5
+```
+
+Each seat reads every pair in a blind packet twice, once in each presentation
+order, in fresh sandboxed sessions. The packet holds the Ticket, the success
+criteria, a rubric, and for each side its outcome, its diff against the base and
+its Pair evidence, with the sides labelled A and B at random and swapped for
+the second order. For each side the Grader rates each rubric criterion with
+evidence and makes a merge call, then gives its reason and a preference: A, B,
+tie or both bad. A call that flips with the order is a tie. A seat's family is
+its provider: the Harness's own, or the provider an OpenCode Model names.
+The panel votes one vote per family by default, each family taking its own
+majority first; `--panel-vote model` gives each Model a vote, with seats
+naming the same Model taking their own majority first. A seat from
+either Arm's family is reported but doesn't vote while a seat from another
+family sits on the panel; `--panel-arm-family-rule off` lets it vote. A call
+needs more than half the votes, otherwise it is a tie, and a tied merge call is
+not ready. Every seat's calls and the panel's result are reported beside the
+Verdict, in the text view and under `panel` in
+`thirdshift experiments <id> --json`; they change no Score and no Verdict
+unless the Bar counts them.
+
+The Bar fixes who decides the Verdict before the first Trial. The panel and
+the people are each off, beside the Verdict or counted in it: `--panel off`,
+`beside` (the default with seats) or `counted`, and `--people off`, `beside`
+(the default) or `counted`. Name each reader with `--people-reader`, as the
+Console or the CLI names them (a Console address, a token's person, or a Unix
+user). `--people-sample <n>` gives each reader `n` pairs drawn from the Bar's
+seed, and `--people-overlap <n>` how many of those every reader shares; with
+no sample, every reader reads every pair. Each reader's queue lists their pairs
+on the Experiment page, in the text view and under `people.queues` in
+`--json`, and the Experiment refuses a sample larger than it has pairs, or
+readers when a process Eval task has no pair evidence to read:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5 \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
+  --panel counted --people counted \
+  --people-reader ann@example.com --people-reader bo@example.com \
+  --people-sample 7 --people-overlap 4
+```
+
+When the panel or the people are counted, a process Trial passes only if its
+Score passes and whoever decides its pair calls it ready to merge. People's
+call is each reader's latest blind merge call; on a pair two readers share, it
+is ready only if both say so. With only the panel counted, its calls decide
+every pair and people's calls calibrate it. With only the people counted on a
+sample, the Verdict rests on the sampled pairs alone, each pair a unit, and a
+small sample usually comes out inconclusive rather than wrong. With people
+counted on every pair, their calls decide every pair. With both counted, the
+panel stands in on the pairs people didn't read. That needs a voting panel
+spanning `--panel-families` families (two by default), or the Experiment
+refuses to start, and people–panel agreement on the sample of at least
+`--panel-agreement` (0.8 by default) of the merge calls compared, or the
+Verdict is inconclusive and says why. While a reader has a pair still to call,
+the Verdict is `waiting_on_people`; each call recalculates it once the
+Experiment has completed. The Verdict says who decided it and on how many
+pairs. People–people agreement on shared pairs and people–panel agreement are
+reported in every mode.
+
+The estimate shown before the Trials includes the panel: for each seat, its
+remaining sessions (pairs × 2 orders) and their expected cost, priced from the
+Experiment's frozen price table. A seat is priced at the mean of its sessions
+measured in this Experiment once there are some, and otherwise at an assumed
+session of 400k input tokens (80% of them cache reads) and 15k output tokens.
+A seat whose Model has no frozen price is listed without one. Panel spend is
+reported apart from the Arms' cost, in the text view and under `panel_spend`
+in `--json`, and never counts toward an Arm's cost or the Bar's
+`--cost-ceiling`. `--panel-spending-limit 25` caps what each run of the
+Experiment spends on panel sessions, in USD: once this run's priced panel
+sessions reach it, grading pauses before the next session, as it does when a
+Grader is unavailable. A panel session that can't be priced, because its
+Model has no frozen price or it reported no usage, also pauses grading while a
+limit is set, since the limit can't count it; its call is kept. Resuming gets
+the limit afresh and continues from the calls already made; none is graded
+again. When every Trial has run and only panel calls remain, the estimate lists
+just the panel and a terminal asks `Run the remaining Grader panel sessions?`.
+
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1367,6 +1499,11 @@ Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
 timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
+The Grader panel's `--panel-seat`, `--panel-vote`, `--panel-arm-family-rule`,
+`--panel-spending-limit`, `--panel`, `--panel-families` and `--panel-agreement`,
+and the people's `--people`, `--people-reader`, `--people-sample` and
+`--people-overlap`, are part of the Bar too; it has no panel by default, and
+anyone may read any pair beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 
@@ -1457,8 +1594,9 @@ For review Trials, a fresh model Grader then scores one blind packet per Eval ta
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.
-When an installed Harness has a configured Model different from both Arms,
-that Model grades; otherwise the User config's default choice grades. The
+When an installed Harness has a configured Model from a family neither Arm
+runs on, as the Grader panel's family rule reads it, that Model grades;
+otherwise the User config's default choice grades. The
 Grader choice and executable are fixed before Trials start. Model Graders run
 in the same sandbox, seeing only their packet workspace. Code Graders run
 offline with their report packet and prepared repository. Neither can read
@@ -1585,7 +1723,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 8`.
+[Experiment results format](experiment-results.md), identified by `format: 10`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -2703,7 +2841,7 @@ no Resend API key. Either:
     (a crontab line, CI secret, or a shell profile the Ticket run's shell reads)
 ```
 
-Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it, as `api_key` under `[opencode]`; without it, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
+Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values, and an `[opencode.keys]` table of quoted keys by OpenCode provider name. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it: one per provider under `[opencode.keys]`, such as `fireworks-ai = "…"` and `baseten = "…"`, or a single `api_key` under `[opencode]` for any provider without its own. Each OpenCode session takes the key for the provider its Model names, so two OpenCode sessions on different providers, such as two Graders in a Grader panel, each get their own; without one, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 

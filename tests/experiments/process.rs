@@ -119,7 +119,7 @@ printf '%s' 'PR 421; issue 422; fix/the-counter; Repair "quoted" counter; {}' > 
     }
 }
 
-fn private_fix(fixture: &Fixture) {
+pub(super) fn private_fix(fixture: &Fixture) {
     let task = fixture
         .scenario
         .path("home/.thirdshift/evals/suites/process/tasks/fixture/task.toml");

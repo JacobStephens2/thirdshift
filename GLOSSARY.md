@@ -275,7 +275,7 @@ A **Ticket run** that picks up an existing **Issue branch**, one with no pull re
 The per-machine settings file in the user's home folder that sets thirdshift's defaults for every **Ticket run** started on that machine, such as the **Run notification** address, whether a merged **Command** still emails its Run notification, whether every Ticket run is asked to **Self-merge**, whether a Ticket run may start a **Base fix**, whether a Ticket run first brings the **Launch directory**'s checkout of the **Base branch** up to date with `origin`, and the **Harness**, with a **Model** and **Effort** for each Harness. With no User config, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
 **Credentials**:
-The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and a Claude setup token reserved for **Trials**. The Resend key in the environment wins over the saved key; the User config holds no secret.
+The per-machine secrets file next to the **User config**, readable only by its owner, that holds the Resend API key for **Run notifications** and **Console** sign-in emails, and a Claude setup token and OpenCode provider keys reserved for **Trials**: one key per provider, with a single key for any provider without its own. The Resend key in the environment wins over the saved key; the User config holds no secret.
 _Avoid_: secrets file, key file
 
 **Setup**:
@@ -409,6 +409,14 @@ _Avoid_: judge, evaluator, scorer
 The model **Graders** an **Experiment**'s **Bar** names to judge each pair of **Trials**, from one **Model** up, each reading the pair in both orders. The panel's call is a majority by family or by Model, as the Bar says, and may stand in for the **Day shift**'s on pairs it doesn't read.
 _Avoid_: jury, committee, judges
 
+**Base-test**:
+Running one **Arm**'s new tests from a **Trial** on the unchanged repository its **Eval task** starts from, to see whether they check the change at all. Evidence beside the **Scores**, never a Score.
+_Avoid_: baseline test, pre-test
+
+**Cross-test**:
+Running one **Arm**'s new tests from a **Trial** against the final commit of the other Arm's Trial in the same pair. A failure is a disagreement to look into, not a defect, and changes no **Score**.
+_Avoid_: swap test, mutual test
+
 **Score**:
 What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Ticket run** on one criterion: whether it passed, and why.
 _Avoid_: grade, rating, feedback
@@ -418,7 +426,7 @@ The **Command** that compares a **Baseline arm** with a **Candidate arm** on the
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
-The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, whether the **Day shift** grades and whether that counts in the Verdict, and optional cost and time ceilings as Candidate-to-Baseline ratios, off by default.
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the pass level and the fail level (the credible levels a pass and a fail are each judged at), the pass rule (since ADR 0025, a pass needs only the pass-level interval above the margin; a pass whose interval lies wholly below zero is reported as worse, within the margin), the prior, the seed and draw count, the **Trials** per **Eval task**, the rules for **Void Trials**, the **Grader panel**'s seats, voting rules and spending limit, whether the **Day shift** grades and whether that counts in the Verdict, and optional cost and time ceilings as Candidate-to-Baseline ratios, off by default.
 _Avoid_: threshold, gate, acceptance criteria
 
 **Verdict**:

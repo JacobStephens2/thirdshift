@@ -67,6 +67,7 @@ impl From<&TestSelection> for ProcessGrading {
             test_fakes: selection.shared_fakes.clone(),
             fail_to_pass: selection.fail_to_pass.clone(),
             pass_to_pass: selection.pass_to_pass.clone(),
+            new_tests: None,
         }
     }
 }
@@ -82,7 +83,7 @@ impl From<&ProcessGrading> for TestSelection {
     }
 }
 
-fn is_test_path(path: &str) -> bool {
+pub(super) fn is_test_path(path: &str) -> bool {
     path.split('/')
         .any(|part| matches!(part, "tests" | "test" | "__tests__"))
         || Path::new(path)
