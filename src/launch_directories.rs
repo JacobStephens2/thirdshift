@@ -36,10 +36,7 @@ pub(crate) fn load() -> Result<Inventory> {
     };
     let mut directories = BTreeMap::new();
     for job in jobs {
-        if let Some((path, output_log)) = cron_directory(&job.command, &home)
-            && let Ok(mut directory) = resolve(&path)
-        {
-            directory.output_log = output_log;
+        if let Some(directory) = from_cron(&job.command, &home) {
             directories
                 .entry(directory.path.clone())
                 .or_insert(directory);
@@ -69,9 +66,11 @@ fn resolve(path: &Path) -> Result<Directory> {
 }
 
 // Parse literal shell words only. Never execute cron text to discover a path.
-fn cron_directory(command: &str, home: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+pub(crate) fn from_cron(command: &str, home: &Path) -> Option<Directory> {
     let invocation = cron_invocation(command, home)?;
-    Some((invocation.directory, invocation.output_log))
+    let mut directory = resolve(&invocation.directory).ok()?;
+    directory.output_log = invocation.output_log;
+    Some(directory)
 }
 
 struct CronInvocation {
@@ -90,6 +89,17 @@ fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
     }
     let thirdshift = rest
         .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
+        // A later directory change makes the initial cd unreliable. Leave
+        // these compounds display-only rather than infer the wrong checkout.
+        .take_while(|part| {
+            let executable = part.iter().map(String::as_str).find(|word| {
+                !word.contains('=') && !matches!(*word, "command" | "builtin" | "--" | "-p" | "!")
+            });
+            !matches!(
+                executable,
+                Some("cd" | "pushd" | "popd" | "eval" | "source" | ".")
+            )
+        })
         .find(|part| {
             let executable = if part.first().is_some_and(|word| {
                 Path::new(word)
