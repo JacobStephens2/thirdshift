@@ -70,6 +70,39 @@ fn each_arms_new_tests_run_on_the_base_and_the_other_arms_commit() {
     assert_eq!(pair["task"], "fixture", "{pair}");
     assert_eq!(pair["trial"], 0, "{pair}");
 
+    // Each side keeps its whole change, code before tests, for the blind
+    // pairwise page: the Trial repositories are gone once the Experiment ends.
+    let paths = |side: &Value| -> Vec<(String, bool)> {
+        side["diff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                (
+                    file["path"].as_str().unwrap().to_owned(),
+                    file["test"] == true,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        paths(&pair["baseline"]),
+        [
+            ("feature.txt".to_owned(), false),
+            ("test_new_baseline.py".to_owned(), true)
+        ]
+    );
+    assert_eq!(
+        paths(&pair["candidate"]),
+        [
+            ("extra.txt".to_owned(), false),
+            ("feature.txt".to_owned(), false),
+            ("test_new_candidate.py".to_owned(), true)
+        ]
+    );
+    let feature = pair["baseline"]["diff"][0]["patch"].as_str().unwrap();
+    assert!(feature.contains("+implemented"), "{feature}");
+
     let baseline = &pair["baseline"];
     assert_eq!(baseline["test_files"], json!(["test_new_baseline.py"]));
     assert_eq!(baseline["fails_on_base"], true, "{baseline}");
@@ -122,6 +155,7 @@ fn each_arms_new_tests_run_on_the_base_and_the_other_arms_commit() {
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
     assert_eq!(shown["pairs"], view["pairs"]);
+    blind_calls_match_the_documented_contract(&fixture, &view);
     let text = fixture
         .scenario
         .run_with_env(&["experiments", view["id"].as_str().unwrap()], &NO_SANDBOX);
@@ -313,4 +347,47 @@ fn an_unpreparable_snapshot_decides_nothing() {
     let view: Value = serde_json::from_str(&run.stdout).unwrap();
     let candidate = &pair(&view)["candidate"];
     assert_ne!(candidate["fails_on_base"], true, "{candidate}");
+}
+
+/// Calls recorded through the CLI on a real pair, with panel calls retained
+/// beside it, keep the documented shapes.
+fn blind_calls_match_the_documented_contract(fixture: &Fixture, view: &Value) {
+    let id = view["id"].as_str().unwrap();
+    let pairs = fixture
+        .scenario
+        .path(&format!("home/.thirdshift/evals/experiments/{id}/pairs"));
+    let path = fs::read_dir(&pairs)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let pair = path.file_stem().unwrap().to_str().unwrap().to_owned();
+    let mut retained: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    retained["panel"] =
+        json!({"baseline_ready": true, "candidate_ready": true, "preference": "tie"});
+    fs::write(&path, serde_json::to_vec(&retained).unwrap()).unwrap();
+    let call = |args: &[&str]| {
+        let mut full = vec!["experiments", id, "--pair", pair.as_str()];
+        full.extend_from_slice(args);
+        full.push("--json");
+        let run = fixture.scenario.run_with_env(&full, &NO_SANDBOX);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        serde_json::from_str::<Value>(&run.stdout).unwrap()
+    };
+    super::result_format::assert_documented("PairPage", &call(&[]));
+    call(&["--merge", "ready", "not-ready"]);
+    let revealed = call(&["--prefer", "both-bad", "--rubric", "tests=a"]);
+    assert_ne!(revealed["revealed"], Value::Null, "{revealed}");
+    super::result_format::assert_documented("PairPage", &revealed);
+    let shown = fixture
+        .scenario
+        .run_with_env(&["experiments", id, "--json"], &NO_SANDBOX);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["people"]["reviews"][0]["preference"], "both_bad",
+        "{shown}"
+    );
+    assert_eq!(shown["people"]["agreement"]["compared"], 2, "{shown}");
+    super::result_format::assert_documented("Experiment", &shown);
 }

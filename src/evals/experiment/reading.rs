@@ -20,6 +20,7 @@ struct Observation {
     usage: usage::Arms,
     pairs: Vec<super::pairs::Pair>,
     panel: Vec<super::panel::PanelPair>,
+    people: super::pairwise::People,
 }
 
 pub(super) fn read(stored: &Stored) -> Result<View> {
@@ -94,6 +95,13 @@ impl Observation {
         observation.pairs = super::pairs::read(files, &stored.directory)?;
         observation.panel =
             super::panel::read(files, &stored.directory, &stored.description, &stored.tasks)?;
+        super::panel::attach(&mut observation.pairs, &observation.panel);
+        observation.people = super::pairwise::people(
+            files,
+            &stored.directory,
+            &observation.pairs,
+            stored.description.bar.seed,
+        )?;
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions
@@ -147,6 +155,7 @@ impl Observation {
             voids: self.voids,
             pairs: self.pairs,
             panel: self.panel,
+            people: self.people,
         }
     }
 }

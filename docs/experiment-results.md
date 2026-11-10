@@ -101,6 +101,34 @@ merge call is `not_ready`. Pairs appear once every seat has called both
 orders. The panel is reported beside the Verdict and changes no Score,
 Verdict or Void cause. Experiments without a panel have none.
 
+Format 10 also adds each `PairSide`'s `diff`, the Grader panel's optional
+`panel` calls per `Pair`, and `people`. `diff` lists every file the Arm's
+final commit changes since the base, code files before tests (`test` is true for a file
+matching `new_tests.paths` or in a test location), each with its `git diff`
+text: the blind pairwise page reads this copy once the Trial repositories are
+gone. `panel`, when present, is the panel's merge call per Arm (a tied call is
+not ready) and its preference. `people` holds the Day shift's blind pairwise
+calls ([guide](guide.md#experiments)): one `PairReview` per sealed pair of
+merge calls, in Arm terms, with the preference and optional rubric the reader
+then gave (`preference` is null until given), in record order per pair.
+A reader's merge calls are sealed until their preference; a review begun after
+that reader's own preference, once the Arms were revealed, has `blind` false.
+`agreement` compares each reader's latest blind merge calls with the panel's,
+per side, on pairs the panel has read; `compared` is zero when there are none.
+
+`thirdshift experiments <id> --pair <pair-id> --json`, and its `--merge` and
+`--prefer` forms, emit `PairPage`: what the calling reader may see of one pair.
+`a` and `b` are the two `PairSide`s on the sides drawn for the pair from the
+Bar's seed, with no Arm named. `ticket` is null when the Eval task's Ticket
+input can't be read; `checklist` holds the items under its "Acceptance
+criteria" heading. `next` is the reader's next call. `mine` lists the reader's
+records and `revealed` stays null until the reader has given a preference;
+it then names the Arm on each side with its `Setup`, the panel's calls, and
+every reader's records. Each record is kept as
+`reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
+ever added, numbered from `000000`, beside a `lock` file.
+People's calls are reported beside the Verdict and change no Score.
+
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
 failed counts per Arm, excluding Void attempts. `Setup.process`, when present,
@@ -187,7 +215,8 @@ Private artifacts live under `~/.thirdshift/evals/experiments/<id>/`:
 experiment.json                  # fixed inputs, state, Verdict, recheck history
 results/<trial-id>.json           # one terminal TrialResult
 trials/<trial-id>/pending.json    # checkpointed TrialResult before publication
-pairs/<pair-id>.json             # one pair's base-tests and cross-tests (evidence)
+pairs/<pair-id>.json             # one pair's diffs, base-tests and cross-tests (evidence)
+reviews/<pair-id>/<n>.json       # one append-only blind pairwise record
 trials/<trial-id>/attempt-<suffix>/ # retained Trial protocol output and evidence
 ```
 
@@ -379,6 +408,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "leak_hits": ["LeakHit"],
     "pairs": ["Pair"],
     "panel": ["PanelPair"],
+    "people": {"reviews": ["PairReview"], "agreement": {"compared": "integer", "agreed": "integer"}},
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
     "voids": {"baseline": "Voids", "candidate": "Voids"},
@@ -451,29 +481,54 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "label": "string", "passed": "boolean", "reason": "string",
     "wrong_finding": "boolean", "borderline": "boolean"
   },
-  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide"},
+  "Pair": {"suite": "string", "task": "string", "trial": "integer", "baseline": "PairSide", "candidate": "PairSide", "panel?": "PanelCalls"},
+  "PanelCalls": {"baseline_ready": "boolean", "candidate_ready": "boolean", "preference": "ArmPreference"},
+  "ArmPreference": "baseline|candidate|tie|both_bad",
+  "PairReview": {
+    "pair": "string", "suite": "string", "task": "string", "trial": "integer",
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "blind": "boolean", "baseline_ready": "boolean", "candidate_ready": "boolean",
+    "preference": "ArmPreference?", "rubric": {"*": "ArmPreference"}
+  },
+  "PairPage": {
+    "experiment": "string", "pair": "string", "suite": "string", "task": "string", "number": "integer",
+    "ticket": "string?", "checklist": ["string"], "a": "PairSide", "b": "PairSide",
+    "rubric": [{"name": "string", "question": "string"}], "reader": "string",
+    "next": "merge|preference", "mine": ["PairRecord"], "revealed": "PairReveal?"
+  },
+  "PairReveal": {
+    "a": "baseline|candidate", "b": "baseline|candidate", "a_setup": "Setup", "b_setup": "Setup",
+    "panel": "PanelCalls?", "records": ["PairRecord"]
+  },
+  "PairRecord": {
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "call": "merge|preference",
+    "a_ready?": "boolean", "b_ready?": "boolean",
+    "preference?": "Preference", "rubric?": {"*": "Preference"}
+  },
+  "Preference": "a|b|tie|both_bad",
   "PairSide": {
+    "diff": [{"path": "string", "test": "boolean", "patch": "string"}],
     "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
     "disagreement": "boolean", "base": ["Check"], "cross": ["Check"], "error": "string?"
   },
   "PanelPair": {
     "suite": "string", "task": "string", "trial": "integer", "graders": ["PanelGrader"],
-    "votes": [{"name": "string", "preference": "Preference", "merge": "MergeCalls"}],
-    "preference": "Preference", "merge": {"baseline": "ready|not_ready", "candidate": "ready|not_ready"}
+    "votes": [{"name": "string", "preference": "ArmPreference", "merge": "MergeCalls"}],
+    "preference": "ArmPreference", "merge": {"baseline": "ready|not_ready", "candidate": "ready|not_ready"}
   },
   "PanelGrader": {
     "harness": "string", "model": "string", "effort": "string?", "family": "string",
-    "votes": "boolean", "orders": ["PanelCall"], "preference": "Preference", "merge": "MergeCalls"
+    "votes": "boolean", "orders": ["PanelCall"], "preference": "ArmPreference", "merge": "MergeCalls"
   },
   "PanelCall": {
     "shown_as_a": "baseline|candidate", "baseline": "PanelSide", "candidate": "PanelSide",
-    "reason": "string", "preference": "Preference"
+    "reason": "string", "preference": "ArmPreference"
   },
   "PanelSide": {
     "rubric": [{"criterion": "string", "met": "boolean", "evidence": "string"}],
     "merge_reason": "string", "ready_to_merge": "boolean"
   },
-  "Preference": "baseline|candidate|tie|both_bad",
   "MergeCalls": {"baseline": "ready|not_ready|tie", "candidate": "ready|not_ready|tie"},
   "Command": ["string"],
   "Check": {"command": "Command?", "passed": "boolean", "reason": "string"},

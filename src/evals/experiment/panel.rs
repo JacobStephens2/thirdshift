@@ -697,6 +697,27 @@ pub(super) fn read(
     Ok(reports)
 }
 
+/// Gives each retained pair the panel's result on it, once the panel has read it.
+pub(super) fn attach(pairs: &mut [super::pairs::Pair], panel: &[PanelPair]) {
+    for pair in pairs {
+        let report = panel.iter().find(|report| {
+            report.suite == pair.suite && report.task == pair.task && report.trial == pair.trial
+        });
+        if let Some(report) = report {
+            pair.panel = Some(super::pairwise::PanelCalls {
+                baseline_ready: report.merge.baseline == Merge::Ready,
+                candidate_ready: report.merge.candidate == Merge::Ready,
+                preference: match report.preference {
+                    Preference::Baseline => super::pairwise::ArmPreference::Baseline,
+                    Preference::Candidate => super::pairwise::ArmPreference::Candidate,
+                    Preference::Tie => super::pairwise::ArmPreference::Tie,
+                    Preference::BothBad => super::pairwise::ArmPreference::BothBad,
+                },
+            });
+        }
+    }
+}
+
 /// The call more than half of `calls` make, or `tie` without one.
 fn majority<T: Copy + Eq>(calls: impl IntoIterator<Item = T>, tie: T) -> T {
     let calls: Vec<T> = calls.into_iter().collect();

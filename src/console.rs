@@ -196,6 +196,9 @@ enum View {
     Experiments,
     Experiment,
     ExperimentSession,
+    ExperimentPair,
+    MergeCalls,
+    PairPreference,
     ApproveEvalTask,
     CronJobs,
     LaunchDirectories,
@@ -269,6 +272,9 @@ impl PageRoute {
                 | View::Experiments
                 | View::Experiment
                 | View::ExperimentSession
+                | View::ExperimentPair
+                | View::MergeCalls
+                | View::PairPreference
                 | View::CronJobs
                 | View::LaunchDirectories
                 | View::StartRun
@@ -607,6 +613,30 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift experiments id --session session --json"],
         method: Method::GET,
         view: View::ExperimentSession,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}",
+        api: "/api/v1/experiments/{id}/pairs/{pair}",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift experiments id --pair pair --json"],
+        method: Method::GET,
+        view: View::ExperimentPair,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}/merge",
+        api: "/api/v1/experiments/{id}/pairs/{pair}/merge",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --pair pair --merge ready not-ready --json"],
+        method: Method::POST,
+        view: View::MergeCalls,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}/preference",
+        api: "/api/v1/experiments/{id}/pairs/{pair}/preference",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --pair pair --prefer a --rubric scope=tie --json"],
+        method: Method::POST,
+        view: View::PairPreference,
     },
     PageRoute {
         path: "/experiments",
@@ -1047,6 +1077,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
+            (View::ExperimentPair, Method::GET) => get(experiments::pair),
+            (View::MergeCalls, Method::POST) => post(experiments::merge_calls),
+            (View::PairPreference, Method::POST) => post(experiments::preference),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::LaunchDirectories, Method::GET) => get(known_launch_directories),

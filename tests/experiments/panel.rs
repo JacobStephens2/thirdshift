@@ -141,6 +141,12 @@ fn a_three_seat_panel_reports_each_graders_calls_in_both_orders_and_its_majority
         pair["merge"],
         json!({"baseline": "not_ready", "candidate": "ready"})
     );
+    // The pair carries the panel's result, for the blind page's reveal and
+    // people–panel agreement.
+    assert_eq!(
+        view["pairs"][0]["panel"],
+        json!({"baseline_ready": false, "candidate_ready": true, "preference": "candidate"})
+    );
 
     // Each seat read a blind packet in each order, with the sides swapped.
     let packets: Vec<Value> = fixture

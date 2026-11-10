@@ -90,7 +90,10 @@ fn documented_format_matches_real_experiment_results() {
     let run = fixture.run(&["--prior", "0.01"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
-    assert_eq!(experiment["format"], 10, "format 10 adds the Grader panel");
+    assert_eq!(
+        experiment["format"], 10,
+        "format 10 adds the Grader panel, each pair's diffs and people's blind pairwise calls"
+    );
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(
         !experiment["pending_rechecks"]
