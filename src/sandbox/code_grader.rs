@@ -42,11 +42,13 @@ impl Timeout {
     }
 }
 
-/// Python puts the check's working directory ahead of the standard library.
-/// A process Trial can commit `pathlib.py` or `unittest.py`, and the reference
-/// tests then import the Trial's module and pass without the fix. This startup
-/// file moves that directory behind the standard library. It does not read
-/// `sys.environ`: site imports it before that attribute exists.
+/// Python puts the check's working directory, and the script's own directory,
+/// ahead of the standard library. A process Trial can commit `pathlib.py` or
+/// `unittest.py` there, including `tests/pathlib.py` when the selector is
+/// `python3 tests/check.py`, and the reference tests then import the Trial's
+/// module and pass without the fix. This startup file moves every path inside
+/// the repository behind the standard library. It does not read `sys.environ`:
+/// site imports it before that attribute exists.
 const IMPORT_GUARD: &str = "\
 import sys
 class Guard:
@@ -54,10 +56,12 @@ class Guard:
         if path is not None:
             return None
         import os
-        cwd = os.getcwd()
+        cwd = os.path.normpath(os.getcwd())
+        prefix = cwd + os.sep
         front, back = [], []
         for entry in list(sys.path):
-            if entry == \"\" or entry == cwd:
+            candidate = cwd if entry == \"\" else os.path.normpath(os.path.abspath(entry))
+            if candidate == cwd or candidate.startswith(prefix):
                 back.append(entry)
             else:
                 front.append(entry)
@@ -405,6 +409,52 @@ pathlib.Path(sys.argv[1]).write_text(f"{mode:03o}")
                 .unwrap();
                 assert!(checks[0].passed, "{}", checks[0].reason);
                 assert_eq!(fs::read_to_string(mode_path).unwrap(), "700");
+            },
+        );
+    }
+
+    /// Python puts the script's directory ahead of the standard library.
+    /// Process selectors run `python3 tests/check.py`, so a Trial can commit
+    /// `tests/pathlib.py` and satisfy the reference check without the fix.
+    #[test]
+    fn a_script_directory_cannot_shadow_the_standard_library() {
+        isolated(
+            "a_script_directory_cannot_shadow_the_standard_library",
+            || {
+                let fixture = Fixture::new();
+                let repository = fixture.path("repository");
+                let tests = repository.join("tests");
+                fs::create_dir_all(&tests).unwrap();
+                fs::write(repository.join("feature.txt"), "broken\n").unwrap();
+                fs::write(
+                    tests.join("pathlib.py"),
+                    "class Path:\n    def __init__(self, *args, **kwargs):\n        self.name = args[0] if args else ''\n    def read_text(self, *args, **kwargs):\n        return 'implemented\\n'\n",
+                )
+                .unwrap();
+                fs::write(
+                    tests.join("test_feature.py"),
+                    "import pathlib\nvalue = pathlib.Path('feature.txt').read_text()\nraise SystemExit(0 if value == 'implemented\\n' else 1)\n",
+                )
+                .unwrap();
+                let checks = with_grader(&fixture, || {
+                    execute(
+                        &repository,
+                        &Reports {
+                            standards: None,
+                            spec: None,
+                        },
+                        &[vec!["python3".into(), "tests/test_feature.py".into()]],
+                        Timeout::PerCheck(Duration::from_secs(10)),
+                        &Caps::default(),
+                        true,
+                    )
+                })
+                .unwrap();
+                assert!(
+                    !checks[0].passed,
+                    "script directory shadowed pathlib: {}",
+                    checks[0].reason
+                );
             },
         );
     }
