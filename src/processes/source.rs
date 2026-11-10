@@ -201,7 +201,11 @@ impl TicketSource {
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> Result<T> {
         match self {
-            Self::Local(local) => local.session(index, run.choice, action).0,
+            Self::Local(local) => {
+                local
+                    .session(index, &run.steps[index - 1].name, run.choice, action)
+                    .0
+            }
             Self::Factory => {
                 let mut logs = session::Logs::of_process(&launch::repo()?);
                 if let Some(identity) = run.dispatched {
@@ -290,7 +294,7 @@ impl TicketSource {
             Self::Local(local) => {
                 let text = prompt::local_security_review(&local.issue, &local.base, &local.branch);
                 local
-                    .session(index + 1, &step.choice, |sessions, _| {
+                    .session(index + 1, &step.name, &step.choice, |sessions, _| {
                         local.ensure_actionable()?;
                         let review = crate::security::review::run_local(
                             sessions,
@@ -354,10 +358,11 @@ impl Local {
     pub(super) fn session<T>(
         &self,
         index: usize,
+        role: &str,
         choice: &Choice,
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let logs = session::Logs::of_trial(&self.output);
+        let logs = session::Logs::of_trial_step(&self.output, role);
         let before_each = || {
             self.ensure_actionable()?;
             restore_issue_file(&self.repository, &self.issue_text)?;

@@ -92,6 +92,13 @@ impl Logs {
         }
     }
 
+    pub(crate) fn of_trial_step(dir: &Path, role: &str) -> Self {
+        Self {
+            recording: recording::Recording::for_trial_step(role).into(),
+            ..Self::of_trial(dir)
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {

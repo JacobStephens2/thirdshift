@@ -138,6 +138,22 @@ impl Trace {
         })
     }
 
+    pub(super) fn with_trial_role(mut self, role: Option<&str>) -> io::Result<Self> {
+        if let Some(role) = role {
+            let role = attribute("thirdshift.trial.role", role);
+            set(&mut self.resource.attributes, role.clone());
+            set(&mut self.session.attributes, role);
+            // Publish ownership before starting the Harness. A SIGKILL may
+            // prevent both the first event and the Step's completion record.
+            let mut started = self.session.clone();
+            started.trace_id = Some(self.context.trace);
+            started.parent_span_id = Some(self.context.stage);
+            started.end_time_unix_nano = started.start_time_unix_nano;
+            self.write_span(started)?;
+        }
+        Ok(self)
+    }
+
     pub fn record(&mut self, raw: impl AsRef<[u8]>, events: &[Event]) -> io::Result<()> {
         self.record_at(raw.as_ref(), events, now())
     }

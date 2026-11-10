@@ -1250,9 +1250,11 @@ before Void dropouts, rather than the retained judged count.
 
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
-Bar's timeout, in session-minutes; and, for each suite and Harness that has
-history, an estimate from the mean minutes of completed, non-void Trials in this
-machine's earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
+Bar's timeout, in session-minutes; and, for each suite and exact Arm setup that has
+history, an estimate from completed, non-Void Trials in this machine's earlier
+Experiments. The setup includes the build, Harness, Model, Effort and Process.
+Estimates count every attempt's minutes and show priced dollars when all of
+that history has complete accounting. The total time estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
 stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` or `yes`
 exits without building an Arm or starting a Trial, and a new Experiment
@@ -1262,6 +1264,18 @@ and so does a stdin that is not a terminal. `scripts/release.sh
 --with-experiment` passes `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.
+
+Each new Experiment freezes a dated token price table. `--prices <file.json>`
+supplies another table with exact observed Model names and USD rates per million
+input, output, cache-read and cache-write tokens; otherwise it uses the bundled
+standard-rate snapshot. The table cannot change once a Trial starts. Every
+session, including a Resume or fallback, is priced and attributed to its starting
+Step. Missing usage or a missing Model price makes the Trial Void with an
+accounting-gap cause. Arm totals include all attempts; paired median
+Candidate-to-Baseline cost and time ratios use matching complete, non-Void Trials.
+Time spent paused at a usage limit between invocations is excluded. Harness-reported
+costs remain separate from these frozen comparison prices. See the
+[Experiment accounting format](experiment-results.md) for the table and result fields.
 
 `--name <text>` saves a name with the Experiment: one line of at most 100
 characters, trimmed. An empty or over-long name is refused before any build.

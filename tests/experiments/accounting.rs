@@ -1,6 +1,92 @@
 use super::*;
 
 #[test]
+fn architecture_describes_the_exact_arm_history_used_for_estimates() {
+    let text = include_str!("../../site/architecture/index.html");
+    assert!(
+        !text.contains("completed Trials per suite and Harness"),
+        "The architecture page still documents the replaced suite/Harness estimate key"
+    );
+}
+
+#[test]
+fn a_hard_killed_process_session_keeps_its_starting_step_role() {
+    let fixture = process::fixture();
+    fixture.scenario.agent_does(
+        r#"
+python3 - <<'PY'
+import os
+from pathlib import Path
+import signal
+
+# Walk only this fixture's ancestry and kill the Arm, whose exact argv
+# contains --trial. This prevents the active Step's completion publication.
+pid = os.getppid()
+for _ in range(32):
+    if pid <= 1:
+        break
+    args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    if b'--trial' in args:
+        os.kill(pid, signal.SIGKILL)
+        break
+    status = Path(f'/proc/{pid}/status').read_text().splitlines()
+    pid = int(next(line.split()[1] for line in status if line.startswith('PPid:')))
+else:
+    raise AssertionError('Trial ancestor search exceeded its bound')
+if pid <= 1:
+    raise AssertionError('No fixture Trial ancestor found')
+PY
+"#,
+    );
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    let trials = view["accounting"]["trials"].as_array().unwrap();
+    assert_eq!(trials.len(), 2, "{view}");
+    for trial in trials {
+        let sessions = trial["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1, "{trial}");
+        assert_eq!(sessions[0]["role"], "implement", "{trial}");
+    }
+}
+
+#[test]
+fn legacy_trials_with_unknown_prices_still_report_paired_time() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does("true");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view = fixture.experiment();
+    let root = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        view["id"].as_str().unwrap()
+    ));
+    let metadata = root.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    saved.as_object_mut().unwrap().remove("pricing");
+    fs::write(metadata, saved.to_string()).unwrap();
+    for entry in fs::read_dir(root.join("results")).unwrap() {
+        let path = entry.unwrap().path();
+        let mut result: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let time_ms = if result["arm"] == "baseline" {
+            1000
+        } else {
+            2000
+        };
+        assert_ne!(result["outcome"], "void", "{result}");
+        for attempt in result["attempts"].as_array_mut().unwrap() {
+            attempt.as_object_mut().unwrap().remove("accounting");
+            attempt["timings"]["total_ms"] = json!(time_ms);
+        }
+        fs::write(path, result.to_string()).unwrap();
+    }
+    let shown = fixture.experiment();
+    assert!(shown["pricing"].is_null());
+    assert!(shown["accounting"]["paired_median_ratios"]["cost"].is_null());
+    assert_eq!(shown["accounting"]["paired_median_ratios"]["time"], 2.0);
+}
+
+#[test]
 fn estimates_use_each_arms_own_history_and_include_frozen_costs() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does("true");

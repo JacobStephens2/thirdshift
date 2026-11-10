@@ -47,19 +47,19 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
 }
 
 /// Completed Trials' measurements, by suite and exact Arm setup.
-type History = BTreeMap<(String, String), TrialMinutes>;
+type History = BTreeMap<(String, String), TrialMeasurements>;
 
 #[derive(Clone, Copy, Default)]
-struct TrialMinutes {
-    total: f64,
+struct TrialMeasurements {
+    total_minutes: f64,
     trials: usize,
     cost_usd: f64,
     priced_trials: usize,
 }
 
-impl TrialMinutes {
+impl TrialMeasurements {
     fn add(&mut self, minutes: f64, cost_usd: Option<f64>) {
-        self.total += minutes;
+        self.total_minutes += minutes;
         self.trials += 1;
         if let Some(cost) = cost_usd {
             self.cost_usd += cost;
@@ -67,8 +67,8 @@ impl TrialMinutes {
         }
     }
 
-    fn per_trial(self) -> f64 {
-        self.total / self.trials as f64
+    fn minutes_per_trial(self) -> f64 {
+        self.total_minutes / self.trials as f64
     }
 }
 
@@ -166,7 +166,7 @@ impl Plan {
                         trials,
                         mean: history
                             .get(&history_key(suite, setup))
-                            .map(|minutes| minutes.per_trial()),
+                            .map(|measurements| measurements.minutes_per_trial()),
                         mean_cost: history
                             .get(&history_key(suite, setup))
                             .filter(|past| past.priced_trials == past.trials)

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::trial_results::files::Native;
 use super::{TrialResult, trial_sessions};
-use crate::otlp_jsonl::{Reader, Spans};
+use crate::otlp_jsonl::{AnyValue, Reader, Spans};
 use crate::session::usage;
 use crate::trial::accounting::{Attempt, Prices, Session};
 use crate::trial::{Outcome, Output};
@@ -29,6 +29,7 @@ pub(super) fn capture(
             .unwrap_or_default();
         let mut started = 0;
         let mut time_ms = 0;
+        let mut recorded_role = None;
         if let Some(bytes) = &bytes {
             for request in Reader::<_, Spans>::new(Cursor::new(bytes)) {
                 for span in request?
@@ -39,26 +40,36 @@ pub(super) fn capture(
                     .filter(|span| span.name.starts_with("invoke_agent "))
                 {
                     started = span.start_time_unix_nano;
+                    recorded_role = span.attributes.iter().find_map(|attribute| {
+                        match (&*attribute.key, &attribute.value) {
+                            ("thirdshift.trial.role", Some(AnyValue::String(role))) => {
+                                Some(role.clone())
+                            }
+                            _ => None,
+                        }
+                    });
                     time_ms =
                         u128::from(span.end_time_unix_nano.saturating_sub(started)) / 1_000_000;
                 }
             }
         }
-        let role = output
-            .steps
-            .iter()
-            .find(|step| {
-                let nanos = |text: &str| {
-                    chrono::DateTime::parse_from_rfc3339(text)
-                        .ok()
-                        .and_then(|date| date.timestamp_nanos_opt())
-                        .and_then(|n| u64::try_from(n).ok())
-                };
-                nanos(&step.started_at)
-                    .zip(nanos(&step.ended_at))
-                    .is_some_and(|(begin, end)| begin <= started && started <= end)
-            })
-            .map_or(role, |step| step.name.as_str());
+        let role = recorded_role.as_deref().unwrap_or_else(|| {
+            output
+                .steps
+                .iter()
+                .find(|step| {
+                    let nanos = |text: &str| {
+                        chrono::DateTime::parse_from_rfc3339(text)
+                            .ok()
+                            .and_then(|date| date.timestamp_nanos_opt())
+                            .and_then(|n| u64::try_from(n).ok())
+                    };
+                    nanos(&step.started_at)
+                        .zip(nanos(&step.ended_at))
+                        .is_some_and(|(begin, end)| begin <= started && started <= end)
+                })
+                .map_or(role, |step| step.name.as_str())
+        });
         let priced = prices.cost(&summary);
         let gap = priced.as_ref().err().map(|error| {
             format!(
@@ -278,14 +289,14 @@ impl Report {
             };
             let baseline = trial_total(baseline);
             let candidate = trial_total(candidate);
+            report.paired_median_ratios.pairs += 1;
             if let Some((base, cand)) = baseline.cost_usd.zip(candidate.cost_usd) {
-                report.paired_median_ratios.pairs += 1;
                 if base > 0.0 {
                     costs.push(cand / base);
                 }
-                if baseline.time_ms > 0 {
-                    times.push(candidate.time_ms as f64 / baseline.time_ms as f64);
-                }
+            }
+            if baseline.time_ms > 0 {
+                times.push(candidate.time_ms as f64 / baseline.time_ms as f64);
             }
         }
         report.paired_median_ratios.cost = median(&mut costs);

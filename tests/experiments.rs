@@ -853,7 +853,7 @@ printf changed >> .thirdshift-issue.md
 }
 
 #[test]
-fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
+fn spec_review_generated_instruction_fallbacks_do_not_change_the_repository() {
     for harness_name in ["agy", "opencode"] {
         let fixture = Fixture::new();
         let harness = fixture.scenario.path(&format!("bin/{harness_name}"));
@@ -890,8 +890,8 @@ fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
         let experiment = fixture.experiment();
         for result in experiment["results"].as_array().unwrap() {
             assert_eq!(
-                result["outcome"], "succeeded",
-                "{harness_name}: generated fallback links must not invalidate an unchanged Trial"
+                result["attempts"][0]["void_cause"], "accounting_gap",
+                "{harness_name}: generated fallback links must not invalidate the repository; these fake Harnesses report no observed Model: {result}"
             );
         }
     }
@@ -1052,9 +1052,11 @@ PY
                 fs::create_dir_all(delegate.parent().unwrap()).unwrap();
                 fs::rename(&fixed, &delegate).unwrap();
                 fs::write(&fixed, format!(r#"#!/usr/bin/python3
-import json, os, subprocess, sys
+import json, os, signal, subprocess, sys
 if '--output-format' not in sys.argv:
     os.execv({delegate:?}, [{delegate:?}, *sys.argv[1:]])
+for stop in [signal.SIGTERM, signal.SIGINT]:
+    signal.signal(stop, lambda *_: None)
 child = subprocess.Popen([{delegate:?}, *sys.argv[1:]], stdout=subprocess.PIPE)
 measured = False
 ending = []
@@ -1802,9 +1804,14 @@ fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
         ),
     ] {
         let fixture = Fixture::new();
+        let usage = if harness == "claude" {
+            "echo '{\"type\":\"assistant\",\"message\":{\"id\":\"priced\",\"model\":\"fixture-model\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2},\"content\":[]}}'"
+        } else {
+            "true"
+        };
         fixture
             .scenario
-            .agent_does(&format!("echo '{event}'\nsleep 0.5\n"));
+            .agent_does(&format!("{usage}\necho '{event}'\nsleep 0.5\n"));
         let args = [
             "--trials-per-task",
             "3",
@@ -1852,7 +1859,31 @@ fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
         assert_eq!(after["results"].as_array().unwrap().len(), 6);
         assert_eq!(calls().len(), started + 6, "void Trials must be retried");
         for result in after["results"].as_array().unwrap() {
-            assert_eq!(result["outcome"], "succeeded");
+            let missing_before =
+                before["unfinished_trials"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|prior| {
+                        prior["arm"] == result["arm"]
+                            && prior["trial"] == result["trial"]
+                            && prior["attempts"].as_array().unwrap().iter().any(|attempt| {
+                                attempt["accounting"]["sessions"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|session| !session["gap"].is_null())
+                            })
+                    });
+            if harness == "claude" && !missing_before {
+                assert_eq!(result["outcome"], "succeeded", "{result}");
+            } else {
+                assert_eq!(result["outcome"], "void", "{result}");
+                assert_eq!(
+                    result["attempts"].as_array().unwrap().last().unwrap()["void_cause"],
+                    "accounting_gap"
+                );
+            }
         }
     }
 }
@@ -2125,7 +2156,7 @@ fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     let escaped = fixture.scenario.path("escaped-after-timeout");
     fixture.scenario.agent_does(&format!(
         r#"
-echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
+echo '{{"type":"assistant","message":{{"id":"partial","model":"observed","usage":{{"input_tokens":10,"output_tokens":2}},"content":[]}}}}'
 printf changed > changed-by-agent.txt
 (sleep 7; echo escaped > '{}') &
 while true; do sleep 0.05; done
@@ -2259,6 +2290,16 @@ fn an_agent_killing_its_own_harness_fails_without_a_retry() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"
 echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":10,"output_tokens":2},"content":[]}}'
+python3 - <<'PY'
+import os, time
+from pathlib import Path
+session = Path(os.environ['HOME']).parent
+deadline = time.monotonic() + 120
+while not any('input_tokens' in path.read_text() for path in session.glob('*.logs.jsonl')):
+    if time.monotonic() > deadline:
+        raise AssertionError('Session usage was not retained before the agent action')
+    time.sleep(0.01)
+PY
 kill -KILL "$PPID"
 "#);
     let run = fixture.run(&[]);
