@@ -16,6 +16,7 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod check_read;
+pub(crate) mod evals;
 mod quota;
 pub(crate) use check_read::is_transient as check_read_is_transient;
 pub(crate) use quota::{Quota, Quotas};
