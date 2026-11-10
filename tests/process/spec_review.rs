@@ -309,7 +309,7 @@ fn spec_review_and_delivery_leave_the_spec_pr_ready_with_its_checklist() {
         .unwrap();
     let prompt = review["prompt"].as_str().unwrap();
     for expected in [
-        "/thirdshift-code-review main",
+        "/thirdshift-code-review refs/remotes/origin/main",
         "Every Ticket",
         "Closes #7",
         "summary.json",

@@ -13,9 +13,10 @@ diff prints that no tests are affected. Before each selected command starts,
 the script prints its full-output log path. After it finishes, one summary line
 shows the command, `PASS` or `FAIL`, wall time in seconds and the log path. Raw
 check output stays in the log. Failures also print failing Rust test names and
-panic messages, or failing `node --test` cases for the browser suites, so the
-summary is enough to start investigating. Any failed command fails the entry
-point and stops the remaining checks.
+panic messages, or failing `node --test` cases for the browser suites with
+their error messages (up to 15 lines each, without stack frames or other
+diagnostic keys), so the summary is enough to start investigating. Any failed
+command fails the entry point and stops the remaining checks.
 
 Logs live in `.affected-tests/` at the checkout root, which Git ignores. Each
 command gets a separate log named after the command with a unique suffix;
@@ -32,8 +33,10 @@ PASS cargo nextest run (42.15s; log: /checkout/.affected-tests/cargo-nextest-run
 | --- | --- |
 | `prototype/go/**` only | `go test ./...` from `prototype/go/`; no Rust suite |
 | `prototypes/typescript/**` | `bun run --cwd prototypes/typescript typecheck` (`tsc --noEmit`), then `bun test --cwd prototypes/typescript`; requires Python 3.11 and `bun install --frozen-lockfile` in that directory first; Chromium setup is in the prototype README |
+| `prototypes/console-split/**` | `python3 -m unittest discover -s prototypes/console-split -p 'test_*.py'` and the full Rust suite |
+| `docs/research/console-core-split.md` | The Console/core prototype's Python tests |
 | `site/**`, `docs/guide.md` | `npm test --prefix site`; `cargo test --test share_card --test site_deploy`; `cargo test --bin thirdshift prompts_page` |
-| `docs/**/*.md`, `GLOSSARY.md`, `CODING_STANDARDS.md` | No checks; prints `No checks for docs-only '<path>'.` Exceptions: `docs/guide.md` and `GLOSSARY.md` select the site checks; `docs/experiment-results.md`, `docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md` and `docs/research/go-vs-rust-prototype.md` retain the full Rust suite. Non-Markdown files under `docs/` retain the full suite. |
+| `docs/**/*.md`, `GLOSSARY.md`, `CODING_STANDARDS.md` | No checks; prints `No checks for docs-only '<path>'.` Exceptions: `docs/guide.md` and `GLOSSARY.md` select the site checks; `docs/research/console-core-split.md` selects the prototype's Python tests; `docs/experiment-results.md`, `docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md` and `docs/research/go-vs-rust-prototype.md` retain the full Rust suite. Non-Markdown files under `docs/` retain the full suite. |
 | `console/**`: the Console browser tests, their fixtures and packages | Console browser tests: `cargo build --locked`, then `npm test --prefix console` |
 | `src/console.rs`, `src/console/**` (including templates and served assets), `src/config/console.rs`, `src/config/console/**`, and the shared fixtures the Console browser tests read: `tests/console/scoring_fixture.py`, `tests/fixtures/waterfall-{logs,spans}.jsonl` | Console browser tests and the full Rust suite |
 | `scripts/release*`, `scripts/generate-release.py`, `scripts/test_generate_release.py` | `cargo test --test release`; `python3 -m unittest discover -s scripts -p test_generate_release.py` |
@@ -50,7 +53,8 @@ independently, without broadening the existing areas' Rust selection. See the
 Docs without consumers add no checks when mixed with other areas. The selector's
 `DOC_CHECKS` exception list preserves checks for Markdown read by code: the
 manual and glossary by the site tests, the experiment result format and Console
-API ADR by Rust tests, and the Go comparison by the prototype's benchmark test.
+API ADR by Rust tests, the Go comparison by the prototype's benchmark test, and
+the Console/core comparison by the prototype's report test.
 `scripts/test_affected_tests.py` scans repository code for literal references to
 existing Markdown inputs and fails with the referencing file and doc path when
 an exception is missing. Add new inputs to `DOC_CHECKS` with their checks. The
@@ -172,3 +176,39 @@ supervisor handshake use the shared 120-second readiness bound.
 
 Release-script tests run on Linux. These deadlines belong to tests;
 production release polling still has no overall timeout and resumes on rerun.
+
+## Scenario Run lifetime
+
+Every thirdshift process a `Scenario` starts through `run`, `run_with_input`,
+`run_from`, `run_with_env`, `run_until`, `run_from_until`, `run_and_signal`,
+`run_and_signal_with_env`, `read_to_file` and `run_copy_replaced_midway` belongs
+to that scenario, as does everything it starts. A Linux guardian from the shared
+child-lifetime helper (`OwnedRuns`) starts each Run. It is a subreaper in a
+process group of its own that ignores INT, TERM, HUP and QUIT, so it adopts
+descendants that start new process groups or sessions, such as fake Harnesses,
+held `git` and `gh` wrappers and detached commands.
+
+The guardian is forked without exec, so before forking it closes the harness's
+inherited close-on-exec descriptors; otherwise an executable another test is
+writing could fail to start with ETXTBSY. It keeps a Run unreaped until the
+test has read its status, as a `Child` does, so `HeldRun::signal` never reaches
+a reused process id.
+
+Descendants outlive their Run as they do in production, until the `Scenario` is
+dropped by normal completion or assertion unwinding. Dropping it closes the
+lease every guardian polls. Each guardian then SIGKILLs and reaps what it owns,
+including commands that trap INT and TERM, and the drop waits up to the shared
+120-second bound for them before the temp root is removed. The lease also closes
+when the harness dies by any signal. So after SIGKILL of the harness alone, or of
+its whole process group, the Run and its descendants end within milliseconds.
+
+Terminal Runs (`run_terminal`, `run_terminal_bounded`, `run_on_terminal`) follow
+the [Setup PTY child lifetime](#setup-pty-child-lifetime) contract instead.
+Commands the tests build with `Scenario::command` themselves, such as the
+Console's, are not covered.
+
+`cargo test --test scenario_lifetime` holds a Run on a fake agent, with a
+detached command that ignores INT and TERM, and on a held fake `git`. It kills
+the fixture harness alone and with its process group, and also covers normal
+completion and assertion unwinding. A subreaping supervisor waits five seconds
+for each recorded process to be gone and names any survivor.

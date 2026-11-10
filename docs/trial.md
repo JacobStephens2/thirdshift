@@ -1,8 +1,8 @@
 # Trial protocol, version 1
 
-`thirdshift --trial /absolute/path/request.json` runs one session in a prepared
-repository through the same session code as a Run. This internal flag is hidden
-from `help`. `session_kind` accepts `code-review` and `spec-review`.
+`thirdshift --trial /absolute/path/request.json` runs a review session or the
+local Ticket Step prefix in a prepared repository through Run execution code. This internal flag is hidden
+from `help`. `session_kind` accepts `code-review`, `spec-review` and `process`.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
 The current Experiment supervises their Session traces (or older Arms' raw Session logs) for plan-limit
@@ -27,6 +27,41 @@ the index unchanged; it fixes and publishes nothing. Its `pr_url` input remains
 required by version 1 but is unused.
 A Trial does not acquire a Worktree,
 make a Claim, fetch the issue, push, watch CI, or perform Delivery itself.
+
+A `process` request exercises a Built-in or Custom process through the Process
+engine's local Ticket source. The caller checks out `inputs.branch`, supplies
+`inputs.base` as a local branch and sets `origin` to an absolute local repository
+directory, with a repository-local Git author identity for commits inside the
+fresh home. The engine runs the Process's Steps, preserving their Harness,
+Model and Effort choices, and stops before the first publishing Step. The
+local source refuses `delivery` and `self-merge` if asked to execute either.
+The optional `process` field accepts a name or a frozen `.toml` file and defaults
+to `ticket-run`. Processes that need GitHub before publication are refused
+before a Trial starts. Experiments set `THIRDSHIFT_TRIAL_HOME` to the attempt's
+fresh home containing only its frozen Process and home skills. Skill lookup
+uses that home, and the sandbox uses it as the session's home while reading
+Harness logins from the production home as usual.
+
+Before each session, including Resume, the local source restores the supplied
+issue file. Its prompts instruct the agent to commit locally, with no GitHub
+publication. Security review uses the Issue branch's diff against the local
+Base branch; validated pre-existing findings stay under `output_dir`, with no
+Security record published. A failed or incomplete Security review fails the
+local Process. Step results and Session traces are also kept under `output_dir`;
+the result's `log` and `model_evidence` identify the last session. `pr_url` remains
+required by version 1 and is unused for a local Process.
+
+Process results end `delivered`, `stopped_to_ask`, `failed` or `void`.
+`delivered` means every local Step finished up to the first publishing Step;
+it publishes nothing. A final message ending in a question mark, including
+ordinary Markdown emphasis or quotation around the question, is
+`stopped_to_ask`, counted as failed in the Verdict. The existing external Void
+causes still apply. The result's `steps` array retains each completed Step's
+name, outcome, start/end times and elapsed milliseconds. Sessions and Step
+spans join the Experiment's Trace, and all evidence lives under its Trial
+attempt. Trials create no factory Command records, Activity entries or run
+metrics. Repository changes are expected for process Trials; the repository
+integrity rule applies only to review Trials.
 
 ## Request
 
@@ -55,7 +90,7 @@ The `.trial` marker reserves the output folder against concurrent reuse.
 }
 ```
 
-`harness` accepts `claude`, `codex`, `agy`, `grok`, `muse` or `opencode`.
+`harness` accepts `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` or `kimi`.
 Factory skills and instruction-file fallbacks are installed as for a Run.
 The build rejects unknown request versions before starting any session or
 creating its output directory. Unknown fields and unsupported session kinds
@@ -86,8 +121,8 @@ Trial fails into `session_unavailable`, void under the connection-failure
 rules. Web search stays off by each Harness's own flag: Claude denies
 `WebSearch` and `WebFetch`, Codex sets `web_search="disabled"`, Grok passes
 `--disable-web-search`, Muse passes `--disable-web-tools`, and the Trial's
-OpenCode config denies `webfetch` and `websearch`. agy has no such switch, so
-a Trial keeps its session unchanged; the proxy still reaches only its provider
+OpenCode config denies `webfetch` and `websearch`. agy and Kimi Code have no
+such switch, so a Trial keeps their session unchanged; the proxy still reaches only its provider
 hosts.
 
 The fresh home holds the login, and the user-level instructions, rules,
@@ -103,10 +138,20 @@ fresh home. Grok Trials use a Trials home of their own at
 and lock into the fresh home; Grok Trials run one at a time, and the Grok binary
 is bound outside that home. The sandbox clears ambient environment variables
 and hides Cargo registry credentials. An OpenCode Trial's provider key comes only from
-`opencode.api_key` in the Credentials, through its environment; it never sees
-production's `opencode.db`. The Trial's config sets that provider's `apiKey`
-to `{env:…}` naming the variable, so the Trial's Model names its provider as
-`<provider>/<model>`. A Trial whose sandbox cannot start is void with
+the Credentials, through its environment: the key under `[opencode.keys]` for
+the provider its Model names, else `opencode.api_key`. It never sees
+production's `opencode.db`. Its proxy allows `opencode.ai`,
+`models.opencode.ai` and that provider's hosts, so a `fireworks-ai/...` Model
+reaches `api.fireworks.ai` and a `baseten/...` Model `inference.baseten.co`.
+The Trial's config sets that provider's `apiKey` to `{env:…}` naming the
+variable, so the Trial's Model names its provider as `<provider>/<model>`. A Kimi Code Trial must name its Model, an alias in
+Kimi Code's config: its provider's base URL chooses the proxy's hosts, so a
+Fireworks Model reaches `api.fireworks.ai` alone and the managed provider its
+API and sign-in hosts, and an unknown provider fails before the session. Its
+`config.toml` and managed sign-in are copied into the fresh home, and a
+provider whose key comes from `api_key_env` gets that variable from
+thirdshift's own environment; one that is unset fails before the session.
+A Trial whose sandbox cannot start is void with
 `sandbox_unavailable`; one whose Harness has no login (a missing Grok login or
 OpenCode key) fails before its session starts and is void with
 `session_unavailable`. `THIRDSHIFT_TRIAL_NO_SANDBOX`, when set and not empty,

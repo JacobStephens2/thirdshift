@@ -32,6 +32,15 @@ fn a_check_diagnostic_cannot_claim_sandbox_failure() {
 
 fn fixture_with_passthrough_trials() -> Fixture {
     let fixture = Fixture::new();
+    sandbox_graders(&fixture);
+    fixture.scenario.agent_does(&format!(
+        "{}\nprintf 'caught\\n' > \"$reports/spec.md\"\n",
+        review_reports_prelude()
+    ));
+    fixture
+}
+
+pub(super) fn sandbox_graders(fixture: &Fixture) {
     for commit in [&fixture.baseline, &fixture.candidate] {
         let binary = fixture.scenario.path(&format!(
             "home/.thirdshift/evals/builds/{commit}/thirdshift"
@@ -48,11 +57,6 @@ fn fixture_with_passthrough_trials() -> Fixture {
         .unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    fixture.scenario.agent_does(&format!(
-        "{}\nprintf 'caught\\n' > \"$reports/spec.md\"\n",
-        review_reports_prelude()
-    ));
-    fixture
 }
 
 fn set_check(fixture: &Fixture, command: &[&str]) {

@@ -67,6 +67,11 @@ pub(crate) fn setup_changes(description: &Description) -> Vec<String> {
     });
     [
         (
+            "Process",
+            baseline.process.as_deref().unwrap_or("ticket-run"),
+            candidate.process.as_deref().unwrap_or("ticket-run"),
+        ),
+        (
             "Harness",
             baseline.harness.as_str(),
             candidate.harness.as_str(),

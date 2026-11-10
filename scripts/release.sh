@@ -439,7 +439,7 @@ wait_for_experiment() {
 		read -r outcome id <<<"$status"
 		case $outcome in
 		pass | skip) return ;;
-		waiting_on_rechecks)
+		waiting_on_rechecks | waiting_on_leaks)
 			sleep "$poll_seconds"
 			snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiments "$id" --json)
 			;;

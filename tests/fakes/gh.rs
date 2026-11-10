@@ -11,6 +11,7 @@
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
+//!  "auth_token"?: "<token returned by gh auth token>",
 //!  "comments"?: {"<number>": ["<body>" | {"body", "by", "association"}, ...]},
 //!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
 //!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
@@ -3049,6 +3050,13 @@ pub fn main(args: Vec<String>) {
         (positional, flags)
     };
     match args.as_slice() {
+        ["auth", "token", "--hostname", "github.com"] => {
+            if let Some(token) = state.get("auth_token").and_then(Json::as_str) {
+                println!("{token}");
+            } else {
+                die("gh: no authentication token", 1);
+            }
+        }
         ["pr", "create", rest @ ..] => {
             let (_, flags) = parsed(rest);
             pr_create(&mut state, &flags);

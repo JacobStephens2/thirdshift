@@ -19,6 +19,19 @@ pub(super) enum State {
 pub(super) enum Session {
     CodeReview,
     SpecReview,
+    Process,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Provenance {
+    Real,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Environment {
+    Host,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -27,16 +40,95 @@ pub(super) struct Task {
     pub format: u32,
     pub state: State,
     pub session: Session,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
     pub repository: String,
     pub base: String,
     pub change: String,
     pub criteria: String,
     #[serde(default)]
     pub checks: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_grading: Option<ProcessGrading>,
     pub inputs: BTreeMap<String, String>,
     pub trial: Option<crate::trial::Inputs>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProcessGrading {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_fix: Option<RealFix>,
+    pub test_files: Vec<String>,
+    #[serde(default)]
+    pub test_fakes: Vec<String>,
+    pub fail_to_pass: Vec<Vec<String>>,
+    pub pass_to_pass: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_tests: Option<NewTests>,
+}
+
+/// How to find and run an Arm's own new tests for pair evidence.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NewTests {
+    /// Repository-relative patterns; `*` matches within one path component.
+    pub paths: Vec<String>,
+    /// Run once per new test file, with `{path}` and `{stem}` replaced.
+    pub command: Vec<String>,
+}
+
+impl NewTests {
+    /// Whether `path` names one of an Arm's test files.
+    pub fn matches(&self, path: &str) -> bool {
+        self.paths.iter().any(|pattern| {
+            let mut parts = path.split('/');
+            pattern.split('/').all(|expected| {
+                parts
+                    .next()
+                    .is_some_and(|part| component_matches(expected, part))
+            }) && parts.next().is_none()
+        })
+    }
+
+    /// The argument vector that runs one new test file.
+    pub fn command_for(&self, path: &str) -> Vec<String> {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        self.command
+            .iter()
+            .map(|argument| argument.replace("{path}", path).replace("{stem}", stem))
+            .collect()
+    }
+}
+
+fn component_matches(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((prefix, rest)) => {
+            let Some(text) = text.strip_prefix(prefix) else {
+                return false;
+            };
+            (0..=text.len())
+                .filter(|index| text.is_char_boundary(*index))
+                .any(|index| component_matches(rest, &text[index..]))
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RealFix {
+    pub pull_request: String,
+    pub issue: String,
+    pub branch: String,
+    pub title: String,
+    #[serde(default)]
+    pub issue_title: String,
 }
 
 /// One replaceable A/A reading, with the setup that produced it.
@@ -69,6 +161,62 @@ impl Task {
         let path = directory.join("task.toml");
         let task: Self = read(&path)?;
         version(task.format)?;
+        if task.session == Session::Process {
+            anyhow::ensure!(
+                task.provenance.is_some() && task.environment.is_some(),
+                "process tasks require provenance and environment"
+            );
+            anyhow::ensure!(
+                task.checks.is_empty(),
+                "process tasks use process_grading, not checks"
+            );
+            let grading = task
+                .process_grading
+                .as_ref()
+                .context("process tasks require process_grading")?;
+            anyhow::ensure!(
+                !grading.test_files.is_empty(),
+                "process_grading requires test_files"
+            );
+            for file in grading.test_files.iter().chain(&grading.test_fakes) {
+                relative_path(file)?;
+            }
+            for selectors in [&grading.fail_to_pass, &grading.pass_to_pass] {
+                anyhow::ensure!(
+                    !selectors.is_empty(),
+                    "process_grading requires fail_to_pass and pass_to_pass selectors"
+                );
+                for selector in selectors {
+                    anyhow::ensure!(
+                        selector
+                            .first()
+                            .is_some_and(|command| !command.trim().is_empty()),
+                        "process_grading selectors must be nonempty argument vectors"
+                    );
+                }
+            }
+            if let Some(new_tests) = &grading.new_tests {
+                anyhow::ensure!(
+                    !new_tests.paths.is_empty(),
+                    "process_grading.new_tests requires paths"
+                );
+                for pattern in &new_tests.paths {
+                    relative_path(pattern)?;
+                }
+                anyhow::ensure!(
+                    new_tests
+                        .command
+                        .first()
+                        .is_some_and(|command| !command.trim().is_empty()),
+                    "process_grading.new_tests requires a nonempty command"
+                );
+            }
+        } else {
+            anyhow::ensure!(
+                task.process_grading.is_none(),
+                "only process tasks use process_grading"
+            );
+        }
         commit_id(&task.base)?;
         commit_id(&task.change)?;
         if let Some(difficulty) = &task.difficulty {
@@ -159,4 +307,44 @@ pub(super) fn relative_path(path: &str) -> Result<()> {
         bail!("expected a confined relative Eval path: {path}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NewTests;
+
+    fn new_tests(paths: &[&str]) -> NewTests {
+        NewTests {
+            paths: paths.iter().map(|path| (*path).into()).collect(),
+            command: ["cargo", "test", "--test", "{stem}", "--", "{path}"]
+                .map(String::from)
+                .into(),
+        }
+    }
+
+    #[test]
+    fn new_test_patterns_match_within_one_component() {
+        let tests = new_tests(&["tests/*.rs", "test_*.py"]);
+        assert!(tests.matches("tests/counter.rs"));
+        assert!(tests.matches("test_feature.py"));
+        assert!(!tests.matches("tests/support/mod.rs"));
+        assert!(!tests.matches("src/test_feature.py"));
+        assert!(!tests.matches("tests/counter.rs.orig"));
+        assert!(new_tests(&["tests/*/*.rs"]).matches("tests/support/mod.rs"));
+    }
+
+    #[test]
+    fn new_test_commands_name_the_file_and_its_stem() {
+        assert_eq!(
+            new_tests(&["tests/*.rs"]).command_for("tests/counter.rs"),
+            [
+                "cargo",
+                "test",
+                "--test",
+                "counter",
+                "--",
+                "tests/counter.rs"
+            ]
+        );
+    }
 }

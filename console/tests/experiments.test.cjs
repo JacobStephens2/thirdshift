@@ -8,6 +8,123 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+
+test('passing cheaper Candidates share the Verdict line with JSON and text on desktop and phone', async t => {
+  const value = fixture.finish(fixture.record());
+  Object.assign(value.bar, { margin: -1, draws: 1024, min_discriminating_tasks: 0, discriminating_tasks: { 'code-review': ['alpha', 'beta', 'gamma'] } });
+  value.verdict = null;
+  value.pending_rechecks = [];
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  t.after(async () => { await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  for (const task of ['alpha', 'beta', 'gamma']) for (const arm of ['baseline', 'candidate']) for (let trial = 0; trial < 3; trial++) {
+    const result = fixture.result(task, arm, trial);
+    Object.assign(result.score, { passed: true, wrong_finding: false, borderline: false, model: null });
+    result.attempts[0].accounting = { sessions: [{ path: 'session', role: 'review', time_ms: 1000, models: {}, cost_usd: arm === 'baseline' ? 1 : 0.5, gap: null }] };
+    await writeFile(join(folder, 'results', `${fixture.key(task, arm, trial)}.json`), JSON.stringify(result));
+  }
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+  const env = { ...process.env, HOME: home };
+  const shown = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--json'], { env, timeout: 20000 }));
+  assert.equal(shown.verdict.line, 'pass: no worse, and cheaper');
+  assert.match(execFileSync(binary, ['experiments', fixture.id], { env, timeout: 20000 }).toString(), /pass: no worse, and cheaper/);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${origin}/experiments/${fixture.id}`);
+      assert.equal(await page.locator('.experiment-resource-verdict').textContent(), 'pass: no worse, and cheaper');
+      await page.locator('#experiment-bar > summary').click();
+      assert.match(await page.locator('#experiment-bar').textContent(), /Cost ceilingOff.*Time ceilingOff/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+});
+
+test('leak decisions retain the reviewer and false positives, and confirmation voids the Trial', async t => {
+  const value = fixture.finish(fixture.record());
+  value.bar.draws = 256;
+  value.bar.discriminating_tasks = { 'code-review': [] };
+  value.verdict.verdict = 'waiting_on_leaks';
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  const result = fixture.result('alpha', 'candidate', 0);
+  const trial = fixture.key('alpha', 'candidate', 0);
+  const hit = id => ({ id: id.repeat(64), trial_id: trial, attempt: 0, session: 'e'.repeat(64), kind: 'title', identifier: 'Fix <script>unsafe()</script>', line: 3, decision: null });
+  result.leaks = [hit('d'), hit('f')];
+  await writeFile(join(folder, 'results', `${trial}.json`), JSON.stringify(result));
+  t.after(async () => { await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+  const dismissed = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--leak', 'd'.repeat(64), 'dismiss', '--reason', 'Unrelated title', '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }));
+  assert.equal(dismissed.leak_hits[0].decision.decision, 'dismiss');
+  assert.ok(dismissed.leak_hits[0].decision.reviewer.who);
+  assert.equal(dismissed.leak_hits[0].decision.reviewer.from_console, false);
+  assert.equal(dismissed.verdict.verdict, 'waiting_on_leaks', 'measurement-only hits still hold the Verdict');
+  assert.equal(dismissed.results.find(result => result.arm === 'candidate' && result.task === 'alpha' && result.trial === 0).outcome, 'succeeded');
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  const leaks = page.getByRole('region', { name: 'Session evidence leak check', exact: true });
+  await leaks.getByText('Dismissed false positive', { exact: false }).waitFor();
+  assert.match(await leaks.textContent(), /Fix <script>unsafe\(\)<\/script>/);
+  const reason = leaks.getByLabel('Reason');
+  await reason.fill('The Session saw the real fix');
+  const rename = name => execFileSync(binary, ['experiments', fixture.id, '--name', name, '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 });
+  rename('Reviewing the leak');
+  await page.getByRole('heading', { name: 'Reviewing the leak', exact: true }).waitFor();
+  assert.equal(await reason.inputValue(), 'The Session saw the real fix', 'live refresh preserves a focused reason');
+  await leaks.getByRole('button', { name: 'Dismiss false positive', exact: true }).focus();
+  rename('Continuing the leak review');
+  await page.getByRole('heading', { name: 'Continuing the leak review', exact: true }).waitFor();
+  assert.equal(await reason.inputValue(), 'The Session saw the real fix', 'live refresh preserves an unfocused reason');
+  await leaks.getByRole('button', { name: 'Confirm leak', exact: true }).click();
+  await leaks.getByText('Confirmed leak', { exact: false }).waitFor();
+  const shown = JSON.parse(execFileSync(binary, ['experiments', fixture.id, '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }));
+  const confirmed = shown.leak_hits.find(hit => hit.id === 'f'.repeat(64));
+  assert.equal(confirmed.decision.reason, 'The Session saw the real fix');
+  assert.equal(confirmed.decision.reviewer.from_console, true);
+  assert.match(confirmed.decision.reviewer.who, /localhost/);
+  const voided = shown.results.find(result => result.arm === 'candidate' && result.task === 'alpha' && result.trial === 0);
+  assert.equal(voided.outcome, 'void');
+  assert.equal(voided.attempts[0].void_cause, 'fix_leaked');
+  assert.equal(shown.voids.candidate.causes.fix_leaked, 1);
+  assert.throws(() => execFileSync(binary, ['experiments', fixture.id, '--leak', 'd'.repeat(64), 'confirm', '--reason', 'Overwrite', '--json'], { env: { ...process.env, HOME: home }, timeout: 20000 }), /already decided/);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.deepEqual(errors, []);
+});
+
+test('process Trial Peeks show Steps and outcome counts beside the Verdict', async t => {
+  const value = fixture.finish(fixture.record());
+  value.baseline.process = value.candidate.process = 'ticket-run';
+  value.tasks[0].manifest.session = 'process';
+  value.tasks[0].manifest.provenance = 'real';
+  value.tasks[0].manifest.environment = 'host';
+  const folder = await fixture.save(home, value);
+  await fixture.results(home);
+  const result = fixture.result('alpha', 'candidate', 0);
+  result.outcome = result.attempts[0].outcome = 'stopped_to_ask';
+  result.score.passed = false;
+  result.attempts[0].steps = [{ name: 'implement', outcome: 'stopped_to_ask', started_at: '2026-11-09T10:00:00Z', ended_at: '2026-11-09T10:00:01Z', elapsed_ms: 1000 }];
+  await writeFile(join(folder, 'results', `${fixture.key('alpha', 'candidate', 0)}.json`), JSON.stringify(result));
+  const delivered = fixture.result('alpha', 'baseline', 0);
+  delivered.outcome = delivered.attempts[0].outcome = 'delivered';
+  delivered.score.model = null;
+  await writeFile(join(folder, 'results', `${fixture.key('alpha', 'baseline', 0)}.json`), JSON.stringify(delivered));
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(async () => { await context.close(); await fixture.save(home, fixture.record()); await rm(join(folder, 'results'), { recursive: true, force: true }); });
+  const page = await context.newPage();
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  const counts = page.getByRole('region', { name: 'Process Trial outcomes', exact: true });
+  assert.match(await counts.textContent(), /Stopped-to-ask counts as failed/);
+  assert.match(await counts.textContent(), /0 delivered · 1 stopped-to-ask · 0 failed/);
+  await openSuites(page);
+  await page.locator('.trial-row[data-task="alpha"]').getByRole('button', { name: 'Baseline Trial 1: Passed', exact: true }).waitFor();
+  await page.locator(`.trial-cell[data-experiment-peek="trial-${fixture.key('alpha', 'candidate', 0)}"]`).click();
+  assert.match(await page.locator('#peek').textContent(), /Steps.*implement · stopped-to-ask · 1.0s/s);
+});
 // Trial suites open folded; a reader opens each one to see its Trials.
 async function openSuites(page) {
   for (const summary of await page.locator('details.trial-suite > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();

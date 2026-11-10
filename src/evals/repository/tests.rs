@@ -93,6 +93,10 @@ fn complete_trial_repository_preserves_reviewed_patch_inputs_and_custom_branches
                 fixture.task.base
             );
             assert_eq!(
+                git(repo, &["rev-parse", &format!("origin/{base_branch}")]).unwrap(),
+                fixture.task.base
+            );
+            assert_eq!(
                 git(repo, &["rev-parse", "HEAD^"]).unwrap(),
                 fixture.task.base
             );

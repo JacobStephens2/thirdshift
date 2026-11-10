@@ -573,7 +573,7 @@ git commit -q -m 'Fix reproduced Security finding'
     let calls = scenario.claude_calls();
     assert_contains(
         calls[4]["prompt"].as_str().unwrap(),
-        "/thirdshift-code-review main",
+        "/thirdshift-code-review refs/remotes/origin/main",
     );
     let prompt = calls[5]["prompt"].as_str().unwrap();
     assert_contains(prompt, "guidance mode");
@@ -739,7 +739,10 @@ fn a_spec_security_hold_still_repairs_ci_without_repeating_the_review() {
     assert_contains(&result.stderr, "Cross-tenant read");
     let prompts = spec_prompts(&scenario);
     assert_eq!(prompts.len(), 3);
-    assert_contains(&prompts[0], "/thirdshift-code-review main");
+    assert_contains(
+        &prompts[0],
+        "/thirdshift-code-review refs/remotes/origin/main",
+    );
     assert_contains(&prompts[1], "guidance mode");
     assert_contains(&prompts[2], "CI");
     assert_eq!(
@@ -1638,9 +1641,9 @@ fn once_the_last_ticket_lands_the_spec_review_reviews_the_spec_branch_against_th
     assert_eq!(review["branch"], "issue-20");
     let prompt = review["prompt"].as_str().unwrap();
     for part in [
-        "/thirdshift-code-review main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
+        "/thirdshift-code-review refs/remotes/origin/main, with the Spec https://github.com/acme/widgets/issues/20 as the spec\n",
         &spec_url(&scenario),
-        "using main as the fixed point",
+        "using refs/remotes/origin/main as the fixed point",
         "the `thirdshift-tdd` skill",
         "Update PR https://github.com/acme/widgets/pull/2 using the `thirdshift-pr` skill",
         "\"Unaddressed findings\"",

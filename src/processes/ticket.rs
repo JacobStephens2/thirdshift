@@ -56,6 +56,7 @@ pub(crate) fn run_custom(
         Some(delivery.issue.clone()),
         delivery.started,
         WorktreeSource {
+            ticket: source::TicketSource::Factory,
             git: worktree.launch(),
             commit: &commit,
             issue_checkout: Some(worktree.path()),

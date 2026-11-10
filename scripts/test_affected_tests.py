@@ -364,6 +364,23 @@ class AffectedTests(unittest.TestCase):
                 _, calls = self.select_for_only(path)
                 self.assertEqual(calls, [["cargo", "nextest", "run"]])
 
+    def test_console_split_report_runs_its_consumers_checks(self):
+        _, calls = self.select_for_only("docs/research/console-core-split.md")
+        self.assertEqual(calls, [
+            ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+        ])
+
+    def test_console_split_sources_add_checks_and_keep_the_full_rust_suite(self):
+        for path in ["prototypes/console-split/prepare.py",
+                     "prototypes/console-split/test_report.py",
+                     "prototypes/console-split/results.json"]:
+            with self.subTest(path=path):
+                _, calls = self.select_for_only(path)
+                self.assertEqual(calls, [
+                    ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+                    ["cargo", "nextest", "run"],
+                ])
+
     def test_glossary_gets_its_site_consumers_checks(self):
         _, calls = self.select_for_only("GLOSSARY.md")
         self.assertEqual(calls, [
@@ -523,9 +540,105 @@ class AffectedTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("FAIL npm test --prefix site (", result.stdout)
                 self.assertIn("navigation opens the manual", result.stdout)
+                self.assertIn("wrong page", result.stdout)
                 self.assertNotIn("homepage loads", result.stdout)
                 self.assertNotIn("duration_ms", result.stdout)
                 self.assertNotIn("failureType", result.stdout)
+
+    def test_failed_browser_cases_print_multiline_error_messages(self):
+        self.change("site/index.html")
+        message = [
+            "locator.waitFor: Timeout 30000ms exceeded.",
+            "Call log:",
+            "  - waiting for getByRole('button', { name: 'Copy' }) to be visible",
+        ]
+        tap = (
+            "TAP version 13\n# Subtest: copies its show command\n"
+            "ok 1 - homepage loads\n  ---\n  duration_ms: 3.2\n  ...\n"
+            "not ok 2 - copies its show command\n  ---\n  duration_ms: 30012.4\n"
+            "  failureType: 'testCodeFailure'\n  error: |-\n"
+            + "".join(f"    {line}\n" for line in message)
+            + "  code: 'ERR_TEST_FAILURE'\n  stack: |-\n"
+            "    TestContext.<anonymous> (tests/console.test.cjs:4:33)\n  ...\n"
+        )
+        spec = (
+            "✔ homepage loads (3.2ms)\n✖ copies its show command (30012.4ms)\n"
+            "ℹ tests 2\nℹ fail 1\n\n✖ failing tests:\n\n"
+            "test at tests/console.test.cjs:4:1\n"
+            "✖ copies its show command (30012.4ms)\n"
+            "  Error: " + message[0] + "\n"
+            + "".join(f"  {line}\n" for line in message[1:])
+            + "      at TestContext.<anonymous> (tests/console.test.cjs:4:33)\n"
+            "      at Test.run (node:internal/test_runner/test:1047:25)\n"
+        )
+        for reporter, output in [("tap", tap), ("spec", spec)]:
+            with self.subTest(reporter=reporter):
+                self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                lines = result.stdout.splitlines()
+                for line in message[1:]:
+                    self.assertIn(line, lines)
+                self.assertIn(("Error: " if reporter == "spec" else "") + message[0], lines)
+                self.assertNotIn("homepage loads", result.stdout)
+                self.assertNotIn("error: |-", result.stdout)
+                for diagnostic in ["duration_ms", "failureType", "code:", "stack", "TestContext"]:
+                    self.assertNotIn(diagnostic, result.stdout)
+
+    def test_long_browser_error_messages_are_cut_at_the_cap(self):
+        self.change("site/index.html")
+        message = [f"message line {number}" for number in range(1, 21)]
+        tap = (
+            "not ok 1 - long failure\n  ---\n  error: |-\n"
+            + "".join(f"    {line}\n" for line in message)
+            + "  code: 'ERR_TEST_FAILURE'\n  ...\n"
+        )
+        spec = (
+            "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n✖ long failure (1ms)\n"
+            + "".join(f"  {line}\n" for line in message)
+            + "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+        )
+        for reporter, output in [("tap", tap), ("spec", spec)]:
+            with self.subTest(reporter=reporter):
+                self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                lines = result.stdout.splitlines()
+                self.assertIn("message line 15", lines)
+                self.assertNotIn("message line 16", result.stdout)
+                self.assertIn("(5 more lines left out; see the log)", lines)
+
+    def test_spec_error_lines_starting_with_at_are_not_taken_for_stack_frames(self):
+        self.change("site/index.html")
+        output = (
+            "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n"
+            "✖ bad one (1ms)\n  Error: expected\n  at least 3 items\n  but got 2\n"
+            "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+        )
+        self.env.update(RUNNER_STDOUT=output, RUNNER_EXIT="1")
+        result, _ = self.run_selector()
+        self.assertIn("at least 3 items", result.stdout.splitlines())
+        self.assertIn("but got 2", result.stdout.splitlines())
+        self.assertNotIn("TestContext", result.stdout)
+
+    def test_spec_stack_frames_without_locations_are_omitted(self):
+        self.change("site/index.html")
+        for frame in ["at JSON.parse (<anonymous>)", "at async Promise.all (index 0)"]:
+            with self.subTest(frame=frame):
+                self.env.update(
+                    RUNNER_EXIT="1",
+                    RUNNER_STDOUT=(
+                        "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n"
+                        "✖ invalid JSON (1ms)\n  SyntaxError: invalid JSON\n"
+                        f"      {frame}\n"
+                        "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+                    ),
+                )
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("SyntaxError: invalid JSON", result.stdout.splitlines())
+                self.assertNotIn(frame, result.stdout)
+                self.assertNotIn("TestContext", result.stdout)
 
     def test_command_that_cannot_start_still_reports_failure_and_keeps_a_log(self):
         self.change("site/index.html")

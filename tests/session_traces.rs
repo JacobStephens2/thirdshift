@@ -75,8 +75,8 @@ fn version_queries(scenario: &Scenario, harness: &str) -> usize {
 }
 
 #[test]
-fn all_six_harnesses_record_their_version_in_session_trace_resources() {
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+fn every_harness_records_its_version_in_session_trace_resources() {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         let scenario = Scenario::new();
         scenario.agent_does(&opens_pr(7, "main"));
         let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
@@ -95,9 +95,10 @@ fn all_six_harnesses_record_their_version_in_session_trace_resources() {
             notification.contains(&format!("Built with {harness} 9.8.7 · ")),
             "{notification}"
         );
+        // Claude and Kimi report their version in their stream.
         assert_eq!(
             version_queries(&scenario, harness),
-            usize::from(harness != "claude")
+            usize::from(!matches!(harness, "claude" | "kimi"))
         );
     }
 }
@@ -240,8 +241,8 @@ printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existi
 }
 
 #[test]
-fn all_six_harnesses_leave_one_inventory_entry_and_both_otlp_files() {
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+fn every_harness_leaves_one_inventory_entry_and_both_otlp_files() {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         let scenario = Scenario::new();
         scenario.agent_does(&opens_pr(7, "main"));
         let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);

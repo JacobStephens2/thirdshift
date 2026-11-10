@@ -127,6 +127,8 @@ pub mod check;
 pub mod child_lifetime;
 
 pub struct Scenario {
+    /// Ends what the scenario's Runs started, before the temp root goes.
+    runs: child_lifetime::OwnedRuns,
     /// Deletes the temp root when the scenario is dropped.
     _temp_dir: TempDir,
     /// The temp root's path with symlinks resolved, as git reports it: on
@@ -295,7 +297,7 @@ impl From<Output> for RunResult {
 /// [`Scenario::run_until`], which its fake agent's script may still be
 /// holding where it is.
 pub struct HeldRun {
-    child: Child,
+    child: child_lifetime::OwnedRun,
     /// Whether the Run had exited by the time the agent was seen to start.
     exited: bool,
 }
@@ -316,16 +318,16 @@ impl HeldRun {
     }
 
     /// Kill the Run, unless it had already exited, and wait until it is gone.
-    /// What it started lives on.
+    /// What it started lives on until the scenario is dropped.
     pub fn kill(&mut self) {
         self.signal("KILL");
-        self.child.wait().unwrap();
+        self.child.wait();
     }
 
     /// Wait for the Run to exit, and for everything it started to let go of
     /// its stdout and stderr.
     pub fn finish(self) -> RunResult {
-        self.child.wait_with_output().unwrap().into()
+        self.child.wait_with_output().into()
     }
 }
 
@@ -435,6 +437,7 @@ impl Scenario {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().canonicalize().unwrap();
         let scenario = Scenario {
+            runs: child_lifetime::OwnedRuns::new(),
             _temp_dir: temp_dir,
             root,
         };
@@ -540,39 +543,50 @@ impl Scenario {
     }
 
     pub fn run(&self, args: &[&str]) -> RunResult {
-        self.command(args).output().unwrap().into()
+        self.output(self.command(args))
     }
 
     /// Supply a Report or other piped input, closing stdin before waiting.
     pub fn run_with_input(&self, args: &[&str], input: &str) -> RunResult {
         use std::io::Write;
 
-        let mut child = self
-            .command(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = self.runs.spawn(
+            self.command(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        );
         child
             .stdin
             .take()
             .unwrap()
             .write_all(input.as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap().into()
+        child.wait_with_output().into()
     }
 
     /// Like [`Scenario::run`], launched from `dir` with the same isolated environment.
     pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
-        self.command(args).current_dir(dir).output().unwrap().into()
+        let mut command = self.command(args);
+        command.current_dir(dir);
+        self.output(command)
     }
 
     /// Like [`Scenario::run`], with extra environment variables.
     pub fn run_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> RunResult {
         let mut command = self.command(args);
         command.envs(env.iter().copied());
-        command.output().unwrap().into()
+        self.output(command)
+    }
+
+    /// Run `command` to the end as [`Command::output`] does, owned by this
+    /// scenario.
+    fn output(&self, mut command: Command) -> RunResult {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        self.runs.spawn(&mut command).wait_with_output().into()
     }
 
     /// Run thirdshift and send it `signal` (e.g. `"INT"`) once the fake agent
@@ -627,7 +641,7 @@ impl Scenario {
         command.stdout(fs::File::create(output).unwrap());
         command.stderr(Stdio::piped());
         HeldRun {
-            child: command.spawn().unwrap(),
+            child: self.runs.spawn(&mut command),
             exited: false,
         }
     }
@@ -672,22 +686,20 @@ test -f {root}/{COPY_REPLACED}
     /// stderr if the Run exits without the file there, or if the file isn't
     /// there within [`WAIT_BOUND`].
     fn spawn_until_started(&self, mut command: Command, started: &str) -> HeldRun {
-        let mut child = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = self
+            .runs
+            .spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()));
         let deadline = Instant::now() + WAIT_BOUND;
         // Whether the Run has exited is read before whether the agent has
         // started, so a Run that starts the agent and exits between the two
         // reads still counts as started.
         let exited = loop {
-            let exited = child.try_wait().unwrap().is_some();
+            let exited = child.try_wait().is_some();
             if self.path(started).exists() {
                 break exited;
             }
             if exited {
-                let result = RunResult::from(child.wait_with_output().unwrap());
+                let result = RunResult::from(child.wait_with_output());
                 panic!(
                     "the agent never started: the Run exited first; stderr:\n{}",
                     result.stderr
@@ -933,6 +945,7 @@ test -f {root}/{COPY_REPLACED}
             .env("FAKE_GROK_RECORD", self.path("grok-calls.json"))
             .env("FAKE_MUSE_RECORD", self.path("muse-calls.json"))
             .env("FAKE_OPENCODE_RECORD", self.path("opencode-calls.json"))
+            .env("FAKE_KIMI_RECORD", self.path("kimi-calls.json"))
             .env("FAKE_GH_RECORD", self.path("gh-calls.json"))
             // Seconds of waiting for CI become milliseconds. Each poll starts
             // the fake gh; at 100ms the grace period holds about three reads,

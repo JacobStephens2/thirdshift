@@ -323,8 +323,7 @@ fn gates(
     limit: NonZeroUsize,
     order: PickupOrder,
 ) -> Result<Decision> {
-    sweep(outside);
-    let failed = clear_and_count_failures(outside)?;
+    let failed = failures(outside)?;
     if failed.len() >= limit.get() {
         return Ok(Decision::Skip(Skipped::AtFailureLimit {
             repo: repo.clone(),
@@ -336,6 +335,12 @@ fn gates(
         Some(ready) => Decision::Take(ready),
         None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
     })
+}
+
+/// Shared Sweep and open-failure accounting for Pickup and Triage Passes.
+pub(crate) fn failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
+    sweep(outside);
+    clear_and_count_failures(outside)
 }
 
 /// The labels the Sweep takes off closed issues, and a handback takes off an

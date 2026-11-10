@@ -2,6 +2,31 @@ use super::*;
 use crate::harness::interpretation::event::Outcome;
 use serde_json::json;
 
+#[test]
+fn trial_role_does_not_publish_an_ended_session_before_harness_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("trial-role.jsonl");
+    let _trace = Trace::create(
+        &log,
+        "process-1",
+        &Choice::default(),
+        "prompt",
+        Context::of_session(&log),
+        &std::process::Command::new("true"),
+        None,
+    )
+    .unwrap()
+    .with_trial_role(Some("implement"))
+    .unwrap();
+    let published = spans(&log.with_extension("spans.jsonl"));
+    assert!(
+        !published
+            .iter()
+            .any(|span| { span.name.starts_with("invoke_agent ") && span.end_time_unix_nano != 0 }),
+        "A Trial session must remain open until it actually ends: {published:?}"
+    );
+}
+
 fn spans(path: &Path) -> Vec<Span> {
     Reader::<_, Spans>::new(std::fs::read(path).unwrap().as_slice())
         .flat_map(|request| request.unwrap().resource_spans)

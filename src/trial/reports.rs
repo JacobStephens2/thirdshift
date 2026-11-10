@@ -32,6 +32,23 @@ impl Reports {
     }
 }
 
+/// A unified diff without the added lines [`blind`] would remove from a
+/// report, such as a committed note naming its Harness or Model.
+pub(crate) fn blind_diff(diff: &str) -> String {
+    let mut blinded = String::new();
+    for line in diff.lines() {
+        let identifying = !line.starts_with("+++")
+            && line
+                .strip_prefix('+')
+                .is_some_and(|added| blind(added).is_empty());
+        if !identifying {
+            blinded.push_str(line);
+            blinded.push('\n');
+        }
+    }
+    blinded
+}
+
 fn blind(text: &str) -> String {
     enum Table {
         Identities,

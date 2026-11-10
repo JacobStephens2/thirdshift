@@ -29,6 +29,7 @@ impl Attempt for execution::Execution<'_> {
 pub(super) struct Runner<'a> {
     directory: &'a Path,
     bar: &'a Bar,
+    leak_decisions: &'a super::leaks::History,
     signal: &'a Path,
     trace: &'a logs::trace::Context,
     execution: Box<dyn Attempt + 'a>,
@@ -48,10 +49,12 @@ impl<'a> Runner<'a> {
             [&description.baseline, &description.candidate],
             Duration::from_secs(description.bar.timeout_seconds),
             signal,
-        )?;
+        )?
+        .with_pricing(experiment.pricing.as_ref());
         Ok(Self {
             directory: &experiment.directory,
             bar: &description.bar,
+            leak_decisions: &experiment.leak_decisions,
             signal,
             trace,
             execution: Box::new(execution),
@@ -68,7 +71,9 @@ impl<'a> Runner<'a> {
         };
         let mut writer = Writer::resume(self.directory, &identity)?;
         // Recovery may only need to publish retained history. Never replay its pause.
-        if !writer.can_continue(self.bar) {
+        if !writer.can_continue(self.bar)
+            || super::leaks::confirmed(&writer.progress, self.leak_decisions)
+        {
             writer.finish()?;
         } else {
             loop {
@@ -83,6 +88,17 @@ impl<'a> Runner<'a> {
                     },
                     Box::new(|attempt, output, score| {
                         let pause = pause_cause(&output);
+                        let hits = super::leaks::scan(
+                            task,
+                            self.directory,
+                            &identity.key(),
+                            writer.progress.attempts.len(),
+                        )?;
+                        for hit in hits {
+                            if !writer.progress.leaks.iter().any(|saved| saved.id == hit.id) {
+                                writer.progress.leaks.push(hit);
+                            }
+                        }
                         writer.record_attempt(&attempt, output, score)?;
                         // Terminal publication belongs to the same evidence lease.
                         if !writer.can_continue(self.bar) {
@@ -151,6 +167,7 @@ impl Writer {
                 outcome: Outcome::Void,
                 score: None,
                 attempts: Vec::new(),
+                leaks: Vec::new(),
             }
         };
         Ok(Self {
@@ -161,21 +178,48 @@ impl Writer {
     }
 
     fn can_continue(&self, bar: &Bar) -> bool {
+        let incomplete = |output: &Output| {
+            output
+                .accounting
+                .as_ref()
+                .is_some_and(|accounting| accounting.incomplete)
+        };
+        let completed = self
+            .progress
+            .attempts
+            .iter()
+            .filter(|output| !incomplete(output))
+            .count();
         self.progress.attempts.last().is_none_or(|latest| {
-            latest.outcome == Outcome::Void
-                && latest
-                    .void_cause
-                    .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
-                && self.progress.attempts.len() <= bar.void_rules.retries
+            incomplete(latest)
+                || (latest.outcome == Outcome::Void
+                    && latest
+                        .void_cause
+                        .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
+                    && completed <= bar.void_rules.retries)
         })
     }
 
     fn record_attempt(
         &mut self,
         attempt: &Path,
-        output: Output,
-        score: grading::Score,
+        mut output: Output,
+        mut score: grading::Score,
     ) -> Result<()> {
+        // Earlier attempts belong to this same Trial, even across a plan pause.
+        if output.outcome != Outcome::Void
+            && let Some(gap) = self
+                .progress
+                .attempts
+                .iter()
+                .filter_map(|attempt| attempt.accounting.as_ref())
+                .find_map(|accounting| accounting.gap())
+        {
+            output.outcome = Outcome::Void;
+            output.void_cause = Some(VoidCause::AccountingGap);
+            output.cause = Some(gap.into());
+            score.passed = false;
+        }
         store::write(&attempt.join("result.json"), &output)?;
         self.progress.outcome = output.outcome;
         self.progress.score = Some(score);

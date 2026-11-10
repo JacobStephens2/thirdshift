@@ -5,8 +5,8 @@
 In an Eval Trial, reviews the prepared historical diff with the production code-review Factory skill, under the implement session's sub-agent rules. Writes reports without fixing or publishing anything.
 
 ```
-/thirdshift-code-review <base>
-This is a review-only Code review session for issue <Issue URL>, on branch <branch>. Review with the `thirdshift-code-review` Factory skill using <base> as the fixed point, on the prepared diff as it was reviewed. Use the issue in `.thirdshift-issue.md` as the spec.
+/thirdshift-code-review refs/remotes/origin/<base>
+This is a review-only Code review session for issue <Issue URL>, on branch <branch>. Review with the `thirdshift-code-review` Factory skill using refs/remotes/origin/<base> as the fixed point, on the prepared diff as it was reviewed. Use the issue in `.thirdshift-issue.md` as the spec.
 Do not fix findings or change repository files, refs or the index; do not commit, push, or edit pull requests or issues. Write only the review reports to the directory below. These constraints apply to every sub-agent too. Include the skill's written-out tests or commands for behaviour findings in the reports without adding tests to the repository.
 Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
 
