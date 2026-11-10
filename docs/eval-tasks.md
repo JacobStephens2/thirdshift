@@ -326,7 +326,7 @@ thirdshift evals prepare-arms <thirdshift-repository> <baseline-commit> <baselin
 
 Commits are full lowercase object IDs in the local thirdshift repository;
 Harnesses use their CLI names (`claude`, `codex`, `agy`, `grok`, `muse`,
-`opencode`). The command writes a format-1 JSON record to stdout and, atomically,
+`opencode`, `kimi`). The command writes a format-1 JSON record to stdout and, atomically,
 to a new file at `<record.json>`. Its parent directory must exist. It records
 `baseline` and `candidate`, each with `commit`, the cached thirdshift `binary`,
 and a `harness` holding its `name`, resolved `path` and `version`.

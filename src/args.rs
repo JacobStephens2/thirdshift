@@ -1927,6 +1927,7 @@ mod tests {
             Harness::Grok,
             Harness::Muse,
             Harness::OpenCode,
+            Harness::Kimi,
         ] {
             let flags = Flags {
                 harness: harness::Asked {
@@ -2820,11 +2821,11 @@ mod tests {
         for (args, error) in [
             (
                 vec![URL, "harness"],
-                "harness must be followed by claude or codex or agy or grok or muse or opencode",
+                "harness must be followed by claude or codex or agy or grok or muse or opencode or kimi",
             ),
             (
                 vec![URL, "harness", "gemini"],
-                "harness must be followed by claude or codex or agy or grok or muse or opencode, not gemini",
+                "harness must be followed by claude or codex or agy or grok or muse or opencode or kimi, not gemini",
             ),
             (
                 vec!["--harness", "claude", URL, "harness", "codex"],
