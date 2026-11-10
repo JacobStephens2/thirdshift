@@ -45,11 +45,11 @@ change = "{change}"
 criteria = "Fix the counter."
 checks = []
 [inputs]
-[process_tests]
-overlay_files = ["tests/regression.py"]
-shared_fakes = []
+[process_grading]
+test_files = ["tests/regression.py"]
+test_fakes = []
 fail_to_pass = [["./tests/regression.py"]]
-pass_to_pass = []
+pass_to_pass = [["./tests/regression.py"]]
 ''')
     result = subprocess.run([str(binary), 'evals', 'prepare', 'process', 'executable',
         str(root / 'prepared')], env=env, text=True, capture_output=True)

@@ -84,7 +84,6 @@ pub(crate) fn propose(
     git.run(&["update-ref", "refs/heads/change", &review.head])?;
     fs::write(staging.path().join("issue.md"), review.input)?;
     let task = Task {
-        process_tests: None,
         difficulty: None,
         format: 1,
         state: State::Proposed,
@@ -99,6 +98,7 @@ pub(crate) fn propose(
             bug.url, reason
         ),
         checks: Vec::new(),
+        process_grading: None,
         inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(review.trial),
     };
