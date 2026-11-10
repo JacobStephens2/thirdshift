@@ -338,6 +338,12 @@ impl<'a> Execution<'a> {
         })?;
         trace.steps(&protocol.steps)?;
         trace.outcome(protocol.outcome);
+        if protocol.void_cause == Some(VoidCause::Interrupted)
+            && interrupt::check().is_err()
+            && let Some(accounting) = &mut protocol.accounting
+        {
+            accounting.incomplete = true;
+        }
         let completed = complete(attempt, protocol, score)?;
         interrupt::check()?;
         Ok(completed)

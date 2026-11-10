@@ -104,6 +104,9 @@ measurement (input or output), unknown observed Model, or missing frozen price
 leaves cost null and makes a Trial Void with an `accounting_gap` cause naming
 the gap. Existing external Void causes retain their cause and pause behavior;
 an accounting gap in an earlier attempt still voids a later completed Trial.
+An attempt stopped by the operator retains its Session facts with
+`accounting.incomplete: true`; it does not consume the completed-attempt retry
+budget. Completed interrupted Voids retain the saved Bar's retry policy.
 
 `paired_median_ratios` pairs terminal, non-Void Trials by suite, task and Trial
 index, divides Candidate by Baseline within each pair, then takes the median.
@@ -332,7 +335,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "log": "string?", "model_evidence": "string?",
     "reports": {"standards": "string?", "spec": "string?"},
     "steps?": [{"name": "string", "outcome": "string", "started_at": "string", "ended_at": "string", "elapsed_ms": "integer"}],
-    "accounting?": {"sessions":["SessionAccounting"]}
+    "accounting?": {"sessions":["SessionAccounting"], "incomplete?":"boolean"}
   },
   "Score": {
     "passed": "boolean", "wrong_finding": "boolean", "borderline": "boolean",

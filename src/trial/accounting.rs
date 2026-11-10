@@ -99,6 +99,9 @@ impl Prices {
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Attempt {
     pub sessions: Vec<Session>,
+    /// A global stop retained Session facts before this attempt completed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

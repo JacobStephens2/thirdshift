@@ -2974,6 +2974,15 @@ while true; do sleep 0.05; done
         "each Arm already completed one Void Trial attempt before Stop"
     );
     for result in fixture.experiment()["results"].as_array().unwrap() {
-        assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+        let attempts = result["attempts"].as_array().unwrap();
+        assert_eq!(attempts.len(), 4, "three completed attempts plus the stop");
+        assert_eq!(
+            attempts
+                .iter()
+                .filter(|attempt| attempt["accounting"]["incomplete"] == true)
+                .count(),
+            1,
+            "retained Session accounting must not consume a completed-attempt retry"
+        );
     }
 }

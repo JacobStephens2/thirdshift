@@ -162,12 +162,25 @@ impl Writer {
     }
 
     fn can_continue(&self, bar: &Bar) -> bool {
+        let incomplete = |output: &Output| {
+            output
+                .accounting
+                .as_ref()
+                .is_some_and(|accounting| accounting.incomplete)
+        };
+        let completed = self
+            .progress
+            .attempts
+            .iter()
+            .filter(|output| !incomplete(output))
+            .count();
         self.progress.attempts.last().is_none_or(|latest| {
-            latest.outcome == Outcome::Void
-                && latest
-                    .void_cause
-                    .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
-                && self.progress.attempts.len() <= bar.void_rules.retries
+            incomplete(latest)
+                || (latest.outcome == Outcome::Void
+                    && latest
+                        .void_cause
+                        .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
+                    && completed <= bar.void_rules.retries)
         })
     }
 
