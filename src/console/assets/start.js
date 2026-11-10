@@ -1,23 +1,39 @@
-// Both page controls submit to the same scoped, CSRF-protected start API.
+// Page controls submit to the same scoped, CSRF-protected start API.
 export function initStarts(refresh) {
-  const area = document.querySelector('[data-start-area]');
-  const dialog = document.getElementById('start-confirm');
-  if (!area || !dialog) return;
-  const result = area.querySelector('[data-start-result]');
-  const accept = dialog.querySelector('[data-start-accept]');
+  let area, dialog, result, accept;
   let pending;
   let sending = false;
-  const buttons = area.querySelectorAll('[data-start-enable]');
-  for (const button of buttons) button.disabled = false;
+  const buttons = () => document.querySelectorAll('[data-start-enable]');
 
-  function review(request, harness, machine = '') {
+  function update(next) {
+    const current = document.getElementById('inbox-start');
+    const replacement = next?.getElementById('inbox-start');
+    // A scope change can introduce or remove the confirmation controls.
+    // Otherwise keep the person's form edits and the submission result.
+    if (current && replacement && !sending &&
+        Boolean(current.querySelector('[data-start-area]')) !== Boolean(replacement.querySelector('[data-start-area]'))) {
+      current.replaceChildren(...replacement.childNodes);
+      pending = undefined;
+    }
+    area = document.querySelector('[data-start-area]');
+    dialog = document.getElementById('start-confirm');
+    result = area?.querySelector('[data-start-result]');
+    accept = dialog?.querySelector('[data-start-accept]');
+    for (const button of buttons()) button.disabled = sending || !dialog;
+  }
+  update();
+
+  function review(request, harness, machine = '', machineName = machine) {
     if (sending) return;
+    update();
+    if (!dialog) return;
     pending = { request, machine };
-    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}, with Harness ${harness}${machine ? ` on machine ${machine}` : ''}.`;
+    dialog.querySelector('[data-start-description]').textContent = `${request.command ?? 'ticket'} on ${request.repository}${request.issue ? ` issue ${request.issue}` : ''}${request.pull_request ? ` pull request ${request.pull_request}` : ''}, ${harness ? `with Harness ${harness}` : 'using User config and CLI defaults'}${machineName ? ` on machine ${machineName}` : ''}.`;
     dialog.querySelector('[data-start-summary]').textContent = JSON.stringify(request, null, 2);
     dialog.showModal();
   }
-  area.querySelector('[data-start-form]')?.addEventListener('submit', event => {
+  document.addEventListener('submit', event => {
+    if (!event.target.matches('[data-start-form]')) return;
     event.preventDefault();
     const values = new FormData(event.target);
     const request = {};
@@ -38,17 +54,22 @@ export function initStarts(refresh) {
     if (mode) request.email = { mode, ...(address ? { address } : {}) };
     review(request, request.harness, event.target.elements.repository.selectedOptions[0].dataset.machine);
   });
-  area.addEventListener('click', event => {
+  // Delegation includes rows introduced or replaced by the Inbox's live morph.
+  document.addEventListener('click', event => {
     const button = event.target.closest('[data-start-request]');
-    if (button) review(JSON.parse(button.dataset.startRequest), button.dataset.startHarness, area.dataset.machine);
+    if (button) review(JSON.parse(button.dataset.startRequest), button.dataset.startHarness,
+      button.dataset.startMachine ?? area?.dataset.machine, button.dataset.startMachineName);
+    if (event.target.closest('[data-start-cancel]')) dialog.close();
   });
-  dialog.querySelector('[data-start-cancel]').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => { pending = undefined; });
-  accept.addEventListener('click', async () => {
+  document.addEventListener('close', event => {
+    if (event.target.id === 'start-confirm') pending = undefined;
+  }, true);
+  document.addEventListener('click', async event => {
+    if (!event.target.closest('[data-start-accept]')) return;
     if (!pending || sending) return;
     const { request, machine } = pending;
     sending = true;
-    for (const button of buttons) button.disabled = true;
+    for (const button of buttons()) button.disabled = true;
     accept.disabled = true;
     dialog.close();
     result.textContent = 'Starting…';
@@ -72,8 +93,9 @@ export function initStarts(refresh) {
       result.textContent = `${error.message} Check Inbox and logs before retrying.`;
     } finally {
       sending = false;
-      for (const button of buttons) button.disabled = false;
+      for (const button of buttons()) button.disabled = false;
       accept.disabled = false;
     }
   });
+  return update;
 }

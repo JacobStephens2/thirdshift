@@ -4,6 +4,89 @@ use std::time::Instant;
 const RECORDS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn targeted_fix_keeps_run_scope_csrf_and_launch_directory_checks() {
+    let scenario = fixture();
+    let console = server(&scenario);
+    let request = json!({"command":"fix", "repository":"acme/widgets",
+        "pull_request":"https://github.com/acme/widgets/pull/42"});
+    for scope in ["read", "act"] {
+        let token = tokens::create(&scenario.path("home"), scope, &["--scopes", scope]);
+        assert_eq!(post(&console, &token, &request).status(), 403);
+    }
+    let client = reqwest::blocking::Client::new();
+    assert_eq!(
+        client
+            .post(format!("{}/api/v1/runs", console.address))
+            .json(&request)
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let unknown = json!({"command":"fix", "repository":"acme/unknown",
+        "pull_request":"https://github.com/acme/unknown/pull/42"});
+    assert_eq!(post(&console, &runner, &unknown).status(), 422);
+    assert!(!scenario.path(RECORDS).exists());
+    assert!(!scenario.path("claude-calls.json").exists());
+}
+
+#[test]
+fn fix_row_action_keeps_other_account_commands_read_only() {
+    let scenario = fixture();
+    let machine = super::other_accounts::Machine::new();
+    machine.setting("readable");
+    let serving = machine.home("serving");
+    fs::write(
+        serving.join(".thirdshift/config.toml"),
+        format!(
+            "launch_directories = [{}]\n[console]\nport = 0\nother_accounts = 'readable'\n",
+            serde_json::to_string(&scenario.launch_dir()).unwrap()
+        ),
+    )
+    .unwrap();
+    let foreign = machine.home("conductor");
+    for (home, number) in [(&serving, 1), (&foreign, 7)] {
+        let pull_request = format!("https://github.com/acme/widgets/pull/{}", number + 10);
+        let mut ready = record(home, number, Some("ready for review"), 0);
+        ready["issue"] = Value::Null;
+        ready["kind"] = json!("Review run");
+        ready["pull_request"] = json!(pull_request);
+        write_record(home, number, &ready);
+        fs::write(
+            home.join(".thirdshift/logs/github-inbox.json"),
+            json!({
+                "version":1, "subjects":{(pull_request):{
+                    "state":"Open", "ci":"red", "mergeable":"mergeable"
+                }}
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    let html = console.get("/").text().unwrap();
+    let rows = scraper::Html::parse_document(&html);
+    let selector = scraper::Selector::parse(".command").unwrap();
+    let mut checked = 0;
+    for row in rows.select(&selector) {
+        let foreign = row.html().contains("account-tag");
+        assert_eq!(
+            row.html().contains(">Start Fix run</button>"),
+            !foreign,
+            "{}",
+            row.html()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 2, "{html}");
+}
+
+#[test]
 fn api_checks_the_same_named_process_as_the_cli() {
     let scenario = fixture();
     let directory = scenario.path("home/.thirdshift/processes");

@@ -104,6 +104,7 @@ function morph(html) {
       }
     }
   });
+  updateStarts(next);
   const focusedNode = document.getElementById(focused);
   (wasSummary ? focusedNode?.querySelector("summary") : focusedNode)?.focus({ preventScroll: true });
   // Focus cannot enter a folded section. Keep the logical row selected so
@@ -193,7 +194,7 @@ function startUpdates() {
 }
 const observesCommands = document.getElementById('inbox') || timePage;
 if (observesCommands) startUpdates();
-initStarts(() => observesCommands ? refresh() : Promise.resolve());
+const updateStarts = initStarts(() => observesCommands ? refresh() : Promise.resolve());
 
 function stopPeekUpdates() {
   if (observesCommands) return;

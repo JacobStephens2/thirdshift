@@ -24,7 +24,34 @@ pub(super) struct Form {
     pub error: Option<String>,
 }
 
+pub(super) struct Fix {
+    pub request: String,
+    pub machine: String,
+}
+
 impl Form {
+    /// The existing row eligibility and current destination choices both apply.
+    pub fn fix(&self, row: &crate::logs::status::Row) -> Option<Fix> {
+        if row.fix_command.is_none() || row.account.is_some() || row.stale {
+            return None;
+        }
+        let pr = crate::review::PullRequestUrl::parse(&row.pull_request).ok()?;
+        let repository = pr.issue.repo().slug();
+        let machine = if row.console.is_empty() {
+            ""
+        } else {
+            &row.machine
+        };
+        self.repositories
+            .iter()
+            .any(|choice| choice.repository == repository && choice.machine == machine)
+            .then(|| Fix {
+                request: json!({"command":"fix", "repository":repository, "pull_request":pr.url})
+                    .to_string(),
+                machine: machine.into(),
+            })
+    }
+
     pub fn load(config: &UserConfig) -> Self {
         let mut form = Self {
             repositories: Vec::new(),
