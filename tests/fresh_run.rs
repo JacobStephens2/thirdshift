@@ -253,7 +253,7 @@ fn gives_the_agent_the_fresh_prompt() {
     assert_eq!(
         scenario.first_prompt_with_report_placeholder(),
         "/thirdshift-implement https://github.com/acme/widgets/issues/7\n\
-         The base branch is main. Review with the `thirdshift-code-review` skill using main as the fixed point.\n\
+         The base branch is main. Review with the `thirdshift-code-review` skill using refs/remotes/origin/main as the fixed point.\n\
          For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. \
          If it fails as the finding says, fix the code and keep the test. \
          If it passes, you may decline the finding, citing the run. \

@@ -7,9 +7,9 @@ Starts the implement session when the Ticket run is a Continuation of an Issue b
 ```
 /thirdshift-implement <Issue URL>
 
-You are continuing work on branch <branch>, which already has commits (see git log <base>..HEAD). Build on them; don't start over.
+You are continuing work on branch <branch>, which already has commits (see git log refs/remotes/origin/<base>..HEAD). Build on them; don't start over.
 
-The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
+The base branch is <base>. Review with the `thirdshift-code-review` skill using refs/remotes/origin/<base> as the fixed point.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
 Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
