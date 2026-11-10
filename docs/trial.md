@@ -55,7 +55,7 @@ The `.trial` marker reserves the output folder against concurrent reuse.
 }
 ```
 
-`harness` accepts `claude`, `codex`, `agy`, `grok`, `muse` or `opencode`.
+`harness` accepts `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` or `kimi`.
 Factory skills and instruction-file fallbacks are installed as for a Run.
 The build rejects unknown request versions before starting any session or
 creating its output directory. Unknown fields and unsupported session kinds
@@ -86,8 +86,8 @@ Trial fails into `session_unavailable`, void under the connection-failure
 rules. Web search stays off by each Harness's own flag: Claude denies
 `WebSearch` and `WebFetch`, Codex sets `web_search="disabled"`, Grok passes
 `--disable-web-search`, Muse passes `--disable-web-tools`, and the Trial's
-OpenCode config denies `webfetch` and `websearch`. agy has no such switch, so
-a Trial keeps its session unchanged; the proxy still reaches only its provider
+OpenCode config denies `webfetch` and `websearch`. agy and Kimi Code have no
+such switch, so a Trial keeps their session unchanged; the proxy still reaches only its provider
 hosts.
 
 The fresh home holds the login, and the user-level instructions, rules,
@@ -106,7 +106,14 @@ and hides Cargo registry credentials. An OpenCode Trial's provider key comes onl
 `opencode.api_key` in the Credentials, through its environment; it never sees
 production's `opencode.db`. The Trial's config sets that provider's `apiKey`
 to `{env:…}` naming the variable, so the Trial's Model names its provider as
-`<provider>/<model>`. A Trial whose sandbox cannot start is void with
+`<provider>/<model>`. A Kimi Code Trial must name its Model, an alias in
+Kimi Code's config: its provider's base URL chooses the proxy's hosts, so a
+Fireworks Model reaches `api.fireworks.ai` alone and the managed provider its
+API and sign-in hosts, and an unknown provider fails before the session. Its
+`config.toml` and managed sign-in are copied into the fresh home, and a
+provider whose key comes from `api_key_env` gets that variable from
+thirdshift's own environment; one that is unset fails before the session.
+A Trial whose sandbox cannot start is void with
 `sandbox_unavailable`; one whose Harness has no login (a missing Grok login or
 OpenCode key) fails before its session starts and is void with
 `session_unavailable`. `THIRDSHIFT_TRIAL_NO_SANDBOX`, when set and not empty,

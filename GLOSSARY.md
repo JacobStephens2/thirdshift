@@ -84,7 +84,7 @@ The message thirdshift starts or resumes an agent session with. It carries the *
 _Avoid_: instructions, system prompt
 
 **Harness**:
-The headless agent CLI that runs an agent session, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per **Step**, defaulting to the **Command**'s, its child Ticket runs and every **Resume** and **Repair** included, except the **Security review**, which runs on the User config's `security.harness` when that is set, falling back to the default Harness when it can't start. Chosen by the Step, else the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
+The headless agent CLI that runs an agent session, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`), OpenCode (`opencode`) or Kimi Code (`kimi`). One per **Step**, defaulting to the **Command**'s, its child Ticket runs and every **Resume** and **Repair** included, except the **Security review**, which runs on the User config's `security.harness` when that is set, falling back to the default Harness when it can't start. Chosen by the Step, else the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
 _Avoid_: agent, provider, backend
 
 **Model**:

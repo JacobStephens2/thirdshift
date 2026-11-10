@@ -1,0 +1,28 @@
+{
+  "providers": {
+    "fireworks": {
+      "type": "openai",
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "apiKeyEnv": "FIREWORKS_API_KEY"
+    },
+    "managed:kimi-code": {
+      "type": "kimi",
+      "oauth": {
+        "storage": "file",
+        "key": "oauth/kimi-code"
+      }
+    }
+  },
+  "models": {
+    "kimi-code/kimi-for-coding": {
+      "provider": "managed:kimi-code",
+      "model": "kimi-for-coding",
+      "maxContextSize": 262144
+    },
+    "kimi-k3.1-pro": {
+      "provider": "fireworks",
+      "model": "accounts/fireworks/models/kimi-k3p1-pro",
+      "maxContextSize": 262144
+    }
+  }
+}

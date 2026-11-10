@@ -20,6 +20,7 @@ mod instructions;
 pub(crate) mod interpretation;
 #[cfg(test)]
 pub(crate) mod interpretation_tests;
+pub(crate) mod kimi;
 pub(crate) mod muse;
 pub(crate) mod opencode;
 pub(crate) mod process;
@@ -53,6 +54,7 @@ pub enum Harness {
     Grok,
     Muse,
     OpenCode,
+    Kimi,
 }
 
 impl Harness {
@@ -135,6 +137,8 @@ pub struct Settings {
     pub muse: ModelAndEffort,
     /// `[harness.opencode]`.
     pub opencode: ModelAndEffort,
+    /// `[harness.kimi]`.
+    pub kimi: ModelAndEffort,
 }
 
 impl Settings {

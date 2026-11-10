@@ -21,6 +21,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::harness::Harness;
+use crate::harness::kimi::Catalog;
 
 /// One provider's hosts, from #1009's live-checked lists: the hosts each
 /// Harness contacted through `HTTPS_PROXY` with a fake credential. Codex's
@@ -34,6 +35,12 @@ const OPENAI_HOSTS: &[&str] = &["api.openai.com", "chatgpt.com", "auth.openai.co
 const XAI_HOSTS: &[&str] = &["api.x.ai"];
 const META_HOSTS: &[&str] = &["api.meta.ai"];
 const AGY_HOSTS: &[&str] = &["antigravity-unleash.goog", "play.googleapis.com"];
+/// Fireworks' OpenAI-compatible API, `https://api.fireworks.ai/inference/v1`.
+const FIREWORKS_HOSTS: &[&str] = &["api.fireworks.ai"];
+/// The managed Kimi Code provider's API and sign-in hosts, from Kimi Code
+/// 2.5.2's defaults, in its two regions.
+const KIMI_HOSTS: &[&str] = &["api.kimi.com", "auth.kimi.com"];
+const KIMI_GLOBAL_HOSTS: &[&str] = &["api.kimi.ai", "auth.kimi.ai"];
 
 /// One provider's hosts by the name an OpenCode Model uses for it.
 fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
@@ -42,6 +49,7 @@ fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
         "openai" => Some(OPENAI_HOSTS),
         "xai" => Some(XAI_HOSTS),
         "meta" => Some(META_HOSTS),
+        "fireworks-ai" => Some(FIREWORKS_HOSTS),
         _ => None,
     }
 }
@@ -68,6 +76,7 @@ pub(crate) fn allowed_hosts(harness: Harness, model: Option<&str>) -> Result<Vec
             hosts.extend(opencode_provider_hosts(model)?);
             hosts
         }
+        Harness::Kimi => kimi_trial_hosts(model, Catalog::read)?,
     };
     let mut kept = Vec::new();
     for host in hosts {
@@ -96,6 +105,49 @@ fn opencode_provider_hosts(model: Option<&str>) -> Result<Vec<&'static str>> {
             ),
         },
     }
+}
+
+/// A Kimi Trial's provider hosts: those of the provider its Model's alias
+/// names in Kimi Code's catalog, read only once the Model is known. A Trial
+/// must name its Model, since Kimi's default is not in the catalog's output.
+fn kimi_trial_hosts(
+    model: Option<&str>,
+    catalog: impl FnOnce() -> Result<Catalog>,
+) -> Result<Vec<&'static str>> {
+    let Some(model) = model else {
+        bail!(
+            "Kimi Trial login failed: the Model must name an alias in Kimi Code's \
+             config, so the Trial's proxy can allow its provider's hosts"
+        );
+    };
+    kimi_hosts(&catalog()?.provider(model)?.base_url)
+}
+
+/// A Kimi provider's hosts, by the host of the base URL its Model's
+/// provider sends requests to. A provider this lookup does not know fails
+/// before the session starts rather than reaching further than its list.
+fn kimi_hosts(base_url: &str) -> Result<Vec<&'static str>> {
+    let host = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host = host
+        .rsplit_once(':')
+        .filter(|(_, port)| port.parse::<u16>().is_ok())
+        .map_or(host, |(host, _)| host)
+        .to_ascii_lowercase();
+    let hosts = match host.as_str() {
+        "api.fireworks.ai" => FIREWORKS_HOSTS,
+        "api.kimi.com" => KIMI_HOSTS,
+        "api.kimi.ai" => KIMI_GLOBAL_HOSTS,
+        _ => bail!(
+            "Kimi Trial login failed: unknown provider host {host}; the Trial's Model \
+             must use a provider this proxy allows"
+        ),
+    };
+    Ok(hosts.to_vec())
 }
 
 /// Whether `host` names an allowed host: an exact match, case-insensitive,
@@ -687,9 +739,31 @@ mod tests {
                 Some("anthropic/claude"),
                 vec!["opencode.ai", "models.opencode.ai", "api.anthropic.com"],
             ),
+            (
+                Harness::OpenCode,
+                Some("fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro"),
+                vec!["api.fireworks.ai"],
+            ),
+            (
+                Harness::Kimi,
+                Some("kimi-k3.1-pro"),
+                vec!["api.fireworks.ai"],
+            ),
         ];
+        let kimi = || Catalog::parse(include_str!("../tests/fixtures/kimi-providers.json"));
         for (harness, model, some) in cases {
-            let allowed = allowed_hosts(harness, model).unwrap();
+            let allowed = if harness == Harness::Kimi {
+                // The Kimi catalog comes from the fixture, not a machine's CLI.
+                let allowed: Vec<String> = kimi_trial_hosts(model, kimi)
+                    .unwrap()
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+                assert_eq!(allowed, some, "a Fireworks Model reaches Fireworks alone");
+                allowed
+            } else {
+                allowed_hosts(harness, model).unwrap()
+            };
             for host in some {
                 assert!(allowed.contains(&host.to_string()), "{harness:?}: {host}");
             }
@@ -711,6 +785,32 @@ mod tests {
         assert!(allowed_hosts(Harness::OpenCode, Some("acme/model")).is_err());
         assert!(allowed_hosts(Harness::OpenCode, Some("model-without-provider")).is_err());
         assert!(allowed_hosts(Harness::OpenCode, None).is_err());
+        // A Kimi Trial must name its Model, whose provider the proxy allows.
+        assert!(allowed_hosts(Harness::Kimi, None).is_err());
+        assert!(kimi_trial_hosts(Some("kimi-k9"), kimi).is_err());
+    }
+
+    #[test]
+    fn a_kimi_trial_allows_only_its_models_provider_hosts() {
+        assert_eq!(
+            kimi_hosts("https://api.fireworks.ai/inference/v1").unwrap(),
+            ["api.fireworks.ai"]
+        );
+        assert_eq!(
+            kimi_hosts("https://api.kimi.com/coding/v1").unwrap(),
+            ["api.kimi.com", "auth.kimi.com"]
+        );
+        assert_eq!(
+            kimi_hosts("https://API.Kimi.ai:443/coding/v1").unwrap(),
+            ["api.kimi.ai", "auth.kimi.ai"]
+        );
+        for unknown in [
+            "https://api.moonshot.ai/v1",
+            "https://api.fireworks.ai.attacker.example/v1",
+            "http://127.0.0.1:8080/v1",
+        ] {
+            assert!(kimi_hosts(unknown).is_err(), "{unknown}");
+        }
     }
 
     /// Ask the proxy at `socket_path` for `head` and read its status line.
