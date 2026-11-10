@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import subprocess
 import sys
 import tempfile
@@ -122,6 +123,21 @@ with tempfile.TemporaryDirectory(prefix="cronjobs-fleet-") as temp:
             else:
                 raise AssertionError("API accepted a Fleet relay")
         assert not calls, calls
+        # Both the hostname and its first local fallback are valid Fleet names.
+        # Keep local and remote schedules identifiable even under that collision.
+        local_hostname = socket.gethostname()
+        for name, route in [(local_hostname, "east"), (local_hostname + " (local)", "west")]:
+            subprocess.run([binary, "console", "fleet", "add", name,
+                            f"http://127.0.0.1:{owner.server_port}/{route}"], env=env,
+                           input="fixture-token\n", text=True, capture_output=True, check=True)
+        output = subprocess.run([binary, "cronjobs", "--fleet", "--json"], env=env,
+                                text=True, capture_output=True, timeout=30)
+        assert output.returncode == 0, output.stderr
+        collision = json.loads(output.stdout)
+        other = next(group for group in collision["repositories"] if group["repository"] is None)
+        assert len(other["machines"]) == 3, "Local and remote schedules were merged: " + json.dumps(other)
+        names = [machine["name"] for machine in collision["machines"]]
+        assert len(set(names)) == len(names), names
         print("Fleet CLI/page grouping, empty inventories, partial failures and API isolation passed")
     finally:
         if child is not None:

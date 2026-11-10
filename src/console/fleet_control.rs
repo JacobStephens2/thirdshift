@@ -60,17 +60,11 @@ fn local_machine(config: &UserConfig, name: &str) -> bool {
 }
 
 pub(crate) fn local_name(config: &UserConfig) -> String {
-    let hostname = super::hostname();
-    if config
-        .console
-        .fleet
-        .iter()
-        .any(|entry| entry.name == hostname)
-    {
-        format!("{hostname} (local)")
-    } else {
-        hostname
+    let mut name = super::hostname();
+    while config.console.fleet.iter().any(|entry| entry.name == name) {
+        name.push_str(" (local)");
     }
+    name
 }
 
 pub(super) struct Target {
