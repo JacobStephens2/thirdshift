@@ -1,6 +1,8 @@
 //! Read-only Experiment assessment: effective paired Scores, suite Verdicts and
 //! whole-Experiment decisive rechecks, kept with private Trial data.
 
+mod process;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
@@ -67,10 +69,12 @@ pub(super) fn score(
             reason: "review must leave at least one report".into(),
         });
     }
-    if task.manifest.session != crate::evals::format::Session::Process
-        && output.outcome != Outcome::Void
-        && !task.manifest.checks.is_empty()
+    if output.outcome != Outcome::Void
+        && task.manifest.session == crate::evals::format::Session::Process
     {
+        let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
+        checks.extend(process::execute(task, repository, timeout, &caps)?);
+    } else if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
         checks.extend(code_grader::execute(
             repository,
@@ -78,6 +82,7 @@ pub(super) fn score(
             &task.manifest.checks,
             timeout,
             &caps,
+            false,
         )?);
     }
     Ok(Score {

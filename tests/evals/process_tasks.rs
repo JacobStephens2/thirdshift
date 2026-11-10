@@ -47,11 +47,17 @@ fn process_task(fixture: &mut Fixture, base_passes: bool) -> PathBuf {
     fixture.change = git(&fixture.source, &["rev-parse", "HEAD"]);
     let task = fixture.task("process", "approved");
     let manifest = task.join("task.toml");
-    let text = fs::read_to_string(&manifest).unwrap().replace(
-        "session = \"process\"",
-        "session = \"process\"\nprovenance = \"real\"\nenvironment = \"host\"",
-    );
-    fs::write(manifest, format!("{text}\n[process_tests]\noverlay_files = [\"tests/regression.py\"]\nshared_fakes = [\"tests/fake.py\"]\nfail_to_pass = [[\"python3\", \"tests/regression.py\"]]\npass_to_pass = []\n")).unwrap();
+    let text = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace(
+            "session = \"process\"",
+            "session = \"process\"\nprovenance = \"real\"\nenvironment = \"host\"",
+        )
+        .replace(
+            "checks = [[\"cargo\", \"test\", \"regression\"]]",
+            "checks = []",
+        );
+    fs::write(manifest, format!("{text}\n[process_grading]\ntest_files = [\"tests/regression.py\"]\ntest_fakes = [\"tests/fake.py\"]\nfail_to_pass = [[\"python3\", \"tests/regression.py\"]]\npass_to_pass = [[\"python3\", \"tests/regression.py\"]]\n")).unwrap();
     task
 }
 
@@ -215,7 +221,7 @@ fn proposals_include_only_merged_tickets_with_source_and_separate_tests() {
     assert_eq!(manifest["state"].as_str(), Some("proposed"));
     assert_eq!(manifest["base"].as_str(), Some(fixture.base.as_str()));
     assert_eq!(
-        manifest["process_tests"]["shared_fakes"][0].as_str(),
+        manifest["process_grading"]["test_fakes"][0].as_str(),
         Some("tests/fake.py")
     );
     assert!(

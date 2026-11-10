@@ -28,19 +28,49 @@ pub(crate) struct Check {
     pub reason: String,
 }
 
+/// Python puts the check's working directory ahead of the standard library.
+/// A process Trial can commit `pathlib.py` or `unittest.py`, and the reference
+/// tests then import the Trial's module and pass without the fix. This startup
+/// file moves that directory behind the standard library. It does not read
+/// `sys.environ`: site imports it before that attribute exists.
+const IMPORT_GUARD: &str = "\
+import sys
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if path is not None:
+            return None
+        import os
+        cwd = os.getcwd()
+        front, back = [], []
+        for entry in list(sys.path):
+            if entry == \"\" or entry == cwd:
+                back.append(entry)
+            else:
+                front.append(entry)
+        if back:
+            sys.path[:] = front + back
+        return None
+sys.meta_path.insert(0, Guard())
+";
+
 /// Run ordered checks against one private snapshot. Each process and its
 /// scope/status finish before the packet can be released, including on errors.
+/// `guard_imports` is for a snapshot that contains a Trial commit.
 pub(crate) fn execute(
     repository: &Path,
     reports: &Reports,
     commands: &[Vec<String>],
     timeout: Duration,
     caps: &Caps,
+    guard_imports: bool,
 ) -> Result<Vec<Check>> {
     let packet = tempfile::Builder::new()
         .prefix("grader-")
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()?;
+    if guard_imports {
+        fs::write(packet.path().join("sitecustomize.py"), IMPORT_GUARD)?;
+    }
     // Bind sources remain visible in /proc/self/mountinfo. A neutral
     // destination alone cannot hide the original Trial's Arm pathname.
     let snapshot = packet.path().join("repository");
@@ -138,6 +168,12 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
             } else {
                 OsString::new()
             },
+        ));
+    }
+    if packet.join("sitecustomize.py").is_file() {
+        packet_env.push((
+            OsString::from("PYTHONPATH"),
+            packet_path.as_os_str().to_owned(),
         ));
     }
     // An unlinked status file stays outside the packet and the sandbox. Only
@@ -341,6 +377,7 @@ pathlib.Path(sys.argv[1]).write_text(f"{mode:03o}")
                         ]],
                         Duration::from_secs(10),
                         &Caps::default(),
+                        false,
                     )
                 })
                 .unwrap();

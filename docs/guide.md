@@ -1302,7 +1302,15 @@ publishes nothing and creates no factory run of its own. Its Steps and all
 sessions appear in the Experiment's Trial Peek and Trace. Process outcomes are
 delivered, stopped-to-ask or failed, with the existing Void causes.
 Stopped-to-ask counts as failed; each Arm's outcome counts appear beside the
-Verdict. Until process grading lands, the outcome alone decides its Score.
+Verdict. A delivered Trial passes only when its code Grader passes both the
+fail-to-pass and pass-to-pass selectors. The Grader exports the Trial's final
+commit and overlays the reference fix's test files and changed shared test
+fakes, replacing any Trial edits to those files. Python selectors search
+the repository after the standard library, so a committed module cannot
+replace one. Selectors run offline in bwrap, each under the Bar's timeout,
+and their failures name the selector in
+the Score's reason. The task's required `process_grading` table declares the
+files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
 
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
@@ -1378,7 +1386,7 @@ both workers. An installation failure makes the Trial void with
 allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
-editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
+for review Trials, editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
 branch, or altering or removing the base or prepared change commit makes an
 otherwise successful Trial void with `repository_changed`. Issue branch commits,
 pushes to the local origin, reports and other working-tree files are allowed.
@@ -1386,7 +1394,7 @@ A review with no reports fails, and the Eval task's mechanical checks must pass.
 Those checks run on a private copy of the prepared repository captured before
 the session, so the session cannot change the code they grade. Checks share
 their own build artifacts. Scores retain each check and its reason.
-Then a fresh model Grader scores one blind packet per Eval task against its
+For review Trials, a fresh model Grader then scores one blind packet per Eval task against its
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.

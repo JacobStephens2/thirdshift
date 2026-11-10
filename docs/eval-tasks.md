@@ -92,9 +92,31 @@ effort = "high"
   They start at `base`, with the Ticket inputs and a local origin; `change`
   remains a private reference fix and is not applied to their repository.
   Their Arm's Built-in process runs through its local Steps, stopping before
-  publication. Until process grading lands, only the outcome is scored:
-  delivered passes; stopped-to-ask and failed do not. Review task checks and
-  Model grading continue as before.
+  publication. A delivered Trial passes only when both groups of code checks
+  in its required `process_grading` table pass. Stopped-to-ask and failed do
+  not pass. Review task checks and Model grading continue as before.
+
+  ```toml
+  [process_grading]
+  test_files = ["tests/counter.rs"]
+  test_fakes = ["tests/support/counter.rs"] # optional, defaults to []
+  fail_to_pass = [["cargo", "test", "--offline", "--test", "counter", "regression"]]
+  pass_to_pass = [["cargo", "test", "--offline", "--test", "counter", "neighbor"]]
+  ```
+
+  `test_files` is nonempty; `test_fakes` names shared test fakes changed by
+  the reference fix. Each path is confined and relative to the repository.
+  Both selector groups require at least one nonempty argument vector.
+  After the Trial, the Grader exports its final commit, discarding uncommitted,
+  untracked and ignored files. It replaces the named tests and fakes with their
+  contents and executable modes from `change`, then runs `fail_to_pass` followed
+  by `pass_to_pass`. Selectors share build artifacts in this private copy.
+  They run offline in bwrap, each under the Bar's timeout. Nonzero exits and
+  timeouts fail checks; the Score records the selector and its reason. Editing
+  the overlaid files cannot help a Trial pass. Python selectors search the
+  repository after the standard library, so a committed module cannot replace
+  one. Process tasks use this table instead of `checks`; review tasks cannot
+  use it.
 - `difficulty` is an optional, replaceable A/A reading: passes and non-void
   Trials pooled across both Arms, with the Experiment ID and its identical
   commit, Harness, Model and Effort. `model` and `effort` are omitted when the
@@ -118,7 +140,7 @@ effort = "high"
   be an ancestor of the change. `base` is the last history visible to a Trial;
   `change` supplies the working-tree diff under review. They may be equal for a
   Spec-review Eval task needing no initial code diff.
-- `criteria` is nonempty written success criteria for a model Grader. `checks`
+- `criteria` is nonempty written success criteria for a model Grader. Review `checks`
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
   executed by review-task preparation. After a Trial, the Experiment runs each check with
@@ -244,7 +266,9 @@ an otherwise successful Trial void with `repository_changed`. Ordinary Issue
 branch commits, pushes to the local origin, report files, and other tracked,
 untracked or ignored working-tree changes do not void a Trial. For tasks with
 `checks`, a private copy captured before the session supplies their repository;
-checks share their own build artifacts, never the session's edits.
+checks share their own build artifacts, never the session's edits. Process
+Trials instead grade the final commit with the reference fix's test overlay,
+as described in `process_grading` above.
 `evals verify` retains its
 inspection contract: it expects the detached base, before the synthetic commit.
 
@@ -257,9 +281,9 @@ to the runner's sandbox, not to this Git preparation step.
 Process tasks record their separate tests and command-vector selectors:
 
 ```toml
-[process_tests]
-overlay_files = ["tests/counter.rs"]
-shared_fakes = ["tests/support/mod.rs"]
+[process_grading]
+test_files = ["tests/counter.rs"]
+test_fakes = ["tests/support/mod.rs"]
 fail_to_pass = [["cargo", "test", "--test", "counter", "increments"]]
 pass_to_pass = [["cargo", "test", "--test", "counter"]]
 ```

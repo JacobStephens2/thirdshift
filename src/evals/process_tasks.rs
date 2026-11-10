@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::format::{self, Task};
+use super::format::{self, ProcessGrading, Task};
 use super::repository::{bytes, git};
 use crate::process::{self, Control, Interruption};
 
@@ -59,6 +59,28 @@ impl TestSelection {
     }
 }
 
+impl From<&TestSelection> for ProcessGrading {
+    fn from(selection: &TestSelection) -> Self {
+        Self {
+            test_files: selection.overlay_files.clone(),
+            test_fakes: selection.shared_fakes.clone(),
+            fail_to_pass: selection.fail_to_pass.clone(),
+            pass_to_pass: selection.pass_to_pass.clone(),
+        }
+    }
+}
+
+impl From<&ProcessGrading> for TestSelection {
+    fn from(grading: &ProcessGrading) -> Self {
+        Self {
+            overlay_files: grading.test_files.clone(),
+            shared_fakes: grading.test_fakes.clone(),
+            fail_to_pass: grading.fail_to_pass.clone(),
+            pass_to_pass: grading.pass_to_pass.clone(),
+        }
+    }
+}
+
 fn is_test_path(path: &str) -> bool {
     path.split('/')
         .any(|part| matches!(part, "tests" | "test" | "__tests__"))
@@ -76,10 +98,11 @@ fn is_test_path(path: &str) -> bool {
 }
 
 pub(super) fn screen(source: &Path, task: &Task) -> Result<()> {
-    let selection = task
-        .process_tests
+    let grading = task
+        .process_grading
         .as_ref()
-        .context("process task needs process_tests for preparation")?;
+        .context("process task needs process_grading for preparation")?;
+    let selection = TestSelection::from(grading);
     selection.validate()?;
     layout::reject_inline_changes(source, &task.base, &task.change)?;
     let temporary = tempfile::Builder::new()
@@ -110,7 +133,7 @@ pub(super) fn screen(source: &Path, task: &Task) -> Result<()> {
             ],
         )?;
         git(&checkout, &["checkout", "-q", "--detach", commit])?;
-        overlay(source, &task.change, selection, &checkout)?;
+        overlay(source, &task.change, &selection, &checkout)?;
         for selector in &selection.fail_to_pass {
             let output = process::output_until(
                 Command::new(&selector[0])

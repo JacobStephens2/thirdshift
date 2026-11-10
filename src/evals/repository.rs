@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
@@ -286,28 +287,45 @@ pub(super) fn git(repo: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub(super) fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
+    execute(repo, args, input, None)
+}
+
+/// Read grading objects under one deadline, including blocked object I/O.
+pub(super) fn bytes_until(repo: &Path, args: &[&str], deadline: Instant) -> Result<Vec<u8>> {
+    execute(repo, args, None, Some(deadline))
+}
+
+fn execute(
+    repo: &Path,
+    args: &[&str],
+    input: Option<&[u8]>,
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>> {
     // Prepared repositories must not inherit host hooks, templates, replacement
     // refs or Git directory overrides. Local fetching needs no host credentials.
-    let output = process::output(
-        Command::new("git")
-            .current_dir(repo)
-            .args(["-c", "gc.auto=0", "-c", "protocol.file.allow=always"])
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES"),
-        input,
-        Control {
-            name: "Eval git",
-            interruption: Interruption::Ordinary,
-            stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-        },
-    )?;
+    let mut command = Command::new("git");
+    command
+        .current_dir(repo)
+        .args(["-c", "gc.auto=0", "-c", "protocol.file.allow=always"])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+    let control = Control {
+        name: "Eval git",
+        interruption: Interruption::Ordinary,
+        stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+    };
+    let output = match deadline {
+        Some(deadline) => process::output_until(&mut command, input, control, deadline, &|| Ok(())),
+        None => process::output(&mut command, input, control),
+    }?;
     if !output.status.success() {
         bail!(
             "Eval git {args:?} failed: {}",

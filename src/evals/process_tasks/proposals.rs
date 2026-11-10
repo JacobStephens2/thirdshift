@@ -184,7 +184,7 @@ fn publish(
         checks: Vec::new(), inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(crate::trial::Inputs { issue_url: ticket.url.clone(), base: pr.base_ref_name.clone(), branch: pr.head_ref_name.clone(), pr_url: String::new() }),
         difficulty: None,
-        process_tests: Some(tests.clone()),
+        process_grading: Some(tests.into()),
     };
     fs::write(
         staging.path().join("task.toml"),
