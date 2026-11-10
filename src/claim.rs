@@ -899,7 +899,7 @@ mod tests {
             [
                 Call::Labels,
                 step("taking agent-failed off #7, which is Claimed again"),
-                edit(&["agent-failed"], &[], &["bug", "in-progress"]),
+                edit(&["agent-failed"], &[], &["in-progress", "bug"]),
             ]
         );
     }
@@ -962,7 +962,7 @@ mod tests {
             [
                 Call::Labels,
                 step("labelling #7 in-progress, in place of ready-for-agent"),
-                edit(&["ready-for-agent"], &[], &["bug", "in-progress"]),
+                edit(&["ready-for-agent"], &[], &["in-progress", "bug"]),
             ]
         );
     }
