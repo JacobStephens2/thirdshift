@@ -370,6 +370,10 @@ impl Local {
         let before_each = || {
             self.ensure_actionable()?;
             restore_issue_file(&self.repository, &self.issue_text)?;
+            if worktree != self.repository {
+                skills::exclude(&Git::new(worktree), &format!("/{}", prompt::ISSUE_FILE))?;
+                restore_issue_file(worktree, &self.issue_text)?;
+            }
             Ok(())
         };
         let action = |sessions: &session::Sessions<'_>| action(sessions, index);
@@ -379,7 +383,7 @@ impl Local {
             && (choice.harness != self.choice.harness
                 || (choice.harness == Harness::OpenCode && choice.model != self.choice.model))
         {
-            match crate::sandbox::for_trial(choice, worktree, &self.output) {
+            match crate::sandbox::for_trial(choice, &self.repository, &self.output) {
                 Ok(sandbox) => sandbox,
                 Err(error) => return (Err(error), None),
             }

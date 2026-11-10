@@ -161,6 +161,76 @@ printf 'Complete.\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 }
 
 #[test]
+fn custom_throwaway_steps_receive_the_issue_and_keep_git_access_on_another_harness() {
+    for sandbox in [false, true] {
+        if sandbox && !bwrap_present() {
+            println!("SKIPPED (throwaway Custom process sandbox): bwrap is not on PATH");
+            continue;
+        }
+        let scenario = Scenario::new();
+        let request = prepare_local_process(&scenario);
+        let skill = scenario.path("home/.thirdshift/skills/fixture");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "Read the issue and inspect Git.\n").unwrap();
+        let process = scenario.path("throwaway.toml");
+        fs::write(
+            &process,
+            r#"version = 1
+description = "Inspect a Ticket on another Harness"
+[worktrees.ticket]
+kind = "issue-branch"
+[worktrees.inspect]
+kind = "throwaway"
+[[steps]]
+name = "inspect"
+skill = "fixture"
+worktree = "inspect"
+harness = "codex"
+[[steps]]
+name = "edit"
+command = "echo complete"
+worktree = "ticket"
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+        )
+        .unwrap();
+        let codex = scenario.path("bin/codex");
+        fs::remove_file(&codex).unwrap();
+        support::write_executable(
+            &codex,
+            r#"#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"fixture"}' '{"type":"turn.started"}'
+test -f .thirdshift-issue.md || exit 55
+git rev-parse --show-toplevel >&2 || exit 56
+printf '%s\n' '{"type":"item.completed","item":{"id":"done","type":"agent_message","text":"Complete."}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+"#,
+        );
+        let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+        document["process"] = json!(process);
+        fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+        let result = scenario.run_with_env(
+            &["--trial", request.to_str().unwrap()],
+            &[(
+                "THIRDSHIFT_TRIAL_NO_SANDBOX",
+                if sandbox { "" } else { "1" },
+            )],
+        );
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let output: Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(
+            output["outcome"], "delivered",
+            "sandbox={sandbox}: {output}\n{}",
+            result.stderr
+        );
+        assert_eq!(output["steps"][0]["name"], "inspect");
+        assert!(scenario.gh_calls().is_empty());
+    }
+}
+
+#[test]
 fn local_issue_restore_does_not_follow_a_symlink_outside_the_repository() {
     let scenario = Scenario::new();
     let request = prepare_local_process(&scenario);
