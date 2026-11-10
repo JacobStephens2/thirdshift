@@ -54,7 +54,10 @@ def print_failures(log_path):
             indent = len(line) - len(line.lstrip())
             if block:
                 header_indent, ends_at_frame, lines = block
-                frame = re.fullmatch(r"at .+:\d+:\d+\)?(?: \{)?", line.strip())
+                frame = re.fullmatch(
+                    r"at (?:.+:\d+:\d+\)?|.+ \((?:<anonymous>|index \d+)\))(?: \{)?",
+                    line.strip(),
+                )
                 if not line or (indent > header_indent and not (ends_at_frame and frame)):
                     lines.append(line)
                     continue

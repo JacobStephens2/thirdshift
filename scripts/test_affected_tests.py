@@ -604,6 +604,25 @@ class AffectedTests(unittest.TestCase):
         self.assertIn("but got 2", result.stdout.splitlines())
         self.assertNotIn("TestContext", result.stdout)
 
+    def test_spec_stack_frames_without_locations_are_omitted(self):
+        self.change("site/index.html")
+        for frame in ["at JSON.parse (<anonymous>)", "at async Promise.all (index 0)"]:
+            with self.subTest(frame=frame):
+                self.env.update(
+                    RUNNER_EXIT="1",
+                    RUNNER_STDOUT=(
+                        "✖ failing tests:\n\ntest at tests/a.test.cjs:3:1\n"
+                        "✖ invalid JSON (1ms)\n  SyntaxError: invalid JSON\n"
+                        f"      {frame}\n"
+                        "      at TestContext.<anonymous> (tests/a.test.cjs:3:31)\n"
+                    ),
+                )
+                result, _ = self.run_selector()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("SyntaxError: invalid JSON", result.stdout.splitlines())
+                self.assertNotIn(frame, result.stdout)
+                self.assertNotIn("TestContext", result.stdout)
+
     def test_command_that_cannot_start_still_reports_failure_and_keeps_a_log(self):
         self.change("site/index.html")
         (self.tools / "git").symlink_to(shutil.which("git"))
