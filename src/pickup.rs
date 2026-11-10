@@ -602,7 +602,9 @@ mod tests {
         let mut expected = Vec::from(listing_closed());
         expected.extend(swept_off(4, &["in-progress", "agent-failed"], &["bug"]));
         expected.extend(swept_off(5, &["agent-failed"], &["p1"]));
-        expected.extend([FAILED, Call::ReadySearch]);
+        expected.push(FAILED);
+        expected.extend(swept_failed(6, &["agent-failed"]));
+        expected.push(Call::ReadySearch);
         assert_eq!(calls, expected);
     }
 
@@ -922,9 +924,9 @@ mod tests {
     #[test]
     fn a_pass_skipped_at_the_failure_limit_records_its_reason_and_does_no_work() {
         let repo = InMemory::default()
-            .issue(4, true, &["in-progress", "agent-failed"])
-            .issue(5, true, &["in-progress", "agent-failed"])
-            .issue(6, true, &["in-progress", "agent-failed"])
+            .issue(4, true, &["agent-failed"])
+            .issue(5, true, &["agent-failed"])
+            .issue(6, true, &["agent-failed"])
             .ready(9, false);
 
         let (outcome, calls) = pickup(repo);
