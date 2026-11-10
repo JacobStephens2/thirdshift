@@ -635,6 +635,10 @@ impl<O: Outside> Record<O> {
         root_under(logs_dir, repo)
     }
 
+    pub(super) fn root_if_configured(&self, repo: &Repo) -> Option<PathBuf> {
+        Some(root_under(self.logs_dir.as_deref()?, repo))
+    }
+
     pub(super) fn command_kind(&self) -> CommandKind {
         self.command
     }

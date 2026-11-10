@@ -804,3 +804,65 @@ gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}
         "{base_fix}"
     );
 }
+
+#[test]
+fn a_dispatched_child_that_merges_does_not_keep_the_parents_claim() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    write_process(
+        &scenario,
+        "contractor",
+        r#"version = 1
+description = "Dispatch another Ticket before delivering this one"
+
+[worktrees.ticket]
+kind = "issue-branch"
+
+[[steps]]
+name = "publish-nested"
+skill = "to-spec"
+worktree = "ticket"
+
+[[steps]]
+name = "run-nested"
+catalogue = "run-published-issue"
+worktree = "ticket"
+
+[[steps]]
+name = "change"
+worktree = "ticket"
+command = """
+echo contractor > contractor.txt
+git add contractor.txt
+git commit -qm contractor
+"""
+
+[[steps]]
+name = "deliver"
+catalogue = "delivery"
+worktree = "ticket"
+"#,
+    );
+    scenario.agent_does_in_session(
+        1,
+        r#"url=$(gh issue create --title Nested --body 'Nested Ticket')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+
+    let result = scenario.run(&["process", "contractor", "issue", "7", "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(pr_from(&scenario, "issue-7")["isDraft"], false);
+    // Its own pull request is only ready for review: in-progress must come off.
+    assert!(
+        !scenario
+            .issue_labels(7)
+            .contains(&"in-progress".to_string()),
+        "{:?}\n{}",
+        scenario.issue_labels(7),
+        result.stderr
+    );
+}

@@ -351,7 +351,11 @@ fn start<O: Outside>(
         }
     }
     if claims {
-        outside.end_claim(claim_ending(&outcome));
+        let comment = outcome
+            .as_ref()
+            .err()
+            .map(|failed| failed.comment(Some(selection.branch())));
+        outside.end_claim(claim_ending(&outcome), comment);
     }
     outcome
 }
@@ -365,6 +369,7 @@ fn claim_ending(outcome: &Result<Reached, FailedRun>) -> claim::Ending {
             Resolution::ArchitectureReview { .. } => claim::Ending::BeforeDelivery,
         },
         Err(failed) if failed.held() => claim::Ending::Held,
+        Err(failed) if failed.waiting() => claim::Ending::Waiting,
         Err(_) => claim::Ending::Failed,
     }
 }
@@ -430,8 +435,9 @@ trait Outside {
     fn interrupted(&mut self) -> bool;
     /// Make the Claim on the issue.
     fn make_claim(&mut self) -> Result<()>;
-    /// End the Claim made, as `ending` says the Run ended.
-    fn end_claim(&mut self, ending: claim::Ending);
+    /// End the Claim made, as `ending` says the Run ended, posting
+    /// `comment` on the issue if that ending owes it one.
+    fn end_claim(&mut self, ending: claim::Ending, comment: Option<String>);
     /// Create the worktree for the Issue branch `branch`, by `checkout`, on
     /// the Base branch `base`.
     fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Self::Worktree>;
@@ -581,9 +587,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         Ok(())
     }
 
-    fn end_claim(&mut self, ending: claim::Ending) {
+    fn end_claim(&mut self, ending: claim::Ending, comment: Option<String>) {
         if let Some(claim) = self.claim.take() {
-            claim.end(ending);
+            claim.end(ending, comment);
         }
     }
 
@@ -818,7 +824,7 @@ mod tests {
             Ok(())
         }
 
-        fn end_claim(&mut self, ending: claim::Ending) {
+        fn end_claim(&mut self, ending: claim::Ending, _: Option<String>) {
             self.calls.push(Call::EndClaim(ending));
         }
 
