@@ -92,7 +92,7 @@ pub(crate) struct Bar {
     pub panel: Option<panel::Panel>,
     /// Absent when anyone may read any pair, beside the Verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub people: Option<deciders::People>,
+    pub people: Option<deciders::PeopleSetting>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

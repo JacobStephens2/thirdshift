@@ -1,5 +1,6 @@
 //! The Grader panel: each seat reads every pair of process Trials blind in
-//! both orders, and its calls and the panel's vote go beside the Verdict.
+//! both orders, and its calls and the panel's vote go beside the Verdict, or
+//! count in it, with the people's, when the Bar says who decides.
 use super::*;
 
 /// Panel Graders by seat. `candidate` and `baseline` judge consistently:
@@ -508,5 +509,73 @@ fn counted_people_hold_the_verdict_until_their_blind_calls_then_decide_it() {
         verdict["suites"]["process"]["accuracy"]["difference_counts"],
         json!([1, 0, 0]),
         "{verdict}"
+    );
+}
+
+#[test]
+fn a_counted_peoples_call_that_settles_the_verdict_releases_trial_repositories() {
+    let fixture = super::process::fixture();
+    super::process::private_fix(&fixture);
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    let reader = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .unwrap();
+    let reader = String::from_utf8(reader.stdout).unwrap().trim().to_owned();
+    let run = fixture.run(&["--people", "counted", "--people-reader", &reader]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(view["verdict"]["verdict"], "waiting_on_people", "{view}");
+    let id = view["id"].as_str().unwrap().to_owned();
+    let pair = view["people"]["queues"][0]["pairs"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let trials = fixture
+        .scenario
+        .path("home/.thirdshift/evals/experiments")
+        .join(&id)
+        .join("trials");
+    let repositories = || -> Vec<PathBuf> {
+        fs::read_dir(&trials)
+            .unwrap()
+            .map(|trial| trial.unwrap().path())
+            .filter(|trial| trial.is_dir())
+            .flat_map(|trial| fs::read_dir(trial).unwrap())
+            .map(|attempt| attempt.unwrap().path())
+            .filter(|attempt| {
+                attempt
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("attempt-")
+            })
+            .map(|attempt| attempt.join("repository"))
+            .filter(|repository| repository.exists())
+            .collect()
+    };
+    assert!(!repositories().is_empty(), "kept while waiting on people");
+    let page = fixture.scenario.run_with_env(
+        &[
+            "experiments",
+            &id,
+            "--pair",
+            &pair,
+            "--merge",
+            "ready",
+            "ready",
+        ],
+        &NO_SANDBOX,
+    );
+    assert_eq!(page.code, Some(0), "{}", page.stderr);
+    let shown = fixture
+        .scenario
+        .run_with_env(&["experiments", &id, "--json"], &NO_SANDBOX);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_ne!(shown["verdict"]["verdict"], "waiting_on_people");
+    assert!(
+        repositories().is_empty(),
+        "still retained: {:?}",
+        repositories()
     );
 }

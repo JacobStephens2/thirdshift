@@ -229,7 +229,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         }
     }
     bar.panel = super::panel::Panel::parse(seats, &mut flags)?;
-    bar.people = super::deciders::People::parse(&mut flags, readers)?;
+    bar.people = super::deciders::PeopleSetting::parse(&mut flags, readers)?;
     number!("--void-retries", bar.void_rules.retries);
     ensure!(
         bar.void_rules.retries <= 2,

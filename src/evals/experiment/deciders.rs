@@ -49,7 +49,7 @@ impl Role {
 /// The people's setting the Bar fixes before the first Trial.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct People {
+pub(crate) struct PeopleSetting {
     pub role: Role,
     /// Each reader as the Console or the CLI names them.
     pub readers: Vec<String>,
@@ -59,7 +59,7 @@ pub(crate) struct People {
     pub overlap: usize,
 }
 
-impl People {
+impl PeopleSetting {
     /// The `--people` flags. No flag, or people beside with no readers,
     /// keeps the setting every Experiment had before: anyone reads any pair,
     /// beside the Verdict.
@@ -136,6 +136,17 @@ pub(crate) fn people_role(bar: &Bar) -> Role {
     bar.people
         .as_ref()
         .map_or(Role::Beside, |people| people.role)
+}
+
+/// With people counted on a sample and the panel not counted, the Verdict
+/// rests on the sampled pairs alone, each pair a unit of the statistics.
+pub(crate) fn sample_only(bar: &Bar) -> bool {
+    people_role(bar) == Role::Counted
+        && panel_role(bar) != Role::Counted
+        && bar
+            .people
+            .as_ref()
+            .is_some_and(|people| people.sample.is_some())
 }
 
 fn counts(bar: &Bar) -> bool {
@@ -285,9 +296,10 @@ pub(crate) struct Deciders {
     pub panel_pairs: usize,
     pub waiting_pairs: usize,
     pub left_out_pairs: usize,
-    /// People–panel agreement on the people's sample, when both are counted.
+    /// People–panel agreement on the people's sample, when both are
+    /// counted: only the readers given each pair, once all have called it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agreement: Option<Agreement>,
+    pub sample_agreement: Option<Agreement>,
     /// Why the Verdict is inconclusive whatever the Scores show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inconclusive: Option<String>,
@@ -315,7 +327,7 @@ impl Deciders {
                 self.waiting_pairs
             ));
         }
-        if let Some(agreement) = &self.agreement {
+        if let Some(agreement) = &self.sample_agreement {
             line.push_str(&format!(
                 " · people–panel agreement on the sample: {}/{} merge calls",
                 agreement.agreed, agreement.compared
@@ -443,12 +455,7 @@ pub(super) fn decide(
         .flatten();
     Ok(Decided {
         calls,
-        sample_only: people_role == Role::Counted
-            && panel_role != Role::Counted
-            && bar
-                .people
-                .as_ref()
-                .is_some_and(|people| people.sample.is_some()),
+        sample_only: sample_only(bar),
         report: Some(Deciders {
             panel: panel_role,
             people: people_role,
@@ -456,7 +463,7 @@ pub(super) fn decide(
             panel_pairs: 0,
             waiting_pairs: 0,
             left_out_pairs: 0,
-            agreement: stand_in.then_some(agreement),
+            sample_agreement: stand_in.then_some(agreement),
             inconclusive,
         }),
     })

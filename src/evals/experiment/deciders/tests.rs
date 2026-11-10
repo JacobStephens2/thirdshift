@@ -33,7 +33,7 @@ fn tasks() -> Vec<Task> {
         .collect()
 }
 
-fn bar(panel: Role, people: Option<People>) -> Bar {
+fn bar(panel: Role, people: Option<PeopleSetting>) -> Bar {
     Bar {
         prior: 0.01,
         draws: 512,
@@ -51,8 +51,13 @@ fn bar(panel: Role, people: Option<People>) -> Bar {
     }
 }
 
-fn people(role: Role, readers: &[&str], sample: Option<usize>, overlap: usize) -> Option<People> {
-    Some(People {
+fn people(
+    role: Role,
+    readers: &[&str],
+    sample: Option<usize>,
+    overlap: usize,
+) -> Option<PeopleSetting> {
+    Some(PeopleSetting {
         role,
         readers: readers.iter().map(|reader| (*reader).to_owned()).collect(),
         sample,
@@ -207,7 +212,7 @@ fn with_both_counted_the_panel_stands_in_on_pairs_people_did_not_read() {
         verdict["deciders"],
         json!({"panel": "counted", "people": "counted", "people_pairs": 4, "panel_pairs": 16,
                "waiting_pairs": 0, "left_out_pairs": 0,
-               "agreement": {"compared": 8, "agreed": 8}}),
+               "sample_agreement": {"compared": 8, "agreed": 8}}),
     );
 }
 
@@ -218,7 +223,7 @@ fn a_stand_in_with_low_people_panel_agreement_is_inconclusive_and_says_why() {
     let verdict = judged(&bar, &results(|_| false), &read_queues(&bar, true, true));
     assert_eq!(verdict["verdict"], "inconclusive", "{verdict}");
     assert_eq!(
-        verdict["deciders"]["agreement"],
+        verdict["deciders"]["sample_agreement"],
         json!({"compared": 8, "agreed": 4})
     );
     let reason = verdict["deciders"]["inconclusive"].as_str().unwrap();
@@ -342,7 +347,7 @@ fn a_sample_the_experiment_cannot_hold_is_refused() {
 fn the_people_flags_keep_the_old_setting_unless_named() {
     let parse = |args: &[(&'static str, &'static str)], readers: &[&str]| {
         let mut flags: BTreeMap<&str, &str> = args.iter().copied().collect();
-        People::parse(
+        PeopleSetting::parse(
             &mut flags,
             readers.iter().map(|reader| (*reader).to_owned()).collect(),
         )

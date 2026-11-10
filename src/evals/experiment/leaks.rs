@@ -313,14 +313,6 @@ pub(crate) fn decide(
     if stored.state == State::Completed {
         stored.refresh_verdict()?;
     }
-    stored.save()?;
-    super::retention::repositories(&stored);
-    if let (Some(log), Some(verdict)) = (&stored.details.command_log, &stored.verdict)
-        && let Err(error) = crate::logs::experiment_rechecked(log, id, verdict.outcome())
-    {
-        crate::progress::step(format!(
-            "warning: could not update the Command record: {error:#}"
-        ));
-    }
+    stored.publish_decided()?;
     stored.render(json)
 }

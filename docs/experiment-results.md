@@ -156,8 +156,9 @@ Trial per Eval task), and `left_out_pairs` counts the rest. With people counted
 on every pair, they decide every pair. With both counted, people decide the
 pairs they read and the panel stands in on the others; the Bar is refused
 before the first Trial when the voting panel spans fewer than `families`
-families, and the Verdict is `inconclusive` when `agreement`, people–panel
-agreement on the sample counted per reader and side, is below the Bar's level,
+families, and the Verdict is `inconclusive` when `sample_agreement`, people–panel
+agreement on the sample counted per reader and side over the readers given each
+pair once all have called it, is below the Bar's level,
 with `inconclusive` saying why. `people_pairs`, `panel_pairs` and
 `waiting_pairs` count the judged pairs, outside Void-dropped tasks, each
 decided. The Verdict is `waiting_on_people` while a reader has not called a
@@ -592,7 +593,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "Deciders": {
     "panel": "off|beside|counted", "people": "off|beside|counted",
     "people_pairs": "integer", "panel_pairs": "integer", "waiting_pairs": "integer", "left_out_pairs": "integer",
-    "agreement?": "Agreement", "inconclusive?": "string"
+    "sample_agreement?": "Agreement", "inconclusive?": "string"
   },
   "Efficiency": {
     "quality_verdict": "Decision", "method": "string", "cost": "Comparison", "time": "Comparison"

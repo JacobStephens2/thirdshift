@@ -3,7 +3,7 @@
 
 pub(super) mod process;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -480,7 +480,7 @@ fn evaluate(
             });
             // Each Trial's Score by its index, Baseline then Candidate.
             let mut by_trial: BTreeMap<usize, [Option<verdict::Score>; 2]> = BTreeMap::new();
-            let mut left_out = std::collections::BTreeSet::new();
+            let mut left_out = BTreeSet::new();
             for (index, result) in results
                 .iter()
                 .enumerate()

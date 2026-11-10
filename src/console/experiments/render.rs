@@ -332,8 +332,8 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     html
 }
 
-/// People's blind pairwise calls beside the Verdict, with links to read each
-/// pair blind. They change no Score.
+/// People's blind pairwise calls, with each reader's queue or links to read
+/// every pair blind. The Bar says whether they count in the Verdict.
 fn people(view: &View) -> String {
     use crate::evals::experiment::{deciders, pairwise};
     if view.pairs.is_empty() {
@@ -344,7 +344,8 @@ fn people(view: &View) -> String {
     let mut html = String::from("<section aria-label=\"People's calls\"><h2>People's calls</h2>");
     html.push_str(match deciders::people_role(&view.description.bar) {
         deciders::Role::Off => {
-            "<p>The Bar has people off: no one grades these pairs.</p></section>"
+            html.push_str("<p>The Bar has people off: no one grades these pairs.</p></section>");
+            return html;
         }
         deciders::Role::Beside => {
             "<p>Blind pairwise calls, reported beside the Verdict. They change no Score.</p>"
@@ -353,9 +354,6 @@ fn people(view: &View) -> String {
             "<p>Blind pairwise calls, counted in the Verdict: a Trial passes only if the code Grader passes and its pair is called ready. On a shared pair, every reader must call it ready.</p>"
         }
     });
-    if deciders::people_role(&view.description.bar) == deciders::Role::Off {
-        return html;
-    }
     let link = |key: &str| {
         view.pairs
             .iter()
@@ -643,6 +641,12 @@ fn verdict(view: &View) -> String {
     if let Some(deciders) = &verdict.deciders {
         html.push_str(&format!("<p>{}</p>", esc(&deciders.line())));
     }
+    // A Verdict on the people's sample alone counts pairs, not Eval tasks.
+    let units = if crate::evals::experiment::deciders::sample_only(&view.description.bar) {
+        "pairs"
+    } else {
+        "Eval tasks"
+    };
     for (name, suite) in &verdict.suites {
         let advisory = suite.advisory == Some(true);
         let counts = suite.counts.as_ref();
@@ -721,17 +725,17 @@ fn verdict(view: &View) -> String {
             if let Some(more) = &assessment.more_tasks {
                 if let Some(count) = more.additional_tasks {
                     html.push_str(&format!(
-                        " About {count} more Eval tasks would settle it ({:.0}% chance).",
+                        " About {count} more {units} would settle it ({:.0}% chance).",
                         more.target_probability * 100.0
                     ));
                 } else {
-                    html.push_str(" The forecast's search budget did not find how many more Eval tasks would settle it.");
+                    html.push_str(&format!(" The forecast's search budget did not find how many more {units} would settle it."));
                 }
             }
             html.push_str("</p>");
         }
         html.push_str("<p class=\"experiment-axis\" aria-hidden=\"true\">−50 ··············· 0 ··············· +50 points</p>");
-        html.push_str(&format!("<p>{} retained Eval tasks; {} dropped{}.</p>", suite.retained_tasks, suite.dropped_tasks, if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 { "; more than a tenth dropped, so the suite is inconclusive whatever the intervals say" } else { "" }));
+        html.push_str(&format!("<p>{} retained {units}; {} dropped{}.</p>", suite.retained_tasks, suite.dropped_tasks, if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 { "; more than a tenth dropped, so the suite is inconclusive whatever the intervals say" } else { "" }));
         if let Some(pass) = suite.pass_cubed {
             html.push_str(&format!(
                 "<p>pass³ (all three Trials passed): Baseline {:.0}%, Candidate {:.0}%.</p>",
@@ -1448,7 +1452,7 @@ fn bar(view: &View) -> String {
     let deciders = {
         use crate::evals::experiment::deciders;
         let panel = b.panel.as_ref().map_or_else(
-            || "Off".to_owned(),
+            || "off".to_owned(),
             |panel| {
                 format!(
                     "{} · {} seats · stands in for people only with {} voting families and people–panel agreement of at least {}",
@@ -1460,7 +1464,7 @@ fn bar(view: &View) -> String {
             },
         );
         let people = b.people.as_ref().map_or_else(
-            || "Beside · anyone may read any pair".to_owned(),
+            || "beside · anyone may read any pair".to_owned(),
             |people| {
                 format!(
                     "{} · readers: {} · {} · {} shared",

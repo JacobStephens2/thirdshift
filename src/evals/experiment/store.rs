@@ -410,9 +410,17 @@ impl Stored {
         let mut stored = Self::metadata(&Native, directory, id)?;
         stored.lock = Some(lock);
         stored.refresh_verdict()?;
-        stored.save()?;
-        if let (Some(log), Some(verdict)) = (&stored.details.command_log, &stored.verdict)
-            && let Err(error) = crate::logs::experiment_rechecked(log, id, verdict.outcome())
+        stored.publish_decided()
+    }
+
+    /// Save a stopped Experiment after a human decision, release its Trial
+    /// repositories once the Verdict is final, and update its Command record.
+    pub(super) fn publish_decided(&mut self) -> Result<()> {
+        self.save()?;
+        super::retention::repositories(self);
+        if let (Some(log), Some(verdict)) = (&self.details.command_log, &self.verdict)
+            && let Err(error) =
+                crate::logs::experiment_rechecked(log, &self.description.id, verdict.outcome())
         {
             crate::progress::step(format!(
                 "warning: could not update the Command record: {error:#}"
