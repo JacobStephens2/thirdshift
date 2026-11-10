@@ -1,4 +1,4 @@
-# Experiment results (format 6)
+# Experiment results (format 7)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 6` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 6.
+`format: 7` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 7.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -50,6 +50,10 @@ Actor) and `recorded_at`. Dismissed hits form the auditable false-positive list.
 Confirmed hits overlay the Trial and matching attempt as Void in the view;
 original Trial files remain intact. Pending hits hold the whole Verdict,
 including hits from Advisory or measurement-only tasks.
+
+Format 7 adds optional `bar.cost_ceiling` and `bar.time_ceiling`, and the
+Verdict's optional `efficiency` and `line`. Saved Verdicts without these fields
+retain their original shape and decision when read.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
@@ -169,6 +173,27 @@ overlaid in the view. Do not rewrite the result files to apply a recheck.
 
 ## Verdict and Bar
 
+`--cost-ceiling` and `--time-ceiling` set positive finite Candidate/Baseline
+ratios before the first Trial; both are off by default. Each ceiling compares
+the paired median ratio, including complete non-Void Trials from all suites.
+A ratio strictly above a ceiling fails the Experiment. A missing ratio or
+incomplete accounting under a set ceiling cannot pass (inconclusive unless
+another metric fails). Zero Baseline denominators are unmeasured.
+
+`efficiency.quality_verdict` retains the quality decision before ceilings;
+suite quality statistics and ADR-0025's decision are unchanged. `cost` and `time`
+each report `ratio` (paired median), `interval` (nullable), valid `pairs`,
+`complete` and nullable `ceiling`. The interval uses a Bayesian bootstrap of
+the paired median at the Bar's pass level, seed and draw count. Independent
+exponential weights are shared by all Trials of each suite/task pair; at least
+two tasks and complete paired measurements are needed. It describes variation
+over observed tasks, without adding unobserved tasks. `method` records this rule.
+An interval wholly below 1 adds "cheaper" or "faster"; a median above 1 says
+"costs more" or "takes longer". `line` combines the decision and these facts,
+for example "pass: no worse, and cheaper". A passing quality regression inside
+the margin keeps its "worse, within the margin" annotation. Pending rechecks
+and leak decisions still hold the Verdict.
+
 `verdict` is null until assessment. Its `verdict` is `pass`, `fail`,
 `inconclusive` or `waiting_on_rechecks`. `provisional_verdict` is the paired
 decision before required rechecks; `borderline_trials` counts borderline Scores.
@@ -250,7 +275,7 @@ run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
 are kept. There is no automatic resume, failure email or failure metric.
 
 The `CommandPause` projection in the contract below covers those fields on
-the Command record and on `show --json`; it does not change Experiment format 6.
+the Command record and on `show --json`; it does not change Experiment format 7.
 
 ## Checked field contract
 
@@ -276,7 +301,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 6,
+    "format": 7,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -339,6 +364,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "seed": "integer", "draws": "integer", "trials_per_task": {"*": "integer"},
     "discriminating_tasks?": {"*": ["string"]},
     "min_discriminating_tasks?": "integer",
+    "cost_ceiling?": "number", "time_ceiling?": "number",
     "timeout_seconds": "integer", "void_rules": {"retries": "integer", "causes": ["VoidCause"]}
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
@@ -382,7 +408,14 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "Verdict": {
     "verdict": "pass|fail|inconclusive|waiting_on_rechecks|waiting_on_leaks",
-    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer"
+    "provisional_verdict?": "Decision?", "suites": {"*": "SuiteVerdict"}, "borderline_trials": "integer",
+    "efficiency?": "Efficiency", "line?": "string"
+  },
+  "Efficiency": {
+    "quality_verdict": "Decision", "method": "string", "cost": "Comparison", "time": "Comparison"
+  },
+  "Comparison": {
+    "ratio": "number?", "interval": "Interval?", "pairs": "integer", "complete": "boolean", "ceiling": "number?"
   },
   "Decision": "pass|fail|inconclusive",
   "SuiteVerdict": {

@@ -4,6 +4,7 @@
 mod accounting;
 mod cost;
 mod difficulty;
+mod efficiency;
 mod evidence;
 mod execution;
 mod grading;
@@ -69,6 +70,18 @@ pub(crate) struct Bar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_discriminating_tasks: Option<usize>,
     pub timeout_seconds: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "efficiency::optional_decimal"
+    )]
+    pub cost_ceiling: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "efficiency::optional_decimal"
+    )]
+    pub time_ceiling: Option<f64>,
     pub void_rules: VoidRules,
 }
 
@@ -91,6 +104,8 @@ impl Default for Bar {
             discriminating_tasks: None,
             min_discriminating_tasks: None,
             timeout_seconds: 1800,
+            cost_ceiling: None,
+            time_ceiling: None,
             void_rules: VoidRules {
                 retries: 2,
                 causes: [

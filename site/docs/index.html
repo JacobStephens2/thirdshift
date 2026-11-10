@@ -1442,6 +1442,15 @@ Override these with <code>--margin</code>, <code>--pass-level</code>, <code>--fa
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--min-discriminating-tasks</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.</p>
+<p>Optional <code>--cost-ceiling 2</code> and <code>--time-ceiling 2</code> cap the paired median
+Candidate/Baseline ratios at 2×. Both are off by default and fixed with the Bar;
+a ratio above either set ceiling fails the Experiment. Unmeasured ceilings
+cannot pass. Quality statistics still follow ADR-0025. When quality passes,
+the Verdict adds &quot;cheaper&quot; or &quot;faster&quot; when the paired ratio&#39;s pass-level
+Bayesian bootstrap interval lies below 1 (at least two paired tasks), or says
+&quot;costs more&quot; or &quot;takes longer&quot; when its median exceeds 1. JSON <code>verdict.line</code>,
+the text view and the Console show the same line. See the
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md#verdict-and-bar">resource comparison rules</a>.</p>
 <p>The default pass level is the highest at which an A/A Experiment at the
 measured disagreement rate passes at least 80% of the time on each suite at
 its size, but never below 70% (#1268). #1370&#39;s A/A Experiment measured these
@@ -1682,7 +1691,7 @@ reports its saved results. A changed Bar is refused after the first Trial.
 That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 6</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 7</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost

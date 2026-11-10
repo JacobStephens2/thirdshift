@@ -461,6 +461,12 @@ fn verdict(view: &View) -> String {
     };
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
+    if let Some(line) = &verdict.line {
+        html.push_str(&format!(
+            "<p class=\"experiment-resource-verdict\">{}</p>",
+            esc(line)
+        ));
+    }
     for (name, suite) in &verdict.suites {
         let advisory = suite.advisory == Some(true);
         let counts = suite.counts.as_ref();
@@ -1207,6 +1213,17 @@ fn change(baseline: Option<f64>, candidate: Option<f64>) -> String {
 
 fn bar(view: &View) -> String {
     let b = &view.description.bar;
+    let ceiling = |ratio: Option<f64>| {
+        ratio.map_or_else(
+            || "Off".into(),
+            |ratio| format!("{ratio:.3}× Candidate/Baseline"),
+        )
+    };
+    let ceilings = format!(
+        "<dt>Cost ceiling</dt><dd>{}</dd><dt>Time ceiling</dt><dd>{}</dd>",
+        ceiling(b.cost_ceiling),
+        ceiling(b.time_ceiling)
+    );
     let levels = match b.levels {
         crate::verdict::Levels::Separate {
             pass_level,
@@ -1253,7 +1270,7 @@ fn bar(view: &View) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}{ceilings}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
         b.prior,
         b.seed,

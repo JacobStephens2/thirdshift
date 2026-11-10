@@ -381,6 +381,7 @@ impl Stored {
         )?;
         if super::leaks::pending(&results) {
             verdict.verdict = super::Conclusion::WaitingOnLeaks;
+            verdict.update_line();
         }
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
@@ -498,7 +499,7 @@ Candidate: {}{}{}",
                 view.results.len(),
                 self.verdict
                     .as_ref()
-                    .map_or("pending", |verdict| verdict.outcome())
+                    .map_or("pending", |verdict| verdict.line.as_deref().unwrap_or_else(|| verdict.outcome()))
                     .replace('_', " "),
                 self.verdict
                     .as_ref()
