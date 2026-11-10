@@ -1347,9 +1347,11 @@ the overall Verdict is inconclusive. The minimum uses the fixed list&#39;s size,
 before Void dropouts, rather than the retained judged count.</p>
 <p>Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
-Bar&#39;s timeout, in session-minutes; and, for each suite and Harness that has
-history, an estimate from the mean minutes of completed, non-void Trials in this
-machine&#39;s earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
+Bar&#39;s timeout, in session-minutes; and, for each suite and exact Arm setup that has
+history, an estimate from completed, non-Void Trials in this machine&#39;s earlier
+Experiments. The setup includes the build, Harness, Model, Effort and Process.
+Estimates count every attempt&#39;s minutes and show priced dollars when all of
+that history has complete accounting. The total time estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
 stdin is a terminal it then asks <code>Run these Trials? [y/N]</code>; any answer but <code>y</code> or <code>yes</code>
 exits without building an Arm or starting a Trial, and a new Experiment
@@ -1358,6 +1360,17 @@ the last release&#39;s Arm. <code>--yes</code> skips the question,
 and so does a stdin that is not a terminal. <code>scripts/release.sh --with-experiment</code> passes <code>--yes</code>, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.</p>
+<p>Each new Experiment freezes a dated token price table. <code>--prices &lt;file.json&gt;</code>
+supplies another table with exact observed Model names and USD rates per million
+input, output, cache-read and cache-write tokens; otherwise it uses the bundled
+standard-rate snapshot. The table cannot change once a Trial starts. Every
+session, including a Resume or fallback, is priced and attributed to its starting
+Step. Missing usage or a missing Model price makes the Trial Void with an
+accounting-gap cause. Arm totals include all attempts; paired median
+Candidate-to-Baseline cost and time ratios use matching complete, non-Void Trials.
+Time spent paused at a usage limit between invocations is excluded. Harness-reported
+costs remain separate from these frozen comparison prices. See the
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment accounting format</a> for the table and result fields.</p>
 <p><code>--name &lt;text&gt;</code> saves a name with the Experiment: one line of at most 100
 characters, trimmed. An empty or over-long name is refused before any build.
 <code>thirdshift experiments &lt;id&gt; --name &lt;text&gt;</code> renames a saved Experiment in any

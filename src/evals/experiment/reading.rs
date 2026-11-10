@@ -105,6 +105,8 @@ impl Observation {
             name_set: stored.name.is_some(),
             description: stored.description.clone(),
             state: stored.state,
+            pricing: stored.pricing.clone(),
+            accounting: super::accounting::Report::of(&self.results, &self.unfinished_trials),
             details: {
                 let mut details = stored.details.clone();
                 details.resume_command = details.resume_command.as_deref().and_then(|command| {

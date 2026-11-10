@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::trace::{Calls, event_attributes};
 use crate::harness::Harness;
@@ -25,7 +25,7 @@ pub(crate) struct Model {
     pub measurement: Measurement,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Measurement {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,

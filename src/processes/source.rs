@@ -209,7 +209,17 @@ impl TicketSource {
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> Result<T> {
         match self {
-            Self::Local(local) => local.session(index, worktree, run.choice, action).0,
+            Self::Local(local) => {
+                local
+                    .session(
+                        index,
+                        &run.steps[index - 1].name,
+                        worktree,
+                        run.choice,
+                        action,
+                    )
+                    .0
+            }
             Self::Factory => {
                 let mut logs = session::Logs::of_process(&launch::repo()?);
                 if let Some(identity) = run.dispatched {
@@ -298,27 +308,33 @@ impl TicketSource {
             Self::Local(local) => {
                 let text = prompt::local_security_review(&local.issue, &local.base, &local.branch);
                 local
-                    .session(index + 1, &local.repository, &step.choice, |sessions, _| {
-                        local.ensure_actionable()?;
-                        let review = crate::security::review::run_local(
-                            sessions,
-                            &local.repository,
-                            &local.issue,
-                            &local.base_commit,
-                            &local.output,
-                            &text,
-                        )?;
-                        local.ensure_actionable()?;
-                        retain_killed_work(&prepared.killed_work, index + 1, sessions);
-                        let outcome = crate::security::review::Outcome::of(
-                            Ok(review),
-                            sessions.last_log_of(session::Kind::SecurityReview),
-                        );
-                        if let Some(hold) = outcome.hold() {
-                            return Err(hold.into());
-                        }
-                        Ok(outcome.entry())
-                    })
+                    .session(
+                        index + 1,
+                        &step.name,
+                        &local.repository,
+                        &step.choice,
+                        |sessions, _| {
+                            local.ensure_actionable()?;
+                            let review = crate::security::review::run_local(
+                                sessions,
+                                &local.repository,
+                                &local.issue,
+                                &local.base_commit,
+                                &local.output,
+                                &text,
+                            )?;
+                            local.ensure_actionable()?;
+                            retain_killed_work(&prepared.killed_work, index + 1, sessions);
+                            let outcome = crate::security::review::Outcome::of(
+                                Ok(review),
+                                sessions.last_log_of(session::Kind::SecurityReview),
+                            );
+                            if let Some(hold) = outcome.hold() {
+                                return Err(hold.into());
+                            }
+                            Ok(outcome.entry())
+                        },
+                    )
                     .0
             }
         }
@@ -362,11 +378,12 @@ impl Local {
     pub(super) fn session<T>(
         &self,
         index: usize,
+        role: &str,
         worktree: &Path,
         choice: &Choice,
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        let logs = session::Logs::of_trial(&self.output);
+        let logs = session::Logs::of_trial_step(&self.output, role);
         let before_each = || {
             self.ensure_actionable()?;
             restore_issue_file(&self.repository, &self.issue_text)?;

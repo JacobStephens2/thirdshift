@@ -16,6 +16,7 @@ use crate::issue::IssueUrl;
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::{config::UserConfig, git::Git, interrupt, prompt, skills};
 
+pub(crate) mod accounting;
 mod reports;
 pub(crate) use reports::Reports;
 
@@ -64,6 +65,8 @@ pub(crate) struct Output {
     pub reports: Reports,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<accounting::Attempt>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,6 +136,7 @@ pub(crate) enum VoidCause {
     SandboxUnavailable,
     HostKilled,
     MemoryCap,
+    AccountingGap,
     FixLeaked,
 }
 
@@ -147,6 +151,7 @@ impl std::fmt::Display for VoidCause {
             Self::SandboxUnavailable => "sandbox_unavailable",
             Self::HostKilled => "host_killed",
             Self::MemoryCap => "memory_cap",
+            Self::AccountingGap => "accounting_gap",
             Self::FixLeaked => "fix_leaked",
         })
     }
@@ -177,6 +182,7 @@ impl Output {
                 spec: None,
             },
             steps: Vec::new(),
+            accounting: None,
         }
     }
 
@@ -206,6 +212,7 @@ impl Output {
                 spec: None,
             },
             steps: Vec::new(),
+            accounting: None,
         }
     }
 }
@@ -383,6 +390,7 @@ pub fn run(path: &Path) -> Result<String> {
         },
         log: log.as_deref().map(crate::logs::session::path),
         steps,
+        accounting: None,
     };
     serde_json::to_string(&output).context("could not serialize Trial result")
 }

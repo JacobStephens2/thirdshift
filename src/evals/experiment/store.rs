@@ -19,6 +19,8 @@ pub(super) struct Stored {
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::trial::accounting::Prices>,
     #[serde(flatten)]
     pub details: Details,
     pub(super) created_at: String,
@@ -48,6 +50,8 @@ pub(crate) struct View {
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
+    pub pricing: Option<crate::trial::accounting::Prices>,
+    pub accounting: super::accounting::Report,
     #[serde(flatten)]
     pub details: Details,
     pub created_at: String,
@@ -305,6 +309,7 @@ impl Stored {
                 format: 1,
                 description,
                 state: State::Prepared,
+                pricing: Some(crate::trial::accounting::Prices::default()),
                 details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
                 name: None,
@@ -477,6 +482,9 @@ impl Stored {
                 || self.description.candidate.process.is_some()
             {
                 selection.push_str(&format!("\nProcess Trial outcomes (stopped-to-ask counts as failed):\nBaseline: {} delivered, {} stopped-to-ask, {} failed\nCandidate: {} delivered, {} stopped-to-ask, {} failed", view.outcomes.baseline.delivered, view.outcomes.baseline.stopped_to_ask, view.outcomes.baseline.failed, view.outcomes.candidate.delivered, view.outcomes.candidate.stopped_to_ask, view.outcomes.candidate.failed));
+            }
+            if self.pricing.is_some() {
+                selection.push_str(&view.accounting.render());
             }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}

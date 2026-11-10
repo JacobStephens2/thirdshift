@@ -99,6 +99,7 @@ impl Monitor {
             },
             log,
             steps: Vec::new(),
+            accounting: None,
         }
     }
 }

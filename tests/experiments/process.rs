@@ -169,7 +169,7 @@ fi
     }
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     let fixture = Fixture::with_session("process", 1);
     fixture
         .scenario
@@ -849,14 +849,24 @@ fi
     let run = fixture.run(&["--candidate-process", process.to_str().unwrap()]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let view: Value = serde_json::from_str(&run.stdout).unwrap();
-    assert!(
-        view["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|trial| trial["outcome"] == "delivered"),
-        "{view}"
-    );
+    for trial in view["results"].as_array().unwrap() {
+        if trial["arm"] == "baseline" {
+            assert_eq!(trial["outcome"], "delivered", "{trial}");
+        } else {
+            assert_eq!(trial["outcome"], "void", "{trial}");
+            let attempt = &trial["attempts"][0];
+            assert_eq!(attempt["void_cause"], "accounting_gap", "{attempt}");
+            assert!(
+                attempt["cause"]
+                    .as_str()
+                    .unwrap()
+                    .contains("missing observed Model"),
+                "{attempt}"
+            );
+            assert_eq!(attempt["steps"][0]["name"], "custom-implement");
+            assert_eq!(attempt["steps"][0]["outcome"], "succeeded");
+        }
+    }
     let calls = fixture.scenario.codex_calls();
     assert_eq!(calls.len(), 1, "{calls:?}");
     let args = calls[0]["argv"].as_array().unwrap();

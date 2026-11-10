@@ -49,7 +49,8 @@ impl<'a> Runner<'a> {
             [&description.baseline, &description.candidate],
             Duration::from_secs(description.bar.timeout_seconds),
             signal,
-        )?;
+        )?
+        .with_pricing(experiment.pricing.as_ref());
         Ok(Self {
             directory: &experiment.directory,
             bar: &description.bar,
@@ -177,21 +178,48 @@ impl Writer {
     }
 
     fn can_continue(&self, bar: &Bar) -> bool {
+        let incomplete = |output: &Output| {
+            output
+                .accounting
+                .as_ref()
+                .is_some_and(|accounting| accounting.incomplete)
+        };
+        let completed = self
+            .progress
+            .attempts
+            .iter()
+            .filter(|output| !incomplete(output))
+            .count();
         self.progress.attempts.last().is_none_or(|latest| {
-            latest.outcome == Outcome::Void
-                && latest
-                    .void_cause
-                    .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
-                && self.progress.attempts.len() <= bar.void_rules.retries
+            incomplete(latest)
+                || (latest.outcome == Outcome::Void
+                    && latest
+                        .void_cause
+                        .is_some_and(|cause| bar.void_rules.causes.contains(&cause))
+                    && completed <= bar.void_rules.retries)
         })
     }
 
     fn record_attempt(
         &mut self,
         attempt: &Path,
-        output: Output,
-        score: grading::Score,
+        mut output: Output,
+        mut score: grading::Score,
     ) -> Result<()> {
+        // Earlier attempts belong to this same Trial, even across a plan pause.
+        if output.outcome != Outcome::Void
+            && let Some(gap) = self
+                .progress
+                .attempts
+                .iter()
+                .filter_map(|attempt| attempt.accounting.as_ref())
+                .find_map(|accounting| accounting.gap())
+        {
+            output.outcome = Outcome::Void;
+            output.void_cause = Some(VoidCause::AccountingGap);
+            output.cause = Some(gap.into());
+            score.passed = false;
+        }
         store::write(&attempt.join("result.json"), &output)?;
         self.progress.outcome = output.outcome;
         self.progress.score = Some(score);
