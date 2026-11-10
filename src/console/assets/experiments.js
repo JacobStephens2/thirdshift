@@ -71,9 +71,16 @@ async function refresh() {
     // A rename from the CLI changes the heading and the tab title together.
     document.title = next.title;
     const position = [scrollX, scrollY];
-    Idiomorph.morph(main, replacement, { callbacks: { beforeAttributeUpdated(name, node) {
+    // Reasons belong to the reviewer until submission, across every poll.
+    const leakReasons = new Map([...main.querySelectorAll('#experiment-leaks input[name="reason"]')]
+      .map(input => [input.form.action, input.value]));
+    Idiomorph.morph(main, replacement, { ignoreActiveValue: true, callbacks: { beforeAttributeUpdated(name, node) {
       if (name === 'open' && node.matches('details')) return false;
     } } });
+    for (const input of main.querySelectorAll('#experiment-leaks input[name="reason"]')) {
+      const reason = leakReasons.get(input.form.action);
+      if (reason !== undefined && input.value !== reason) input.value = reason;
+    }
     controls();
     if (currentPeek && !peek.hidden) openPeek(currentPeek, next);
     window.scrollTo(...position);
