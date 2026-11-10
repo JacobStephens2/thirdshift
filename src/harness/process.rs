@@ -13,9 +13,9 @@ pub(super) fn output(
     invocation: &mut dyn Invocation,
     input: Option<&str>,
 ) -> Result<Output> {
-    invocation
-        .command()
-        .envs(adapter.environment().iter().copied());
+    let command = invocation.command();
+    command.envs(adapter.environment().iter().copied());
+    adapter.prepare(command);
     process::output(
         invocation,
         input.map(str::as_bytes),
@@ -35,9 +35,9 @@ pub(crate) fn streaming<T: Send + 'static>(
     state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
-    invocation
-        .command()
-        .envs(adapter.environment().iter().copied());
+    let command = invocation.command();
+    command.envs(adapter.environment().iter().copied());
+    adapter.prepare(command);
     process::session::mark(invocation.command());
     process::streaming(
         invocation,

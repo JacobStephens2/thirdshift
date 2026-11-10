@@ -7,6 +7,29 @@ const { chromium } = require("playwright");
 
 const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
+test("Experiment format documentation matches the emitted contract", async () => {
+  const root = join(__dirname, "..", "..");
+  const reading = await readFile(join(root, "src/evals/experiment/reading.rs"), "utf8");
+  const format = reading.match(/format:\s*(\d+)/)[1];
+  for (const [file, prefix] of [
+    ["docs/guide.md", "identified by `format: "],
+    ["site/docs/index.html", "identified by <code>format: "],
+    ["site/how-it-works/index.html", "documented result contract with <code>format: "],
+  ]) {
+    const source = await readFile(join(root, file), "utf8");
+    assert.ok(source.includes(prefix), file);
+    assert.equal(source.split(prefix)[1].match(/^\d+/)[0], format, file);
+  }
+});
+
+test("API start lists include the Experiment command", async () => {
+  for (const file of ["index.html", "how-it-works/index.html", "architecture/index.html"]) {
+    const source = await readFile(join(__dirname, "..", file), "utf8");
+    const paragraph = source.match(/<p\b[^>]*>.*?<\/p>/gs).find(text => text.includes("POST /api/v1/runs"));
+    assert.match(paragraph.replace(/<[^>]+>/g, ""), /Experiment/, file);
+  }
+});
+
 let server, browser, origin;
 before(async () => {
   server = createServer(async (request, response) => {
@@ -129,7 +152,9 @@ test('the architecture page distinguishes Triage stdout JSON from its notificati
 
 test('the workflow page identifies the current Experiment result contract', async () => {
   const page = await readFile(join(__dirname, '..', 'how-it-works', 'index.html'), 'utf8');
-  assert.match(page, /contract with <code>format: 4<\/code>/);
+  const contract = await readFile(join(__dirname, '..', '..', 'docs', 'experiment-results.md'), 'utf8');
+  const format = contract.match(/^# Experiment results \(format (\d+)\)/)[1];
+  assert.ok(page.includes(`contract with <code>format: ${format}</code>`), format);
 });
 
 test('Console documentation explains row Dismiss, d and the Undo notice', async t => {
@@ -439,8 +464,8 @@ test("hand-written pages use the five workflow names outside the recorded replay
       return copy.textContent;
     });
     assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
-    // Run remains a verb and part of Run notification / Run metrics.
-    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    // Run remains a verb, the Run now control, and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from| now)/, path);
     assert.match(prose, /Ticket run/, path);
     assert.match(prose, /Failed ticket run/, path);
   }
@@ -524,6 +549,17 @@ for (const width of [320, 390, 768, 1280]) {
 }
 
 for (const javaScriptEnabled of [false, true]) {
+  test(`API start bookmarks expose the command table (JavaScript: ${javaScriptEnabled})`, async (t) => {
+    for (const fragment of ["starting-commands-through-the-api", "starting-ticket-and-spec-runs-through-the-api"]) {
+      const page = await pageForTest(t, { javaScriptEnabled });
+      await page.goto(`${origin}/docs/#${fragment}`);
+      const section = page.locator("#starting-commands-through-the-api");
+      await section.waitFor({ state: "visible" });
+      await section.locator("table").waitFor({ state: "visible" });
+      assert.match(await section.textContent(), /triage/);
+    }
+  });
+
   test(`guide and manual deep links unfold their content (JavaScript: ${javaScriptEnabled})`, async (t) => {
     const page = await pageForTest(t, { javaScriptEnabled });
     for (const [path, fragment, text] of [

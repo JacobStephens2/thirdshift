@@ -132,7 +132,7 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
         Harness::Claude => {
             copy_files(original, home, &[".claude.json"])?;
             copy_files(&claude, &home.join(".claude"), &[".credentials.json"])?;
-            launch.set_env("CLAUDE_CONFIG_DIR", &home.join(".claude"));
+            launch.set_env("CLAUDE_CONFIG_DIR", home.join(".claude"));
         }
         Harness::Codex => {
             let source = from_environment("CODEX_HOME", original.join(".codex"));
@@ -183,6 +183,13 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
                 ],
             )?;
             copy_files(&data, &home.join(".local/share"), &["opencode/auth.json"])?;
+        }
+        Harness::Kimi => {
+            use crate::harness::kimi::{HOME_ENV, HOME_FILES, HOME_NAME};
+            let source = from_environment(HOME_ENV, original.join(HOME_NAME));
+            let dest = home.join(HOME_NAME);
+            copy_files(&source, &dest, &HOME_FILES)?;
+            launch.set_env(HOME_ENV, &dest);
         }
     }
     Ok(())

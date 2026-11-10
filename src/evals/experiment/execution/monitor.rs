@@ -98,6 +98,8 @@ impl Monitor {
                 spec: artifact("spec"),
             },
             log,
+            steps: Vec::new(),
+            accounting: None,
         }
     }
 }

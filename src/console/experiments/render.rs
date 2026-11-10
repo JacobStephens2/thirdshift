@@ -25,6 +25,11 @@ struct Status {
 
 fn status(view: &View) -> Status {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => Status {
+            label: "Waiting on leak decisions",
+            tone: "look",
+            group: 1,
+        },
         Some(Conclusion::Pass) => Status {
             label: "Pass",
             tone: "done",
@@ -42,6 +47,11 @@ fn status(view: &View) -> Status {
         },
         Some(Conclusion::WaitingOnRechecks) => Status {
             label: "Waiting on rechecks",
+            tone: "look",
+            group: 1,
+        },
+        Some(Conclusion::WaitingOnPeople) => Status {
+            label: "Waiting on people",
             tone: "look",
             group: 1,
         },
@@ -87,6 +97,14 @@ fn now(view: &View) -> String {
         );
     };
     let mut reasons = Vec::new();
+    let pending_leaks = view
+        .leak_hits
+        .iter()
+        .filter(|hit| hit.decision.is_none())
+        .count();
+    if pending_leaks > 0 {
+        reasons.push(format!("{pending_leaks} leak decisions waiting"));
+    }
     if !view.pending_rechecks.is_empty() {
         reasons.push(format!(
             "{} rechecks waiting, provisionally {}",
@@ -235,7 +253,7 @@ fn question(view: &View) -> String {
     )
 }
 
-pub(super) fn detail(view: &View) -> String {
+pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
     let id = esc(&view.description.id);
     let command_log = view.details.command_log.as_ref().map_or_else(
         || "Command log unavailable".into(),
@@ -276,10 +294,26 @@ pub(super) fn detail(view: &View) -> String {
                 ));
             }
         } else {
-            html.push_str("<p>Trials fill in as they finish. Model Graders then score each Eval task's blind packet before the Verdict appears.</p>");
+            html.push_str("<p>Trials fill in as they finish. Model Graders then score review tasks' blind packets; process tasks are scored on their outcome.</p>");
         }
     }
+    html.push_str(&leaks(view, csrf, can_act));
     html.push_str(&verdict(view));
+    html.push_str(&people(view));
+    if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
+        html.push_str("<section aria-label=\"Process Trial outcomes\"><h2>Process Trial outcomes</h2><p>Stopped-to-ask counts as failed in the Verdict.</p><dl>");
+        for (label, counts) in [
+            ("Baseline", &view.outcomes.baseline),
+            ("Candidate", &view.outcomes.candidate),
+        ] {
+            html.push_str(&format!(
+                "<dt>{label}</dt><dd>{} delivered · {} stopped-to-ask · {} failed</dd>",
+                counts.delivered, counts.stopped_to_ask, counts.failed
+            ));
+        }
+        html.push_str("</dl></section>");
+    }
+    html.push_str(&pairs(view));
     for finding in &view.findings {
         html.push_str(&format!(
             "<p class=\"experiment-callout\">Finding: {}</p>",
@@ -298,8 +332,152 @@ pub(super) fn detail(view: &View) -> String {
     html
 }
 
+/// People's blind pairwise calls, with each reader's queue or links to read
+/// every pair blind. The Bar says whether they count in the Verdict.
+fn people(view: &View) -> String {
+    use crate::evals::experiment::{deciders, pairwise};
+    if view.pairs.is_empty() {
+        return String::new();
+    }
+    let id = esc(&view.description.id);
+    let people = &view.people;
+    let mut html = String::from("<section aria-label=\"People's calls\"><h2>People's calls</h2>");
+    html.push_str(match deciders::people_role(&view.description.bar) {
+        deciders::Role::Off => {
+            html.push_str("<p>The Bar has people off: no one grades these pairs.</p></section>");
+            return html;
+        }
+        deciders::Role::Beside => {
+            "<p>Blind pairwise calls, reported beside the Verdict. They change no Score.</p>"
+        }
+        deciders::Role::Counted => {
+            "<p>Blind pairwise calls, counted in the Verdict: a Trial passes only if the code Grader passes and its pair is called ready. On a shared pair, every reader must call it ready.</p>"
+        }
+    });
+    let link = |key: &str| {
+        view.pairs
+            .iter()
+            .find(|pair| pair.key() == key)
+            .map_or_else(
+                || format!("{} (not finished)", esc(key)),
+                |pair| {
+                    format!(
+                        "<a href=\"/experiments/{id}/pairs/{}\">{}/{} #{}</a>",
+                        esc(key),
+                        esc(&pair.suite),
+                        esc(&pair.task),
+                        pair.trial + 1
+                    )
+                },
+            )
+    };
+    if people.queues.is_empty() {
+        html.push_str("<p>Read a pair blind:</p><ul>");
+        for pair in &view.pairs {
+            html.push_str(&format!("<li>{}</li>", link(&pair.key())));
+        }
+        html.push_str("</ul>");
+    } else {
+        html.push_str("<h3>Queues</h3><p>The pairs the Bar's seed gives each reader.</p>");
+        for queue in &people.queues {
+            html.push_str(&format!("<h4>{}</h4><ul>", esc(&queue.reader)));
+            for key in &queue.pairs {
+                let called = people.reviews.iter().any(|review| {
+                    review.pair == *key && review.blind && review.reader.who() == queue.reader
+                });
+                html.push_str(&format!(
+                    "<li>{} · {}</li>",
+                    link(key),
+                    if called { "called" } else { "to read" }
+                ));
+            }
+            html.push_str("</ul>");
+        }
+    }
+    if people.reviews.is_empty() {
+        html.push_str("<p>No calls yet.</p></section>");
+        return html;
+    }
+    html.push_str("<table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Reader</th><th scope=\"col\">Recorded</th><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th><th scope=\"col\">Preference</th><th scope=\"col\">Blind</th></tr></thead><tbody>");
+    for review in &people.reviews {
+        html.push_str(&format!(
+            "<tr><td>{}/{} #{}</td><td>{}</td><td><time>{}</time></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(&review.suite),
+            esc(&review.task),
+            review.trial + 1,
+            esc(review.reader.who()),
+            esc(&review.recorded_at),
+            pairwise::ready(review.baseline_ready),
+            pairwise::ready(review.candidate_ready),
+            review
+                .preference
+                .map_or("—", pairwise::arm_preference),
+            if review.blind {
+                "yes"
+            } else {
+                "no, after the reveal"
+            }
+        ));
+    }
+    html.push_str(&format!(
+        "</tbody></table><p>{}</p><p>{}</p></section>",
+        esc(&pairwise::agreement(&people.agreement)),
+        esc(&pairwise::people_agreement(&people.people_agreement))
+    ));
+    html
+}
+
+/// Base-tests and cross-tests per pair, numbered from 1: evidence, not Scores.
+fn pairs(view: &View) -> String {
+    if view.pairs.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(
+        "<section aria-label=\"Pair evidence\"><h2>Pair evidence</h2><p>Each Arm's new tests, run offline on the unchanged base and on the other Arm's final commit. A cross-test failure is a disagreement to look into, not a defect, and changes no Score.</p><table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Arm</th><th scope=\"col\">New tests</th><th scope=\"col\">On the base</th><th scope=\"col\">On the other Arm</th></tr></thead><tbody>",
+    );
+    for pair in &view.pairs {
+        for (arm, side) in [("Baseline", &pair.baseline), ("Candidate", &pair.candidate)] {
+            let tests = if side.test_files.is_empty() {
+                "None".to_owned()
+            } else {
+                side.test_files
+                    .iter()
+                    .map(|file| format!("<code>{}</code>", esc(file)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let unknown = |checks: &[crate::sandbox::code_grader::Check]| match &side.error {
+                Some(error) => format!("Unavailable: {}", esc(error)),
+                None if checks.is_empty() => "—".to_owned(),
+                None => "Did not finish".to_owned(),
+            };
+            let base = match side.fails_on_base {
+                Some(true) => "Fails".to_owned(),
+                Some(false) => "Passes".to_owned(),
+                None => unknown(&side.base),
+            };
+            let other = match side.passes_on_other {
+                Some(true) => "Passes".to_owned(),
+                Some(false) => "Fails: disagreement".to_owned(),
+                None => unknown(&side.cross),
+            };
+            html.push_str(&format!(
+                "<tr><td>{}/{} #{}</td><td>{arm}</td><td>{tests}</td><td>{base}</td><td>{other}</td></tr>",
+                esc(&pair.suite),
+                esc(&pair.task),
+                pair.trial + 1
+            ));
+        }
+    }
+    html.push_str("</tbody></table></section>");
+    html
+}
+
 fn lead(view: &View) -> String {
     match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnLeaks) => {
+            "Review the pending Session evidence leak hits before the Verdict is final.".into()
+        }
         Some(Conclusion::WaitingOnRechecks) => format!(
             "Provisionally {}, until you recheck {} Scores.",
             decision(
@@ -318,11 +496,61 @@ fn lead(view: &View) -> String {
         Some(Conclusion::Fail) => {
             "Fail: the Candidate is worse than the Baseline under the Bar.".into()
         }
-        Some(Conclusion::Inconclusive) => {
-            "Inconclusive: these Trials cannot settle whether the Candidate is worse.".into()
-        }
+        Some(Conclusion::WaitingOnPeople) => format!(
+            "Provisionally {}, until each reader makes their blind merge calls on {} pairs.",
+            decision(
+                view.verdict
+                    .as_ref()
+                    .unwrap()
+                    .provisional_verdict
+                    .decision()
+                    .unwrap_or(Decision::Inconclusive)
+            ),
+            view.verdict
+                .as_ref()
+                .and_then(|verdict| verdict.deciders.as_ref())
+                .map_or(0, |deciders| deciders.waiting_pairs)
+        ),
+        Some(Conclusion::Inconclusive) => match view
+            .verdict
+            .as_ref()
+            .and_then(|verdict| verdict.deciders.as_ref())
+            .and_then(|deciders| deciders.inconclusive.as_ref())
+        {
+            Some(reason) => format!("Inconclusive: {reason}."),
+            None => {
+                "Inconclusive: these Trials cannot settle whether the Candidate is worse.".into()
+            }
+        },
         None => now(view),
     }
+}
+
+fn leaks(view: &View, csrf: &str, can_act: bool) -> String {
+    if view.leak_hits.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(
+        "<section class=\"experiment-callout\" id=\"experiment-leaks\" aria-label=\"Session evidence leak check\"><h2>Session evidence leak check</h2><p>Review each match to the real fix. Dismiss false positives to keep the Trial; confirm a leak to make it Void. Decisions retain the reviewer and reason.</p><ul>",
+    );
+    for hit in &view.leak_hits {
+        html.push_str(&format!("<li><p><strong>{}</strong> · {} · <code>{}</code></p><p>Trial <code>{}</code> · attempt {} · <a href=\"/experiments/{}/sessions/{}\">Session evidence</a> · Session evidence line {}</p>", hit.status(), hit.kind, esc(&hit.identifier), esc(&hit.trial_id), hit.attempt + 1, esc(&view.description.id), esc(&hit.session), hit.line));
+        if let Some(decision) = &hit.decision {
+            html.push_str(&format!(
+                "<p>{} · {} · {}</p>",
+                esc(&decision.reviewer.to_string()),
+                when(&decision.recorded_at),
+                esc(&decision.reason)
+            ));
+        } else if can_act && !active(view) {
+            html.push_str(&format!("<form method=\"post\" action=\"/experiments/{}/leaks/{}\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><label>Reason <input name=\"reason\" required></label><button name=\"decision\" value=\"dismiss\">Dismiss false positive</button><button name=\"decision\" value=\"confirm\">Confirm leak</button></form>", esc(&view.description.id), esc(&hit.id), esc(csrf)));
+        } else if active(view) {
+            html.push_str("<p>Decide after the Experiment stops.</p>");
+        }
+        html.push_str("</li>");
+    }
+    html.push_str("</ul></section>");
+    html
 }
 
 fn points(value: f64) -> String {
@@ -404,6 +632,21 @@ fn verdict(view: &View) -> String {
     };
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
+    if let Some(line) = &verdict.line {
+        html.push_str(&format!(
+            "<p class=\"experiment-resource-verdict\">{}</p>",
+            esc(line)
+        ));
+    }
+    if let Some(deciders) = &verdict.deciders {
+        html.push_str(&format!("<p>{}</p>", esc(&deciders.line())));
+    }
+    // A Verdict on the people's sample alone counts pairs, not Eval tasks.
+    let units = if crate::evals::experiment::deciders::sample_only(&view.description.bar) {
+        "pairs"
+    } else {
+        "Eval tasks"
+    };
     for (name, suite) in &verdict.suites {
         let advisory = suite.advisory == Some(true);
         let counts = suite.counts.as_ref();
@@ -482,17 +725,17 @@ fn verdict(view: &View) -> String {
             if let Some(more) = &assessment.more_tasks {
                 if let Some(count) = more.additional_tasks {
                     html.push_str(&format!(
-                        " About {count} more Eval tasks would settle it ({:.0}% chance).",
+                        " About {count} more {units} would settle it ({:.0}% chance).",
                         more.target_probability * 100.0
                     ));
                 } else {
-                    html.push_str(" The forecast's search budget did not find how many more Eval tasks would settle it.");
+                    html.push_str(&format!(" The forecast's search budget did not find how many more {units} would settle it."));
                 }
             }
             html.push_str("</p>");
         }
         html.push_str("<p class=\"experiment-axis\" aria-hidden=\"true\">−50 ··············· 0 ··············· +50 points</p>");
-        html.push_str(&format!("<p>{} retained Eval tasks; {} dropped{}.</p>", suite.retained_tasks, suite.dropped_tasks, if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 { "; more than a tenth dropped, so the suite is inconclusive whatever the intervals say" } else { "" }));
+        html.push_str(&format!("<p>{} retained {units}; {} dropped{}.</p>", suite.retained_tasks, suite.dropped_tasks, if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 { "; more than a tenth dropped, so the suite is inconclusive whatever the intervals say" } else { "" }));
         if let Some(pass) = suite.pass_cubed {
             html.push_str(&format!(
                 "<p>pass³ (all three Trials passed): Baseline {:.0}%, Candidate {:.0}%.</p>",
@@ -708,9 +951,11 @@ impl<'a> Cell<'a> {
         self.terminal
             && self.result.is_some_and(|r| {
                 r.outcome != Outcome::Void
-                    && r.score
-                        .as_ref()
-                        .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
+                    && r.score.as_ref().is_some_and(|s| {
+                        r.outcome == Outcome::Delivered
+                            || s.model.is_some()
+                            || s.checks.iter().any(|c| !c.passed)
+                    })
             })
     }
     fn passed(&self) -> bool {
@@ -830,7 +1075,7 @@ impl<'a> Cell<'a> {
                         esc(&model.label)
                     ));
                 } else {
-                    html.push_str("Not graded by the Model Grader yet.");
+                    html.push_str("No Model Grader assessment.");
                 }
                 html.push_str("</dd>");
                 for recheck in &score.rechecks {
@@ -871,7 +1116,7 @@ impl<'a> Cell<'a> {
             html.push_str("<h3>Attempts</h3><ol>");
             for (index, attempt) in result.attempts.iter().enumerate() {
                 html.push_str(&format!(
-                    "<li>{}{}{} · {:.1} minutes · {}</li>",
+                    "<li>{}{}{} · {:.1} minutes · {}",
                     attempt.outcome,
                     attempt
                         .void_cause
@@ -885,6 +1130,21 @@ impl<'a> Cell<'a> {
                     attempt.timings.total_ms as f64 / 60_000.0,
                     self.sessions(index)
                 ));
+                if !attempt.steps.is_empty() {
+                    html.push_str("<h4>Steps</h4><ol>");
+                    for step in &attempt.steps {
+                        html.push_str(&format!(
+                            "<li>{} · {} · {:.1}s · {} to {}</li>",
+                            esc(&step.name),
+                            step.outcome,
+                            step.elapsed_ms as f64 / 1000.0,
+                            when(&step.started_at),
+                            when(&step.ended_at)
+                        ));
+                    }
+                    html.push_str("</ol>");
+                }
+                html.push_str("</li>");
             }
             html.push_str("</ol>");
         }
@@ -1119,7 +1379,7 @@ fn arms(view: &View) -> String {
         &view.voids.baseline.to_string(),
         &view.voids.candidate.to_string(),
     ));
-    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></details></section>");
+    html.push_str("</tbody></table><p>The Bar's optional cost and time ceilings apply to frozen-price accounting. This table shows Harness-reported usage; unknown usage was not reported by the Harness.</p></details></section>");
     html
 }
 
@@ -1133,6 +1393,17 @@ fn change(baseline: Option<f64>, candidate: Option<f64>) -> String {
 
 fn bar(view: &View) -> String {
     let b = &view.description.bar;
+    let ceiling = |ratio: Option<f64>| {
+        ratio.map_or_else(
+            || "Off".into(),
+            |ratio| format!("{ratio:.3}× Candidate/Baseline"),
+        )
+    };
+    let ceilings = format!(
+        "<dt>Cost ceiling</dt><dd>{}</dd><dt>Time ceiling</dt><dd>{}</dd>",
+        ceiling(b.cost_ceiling),
+        ceiling(b.time_ceiling)
+    );
     let levels = match b.levels {
         crate::verdict::Levels::Separate {
             pass_level,
@@ -1178,8 +1449,43 @@ fn bar(view: &View) -> String {
                 .collect::<String>()
         })
         .unwrap_or_default();
+    let deciders = {
+        use crate::evals::experiment::deciders;
+        let panel = b.panel.as_ref().map_or_else(
+            || "off".to_owned(),
+            |panel| {
+                format!(
+                    "{} · {} seats · stands in for people only with {} voting families and people–panel agreement of at least {}",
+                    deciders::panel_role(b).name(),
+                    panel.seats.len(),
+                    panel.families,
+                    panel.agreement
+                )
+            },
+        );
+        let people = b.people.as_ref().map_or_else(
+            || "beside · anyone may read any pair".to_owned(),
+            |people| {
+                format!(
+                    "{} · readers: {} · {} · {} shared",
+                    people.role.name(),
+                    people.readers.join(", "),
+                    people.sample.map_or_else(
+                        || "every pair".to_owned(),
+                        |sample| format!("{sample} pairs each, drawn from the seed")
+                    ),
+                    people.overlap
+                )
+            },
+        );
+        format!(
+            "<dt>Grader panel</dt><dd>{}</dd><dt>People</dt><dd>{}</dd>",
+            esc(&panel),
+            esc(&people)
+        )
+    };
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}{minimum}{ceilings}{deciders}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth of judged tasks dropped in suites that are not advisory makes the overall Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
         b.prior,
         b.seed,

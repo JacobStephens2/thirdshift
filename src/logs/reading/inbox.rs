@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
@@ -13,7 +13,7 @@ use crate::logs::dismiss::{self, DismissalView, DismissedRow, READY_KIND};
 use crate::logs::github::{CommandAnswer, FindingSubject, Kept, Subject};
 use crate::logs::stop;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum Group {
     #[serde(rename = "needs you")]
@@ -28,6 +28,36 @@ pub(in crate::logs) enum Group {
 }
 
 impl Group {
+    pub(in crate::logs) fn row_order(
+        self,
+        kind: Option<NeedsYouKind>,
+        ended_or_started: Option<&str>,
+    ) -> RowOrder {
+        (
+            self,
+            kind.map(NeedsYouKind::priority),
+            Reverse(time(ended_or_started)),
+        )
+    }
+
+    pub(in crate::logs) fn state_word(
+        self,
+        kind: Option<NeedsYouKind>,
+        stopping: bool,
+        state: &str,
+    ) -> &str {
+        if let Some(kind) = kind {
+            return kind.title();
+        }
+        if stopping {
+            return "Stopping";
+        }
+        match self {
+            Self::ReadyForReview => "Ready",
+            Self::Landing => "Landing",
+            Self::NeedsYou | Self::Working | Self::Done | Self::Resolved | Self::History => state,
+        }
+    }
     pub(in crate::logs) const ORDER: [Self; 7] = [
         Self::NeedsYou,
         Self::ReadyForReview,
@@ -51,7 +81,7 @@ impl Group {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(in crate::logs) enum NeedsYouKind {
     Silent,
@@ -117,15 +147,15 @@ pub(in crate::logs) struct InboxItem<'a> {
     pub dismissal: Option<DismissalView>,
 }
 
-#[derive(Serialize)]
-struct Departure {
+#[derive(Serialize, Deserialize)]
+pub(in crate::logs) struct Departure {
     left_from: String,
     left_reason: String,
     left_at: String,
 }
 
 impl Departure {
-    fn line(&self) -> String {
+    pub(in crate::logs) fn line(&self) -> String {
         let Self {
             left_from,
             left_reason,
@@ -140,6 +170,14 @@ impl Departure {
 }
 
 impl InboxItem<'_> {
+    pub(in crate::logs) fn order(&self) -> RowOrder {
+        let facts = self.command.facts();
+        self.group.row_order(
+            self.needs_you_kind,
+            facts.ended_at.or(Some(facts.started_at)),
+        )
+    }
+
     /// Offer the Fix run only for a pull request still waiting for review
     /// whose latest kept facts show work for Delivery to repair.
     pub(in crate::logs) fn fix_command(&self) -> Option<String> {
@@ -164,19 +202,11 @@ impl InboxItem<'_> {
     /// The row's state word in the Console and `status`: its Needs you kind,
     /// then Stopping, Ready or Landing, otherwise the Command's own state.
     pub(in crate::logs) fn state_word(&self) -> &str {
-        if let Some(kind) = self.needs_you_kind {
-            return kind.title();
-        }
-        if self.stopping {
-            return "Stopping";
-        }
-        match self.group {
-            Group::ReadyForReview => "Ready",
-            Group::Landing => "Landing",
-            Group::NeedsYou | Group::Working | Group::Done | Group::Resolved | Group::History => {
-                self.command.facts().state
-            }
-        }
+        self.group.state_word(
+            self.needs_you_kind,
+            self.stopping,
+            self.command.facts().state,
+        )
     }
 }
 
@@ -202,7 +232,7 @@ impl<'a> Observation<'a> {
         } else if facts
             .outcome
             .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
-            || matches!(self, Observation::Record(command) if command.record.kind == "Experiment" && matches!(facts.outcome, Some("fail" | "inconclusive" | "waiting_on_rechecks")))
+            || matches!(self, Observation::Record(command) if command.record.kind == "Experiment" && matches!(facts.outcome, Some("fail" | "inconclusive" | "waiting_on_rechecks" | "waiting_on_leaks" | "waiting_on_people")))
         {
             Some(NeedsYouKind::Failed)
         } else if matches!(self, Observation::Record(command) if command.record.security_findings_waiting)
@@ -352,9 +382,11 @@ impl RefreshWork {
     }
 }
 
+pub(in crate::logs) type RowOrder = (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>);
+
 struct Row<'a> {
     item: InboxItem<'a>,
-    order: (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>),
+    order: RowOrder,
     failure: Option<(&'a str, bool, Option<&'a str>)>,
 }
 
@@ -699,11 +731,7 @@ pub(super) fn evaluate<'a>(
                 .as_ref()
                 .is_some_and(|row| row.kind == NeedsYouKind::Failed.title());
         evaluation.rows.push(Row {
-            order: (
-                group,
-                needs_you_kind.map(NeedsYouKind::priority),
-                Reverse(time(facts.ended_at.or(Some(facts.started_at)))),
-            ),
+            order: group.row_order(needs_you_kind, facts.ended_at.or(Some(facts.started_at))),
             failure: facts
                 .cause
                 .filter(|cause| failed && !cause.is_empty())

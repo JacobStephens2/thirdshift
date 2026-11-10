@@ -353,6 +353,11 @@ fn body(
     for line in account.triage_publication_lines() {
         text += &format!("{line}\n");
     }
+    if let Err(cause) = &account.ended
+        && let Some(notification) = cause.private_triage_notification()
+    {
+        text += notification;
+    }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.
         let audit = match (&account.security_fix, &account.ended) {
@@ -449,7 +454,9 @@ fn body(
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
-        let cause = if account.security_findings.is_some() {
+        let cause = if cause.private_triage_notification().is_some() {
+            Some("Private Security finding triage failed; details retained locally")
+        } else if account.security_findings.is_some() {
             account
                 .pre_audit_failure
                 .or_else(|| cause.safeguard_refusal())

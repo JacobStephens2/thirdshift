@@ -19,7 +19,7 @@ pub(super) fn document() -> Value {
         paths.entry(route.api).or_insert_with(|| json!({}))
             [route.method.as_str().to_ascii_lowercase()] = json!({
             "description": format!("CLI twins: {}. The required scope is declared in x-scope.", route.cli.join("; ")),
-            "x-scope": route.scope,
+            "x-scope": route.scope.map(|scope| scope.name()).unwrap_or("authenticated"),
             "x-cli-twins": route.cli,
             "parameters": parameters,
             "responses": {
@@ -114,6 +114,34 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
     let record = json!({"type": "object"});
     let version = json!({"type": "integer", "const": 1});
     let schema = match route.view {
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::CheckProcess
+        | View::EmailTest => text,
+        View::Evals => array(record),
+        View::TouchedEvals => array(text),
+        View::VerifyEval => object(json!({"safe":{"const":true}})),
+        View::OtherAccounts | View::SetOtherAccounts => {
+            json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
+        }
+        View::RecordDifficulty => array(record),
+        View::RenameExperiment
+        | View::PendingRechecks
+        | View::Recheck
+        | View::DecideLeak
+        | View::ExperimentPair
+        | View::MergeCalls
+        | View::PairPreference => record,
+        View::Update => object(json!({"current": text, "latest": text})),
+        View::RunUpdate => text,
+        View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
+        View::ProposeProcess => {
+            object(json!({"proposals":array(record.clone()),"skipped":array(record)}))
+        }
+        View::Config => object(json!({"version": version, "settings": array(setting())})),
+        View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
             "version": version, "hostname": text, "thirdshift_version": text,
             "api_version": {"type": "string", "const": "v1"},
@@ -139,7 +167,13 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 query("all", false, json!({"type": "boolean", "default": false}));
             }
             object(json!({
-                "version": version, "hostname": text, "active_runs": integer,
+                "version": {"type": "integer", "const": 2}, "hostname": text, "active_runs": integer,
+                "machines": array(object(json!({
+                    "name": {"type": "string"}, "hostname": {"type": ["string", "null"]},
+                    "fetched_at": {"type": "string", "format": "date-time"},
+                    "reachability": {"enum": ["ok", "unreachable", "refused", "needs update"]},
+                    "active_runs": {"type": "integer"}, "error": {"type": ["string", "null"]}
+                }))),
                 "commands": array(record.clone()), "idle_passes": array(record.clone()),
                 "pass_starts": array(record), "github_answer_age_seconds": {"type": ["integer", "null"]},
                 "github_last_answered_at": {"type": ["string", "null"]},
@@ -158,6 +192,11 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::Log => {
             query("command", true, text.clone());
             query("session", false, text.clone());
+            query(
+                "tail",
+                false,
+                json!({"type": "boolean", "default": false, "description": "Read at most the final 4096 bytes."}),
+            );
             object(json!({"version": version, "contents": text}))
         }
         View::Reader => object(json!({"version": version, "contents": text})),
@@ -196,6 +235,15 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         View::CronJobs => object(json!({
             "jobs": array(object(json!({"schedule": text, "command": text}))), "pass_starts": array(record)
         })),
+        View::LaunchDirectories => object(json!({
+            "directories": array(object(json!({"repository": text, "path": text})))
+        })),
+        View::StartOptions => object(json!({"form": record, "passes": array(record.clone())})),
+        View::StartRun => json!({"oneOf": [
+            object(json!({"version": version, "name": text})),
+            object(json!({"version": version, "outcome": {"const":"skipped"}, "reason": text})),
+            object(json!({"version": version, "outcome": {"const":"started"}, "process_id": integer}))
+        ]}),
         View::Resources | View::ResourceStatus => object(json!({
             "host": object(json!({"total_memory_mb": integer, "available_memory_mb": integer,
                 "logical_cpus": integer, "load_one": {"type": "number"}})),
@@ -219,7 +267,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             object(json!({"suite": text, "task": text, "state": {"const": "approved"}}))
         }
         View::Look | View::Theme | View::Sections => record,
-        View::Changes
+        View::FleetRun
+        | View::Changes
         | View::LogStream
         | View::Account
         | View::SignOut
@@ -235,7 +284,81 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
 
 fn action_body(view: View) -> Value {
     let text = json!({"type": "string"});
+    let json_request = |properties, required| {
+        json!({"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,"properties":properties,"required":required
+        }}}})
+    };
     let (properties, required) = match view {
+        View::CheckProcess => {
+            let mut schema = start_schema()["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|schema| schema["properties"]["command"]["const"] == "process")
+                .unwrap()
+                .clone();
+            schema["required"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|value| value != "command");
+            return json!({"required":true,"content":{"application/json":{"schema":schema}}});
+        }
+        View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::ProposeProcess => {
+            return json_request(
+                json!({"repository":{"type":"string","description":"A known Launch directory's owner/repo, not a filesystem path."},"limit":{"type":"integer","minimum":1,"maximum":100,"default":100}}),
+                vec!["repository"],
+            );
+        }
+        View::VerifyEval => {
+            return json_request(
+                json!({"repository":text,"base":text}),
+                vec!["repository", "base"],
+            );
+        }
+        View::SetOtherAccounts => return json_request(json!({"value":text}), vec!["value"]),
+        View::EmailTest => return json_request(json!({"address":text}), vec![]),
+        View::RenameExperiment => return json_request(json!({"name":text}), vec!["name"]),
+        View::RecordDifficulty => (json!({}), vec![]),
+        View::Recheck => {
+            let mut body = json_request(
+                json!({"trial":text,"fingerprint":text,"decision":{"enum":["pass","fail"]},"reason":text,"wrong_finding":{"type":"boolean"}}),
+                vec!["decision", "reason"],
+            );
+            body["content"]["application/json"]["schema"]["oneOf"] = json!([
+                {"required":["trial"],"not":{"required":["fingerprint"]}},
+                {"required":["fingerprint"],"not":{"required":["trial"]}}
+            ]);
+            return body;
+        }
+        View::DecideLeak => {
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"decision":{"enum":["confirm","dismiss"]},"reason":text},"required":["decision","reason"]
+            }}}});
+        }
+        View::MergeCalls => {
+            let call = json!({"enum": ["ready", "not-ready"]});
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"a":call,"b":call},"required":["a","b"]
+            }}}});
+        }
+        View::PairPreference => {
+            use crate::evals::experiment::pairwise::Preference;
+            let values: Vec<_> = Preference::ALL.iter().map(|(_, value, _)| *value).collect();
+            let preference = json!({"enum": values});
+            let mut properties = json!({"preference": preference});
+            for (name, _) in crate::evals::experiment::pairwise::RUBRIC {
+                properties[format!("rubric_{name}")] = preference.clone();
+            }
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":properties,"required":["preference"]
+            }}}});
+        }
+        View::StartRun => {
+            return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
+        }
+        View::SetConfig => (json!({"value": text}), vec!["value"]),
         View::ThemeImport => {
             return json!({"required": true, "content": {"application/json": {"schema": {
                 "type": "object", "required": ["name"], "properties": {
@@ -269,15 +392,29 @@ fn action_body(view: View) -> Value {
                 "type":"object", "properties":properties,"required":required
             }}}});
         }
-        View::ApproveEvalTask => (json!({}), vec![]),
-        View::Whoami
+        View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),
+        View::Help
+        | View::Version
+        | View::Processes
+        | View::Process
+        | View::Evals
+        | View::OtherAccounts
+        | View::PendingRechecks
+        | View::Whoami
+        | View::Update
+        | View::Config
+        | View::ConfigSetting
         | View::OpenApi
         | View::BugOrigins
         | View::Scores
         | View::Experiments
         | View::Experiment
         | View::ExperimentSession
+        | View::ExperimentPair
         | View::CronJobs
+        | View::LaunchDirectories
+        | View::StartOptions
+        | View::FleetRun
         | View::Resources
         | View::ResourceStatus
         | View::Metrics
@@ -308,6 +445,71 @@ fn action_body(view: View) -> Value {
     }}}})
 }
 
+fn start_schema() -> Value {
+    let text = json!({"type":"string"});
+    let boolean = json!({"type":"boolean"});
+    let fields = json!({
+        "repository": text, "issue": {"oneOf":[{"type":"integer","minimum":1},text]},
+        "pull_request": text, "author": text, "name": text,
+        "base": text, "focus": text, "report": {"type":"string","minLength":1},
+        "order": {"enum":["lowest-first","highest-first"]},
+        "plan_only": boolean, "recommend_only": boolean, "read_machine": boolean,
+        "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
+        "security_review": boolean, "security_fix": boolean, "security_close": boolean,
+        "parallel": {"type":"integer","minimum":1},
+        "harness": {"enum":["claude","codex","agy","grok","muse","opencode","kimi"]},
+        "model": text, "effort": text,
+        "email": {"oneOf":[
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"enum":["always","unless_merged"]},"address":text}},
+            {"type":"object","required":["mode"],"additionalProperties":false,
+             "properties":{"mode":{"const":"never"}}}
+        ]},
+        "experiment": {"type":"object","additionalProperties":false,"properties":super::start::experiment_properties()}
+    });
+    let mut variants = Vec::new();
+    for kind in super::start::Kind::ALL {
+        let command = kind.word();
+        let mut properties = serde_json::Map::new();
+        for key in ["repository"].into_iter().chain(kind.fields()) {
+            properties.insert(key.into(), fields[key].clone());
+        }
+        properties.insert("command".into(), json!({"const":command}));
+        let mut required: Vec<_> = kind
+            .required()
+            .iter()
+            .copied()
+            .chain(["repository"])
+            .collect();
+        if command != "ticket" {
+            required.push("command");
+        }
+        let mut variant = json!({"type":"object","additionalProperties":false,"required":required,"properties":properties});
+        if command == "review" {
+            variant["oneOf"] = json!([
+                {"required":["pull_request"],"not":{"required":["author"]}},
+                {"required":["author"],"not":{"required":["pull_request"]}}
+            ]);
+        } else if command == "process" {
+            variant["not"] = json!({"required":["issue","pull_request"]});
+        } else if command == "fix" {
+            variant["not"] = json!({"anyOf":[
+                {"required":["pull_request","base"]},
+                {"required":["pull_request","author"]}
+            ]});
+        }
+        variants.push(variant);
+    }
+    json!({"oneOf":variants})
+}
+
+fn setting() -> Value {
+    object(json!({
+        "key": {"type":"string"}, "value": {}, "default": {},
+        "editable": {"type":"boolean"}, "reason": {"type":["string","null"]}
+    }))
+}
+
 fn tree() -> Value {
     object(
         json!({"command": {"type": "string"}, "now": {"type": "number"}, "spans": array(span())}),
@@ -330,7 +532,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 4}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 10}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))

@@ -16,13 +16,15 @@ pub(super) async fn events(
     Extension(viewer): Extension<super::auth::Viewer>,
     Extension(notifier): Extension<super::changes::Notifier>,
     Extension(assets): Extension<super::assets::Development>,
+    Extension(fleet): Extension<super::fleet_inbox::Fleet>,
 ) -> Response {
     // Every reconnect catches up even if its last notice was lost.
+    let lease = fleet.subscribe(viewer.fleet_person());
     let subscription = Subscription::new(changes, viewer, &notifier);
     let development = assets.directory().is_some();
     let stream = futures_util::stream::unfold(
-        (subscription, None::<super::changes::Revision>),
-        move |(mut subscription, previous)| async move {
+        (subscription, None::<super::changes::Revision>, lease),
+        move |(mut subscription, previous, lease)| async move {
             match subscription.ready(Readiness::Page).await {
                 Ok(true) => {
                     let current = subscription.revision();
@@ -44,7 +46,7 @@ pub(super) async fn events(
                             .to_string(),
                         )));
                     }
-                    Some((events, (subscription, Some(current))))
+                    Some((events, (subscription, Some(current), lease)))
                 }
                 Ok(false) => None,
                 Err(error) => {

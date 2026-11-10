@@ -1,0 +1,2156 @@
+{
+  "base": "9283d0b8379aa9cf5b645bfe95699813846cb3a0",
+  "started": "2026-11-09T21:54:42.520820+00:00",
+  "host": {
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "uname": [
+      "Linux",
+      "stephens",
+      "6.8.0-147-generic",
+      "#147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026",
+      "x86_64",
+      "x86_64"
+    ],
+    "cpu_count": 4,
+    "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           40 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  4\nOn-line CPU(s) list:                     0-3\nVendor ID:                               AuthenticAMD\nModel name:                              DO-Premium-AMD\nCPU family:                              23\nModel:                                   49\nThread(s) per core:                      1\nCore(s) per socket:                      4\nSocket(s):                               1\nStepping:                                0\nBogoMIPS:                                3992.49\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm rep_good nopl cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid\nVirtualization:                          AMD-V\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               128 KiB (4 instances)\nL1i cache:                               128 KiB (4 instances)\nL2 cache:                                2 MiB (4 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-3\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; untrained return thunk; SMT disabled\nVulnerability Spec rstack overflow:      Vulnerable: Safe RET, no microcode\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "linker_command": "LC_ALL=\"C\" PATH=\"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin:/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/self-contained:/home/jacob/.codex/packages/standalone/releases/0.164.0-x86_64-unknown-linux-musl/codex-path:/home/jacob/.local/bin:/home/jacob/.elan/bin:/home/jacob/.local/bin:/home/jacob/bin:/home/jacob/.codex/tmp/arg0-linux/codex-arg0xcKre5:/home/jacob/.codex/packages/standalone/releases/0.164.0-x86_64-unknown-linux-musl/codex-path:/home/jacob/.local/bin:/home/jacob/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:/home/jacob/.dotnet/tools\" VSLANG=\"1033\" \"cc\" \"-m64\" \"/tmp/console-split-linker-9gv4_1ua/rustcXAILV4/symbols.o\" \"/tmp/console-split-linker-9gv4_1ua/probe.probe.7cc48b8033570ecf-cgu.0.rcgu.o\" \"/tmp/console-split-linker-9gv4_1ua/probe.5yp177nwbcyib6bl0ucjicqzm.rcgu.o\" \"-Wl,--as-needed\" \"-Wl,-Bstatic\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-7e719de9c4abc98f.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libpanic_unwind-4c962e8757b7fd52.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libobject-9ab214bf508f4fb2.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libmemchr-e57d23b4cf2c7093.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libaddr2line-b2546485fb156a81.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libgimli-a024a39c5ca178d0.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcfg_if-77a19c181a6f6522.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_demangle-23edf219dcb73297.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd_detect-ce90372c8b94015d.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libhashbrown-bd00bf133bcf4229.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_alloc-e4d7e1d94de777fa.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libminiz_oxide-4ee1421476c1c513.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libadler2-e749a99f48dba5bc.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libunwind-87f8da15080ba246.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liblibc-6cf0fcd942b0e793.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc_std_workspace_core-fb3f24e4abf4be88.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/liballoc-3988244237fec6ee.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-1d288395a3394ed3.rlib\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcompiler_builtins-2d9557d6e902a200.rlib\" \"-Wl,-Bdynamic\" \"-lgcc_s\" \"-lutil\" \"-lrt\" \"-lpthread\" \"-lm\" \"-ldl\" \"-lc\" \"-L\" \"/tmp/console-split-linker-9gv4_1ua/rustcXAILV4/raw-dylibs\" \"-B/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld\" \"-fuse-ld=lld\" \"-Wl,--eh-frame-hdr\" \"-Wl,-z,noexecstack\" \"-L\" \"/home/jacob/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib\" \"-o\" \"/tmp/console-split-linker-9gv4_1ua/probe\" \"-Wl,--gc-sections\" \"-pie\" \"-Wl,-z,relro,-z,now\" \"-nodefaultlibs\"",
+    "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+    "environment": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_INCREMENTAL": "1"
+    }
+  },
+  "samples": 3,
+  "jobs": 4,
+  "edits": {
+    "console": "src/console/commands.rs",
+    "ticket": "src/run.rs",
+    "logs": "src/logs.rs"
+  },
+  "method": "sequential fresh targets; warm commands excluded; OS page cache retained",
+  "finished": "2026-11-09T23:23:58.075966+00:00",
+  "runs": [
+    {
+      "label": "validation-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked"
+      ],
+      "seconds": 128.98644373985007,
+      "exit_code": 0,
+      "measured": false,
+      "log": "validation-build.log",
+      "sha256": "07b3cd5ea43b2835d5395f2485e8bf62b7dff0e59411e83cbe36fd4464be7e2e",
+      "results": [],
+      "tail": [
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-validate-8ffum2go/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-validate-8ffum2go/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 08s"
+      ]
+    },
+    {
+      "label": "validation-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "seconds": 77.70804320601746,
+      "exit_code": 0,
+      "measured": false,
+      "log": "validation-clippy.log",
+      "sha256": "1402e540922dc4e322e5646fe5b9add7413cf1bc2a95f8d0058d8bcf0321b94b",
+      "results": [],
+      "tail": [
+        "    Checking base64 v0.22.1",
+        "    Checking choice v0.0.2",
+        "    Checking syn v2.0.119",
+        "    Checking stateright v0.31.0",
+        "    Checking opentelemetry-proto v0.33.1",
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-validate-8ffum2go/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-validate-8ffum2go/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 17s"
+      ]
+    },
+    {
+      "label": "validation-eval-metadata",
+      "command": [
+        "cargo",
+        "test",
+        "--test",
+        "evals",
+        "replay_import_completes_trial_inputs_and_preserves_local_edits",
+        "--",
+        "--exact"
+      ],
+      "seconds": 68.39904335001484,
+      "exit_code": 0,
+      "measured": false,
+      "log": "validation-eval-metadata.log",
+      "sha256": "3a8f95dc9fb7e316380667a3ce9cfb17aea34a9271c1d0a1432b2fa04681bb0a",
+      "results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.16s"
+      ],
+      "tail": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s",
+        "     Running tests/evals.rs (/tmp/console-split-validate-8ffum2go/target/debug/deps/evals-9dc50191a1bd17e3)",
+        "",
+        "running 1 test",
+        "test replay_import_completes_trial_inputs_and_preserves_local_edits ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.16s",
+        ""
+      ]
+    },
+    {
+      "label": "validation-platform",
+      "command": [
+        "cargo",
+        "test",
+        "--test",
+        "packaging",
+        "non_linux_compilation_reports_only_the_platform_error",
+        "--",
+        "--exact"
+      ],
+      "seconds": 0.8710216251201928,
+      "exit_code": 0,
+      "measured": false,
+      "log": "validation-platform.log",
+      "sha256": "fa102d5de823ef81ae93ff515d75068c9f7f2ea3dc2223af92debf08eb866e48",
+      "results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.11s"
+      ],
+      "tail": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s",
+        "     Running tests/packaging.rs (/tmp/console-split-validate-8ffum2go/target/debug/deps/packaging-4865792907e08eed)",
+        "",
+        "running 1 test",
+        "test non_linux_compilation_reports_only_the_platform_error ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.11s",
+        ""
+      ]
+    },
+    {
+      "label": "validation-test",
+      "command": [
+        "cargo",
+        "test",
+        "--no-fail-fast"
+      ],
+      "seconds": 2352.408169175964,
+      "exit_code": 0,
+      "measured": false,
+      "log": "validation-test.log",
+      "sha256": "631d4c32cdb1bbf45c2d40505354ebabbdf2a9991d0c18b7d53ef6575a84d431",
+      "results": [
+        "test result: ok. 85 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.16s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.96s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.16s",
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 10.78s",
+        "test result: ok. 94 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 72.94s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.63s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 28.35s",
+        "test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.51s",
+        "test result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 15.66s",
+        "test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 37.26s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 22.52s",
+        "test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.78s",
+        "test result: ok. 20 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.87s",
+        "test result: ok. 264 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 107.47s",
+        "test result: ok. 19 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.85s",
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.47s",
+        "test result: ok. 25 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 10.19s",
+        "test result: ok. 18 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.51s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s",
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s",
+        "test result: ok. 126 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 225.58s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.07s",
+        "test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 9.20s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.96s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 17.17s",
+        "test result: ok. 11 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.49s",
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 19.77s",
+        "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.45s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.89s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.98s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.94s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 15.95s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 9.15s",
+        "test result: ok. 40 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 51.63s",
+        "test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.87s",
+        "test result: ok. 33 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.26s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.13s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.07s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.52s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.85s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.89s",
+        "test result: ok. 143 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 110.58s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.55s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 8.10s",
+        "test result: ok. 235 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 202.05s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.22s",
+        "test result: ok. 20 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 21.04s",
+        "test result: ok. 11 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.80s",
+        "test result: ok. 106 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 59.05s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.35s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.36s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.34s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.97s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.66s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.57s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.22s",
+        "test result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 10.12s",
+        "test result: ok. 31 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 18.55s",
+        "test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 9.46s",
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.42s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.05s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.10s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.24s",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.32s",
+        "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.07s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 15.57s",
+        "test result: ok. 47 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 46.25s",
+        "test result: ok. 40 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 41.75s",
+        "test result: ok. 39 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 73.40s",
+        "test result: ok. 125 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 178.22s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 21.49s",
+        "test result: ok. 37 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 5.78s",
+        "test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.14s",
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.18s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.94s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s",
+        "test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.84s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.11s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.43s",
+        "test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.49s",
+        "test result: ok. 92 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 255.77s",
+        "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.89s",
+        "test result: ok. 78 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 21.88s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.76s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 28 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 10.86s",
+        "test result: ok. 27 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 30.45s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s",
+        "test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.18s",
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 10.91s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1578 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1578 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1578 filtered out; finished in 0.00s",
+        "test result: ok. 1576 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 167.08s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "tail": [
+        "test result: ok. 1576 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 167.08s",
+        "",
+        "   Doc-tests thirdshift_core",
+        "",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        ""
+      ]
+    },
+    {
+      "label": "1-base-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.5509405180346221,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "1-base-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 129.34221504302695,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-cold-build.log",
+      "sha256": "5ebf7f27fe0b40f260de9373a683ea582c45c72d022d648c2cf2d1f0df9074ed",
+      "results": [],
+      "tail": [
+        "   Compiling tokio-rustls v0.26.5",
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 09s"
+      ]
+    },
+    {
+      "label": "1-base-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.25691396393813193,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-build-console-warm.log",
+      "sha256": "299f16a2c523be18fef769975d2df00e0505521db047540feea3a74b94666887",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s"
+      ]
+    },
+    {
+      "label": "1-base-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.443721822928637,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-build-console.log",
+      "sha256": "97c62fd27e81330c12efc87e65331d5b4dce543a77a3e3fbdcf4197fcdd72ab3",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.35s"
+      ]
+    },
+    {
+      "label": "1-base-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.550436107907444,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-build-ticket-warm.log",
+      "sha256": "396e394a91ee9d082af64d0180234347c94c7f74515196ce4406412a49c7d735",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.46s"
+      ]
+    },
+    {
+      "label": "1-base-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.263653710018843,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-build-ticket.log",
+      "sha256": "19893da5f37ff424e8f6891e83964acc41f0c7ce2ebebbbcda96d5e21d930c0f",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.17s"
+      ]
+    },
+    {
+      "label": "1-base-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.04655715986155,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-build-logs-warm.log",
+      "sha256": "3bb2b42061a7435777e5da7036e5b1a013231acf646bac568661e456cf8f4352",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.96s"
+      ]
+    },
+    {
+      "label": "1-base-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.358692736830562,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-build-logs.log",
+      "sha256": "5c754946db2e4a4e7d5767d086ef6c329f4ec1bf69b19c28d0faf358f1d8022d",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.26s"
+      ]
+    },
+    {
+      "label": "1-base-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 42.85614948510192,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-check-console-warm.log",
+      "sha256": "14018a257fd5952a84569078df24c80ad4a7fd4a0121cf44713653d7f488484d",
+      "results": [],
+      "tail": [
+        "    Checking sha2 v0.10.9",
+        "    Checking rand_pcg v0.10.2",
+        "    Checking sysinfo v0.38.4",
+        "    Checking axoasset v2.0.1",
+        "    Checking shlex v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 42.77s"
+      ]
+    },
+    {
+      "label": "1-base-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.158094743033871,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-check-console.log",
+      "sha256": "d4b41ffdadf71e98bf97eae394569085da68735f17836d2fa1100d3a2936f8b0",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.06s"
+      ]
+    },
+    {
+      "label": "1-base-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.592291609849781,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-check-ticket-warm.log",
+      "sha256": "029637621aa10c706baaa0db5a11c921fa1b8f4983f79010dd07aac5a661196d",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.49s"
+      ]
+    },
+    {
+      "label": "1-base-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.397836423013359,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-check-ticket.log",
+      "sha256": "8241b9e5b19a810afd50dcb811a9dad016626d2513b655806b1ab32c18e27b01",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.29s"
+      ]
+    },
+    {
+      "label": "1-base-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.318260596133769,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-base-check-logs-warm.log",
+      "sha256": "37335ae94f4f0930e8ea499c83ca07ae6101ab6134a732281f5ae0ed5c107ef5",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.22s"
+      ]
+    },
+    {
+      "label": "1-base-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.1024072950240225,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-check-logs.log",
+      "sha256": "b099c22328b69ff15253e529eb160b2825872383f9a7b429e234737ec12ec374",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-eus7oh1h/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.01s"
+      ]
+    },
+    {
+      "label": "1-base-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 211.84992742305622,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-base-cold-test.log",
+      "sha256": "e74f087067984acba849398fc813608221dc6d24ac1d78711a3d2025a7d28f1d",
+      "results": [],
+      "tail": [
+        "  Executable tests/status.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/status-23706d37f75b4cee)",
+        "  Executable tests/stop.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/stop-228bbed547257c95)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/toolchain-2cadfea69558b418)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/triage_run-3274fadaef7ae3ad)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/trial-eb5275d7521e4351)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/trial_scope-44f4f7cb5a677446)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/update-db62f51fa23d64a4)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-eus7oh1h/test-target/debug/deps/user_config-39af28a3799f0115)"
+      ]
+    },
+    {
+      "label": "1-split-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.3905407260172069,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "1-split-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 123.15242632594891,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-cold-build.log",
+      "sha256": "d16557fd84f6a318e17abc02d8be360d663c1ea3eeced1b1a8e64b558a8009a5",
+      "results": [],
+      "tail": [
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 03s"
+      ]
+    },
+    {
+      "label": "1-split-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.32595442119054496,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-build-console-warm.log",
+      "sha256": "f2066ca264b9a8598ecd436c70919e1efe1acea4098ad2a13b5d82d67bc049ec",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s"
+      ]
+    },
+    {
+      "label": "1-split-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 3.799856162862852,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-build-console.log",
+      "sha256": "a383c277eea8449c3c4ddab58555a29946374593858eb82ddb210dd8def2ae18",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.70s"
+      ]
+    },
+    {
+      "label": "1-split-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 3.749783136881888,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-build-ticket-warm.log",
+      "sha256": "63fccc8517a084c264a16befaf39e92d9970aaf7fe0b80f45dbe03bf9c64930d",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.67s"
+      ]
+    },
+    {
+      "label": "1-split-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.269467893987894,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-build-ticket.log",
+      "sha256": "72b53daea7787355c33f7f4a023f753b87ab1f5bb9f9a741ad23109e9c1a4af8",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.18s"
+      ]
+    },
+    {
+      "label": "1-split-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.800994063029066,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-build-logs-warm.log",
+      "sha256": "46099889532d33a2e8f2a5b2e3b9da48e9df1fc4c28213b9243eb3bcf9b4a7c4",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.71s"
+      ]
+    },
+    {
+      "label": "1-split-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.423510415945202,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-build-logs.log",
+      "sha256": "eb87a3ed0e9f24e45133d2ce4cd3c8ae2b589749a0ad98570751291819d4c9b7",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.33s"
+      ]
+    },
+    {
+      "label": "1-split-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 40.81224228302017,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-check-console-warm.log",
+      "sha256": "b2ccb93b578a8063a13455d94673a31d71d1a28af54ed05ee63bc1c847c15cc6",
+      "results": [],
+      "tail": [
+        "    Checking rand_pcg v0.10.2",
+        "    Checking sysinfo v0.38.4",
+        "    Checking shlex v2.0.1",
+        "    Checking axoasset v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 40.71s"
+      ]
+    },
+    {
+      "label": "1-split-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.6412611759733409,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-check-console.log",
+      "sha256": "ace8d67eaaf3fa84544cab4c136bdd57aae6388b7deff6af1aa33a29a086e357",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.53s"
+      ]
+    },
+    {
+      "label": "1-split-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.8816323280334473,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-check-ticket-warm.log",
+      "sha256": "42404411eda75d9ccb427182142caee1b0f1483a265676be3d478940017ed666",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.77s"
+      ]
+    },
+    {
+      "label": "1-split-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 6.093268685974181,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-check-ticket.log",
+      "sha256": "a853bae317816f470ca7e980d2a8bfb694f52dbbdce95ceac99a0799e3229d8a",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.99s"
+      ]
+    },
+    {
+      "label": "1-split-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.365481252083555,
+      "exit_code": 0,
+      "measured": false,
+      "log": "1-split-check-logs-warm.log",
+      "sha256": "46a98879262d3c74f770443cafb0ea046d82120b6c97867c64e88e810ceedb98",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.26s"
+      ]
+    },
+    {
+      "label": "1-split-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.731756592169404,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-check-logs.log",
+      "sha256": "14552c0eae4ff8dde7ce90f8f877d1ae50f594df7084dc7ce066fc3e2a066b2c",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-n2zxbb9k/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.64s"
+      ]
+    },
+    {
+      "label": "1-split-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 205.25460388092324,
+      "exit_code": 0,
+      "measured": true,
+      "log": "1-split-cold-test.log",
+      "sha256": "2e4d3035f224af87666f49cdb348a93cc06fd093edb69484d0aab822ba718cb0",
+      "results": [],
+      "tail": [
+        "  Executable tests/stop.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/stop-e70a72eacc7405d2)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/toolchain-3329b8d181d1475b)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/triage_run-f9ed968fcdfe0a76)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/trial-ebc4ca2f079c6030)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/trial_scope-6761b04221703039)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/update-37a52e06a1bbc56e)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/user_config-174951824e751d2e)",
+        "  Executable unittests ../src/core.rs (/tmp/console-split-sample-n2zxbb9k/test-target/debug/deps/thirdshift_core-f7308e67e3771bf6)"
+      ]
+    },
+    {
+      "label": "2-split-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.3772190338931978,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "2-split-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 127.73571657994762,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-cold-build.log",
+      "sha256": "40cae3fc23d918db195ef008bbb739e1f26cf222b838bed269e1d85bfd2981ae",
+      "results": [],
+      "tail": [
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 07s"
+      ]
+    },
+    {
+      "label": "2-split-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.28002017503604293,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-build-console-warm.log",
+      "sha256": "732186322402325172940531d8d6d7cfac85dc902585b2bef6715ad6839dacfd",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s"
+      ]
+    },
+    {
+      "label": "2-split-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 4.058138331165537,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-build-console.log",
+      "sha256": "2cbce96e7973f9ea339f306d8343c05656dd1a0ce251bf8618edb955e14f0f14",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.97s"
+      ]
+    },
+    {
+      "label": "2-split-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 3.81863581109792,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-build-ticket-warm.log",
+      "sha256": "d9b8df785a1a577c9ee1eaa175f60b686bb7351000b3546c7c7b9ca9548ced94",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.73s"
+      ]
+    },
+    {
+      "label": "2-split-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.17585522402078,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-build-ticket.log",
+      "sha256": "a02f75e73623a07c5264a2964f96aaa1fe15ad0639eaacc3a4d24fff3a2a2f05",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.07s"
+      ]
+    },
+    {
+      "label": "2-split-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.533106398070231,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-build-logs-warm.log",
+      "sha256": "f9821c8c930abeb1f64c1fae7636fdcb27cbe9ddcbc12158259a577ef4a6cc60",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.44s"
+      ]
+    },
+    {
+      "label": "2-split-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 9.959745635045692,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-build-logs.log",
+      "sha256": "f60f5606b7ffb1977ea15d72dec66de6ac66d86da50b8e912c12d194785ce63b",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.86s"
+      ]
+    },
+    {
+      "label": "2-split-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 40.995403982000425,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-check-console-warm.log",
+      "sha256": "462bfe3f9d87280c017ec756bbc4f3e51661f8a1a0087aefdca3a8504901bb7c",
+      "results": [],
+      "tail": [
+        "    Checking rand_pcg v0.10.2",
+        "    Checking sysinfo v0.38.4",
+        "    Checking shlex v2.0.1",
+        "    Checking axoasset v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 40.91s"
+      ]
+    },
+    {
+      "label": "2-split-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.5101710630115122,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-check-console.log",
+      "sha256": "48e29d7ef7f1e630ca2cd5708bb7141170f26eac99a708bbf4323251f135657a",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.40s"
+      ]
+    },
+    {
+      "label": "2-split-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.532916228985414,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-check-ticket-warm.log",
+      "sha256": "613a8d95679c38b8933baa104388561daad4f6229034d1c95ab664bfb76b99a5",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.44s"
+      ]
+    },
+    {
+      "label": "2-split-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.461886713048443,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-check-ticket.log",
+      "sha256": "59c4010395f67fd22b4420b2fc575e9db8117535acb7321095092d485c7e2619",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.38s"
+      ]
+    },
+    {
+      "label": "2-split-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.185969172976911,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-split-check-logs-warm.log",
+      "sha256": "2ca52b851e20b603733da9f6f34f34926ee19d40c30461ae1b65f3842f355f59",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.09s"
+      ]
+    },
+    {
+      "label": "2-split-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.195299902930856,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-check-logs.log",
+      "sha256": "cc317390f42df10b92b539c5b3b32fa9ebed1a7a9f9f7c92e0914f1d9e9485c3",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-8w6yxrf4/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.10s"
+      ]
+    },
+    {
+      "label": "2-split-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 218.62805011705495,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-split-cold-test.log",
+      "sha256": "0e7d828c733844b0b697241cc3efacdf765d7989760d72ab7f9c30f42e5b9675",
+      "results": [],
+      "tail": [
+        "  Executable tests/stop.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/stop-e70a72eacc7405d2)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/toolchain-3329b8d181d1475b)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/triage_run-f9ed968fcdfe0a76)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/trial-ebc4ca2f079c6030)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/trial_scope-6761b04221703039)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/update-37a52e06a1bbc56e)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/user_config-174951824e751d2e)",
+        "  Executable unittests ../src/core.rs (/tmp/console-split-sample-8w6yxrf4/test-target/debug/deps/thirdshift_core-f7308e67e3771bf6)"
+      ]
+    },
+    {
+      "label": "2-base-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.3706412159372121,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "2-base-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 124.4284968660213,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-cold-build.log",
+      "sha256": "8fec0a0782cd9b996e11b36eff492acf8c5c7eb68cab15b1346169244d8bc497",
+      "results": [],
+      "tail": [
+        "   Compiling tokio-rustls v0.26.5",
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 04s"
+      ]
+    },
+    {
+      "label": "2-base-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.2593805349897593,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-build-console-warm.log",
+      "sha256": "299f16a2c523be18fef769975d2df00e0505521db047540feea3a74b94666887",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s"
+      ]
+    },
+    {
+      "label": "2-base-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 9.898688009008765,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-build-console.log",
+      "sha256": "cfdeed828c28375fb52181f4bab9058fa34c8f6f965dbf0516bd9929a9484ad6",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.81s"
+      ]
+    },
+    {
+      "label": "2-base-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 9.86579496297054,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-build-ticket-warm.log",
+      "sha256": "486aa87bad295df05fbccee9554dd1e3d1d4e14466ae5b1f5954f507ebd8ef7a",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.77s"
+      ]
+    },
+    {
+      "label": "2-base-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.158662266097963,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-build-ticket.log",
+      "sha256": "ded1533a14ee3d290077f13fb0ccca5c20f92bf3189c48698d7f20fe6dcc41e7",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.05s"
+      ]
+    },
+    {
+      "label": "2-base-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.747198024997488,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-build-logs-warm.log",
+      "sha256": "cdf317f0ee1c2a6fbb6f549349225c81869d7e261113eeb6dc0a95a4c8f8c557",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.63s"
+      ]
+    },
+    {
+      "label": "2-base-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 9.926744937896729,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-build-logs.log",
+      "sha256": "fb54606d873805df82e50a7bb76047b0eb29d56220af10b06b3f8d1ca62e7ecc",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.82s"
+      ]
+    },
+    {
+      "label": "2-base-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 43.53863262897357,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-check-console-warm.log",
+      "sha256": "8c7914f8fcb52760c4b829b862cb2a6acde957166bc1d098727d7dd13a7e04b8",
+      "results": [],
+      "tail": [
+        "    Checking sha2 v0.10.9",
+        "    Checking rand_pcg v0.10.2",
+        "    Checking sysinfo v0.38.4",
+        "    Checking shlex v2.0.1",
+        "    Checking axoasset v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 43.45s"
+      ]
+    },
+    {
+      "label": "2-base-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.480898613110185,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-check-console.log",
+      "sha256": "12fd14407505d346e3b6211ac3cb83632db63fa02ac010201004269b228d98a3",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.39s"
+      ]
+    },
+    {
+      "label": "2-base-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.414096074877307,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-check-ticket-warm.log",
+      "sha256": "2e3c2ab1e0f3336a3f0664bea9191efb7070c388744dddc9ae97f3704a55490c",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.32s"
+      ]
+    },
+    {
+      "label": "2-base-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.189596003852785,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-check-ticket.log",
+      "sha256": "74d99f289cc98fe8d498580a625200b269feebc558d7f5ecca329fc2783efd9d",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.09s"
+      ]
+    },
+    {
+      "label": "2-base-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.610406883060932,
+      "exit_code": 0,
+      "measured": false,
+      "log": "2-base-check-logs-warm.log",
+      "sha256": "72a3550feb68df6abf1d620574844975840725b1efc68b348fb70d0ba67eb05f",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.52s"
+      ]
+    },
+    {
+      "label": "2-base-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.222279976122081,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-check-logs.log",
+      "sha256": "b94453ee72f469435e28b94d9646bb5bbf24a8a0178de40e02b1e566778093f0",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-ajx277ds/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.13s"
+      ]
+    },
+    {
+      "label": "2-base-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 195.3795442241244,
+      "exit_code": 0,
+      "measured": true,
+      "log": "2-base-cold-test.log",
+      "sha256": "547dd079c483e68432ea10abc6e14a32727fb1b99dd590697adb10ef6b81f663",
+      "results": [],
+      "tail": [
+        "  Executable tests/status.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/status-23706d37f75b4cee)",
+        "  Executable tests/stop.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/stop-228bbed547257c95)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/toolchain-2cadfea69558b418)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/triage_run-3274fadaef7ae3ad)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/trial-eb5275d7521e4351)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/trial_scope-44f4f7cb5a677446)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/update-db62f51fa23d64a4)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-ajx277ds/test-target/debug/deps/user_config-39af28a3799f0115)"
+      ]
+    },
+    {
+      "label": "3-base-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.42500041984021664,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "3-base-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 124.08966106409207,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-cold-build.log",
+      "sha256": "628c7498a08eb967c4941eefc58623123a361aaecdae34149f77df0ce191c518",
+      "results": [],
+      "tail": [
+        "   Compiling tokio-rustls v0.26.5",
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 03s"
+      ]
+    },
+    {
+      "label": "3-base-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.3392593050375581,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-build-console-warm.log",
+      "sha256": "5604fc8f0c276397a55db4bd7008236712075c0ad37d3b3a0f1fe362b1b85a36",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s"
+      ]
+    },
+    {
+      "label": "3-base-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 11.141940830973908,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-build-console.log",
+      "sha256": "4158fb19dd1d4185dd9dced4a4c260c2677819190f71295c611cbc71cc427ac7",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.03s"
+      ]
+    },
+    {
+      "label": "3-base-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.094758844003081,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-build-ticket-warm.log",
+      "sha256": "afc17ef497e1e44e1f42c6a87d0ccf0fe7ee7e34b9b70e495f9a858dcbc6f4c0",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.00s"
+      ]
+    },
+    {
+      "label": "3-base-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.507518727099523,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-build-ticket.log",
+      "sha256": "af05a7cf42e20b5fe2e9b79726b706487dd35724c9155ba955bba24ce0e84983",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.41s"
+      ]
+    },
+    {
+      "label": "3-base-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.53999689500779,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-build-logs-warm.log",
+      "sha256": "a61320a34f1a9f5ad87ee5cd0d991d4d0d57a061a70bc93af7b2e9d6299589aa",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.45s"
+      ]
+    },
+    {
+      "label": "3-base-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.384086800972,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-build-logs.log",
+      "sha256": "c0310eeffa43d05289955f7d9ed1208bb4a8b83351f19c5e3ada8510a4b25154",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.29s"
+      ]
+    },
+    {
+      "label": "3-base-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 45.550987208029255,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-check-console-warm.log",
+      "sha256": "aafc4691a7ee40631ff0df147530d7b819779ab23a596b97baf269ba3e500361",
+      "results": [],
+      "tail": [
+        "    Checking sha2 v0.10.9",
+        "    Checking rand_pcg v0.10.2",
+        "    Checking axoasset v2.0.1",
+        "    Checking sysinfo v0.38.4",
+        "    Checking shlex v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 45.46s"
+      ]
+    },
+    {
+      "label": "3-base-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.3072463921271265,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-check-console.log",
+      "sha256": "90486cb88d49e273ea0db594b6fe1c146aff160a52671eac250db30d466a0900",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.21s"
+      ]
+    },
+    {
+      "label": "3-base-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.665175127098337,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-check-ticket-warm.log",
+      "sha256": "38cc7f9a38f9c85f78848bb3a4280c9afa2df28b28dedbb5abc99d8b5f2aea64",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.56s"
+      ]
+    },
+    {
+      "label": "3-base-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.63439327199012,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-check-ticket.log",
+      "sha256": "053b0c195c497cf411126e1ff3d3a9cc3158312ad5b186d6618311eb7f5fe2c0",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.53s"
+      ]
+    },
+    {
+      "label": "3-base-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.395151315955445,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-base-check-logs-warm.log",
+      "sha256": "e15a902913a1693635a2796b1d9f8574865d3ed8a7aa65512bd6d073c5cd4aba",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.30s"
+      ]
+    },
+    {
+      "label": "3-base-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.410382946021855,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-check-logs.log",
+      "sha256": "e6d4767329b823e49ba8d66a7b5c182bc308ef7d1297345127496e7475212480",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-3gz64p72/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.31s"
+      ]
+    },
+    {
+      "label": "3-base-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 206.14164773910306,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-base-cold-test.log",
+      "sha256": "e3943f7a23eb6f444da900bad55a985cf72190e22b9259ff483ba42595539246",
+      "results": [],
+      "tail": [
+        "  Executable tests/status.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/status-23706d37f75b4cee)",
+        "  Executable tests/stop.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/stop-228bbed547257c95)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/toolchain-2cadfea69558b418)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/triage_run-3274fadaef7ae3ad)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/trial-eb5275d7521e4351)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/trial_scope-44f4f7cb5a677446)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/update-db62f51fa23d64a4)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-3gz64p72/test-target/debug/deps/user_config-39af28a3799f0115)"
+      ]
+    },
+    {
+      "label": "3-split-fetch",
+      "command": [
+        "cargo",
+        "fetch",
+        "--locked"
+      ],
+      "seconds": 0.38189411209896207,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-fetch.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [],
+      "tail": []
+    },
+    {
+      "label": "3-split-cold-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 124.12322617112659,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-cold-build.log",
+      "sha256": "af5f86fa66a327d86fd4b3861b8a75f56f77b5b467d7bf11d1c66b6bfd056ca0",
+      "results": [],
+      "tail": [
+        "   Compiling rustls-platform-verifier v0.7.1",
+        "   Compiling hyper-rustls v0.27.10",
+        "   Compiling reqwest v0.13.5",
+        "   Compiling axoasset v2.0.1",
+        "   Compiling axoupdater v0.10.2",
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 04s"
+      ]
+    },
+    {
+      "label": "3-split-build-console-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 0.2746930359862745,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-build-console-warm.log",
+      "sha256": "732186322402325172940531d8d6d7cfac85dc902585b2bef6715ad6839dacfd",
+      "results": [],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.20s"
+      ]
+    },
+    {
+      "label": "3-split-build-console",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 3.930190716171637,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-build-console.log",
+      "sha256": "b120cc332767a1c7542ebbb233fca9589eb491470024f90761cb03fbafec9314",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.83s"
+      ]
+    },
+    {
+      "label": "3-split-build-ticket-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 3.85106619191356,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-build-ticket-warm.log",
+      "sha256": "c01e6bc308f33a53c89df9ec81d474d23b25efa87257d8ffd0db50ee986835d7",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.76s"
+      ]
+    },
+    {
+      "label": "3-split-build-ticket",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.770621348870918,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-build-ticket.log",
+      "sha256": "19c8f870ae639bf87d55ba4ac22dfb8b6f46cb3b96b6ffa34287e907ce44001f",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.68s"
+      ]
+    },
+    {
+      "label": "3-split-build-logs-warm",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.701784441946074,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-build-logs-warm.log",
+      "sha256": "0d9ffdd713dfdf2f56e87a96b7991fca2a45b9173934bf53510dd0e4ea7150f1",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.60s"
+      ]
+    },
+    {
+      "label": "3-split-build-logs",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 10.305859681917354,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-build-logs.log",
+      "sha256": "39b1d388984c6eb798f4d4f62dbe9721a097fc02da7f3207a142dd8951ee4214",
+      "results": [],
+      "tail": [
+        "   Compiling thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "   Compiling thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.22s"
+      ]
+    },
+    {
+      "label": "3-split-check-console-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 44.01966904103756,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-check-console-warm.log",
+      "sha256": "c994d5b86955837884094b648912a79d4f9dbee33a4cce48f14be7972b940a7e",
+      "results": [],
+      "tail": [
+        "    Checking rand_pcg v0.10.2",
+        "    Checking sysinfo v0.38.4",
+        "    Checking shlex v2.0.1",
+        "    Checking axoasset v2.0.1",
+        "    Checking axoupdater v0.10.2",
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 43.93s"
+      ]
+    },
+    {
+      "label": "3-split-check-console",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.4957590780686587,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-check-console.log",
+      "sha256": "4c2b6bfc461dcfeeee76f1f7f8133e8b51978f32cb4a4cf8dfaec7fe0cb3d28e",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.40s"
+      ]
+    },
+    {
+      "label": "3-split-check-ticket-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 1.5938748819753528,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-check-ticket-warm.log",
+      "sha256": "020c013ececb0c42cbdb4241ef6b21d33e180bcd3dbab8cae3e51caca3c5d978",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.50s"
+      ]
+    },
+    {
+      "label": "3-split-check-ticket",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.440238734008744,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-check-ticket.log",
+      "sha256": "30609de48c2768aec593089753d87aff3a8b87f97c637395f616fb5414fde241",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.34s"
+      ]
+    },
+    {
+      "label": "3-split-check-logs-warm",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.6666128758806735,
+      "exit_code": 0,
+      "measured": false,
+      "log": "3-split-check-logs-warm.log",
+      "sha256": "25d1829c361b934607fe5e54ef7335dbc23ce2cd688e4fb1ab5ba17a2820dbb9",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.57s"
+      ]
+    },
+    {
+      "label": "3-split-check-logs",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--bin",
+        "thirdshift"
+      ],
+      "seconds": 5.466169682098553,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-check-logs.log",
+      "sha256": "e0325b7acfd08f0641ca4d574af2732baf45d5d50921e353e7b057d8b87fcd45",
+      "results": [],
+      "tail": [
+        "    Checking thirdshift-core v0.24.1 (/tmp/console-split-sample-44if8gz1/tree/core)",
+        "    Checking thirdshift v0.24.1 (/tmp/console-split-sample-44if8gz1/tree)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.37s"
+      ]
+    },
+    {
+      "label": "3-split-cold-test",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run"
+      ],
+      "seconds": 205.9172803470865,
+      "exit_code": 0,
+      "measured": true,
+      "log": "3-split-cold-test.log",
+      "sha256": "15f5081933f9731f88daeac0f8e980d3ff8910f444fc1c95b16782c0252f4738",
+      "results": [],
+      "tail": [
+        "  Executable tests/stop.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/stop-e70a72eacc7405d2)",
+        "  Executable tests/toolchain.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/toolchain-3329b8d181d1475b)",
+        "  Executable tests/triage_run.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/triage_run-f9ed968fcdfe0a76)",
+        "  Executable tests/trial.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/trial-ebc4ca2f079c6030)",
+        "  Executable tests/trial_scope.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/trial_scope-6761b04221703039)",
+        "  Executable tests/update.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/update-37a52e06a1bbc56e)",
+        "  Executable tests/user_config.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/user_config-174951824e751d2e)",
+        "  Executable unittests ../src/core.rs (/tmp/console-split-sample-44if8gz1/test-target/debug/deps/thirdshift_core-f7308e67e3771bf6)"
+      ]
+    }
+  ]
+}

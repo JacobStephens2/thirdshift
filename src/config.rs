@@ -22,12 +22,15 @@ use crate::ready::PickupOrder;
 pub mod console;
 pub mod review;
 pub mod scoring;
+pub mod settings;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    /// Additional known Launch directories for Console API starts.
+    pub launch_directories: Vec<PathBuf>,
     pub review: review::Settings,
     pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
@@ -162,6 +165,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            launch_directories: Vec::new(),
             review: review::Settings::default(),
             scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
@@ -203,10 +207,33 @@ impl UserConfig {
         let file = format!("the User config {}", path.display());
         let table: Table = text
             .parse()
-            .map_err(|error| anyhow!("{error}"))
+            // TOML's Display includes source lines, which can hold credentials
+            // inside an export URL. Keep the reason and location, not the text.
+            .map_err(|error: toml::de::Error| {
+                let location = error
+                    .span()
+                    .map(|span| {
+                        let before = text.get(..span.start).unwrap_or(text);
+                        let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                        let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+                        format!(" at line {line}, column {column}")
+                    })
+                    .unwrap_or_default();
+                anyhow!("{}{location}", error.message())
+            })
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "launch_directories" {
+                config.launch_directories = value.as_array()
+                    .context(format!("launch_directories must be a list of paths in {file}"))?
+                    .iter()
+                    .map(|value| {
+                        value.as_str().and_then(|path| expand_home(path, home))
+                            .context(format!("launch_directories entries must be absolute paths or start with ~/ in {file}"))
+                    }).collect::<Result<_>>()?;
+                continue;
+            }
             if section == "review" {
                 config.review = review::Settings::parse(value)
                     .with_context(|| format!("invalid [review] in {file}"))?;
@@ -235,6 +262,7 @@ impl UserConfig {
                     .clone()
                     .try_into()
                     .with_context(|| format!("invalid [console] in {file}"))?;
+                config.console.migrate_fleet()?;
                 config
                     .console
                     .validate()
@@ -574,8 +602,10 @@ impl UserConfigDocument {
     }
 
     fn prepare(text: &str, path: &Path, home: &Path) -> Result<Self> {
-        UserConfig::parse(text, path, home)?;
-        let completed = complete(text)?;
+        let settings = UserConfig::parse(text, path, home)?;
+        let mut document: DocumentMut = text.parse()?;
+        console::fleet::migrate_document(&mut document, &settings.console.fleet);
+        let completed = complete(&document.to_string())?;
         let settings = UserConfig::parse(&completed, path, home)?;
         // Completion appends missing implicit sections after the original
         // text. Reparse that text so subsequent edits keep their placement.
@@ -748,6 +778,11 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    set_value(old, value);
+}
+
+/// Replace a value using the same comment and array edits as Setup.
+fn set_value(old: &mut toml_edit::Value, value: toml_edit::Value) {
     if let (Some(existing), Some(replacement)) = (old.as_array_mut(), value.as_array()) {
         edit_array(existing, replacement);
         return;
@@ -1094,7 +1129,9 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// The User config Setup writes with no answers: every key at its default,
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
-pub const DEFAULTS: &str = r#"[merge]
+pub const DEFAULTS: &str = r#"launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
+
+[merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
@@ -1129,7 +1166,7 @@ address = ""        # HTTPS address for console install, e.g. https://console.ex
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 address_scopes = {}  # an address absent here has all five scopes; CLI-only; default {}
-other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+fleet = []           # named Console addresses; tokens live in Credentials; default []
 other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
@@ -1153,7 +1190,7 @@ wait_minutes = 5   # minutes since the latest shaping event before an issue is R
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
-default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse, opencode or kimi; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -1178,6 +1215,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 [harness.opencode]
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
+
+[harness.kimi]
+model = ""    # the Model alias in Kimi Code's config its sessions run on; default blank, for Kimi Code's default_model
+effort = ""   # leave blank: Kimi Code takes its thinking from its own config; default blank
 
 [triage]
 allow_ready_for_agent = false   # keep recommended ready-for-agent on filed issues; default false
@@ -1280,6 +1321,16 @@ pub(crate) fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
         None => PathBuf::from(path),
     };
     path.is_absolute().then_some(path)
+}
+
+/// Formatting assertions below and in Setup compare the retained sections,
+/// after verifying the only new root default preceding them.
+#[cfg(test)]
+pub(crate) fn without_launch_directories_default(text: &str) -> String {
+    let mut document: DocumentMut = text.parse().unwrap();
+    let added = document.remove("launch_directories").expect("root default");
+    assert_eq!(added.as_array().map(|array| array.is_empty()), Some(true));
+    document.to_string()
 }
 
 #[cfg(test)]
@@ -1426,11 +1477,16 @@ mod tests {
             });
             assert!(comment.contains("default"), "[{section}] {line:?}");
             let key = setting.trim_start_matches("# ").split(' ').next().unwrap();
-            keys.push(format!("{section}.{key}"));
+            keys.push(if section.is_empty() {
+                key.into()
+            } else {
+                format!("{section}.{key}")
+            });
         }
         assert_eq!(
             keys,
             [
+                "launch_directories",
                 "merge.always",
                 "base.fix",
                 "launch.pull",
@@ -1449,7 +1505,7 @@ mod tests {
                 "console.port",
                 "console.allowed_emails",
                 "console.address_scopes",
-                "console.other_consoles",
+                "console.fleet",
                 "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",
@@ -1474,6 +1530,8 @@ mod tests {
                 "harness.muse.effort",
                 "harness.opencode.model",
                 "harness.opencode.effort",
+                "harness.kimi.model",
+                "harness.kimi.effort",
                 "triage.allow_ready_for_agent",
                 "triage.read_machine",
                 "security.fix",
@@ -1563,7 +1621,7 @@ mod tests {
         for (text, error) in [
             (
                 "[harness]\ndefault = \"gemini\"\n",
-                "harness.default must be claude or codex or agy or grok or muse or opencode, not \"gemini\"",
+                "harness.default must be claude or codex or agy or grok or muse or opencode or kimi, not \"gemini\"",
             ),
             (
                 "[harness]\ndefault = true\n",
@@ -2193,7 +2251,8 @@ mod tests {
         let text =
             "[email]\nalways = false\n\n# mine\n# to = \"x@y.z\"\n# more\nfrom = \"a@b.c\"\n";
         let answered = document(text).render(Some(notifications_to("me@example.com")));
-        let lines: Vec<&str> = answered.lines().collect();
+        let retained = without_launch_directories_default(&answered);
+        let lines: Vec<&str> = retained.lines().collect();
         assert_eq!(
             lines[..4],
             ["[email]", "always = true", "", "# mine"],
@@ -2279,7 +2338,8 @@ mod tests {
         };
         let rendered = document(text).render(Some(changes));
         assert!(
-            rendered.starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
+            without_launch_directories_default(&rendered)
+                .starts_with("# top\n[merge]\n# before\nalways = true    # merge\n# after\n"),
             "{rendered}"
         );
         assert!(
@@ -2347,7 +2407,10 @@ mod tests {
             assert_eq!(config.spec_parallel, before.spec_parallel);
             assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
             if let Some(comment) = text.lines().next().filter(|line| line.starts_with('#')) {
-                assert!(rendered.starts_with(comment), "{rendered}");
+                assert!(
+                    without_launch_directories_default(&rendered).starts_with(comment),
+                    "{rendered}"
+                );
             }
             // The completed rendering still uses the user's representation.
             if text.contains("merge.always") {
@@ -2369,7 +2432,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    rendered
+                    without_launch_directories_default(&rendered)
                         .starts_with("[harness.codex]\nmodel = \"\"    # mine\neffort = \"\"\n"),
                     "{rendered}"
                 );
@@ -2420,7 +2483,7 @@ mod tests {
         assert_eq!(config.pickup_failure_limit, before.pickup_failure_limit);
         assert!(config.merge_always && config.launch_pull);
         assert!(!config.base_fix);
-        assert!(rendered.starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
+        assert!(without_launch_directories_default(&rendered).starts_with("[email]\nalways = false # enabled\nto = 'saved@example.com' # inbox\nfrom = 'saved@example.net' # sender\n"), "{rendered}");
         for line in text
             .lines()
             .filter(|line| *line != "always = true # enabled")
@@ -2440,7 +2503,8 @@ mod tests {
         let config = parse(&rendered).unwrap();
         assert!(config.email.always);
         assert_eq!(config.email.to.as_deref(), Some(to));
-        let lines: Vec<_> = rendered.lines().collect();
+        let retained = without_launch_directories_default(&rendered);
+        let lines: Vec<_> = retained.lines().collect();
         assert_eq!(lines[..3], ["[email]", "always = true", "# mine"]);
         assert!(lines[3].starts_with("to = "), "{rendered}");
         assert!(
@@ -2492,11 +2556,17 @@ mod tests {
             );
             let completed = document(&text).render(None);
             assert_eq!(completed.matches("# to =").count(), 1, "{completed}");
-            assert!(completed.starts_with(&text), "{completed}");
+            assert!(
+                without_launch_directories_default(&completed).starts_with(&text),
+                "{completed}"
+            );
             assert_eq!(document(&completed).render(None), completed);
 
             let rendered = document(&text).render(Some(notifications_to("me@example.com")));
-            assert!(rendered.starts_with(header), "{rendered}");
+            assert!(
+                without_launch_directories_default(&rendered).starts_with(header),
+                "{rendered}"
+            );
             assert!(!rendered.contains("# to ="), "{rendered}");
             let lines: Vec<_> = rendered.lines().collect();
             let to = lines

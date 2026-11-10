@@ -22,7 +22,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 
 Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
-Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
+Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code. See [Harness, Model and Effort](#harness-model-and-effort).
 
 ## What a Ticket run does
 
@@ -128,7 +128,7 @@ Other-account Commands carry their OS account name in every Inbox section (inclu
 
 ### Inbox
 
-`thirdshift status` names this host, counts its active runs, such as `2 active runs`, and shows its **Inbox** across every repository in the selected log sources. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:
+`thirdshift status` names this host and shows the **Inbox** across every repository in the selected log sources and every live [Fleet](#fleet) entry. It counts active runs across those machines, such as `2 active runs`, with a per-machine breakdown. Each owning machine supplies its rows' groups; the caller does not regroup them. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:
 
 - **Needs you:** live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Paused (a plan-limit stop), Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or when GitHub shows its issue closed or its pull request merged. A Triage row also leaves once its issue loses `needs-triage`; Resolved counts from the first read showing the label gone. Architect and Security runs use the issue and pull request of the Spec run or Ticket run they dispatched. A failed Ticket run whose pull request closed unmerged stays while its issue is open. Live Silent and Slow rows stay until their Commands end, whatever GitHub shows. A row GitHub can speak for no longer ages out; rows with no issue or pull request, no Command record, no read yet or nothing GitHub can find still age out after `inbox.days` (7 by default), straight to History. Reopening an issue brings back a row still in Done or Resolved. Dismissals hold across GitHub changes; Undo uses the latest kept facts. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
 - **Ready for review:** Commands that ended ready, with a pull request. One leaves when a later Command on the same issue starts on this machine, or when GitHub shows its pull request merged or closed; a pull request GitHub still shows as open keeps its row however old it is. A row GitHub can't speak for still leaves after `inbox.days`: one with no pull request, one with no Command record, one not read yet, or one whose pull request GitHub can't resolve. A merged pull request takes its row to Resolved for `inbox.days` from the merge time (a closed one from the close time); a pull request reopened while its row is in Done or Resolved brings the row back. From History on, a row keeps what GitHub last showed and its issue and pull request aren't read again. The Console reads ready rows' pull requests and Needs you rows' issues and pull requests in a batched query in the background once a minute, even with no pages open, and keeps the answer in one file on the machine. Changed answers wake open Inbox pages; unchanged reads leave pages idle. `status` uses the same answer while it is under 5 minutes old, and otherwise reads GitHub itself. Neither timing is a User config setting. The reads never write to GitHub. `status --json` gives each row what GitHub last showed and when, and how old the Inbox's answer is.
@@ -163,20 +163,30 @@ For each repository and kind of Pass whose latest Activity log line is a skip, s
 Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
 ```
 
-`status` and the Console Inbox also show `Pickup last fired <age> ago on <owner>/<repo>` (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in `<logs.dir>/<owner>/<repo>/<pickup|architect|secure>.last-fired`. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.
+`status` and the Console Inbox also show `Pickup last fired <age> ago on <owner>/<repo>` (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the Command limit, in `<logs.dir>/<owner>/<repo>/<pickup|architect|secure|review|fix|triage>.last-fired`. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.
 
 When no Commands are running, each bullet in the Inbox's **Last recorded skipped Passes** and **Last fired Passes** starts with its recorded date and time. A skipped reason uses its Activity log time, which repeated skips do not advance; a last-fired entry uses the saved Pass start and keeps its relative age. An unreadable skip time shows **Time unknown**.
 
 `thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
 
-`thirdshift status --json` is the versioned API for agents; the [Console](adr/0016-the-console-is-a-long-running-reader.md) shows the same Inbox. It runs outside a repository too. Version 1 has this shape:
+`thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "hostname": "factory",
   "active_runs": 1,
+  "machines": [{
+    "name": "factory",
+    "hostname": "factory",
+    "fetched_at": "2026-10-18T12:00:53-04:00",
+    "reachability": "ok",
+    "active_runs": 1,
+    "error": null
+  }],
   "commands": [{
+    "machine": "factory",
+    "machine_name": "factory",
     "version": 2,
     "kind": "Run",
     "repository": "acme/widgets",
@@ -362,7 +372,11 @@ The Command excerpt omits the common fields documented for `status --json`; all 
 curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh
 ```
 
-The shorter `curl -fsSL https://thirdshift.app/install.sh | sh`, shown on [thirdshift.app](https://thirdshift.app), redirects to the same installer. The shell installer and the binary both come from this repository's [GitHub Releases](https://github.com/JacobStephens2/thirdshift/releases). It puts `thirdshift` in `~/.local/bin`, where Claude Code's installer puts `claude`, and needs no Rust toolchain. thirdshift is a single binary with the Factory skills compiled in, so it runs without a checkout of this repository ([ADR-0001](adr/0001-rust-binary-with-embedded-skills.md), [ADR-0003](adr/0003-static-binaries-through-github-releases.md)).
+The shorter `curl -fsSL https://thirdshift.app/install.sh | sh`, shown on [thirdshift.app](https://thirdshift.app), redirects to the same installer. The shell installer and the binary both come from this repository's [GitHub Releases](https://github.com/JacobStephens2/thirdshift/releases). It puts `thirdshift` in `~/.local/bin`, where Claude Code's installer puts `claude`, and needs no Rust toolchain.
+
+thirdshift is a statically linked Rust binary with the Factory skills compiled in. Unlike an interpreted script, it needs neither a language runtime nor a checkout of thirdshift on the target machine ([ADR-0001](adr/0001-rust-binary-with-embedded-skills.md), [ADR-0003](adr/0003-static-binaries-through-github-releases.md)).
+
+Rust's data-carrying `enum`s represent the unattended Ticket run, Claim and CI states. Exhaustive `match` means adding a state fails compilation until every match handles it. Pickup's reservation protocol across competing hosts is model-checked with `stateright` inside `cargo test` ([ADR-0017](adr/0017-pickup-reserves-issues-on-origin.md)). These checks matter when nobody is watching the control flow.
 
 The installer ends by pointing you to Setup. Run `thirdshift setup` to choose your defaults, or just start a Ticket run and thirdshift will offer it (see [User config](#user-config)).
 
@@ -380,11 +394,173 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. With `run`, use **Start work** on Inbox or **Run now** on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system's scheduler remain available too.
+
+Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
 
 Command details shows the last five lines of recent Command output above **Full Command log**, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.
+
+#### Fleet
+
+The Fleet lists the other machines known to this Console. To pair one, create
+a token on that machine, then supply it to the watching machine through standard
+input. Choose only the scopes that machine needs:
+
+```sh
+# On the machine to pair (prints the token once):
+thirdshift console token create watcher --scopes read,act
+# On the watching machine (paste the token at the hidden prompt):
+thirdshift console fleet add server https://console.example.com
+thirdshift console fleet list
+thirdshift console fleet list --json
+thirdshift console fleet remove server
+```
+
+The token is never an argument. Piped standard input works too. Pairing checks
+`/api/v1/whoami`, then saves the hostname, thirdshift version, scopes and last
+contact. An unreachable machine, a refused token or an older Console without
+that endpoint leaves the saved Fleet and Credentials unchanged. Pairing requires
+HTTPS, with an exception for `http://127.0.0.1` for local use. Redirects are refused.
+
+Tokens are stored under `[fleet]`, keyed by entry name, in the owner-only
+`~/.thirdshift/credentials.toml`. The User config holds no token. Removing an
+entry deletes its saved token too; revoke the token on its issuer separately
+when its access is no longer wanted. Adding an existing name pairs it again.
+
+`thirdshift status` fetches each live entry's own `/api/v1/status` Inbox with
+a three-second timeout per machine. Its rows join the local Inbox groups,
+tagged with their Fleet entry name. Other-account Commands retain their account
+tag too. The total active runs includes reachable machines, with each machine's
+count shown separately. Link-only entries are not fetched.
+
+Use `thirdshift status --machine server` to show only that paired machine;
+`--json` and `--all` can be combined with it. Giving this machine's own hostname
+behaves like plain `status`, including its Fleet. Unknown and link-only names
+are rejected. Human-readable rows carry machine tags once a live Fleet exists.
+
+**Start work** lists known Launch directories across the Fleet, labelled by
+machine. Select the repository and machine, review the request, then confirm.
+**Cron jobs**, **User config** and **Update** offer machine links; their
+`?machine=<name>` selection remains in forms and confirmation dialogs. A control
+appears only when that machine's live `whoami` includes `run` or `admin` for
+the signed-in person. The owning machine checks the token and that person's
+own scopes again on submission, so a forced request still receives its 403.
+Only the owner starts work or changes settings. Its Activity log names
+`by <person> from the Console on <token holder>`; name the pairing token for the
+calling Console. Its Command appears in the merged Inbox when the token also
+has `read`. The sign-in list and address scopes remain shell-only.
+
+The CLI uses the saved token holder's identity, without naming a signed-in
+person. `start` runs detached in a known Launch directory on the selected
+machine and returns JSON. It accepts the shared Ticket options:
+
+```sh
+thirdshift start acme/widgets 7 no-merge no-email --machine server
+thirdshift start --options --json --machine server
+thirdshift config spec.parallel --json --machine server
+thirdshift config spec.parallel 5 --machine server
+thirdshift update --check --json --machine server
+thirdshift update --machine server
+```
+
+Remote `config` and `update` return the owner's JSON. Unknown and link-only
+machines are refused. Omitting `--machine` selects local work. A configured
+Fleet name always selects its owner, even when the name matches the local
+hostname; local choices then say `(local)`. An unpaired local hostname also
+selects local work. `/api/v1/start-options` requires `run` and returns known
+repositories and startable Passes; `whoami` accepts any authenticated scope so
+`run`-only and `admin`-only tokens can pair without general read access.
+
+Open a remote row to see its Command details in the same Console, including
+child Ticket runs and stages. Waterfall, Full Command log and Session trace
+links keep the owning machine selected. Details are fetched live from its
+`/api/v1` and kept only for that request: remote logs and traces are never
+written under the caller's home. Log readers show a snapshot; reload for newer
+output. Every remote row and details view also links to the owning Console.
+Security run details and findings need `security` on the owning machine's
+token, and on the signed-in person's account there. A refusal says
+"needs the `security` scope on `<machine>`".
+
+The details commands accept the same machine selection and return the owning
+machine's JSON:
+
+```sh
+thirdshift show widgets#7 --machine server --json
+thirdshift show widgets#7 --spans --machine server --json
+thirdshift show widgets#7 --span <span-id> --machine server --json
+thirdshift logs widgets#7 --machine server --json
+thirdshift logs widgets#7 --tail --machine server --json
+thirdshift logs widgets#7 --session implement --machine server --json
+```
+
+Remote reads do not follow redirects or cache details between requests. A
+local hostname selects the ordinary local command. Remote log following and
+Trace export remain on the owning machine. The details API reads its own
+machine; the Console page and CLI call that owning API directly, rather than
+relaying an API caller through another Console's Fleet credentials.
+
+`logs <command> --tail [--json]` reads only the last 4 KiB, on either machine.
+It cannot be combined with `--follow`. Command details use this bounded tail
+through the existing `/api/v1/log?tail=true` endpoint for their recent output.
+
+`thirdshift status --local` reads only this machine. It can be combined with
+`--all` and `--json`, but not `--machine`. This is the Console API's owning-machine
+read, so Consoles paired in both directions never recursively fetch one another.
+
+`status --json` version 2 includes a `machines` array with `name`, `hostname`,
+RFC 3339 `fetched_at`, `active_runs`, `reachability` and nullable `error`.
+Reachability is `ok`, `unreachable` (including a timeout), `refused` (including
+a revoked token) or `needs update` (a missing or incompatible API). A failed
+machine contributes no rows or active runs to that read; it never fails the
+rest of `status`. Reads do not follow other machines' Fleets or change the
+saved pairing's last-contact time.
+
+`fleet list` reports saved metadata without contacting the machines. **Live**
+means Credentials hold a token for the entry's name; it does not promise the
+machine is reachable or the token still valid. **Last contact** is the last
+successful pairing, not a background health check. Entries without a token are
+**link-only**. Both kinds appear as named links in the Console header. These
+commands are CLI-only and have no API endpoints.
+
+Under `[console]`, a link-only entry can be written directly:
+
+```toml
+fleet = [{ name = "server", address = "https://console.example.com" }]
+```
+
+Existing `other_consoles` addresses are read as link-only Fleet entries named
+after each address's host. Names that collide receive `-2`, `-3`, and so on.
+Setup and Console settings writes replace `other_consoles` with `fleet`, keeping
+the links and other settings.
+
+Act on a paired machine from the shell:
+
+```sh
+thirdshift stop widgets#7 --machine server
+thirdshift stop widgets#7 --machine server --requeue --json
+thirdshift dismiss widgets#7 --machine server
+thirdshift dismiss widgets#7 --machine server --undo --json
+```
+
+The Console's remote rows offer Stop with confirmation, Dismiss and Undo when
+the owning machine's live `whoami` answer allows `act`. It intersects the saved
+token's scopes with the signed-in person's scopes on that machine. The person
+must also be on that machine's sign-in list. A read-only token or person sees
+no action controls; the owning machine also refuses a forced request with 403.
+Other-account Commands stay read-only on every machine. Stale or refused
+answers offer no controls until access is checked again.
+
+The caller sends the action to the owning machine's `/api/v1`, naming the
+signed-in person in `X-Thirdshift-Person`, and shows that machine's answer,
+including refusals. Dismiss takes the remote row out of Needs you or Ready for
+review; Undo brings it back when it still needs attention. The next Fleet
+refresh reflects the change. The owning machine signals its own processes,
+keeps its Dismissals beside its Command records, and writes its own Activity log:
+`by <person> from the Console on <holder>`. No Command logs or Activity log
+entries are written on the caller. CLI requests name no person and are
+attributed to the token's holder on the owning machine.
 
 #### Console API
 
@@ -416,8 +592,9 @@ and their resumes); those log reads return 403 naming `security`. Span and
 waterfall responses keep the Command's other stages and omit those sessions,
 including their prompts and tool output. A token that
 has `security` receives the finding records and those traces. The `act` endpoints
-and their auditing are described below; `run` and `admin` endpoints arrive in
-later Console API tickets. A missing route scope returns 403 JSON naming that
+and their auditing are described below. `run` starts Ticket and Spec runs;
+`admin` reads and changes User config, updates thirdshift, imports Themes and
+manages Eval data. A missing route scope returns 403 JSON naming that
 scope. An expired or revoked token returns 401.
 
 The machine stores only SHA-256 hashes in the owner-only
@@ -502,7 +679,7 @@ Each response equals its CLI twin's `--json` output. A caller with `read` sees
 Security run rows and stages, with finding records withheld. Security run
 details, the Security page and Security Session traces need `security`.
 For example, `GET /api/v1/status` equals
-`thirdshift status --json`, and `GET /api/v1/peek?command=widgets%237` equals
+`thirdshift status --local --json`, and `GET /api/v1/peek?command=widgets%237` equals
 `thirdshift show widgets#7 --json`, subject to those scope checks.
 Query arguments use the CLI flag names without `--`; positional Command
 selectors use `command`, and Scores selectors use `pull_request`.
@@ -525,8 +702,9 @@ by later Console API tickets appear when they are served.
 | Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
 | Run metrics | `/api/v1/metrics` (`command`, `from`, `through`, repeated `repo`) | `metrics` |
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
-| Experiments and Trial Session evidence | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>` | `experiments [<id>] [--session <session>]` |
+| Experiments, Trial Session evidence and blind pairs | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>`, `/api/v1/experiments/<id>/pairs/<pair>` | `experiments [<id>] [--session <session> \| --pair <pair>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |
+| Known Launch directories | `/api/v1/launch-directories` | `launch-directories` |
 | Selected Theme and hidden sections | `/api/v1/look` | `console sections` |
 | Available Themes | `/api/v1/themes` | `console theme list` |
 
@@ -542,12 +720,14 @@ address's scopes, including the Security finding limits above.
 | --- | --- |
 | `read` | The read calls above, including Security run rows and stages |
 | `security` | `/api/v1/security`, Security run details and Waterfall, and Security Session traces |
-| `act` | The action POSTs below, including Theme and hidden sections |
-| `run`, `admin` | Reserved for starting Commands and other administration in later API tickets |
+| `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
+| `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
+| `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
 
-Actions take `application/x-www-form-urlencoded` bodies, using the page's
-field names below, except Theme import, which takes an `application/json` Theme
-document. Bearer requests need no CSRF token; sign-in sessions and
+The actions in the following table take `application/x-www-form-urlencoded`
+bodies using the listed fields; Theme import takes `application/json` instead.
+Starting work and the additional CLI twins below also take JSON where listed.
+Bearer requests need no CSRF token; sign-in sessions and
 `--no-sign-in` requests must send the page's CSRF token in `X-CSRF-Token`.
 The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 
@@ -561,6 +741,61 @@ The response is the CLI twin's JSON. Stop waits for cleanup to finish.
 | `/theme` | `theme` | `console theme <name>` |
 | `/sections` | comma-separated `hide`, `show` | `console sections --hide <section> --show <section>` |
 | `/themes` | JSON Theme document | `console theme import <file>` (already JSON) |
+| `/update` | none | `update` |
+| `/evals/import-replays` | none | `evals import-replays` (already JSON) |
+| `/evals/propose-process` | `repository` (known owner/repo), optional `limit` (1–100) | `evals propose-process <repository>`; requires `admin` |
+
+Additional CLI twins use these scopes and bodies. All paths are under `/api/v1`;
+JSON bodies use `Content-Type: application/json`. GET calls take no body.
+
+| Method and path | Scope | Body | CLI twin |
+| --- | --- | --- | --- |
+| GET `/help`, `/version` | `read` | none | `--help`, `--version` |
+| GET `/processes`, `/processes/<name>` | `read` | none | `process list`, `process show <name>` |
+| POST `/processes/check` | `run` | JSON `repository`, `name`, optional Process run options | `process check <name>` |
+| GET `/evals` | `read` | none | `evals list` |
+| POST `/evals/touched` | `read` | JSON `paths` array of changed path names | `evals touched <paths>...` |
+| POST `/evals/verify` | `read` | JSON `repository` (a known Launch directory's owner/name), `base` commit | `evals verify <repository> <base>` |
+| GET `/other-accounts` | `read` | none | `console other-accounts --json` |
+| POST `/other-accounts` | `admin` | JSON `value` (`none`, `readable`, or account list) | `console other-accounts <value>` |
+| POST `/email-test` | `admin` | JSON with optional `address` | `email-test [<address>]` |
+| POST `/experiments/<id>/name` | `admin` | JSON `name` | `experiments <id> --name <name> --json` |
+| POST `/experiments/<id>/difficulty` | `admin` | none | `experiments <id> --record-difficulty --json` |
+| GET `/experiments/<id>/rechecks` | `read` | none | `recheck <id> --pending --json` |
+| POST `/experiments/<id>/pairs/<pair>/merge` | `act` | form `a` and `b`, each `ready` or `not-ready` | `experiments <id> --pair <pair> --merge <a> <b> --json` |
+| POST `/experiments/<id>/pairs/<pair>/preference` | `act` | form `preference` (`a`, `b`, `tie` or `both-bad`), optional `rubric_<criterion>` | `experiments <id> --pair <pair> --prefer <preference> [--rubric <criterion>=<value>]... --json` |
+| POST `/experiments/<id>/rechecks` | `act` | JSON `trial` or `fingerprint`, `decision` (`pass` or `fail`), `reason`, optional `wrong_finding` | `recheck <id> <trial> <decision> --reason <reason> --json`, or `--batch <fingerprint>` |
+
+See OpenAPI for each CLI twin's response and full argument schema. The route
+inventory and its explicit CLI-only exclusions are checked against the CLI.
+
+#### Updating and administering a machine
+
+With `admin`, open **Update thirdshift** in the Console navigation. It shows the
+current and latest stable versions. Choose **Update thirdshift** to install the
+release, then reload after the Console restarts. The install receipt must belong
+to the running copy, just as for `thirdshift update`; source builds need a shell
+reinstall. If checking the latest release fails, the page says so and offers Reload.
+
+`GET /api/v1/update` returns `{"current":"…","latest":"…"}`, the same as
+`thirdshift update --check --json`. POST runs the same updater as the CLI and
+returns its result as a JSON string (`thirdshift update --json`). It answers once
+the installer has placed the binary, before the Console re-executes itself:
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+curl -X POST -H "Authorization: Bearer $THIRDSHIFT_TOKEN" https://console.example.com/api/v1/update
+```
+
+Theme import requires `admin` and takes the Theme document itself as JSON;
+a file path or a `path` field is refused. Selecting an existing Theme still
+requires `act`. POST `/api/v1/evals/import-replays` imports the machine's private
+replay manifests and grading index from their standard locations, like the CLI.
+It accepts no paths. Eval task approval remains an `act` judgment. Eval verification
+uses a known Launch directory through POST `/api/v1/evals/verify` with `read`.
+Eval preparation and Arm preparation write caller-selected local paths, so remain
+CLI-only. Updates, imports and judgments name their requester
+in the Console log.
 
 Every attempted API change records its holder or session address, endpoint and
 HTTP outcome in the Console log; reads add no events. Activity log lines for
@@ -568,6 +803,123 @@ token Stops and Dismissals say `by token <holder>`, alongside the CLI and
 Console callers already recorded there. A token naming a person records
 `by <person> from the Console on <holder>`, naming both. Token secrets and action bodies are
 never written to that audit record.
+
+#### Starting Commands through the API
+
+<a id="starting-ticket-and-spec-runs-through-the-api" name="starting-ticket-and-spec-runs-through-the-api"></a>
+
+`GET /api/v1/launch-directories` and `thirdshift launch-directories --json`
+return the same `{"directories":[{"repository":"acme/widgets","path":"/srv/widgets"}]}`
+inventory. Known Launch directories come from this account's thirdshift cron
+jobs with literal `cd <directory> && ... thirdshift ...` commands, including
+`env NAME=value thirdshift` wrappers, plus the
+top-level `launch_directories` list in User config. Paths may be absolute or
+start with `~/`; aliases of the same directory are listed once. Each directory
+is resolved through its GitHub `origin` remote. Stale cron directories are
+omitted; an invalid configured directory is an error. Cron shell text is never
+evaluated. For complex shell scripts or wrappers, list their directory explicitly.
+An account without `crontab` can use the config list alone.
+
+A client with `run` starts work with structured JSON:
+
+On the Console's Inbox, a signed-in person with `run` can open **Start work**,
+choose a repository from the known Launch directories and enter an issue number
+or URL. **Shared options** offers merge, email, Harness, Model, Effort, parallel
+Tickets, Base fix, Security review, Security fix and closing Security findings.
+**Review start** shows the request and its Harness; only **Start now** submits
+it. Cancel or Escape starts nothing. The result names the new Command, which
+appears in the Inbox, or explains a refused start. Check Inbox and logs before
+retrying after a lost response.
+
+On **Cron jobs**, **Run now** offers the same confirmation for each recognizable
+Pass, preserving its CLI arguments. Literal `cd` directories and Pass arguments
+are supported; shell expressions and per-invocation environment wrappers remain
+display-only. The result names a Command
+or gives the Pass's skip reason, with a link to Inbox for started work.
+Both controls require JavaScript and are hidden without `run`. Each confirmed
+start uses the same scoped, CSRF-protected API as a client.
+
+```sh
+curl -H "Authorization: Bearer $THIRDSHIFT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"repository":"acme/widgets","issue":7,"merge":false,"email":{"mode":"never"},"harness":"codex","model":"gpt-6.1-sol","effort":"high","base_fix":false,"security_review":true,"security_fix":false}' \
+  https://console.example.com/api/v1/runs
+```
+
+`issue` accepts a positive number, its decimal string or a full Issue URL in
+the named repository. `merge`, `base_fix`, `security_review` and `security_fix`
+are optional booleans; `harness`, `model` and `effort` are optional strings.
+`email` has `mode` `always`, `unless_merged` or `never`, with an optional
+`address` for the first two. Omitted options use the CLI's User config defaults.
+Unknown fields and invalid arguments are refused. A repository without a known
+Launch directory is refused before anything starts. If several directories
+name it, the first path in the inventory is used.
+
+The optional `command` selects the CLI twin; leaving it out means `ticket`,
+which also starts a Spec run when the issue has Tickets. Every request names
+`repository`. These commands are startable on the same `POST /api/v1/runs` path:
+
+| `command` | Target and command-specific options |
+| --- | --- |
+| `ticket` | Required `issue`; shared run options above, plus positive `parallel` and boolean `security_close` |
+| `architect` | Optional `base`, `focus`, `plan_only`; shared run options, `parallel`, `security_close` |
+| `pickup` | Optional `base`, `order` (`lowest-first` or `highest-first`); shared run options, `parallel`, `security_close` |
+| `secure` | Optional `base`; shared run options, `parallel`, `security_close` |
+| `review` | Required `pull_request` URL or `author` login; optional `recommend_only`, `email`, `harness`, `model`, `effort`, `security_review` |
+| `fix` | Optional `pull_request` URL for a targeted Fix run, or `base` and `author` for a Fix Pass; optional `merge`, `base_fix`, `email`, `harness`, `model`, `effort` |
+| `process` | Required `name`; optional `issue` or `pull_request` URL, `plan_only`, `merge`, `email`, `harness`, `model`, `effort`, `security_review`, `security_fix`, `security_close` |
+| `skill` | Required `name`; optional `issue` |
+| `score` | No options; uses the CLI's machine-wide Scoring lock and fixed Scoring repository |
+| `triage` | Required `report` text; optional `read_machine`, `recommend_only`, `allow_ready_for_agent`, `email`, `harness`, `model`, `effort` |
+| `experiment` | Structured `experiment` options: `candidate`, `baseline`, per-arm Harness/Model/Effort, `suite` array, sampling and timeout settings, optional `release` and `yes` |
+
+Booleans use `true` or `false`. All options and combinations are checked by
+the CLI argument parser; for example, Architect `plan_only` refuses options
+for a dispatched run. Issue and pull request URLs must belong to the named
+repository. Triage receives the Report verbatim through standard input;
+`file`, `path` and arbitrary CLI arguments are refused. `read_machine` has
+the same meaning as the CLI's `--read-machine`, including User config defaults.
+
+For example, start a Pickup run on `main`, taking the highest issue first:
+
+```json
+{"repository":"acme/widgets","command":"pickup","base":"main","order":"highest-first"}
+```
+
+Or compare two commits in an Experiment using the machine's Eval suites:
+
+```json
+{"repository":"acme/widgets","command":"experiment","experiment":{"candidate":"HEAD","baseline":"HEAD~1","baseline_harness":"claude","candidate_harness":"codex","suite":["code-review"]}}
+```
+
+Experiment option names match the CLI's long flags with underscores in place
+of hyphens. `suite` is an array of suite names, and `candidate` is a Git reference.
+The same CLI parser validates the combination; OpenAPI lists the option types.
+
+The Console starts the same binary in that directory, in its own OS session
+with the account's login shell environment. Standard output and errors append
+to the cron command's literal `>>` or `>` output path when present, otherwise
+to `<logs.dir>/cron.log`, the shared cron log used in the scheduling examples.
+It waits at most 30 seconds for the Command record and returns
+`{"version":1,"name":"acme/widgets#7"}`. Passes use the same gates as cron,
+including the Command limit. A skip before a Command record exists returns
+`{"version":1,"outcome":"skipped","reason":"..."}`, even with quiet skips
+or a repeated skip reason. A Custom process's skip retains its Command record
+as in the CLI, so returns its name. Skill runs keep no Command record in the
+CLI; after preflight they return
+`{"version":1,"outcome":"started","process_id":1234}` instead. Their API start
+names the requester in the repository's Activity log. An early failure returns an error naming
+the exit status and log; a timeout names the process and warns that it may still
+start, so check `status` before retrying. Follow the Command with the usual
+`show`, `status` and log views. It keeps running through a Console restart.
+The generated systemd service uses `KillMode=process` to preserve these
+Commands during a service restart; regenerate an older installed service to
+apply that setting.
+
+An issue with sub-issues starts a Spec run. As with a typed Issue URL, the
+Command limit never skips this work. The Command record and Activity log keep
+the token holder or the named person and calling machine. Every start attempt
+goes in the Console log. Cron and terminal starts keep their usual wording.
 
 #### Console on a server
 
@@ -657,7 +1009,7 @@ Native macOS (including Intel macOS) and native Windows have no binary. Apple Si
 
 The user account that runs thirdshift needs:
 
-- The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), or **`opencode`** (OpenCode, with a configured Model provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
+- The selected **Harness** installed and authenticated: **`claude`** (Claude Code, the default), **`codex`** (Codex CLI), **`agy`** (Google Antigravity CLI), **`grok`** (Grok Build), **`muse`** (Muse Code), **`opencode`** (OpenCode, with a configured Model provider), or **`kimi`** (Kimi Code CLI, signed in or with a configured provider). See [Harness, Model and Effort](#harness-model-and-effort) for each CLI's flags and quirks.
 - **`gh`** (GitHub CLI), logged in. For a fine-grained personal access token, grant repository permissions **Contents**, **Issues** and **Pull requests** read and write, plus **Actions** and **Commit statuses** read. If `check-runs` returns HTTP 403, CI watch, CI-fix Repairs and Score packets read the latest GitHub Actions workflow jobs instead, alongside commit statuses. Checks from non-Actions apps are unavailable through this fallback.
 - **`git`** with a global `user.name` and `user.email`, and credentials that can push to the repository (`gh auth setup-git` makes git use `gh`'s login). The agents commit as this identity; without it, an agent may borrow the author of the last commit.
 - **`node`** (Node.js) on `PATH`, for a [Security run](#security-runs) only: the Security audit's report validators run on it.
@@ -771,6 +1123,7 @@ thirdshift setup                    # choose your defaults and write the User co
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
 thirdshift evals approve <suite> <task> [--json]  # approve a proposed Eval task in its suite
 thirdshift evals import-replays     # import #429's private manifests and grading files once
+thirdshift evals propose-process <repository> [--limit <1..100>]  # draft process Eval tasks from merged Tickets
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
@@ -802,6 +1155,14 @@ approves one in its suite without changing its inputs or starting work. The
 Console offers the same action under Proposed Eval tasks on the Experiments
 list and, for its suites, on an Experiment page. Approval affects future
 Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+`evals propose-process <repository>` drafts proposed process Eval tasks from
+recent merged pull requests closing Tickets, listing their bug or feature kind,
+source line count and separate test layout. Review each draft's selectors before
+approving it. `evals prepare` screens process tasks on the host with network
+access: each fail-to-pass selector must fail at the base and pass at the merge
+with the reference tests and shared fakes overlaid. It refuses changed inline
+Rust tests and names the file. The prepared process repository keeps the fix
+and test overlay private. See the [task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md#process-task-preparation-and-proposals).
 Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
@@ -810,6 +1171,14 @@ by commit under `~/.thirdshift/evals/builds/` and records their commits, binarie
 and each Harness's real path and version in a new JSON file. A failed build or
 version lookup stops preparation. Trials use the recorded Harness path so an
 installation's symlink update cannot change the Harness between Arms.
+For process Arms, add `--baseline-process <name-or-file.toml>` and
+`--candidate-process <name-or-file.toml>`; the other Arm defaults to `ticket-run`.
+Names select Built-in processes or files under `~/.thirdshift/processes/`.
+The Process file and its referenced home skills, including supporting files,
+are copied into private Arm folders beside the record. The record lists each
+file's SHA-256 and the resolved Harness, Model and Effort per Step. Optional
+`--baseline-model`, `--baseline-effort`, `--candidate-model` and
+`--candidate-effort` set the inherited choices.
 The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
 documents the manifests with made-up data and the Arm record.
 
@@ -891,9 +1260,11 @@ before Void dropouts, rather than the retained judged count.
 
 Before building either Arm, an Experiment prints what its Trials will cost: how
 many it will run, per suite and Arm; the worst case, those Trials times the
-Bar's timeout, in session-minutes; and, for each suite and Harness that has
-history, an estimate from the mean minutes of completed, non-void Trials in this
-machine's earlier Experiments, counting every attempt as Arm minutes do. The total estimate appears only when every suite
+Bar's timeout, in session-minutes; and, for each suite and exact Arm setup that has
+history, an estimate from completed, non-Void Trials in this machine's earlier
+Experiments. The setup includes the build, Harness, Model, Effort and Process.
+Estimates count every attempt's minutes and show priced dollars when all of
+that history has complete accounting. The total time estimate appears only when every suite
 and Arm has one. A resumed Experiment counts only its remaining Trials. When
 stdin is a terminal it then asks `Run these Trials? [y/N]`; any answer but `y` or `yes`
 exits without building an Arm or starting a Trial, and a new Experiment
@@ -903,6 +1274,18 @@ and so does a stdin that is not a terminal. `scripts/release.sh
 --with-experiment` passes `--yes`, so a release asks only its own question.
 There is no cost ceiling in the Bar: the cost is already bounded by Trials
 times the timeout.
+
+Each new Experiment freezes a dated token price table. `--prices <file.json>`
+supplies another table with exact observed Model names and USD rates per million
+input, output, cache-read and cache-write tokens; otherwise it uses the bundled
+standard-rate snapshot. The table cannot change once a Trial starts. Every
+session, including a Resume or fallback, is priced and attributed to its starting
+Step. Missing usage or a missing Model price makes the Trial Void with an
+accounting-gap cause. Arm totals include all attempts; paired median
+Candidate-to-Baseline cost and time ratios use matching complete, non-Void Trials.
+Time spent paused at a usage limit between invocations is excluded. Harness-reported
+costs remain separate from these frozen comparison prices. See the
+[Experiment accounting format](experiment-results.md) for the table and result fields.
 
 `--name <text>` saves a name with the Experiment: one line of at most 100
 characters, trimmed. An empty or over-long name is refused before any build.
@@ -934,14 +1317,205 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
+Process Eval tasks run each Arm's Process at the task's base commit, stopping
+before its first publishing Step. `--baseline-process <name-or-file.toml>` and
+`--candidate-process <name-or-file.toml>` select a Built-in or Custom process;
+both default to the Built-in `ticket-run` with `implement` and `security-review`.
+Preparation freezes the Process file and referenced home skills by SHA-256,
+recording each Step's Harness, Model and Effort in the Experiment's description.
+Custom process and home-skill content also identifies the Arm: editing either
+starts a new Experiment and uses separate cost-estimate history. Repeating the
+command with unchanged inputs resumes its frozen Experiment.
+Each Trial gets its own copies in its fresh home. Both Arms' frozen files are
+checked before every Trial; a mismatch pauses the Experiment with the filename.
+A Process needing GitHub before publication is refused at start. The Trial
+publishes nothing and creates no factory run of its own. Its Steps and all
+sessions appear in the Experiment's Trial Peek and Trace. Process outcomes are
+delivered, stopped-to-ask or failed, with the existing Void causes.
+Stopped-to-ask counts as failed; each Arm's outcome counts appear beside the
+Verdict. A delivered Trial passes only when its code Grader passes both the
+fail-to-pass and pass-to-pass selectors. The Grader exports the Trial's final
+commit and overlays the reference fix's test files and changed shared test
+fakes, replacing any Trial edits to those files. Python selectors search
+the repository after the standard library, so a committed module cannot
+replace one. Selectors run offline in bwrap, sharing the Bar's timeout with
+preparation of the final-commit snapshot,
+and their failures name the selector in
+the Score's reason. The task's required `process_grading` table declares the
+files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
+
+When the task's `process_grading.new_tests` table says how to find and run an
+Arm's own new tests, each pair of Trials (Baseline Trial *k* with Candidate
+Trial *k*) also gets base-tests and cross-tests once both Trials finish. Each
+Arm's new test files, those its final commit adds or changes that match the
+table's paths, run on the unchanged base and against the other Arm's final
+commit, offline in the code Grader's sandbox, each run within the Bar's
+timeout. New tests that pass on the base may not check the change. A
+cross-test failure is a disagreement to look into, not a defect: this evidence
+changes no Score and no Verdict. A run cut short by the timeout, or whose
+snapshot could not be prepared, decides nothing either way. The Console's
+Experiment page lists it under Pair evidence. The text view adds a line for
+each disagreement, new test that passes on the base, run that did not finish
+and evidence that could not run. `thirdshift experiments <id> --json` keeps it
+under `pairs`, with each Arm's whole change since the base.
+
+Each pair with evidence can also be read blind, one person at a time. The
+Experiment page's **People's calls** section links each pair's page, which shows
+the Ticket, its acceptance checklist numbered from 1, the two changes side by
+side with code before tests, and each change's evidence. The sides, A and B, are
+drawn for each pair from the Bar's seed, and the page names no Arm, build,
+Harness or Model and shows no model call. First make a sealed merge call for
+each side, ready or not ready; then give a preference (A, B, tie or both bad)
+and, optionally, the rubric: which change better does what the Ticket asks
+(`correctness`), has proportionate tests that check the change (`tests`) and
+keeps to what was asked (`scope`). The preference and rubric are refused until
+both merge calls are sealed, and sealed calls can't be made again until you
+have given that preference. Every call is a new record, attributed to you and
+never changed, so reading a pair again adds a second review; one begun after
+your reveal is marked as not blind and left out of people–panel agreement.
+Once you have given
+a preference, the page shows which Arm made each side, the Grader panel's calls
+when it has read the pair, and every reader's calls. In the shell:
+
+```sh
+thirdshift experiments <id> --pair <pair-id>
+thirdshift experiments <id> --pair <pair-id> --merge ready not-ready
+thirdshift experiments <id> --pair <pair-id> --prefer a --rubric scope=tie
+```
+
+People's calls, in Arm terms, and their agreement with the panel's merge calls
+and with each other show beside the Verdict on the Experiment page, in the text
+view, and under `people` in `--json`. They change no Score, and change the
+Verdict only when the Bar counts them.
+
+A Grader panel can also grade each pair of process Trials. Name its seats in
+the Bar, one `--panel-seat` per Harness and Model, several per family allowed:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5,effort=high \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
+  --panel-seat harness=claude,model=claude-opus-5-5
+```
+
+Each seat reads every pair in a blind packet twice, once in each presentation
+order, in fresh sandboxed sessions. The packet holds the Ticket, the success
+criteria, a rubric, and for each side its outcome, its diff against the base and
+its Pair evidence, with the sides labelled A and B at random and swapped for
+the second order. For each side the Grader rates each rubric criterion with
+evidence and makes a merge call, then gives its reason and a preference: A, B,
+tie or both bad. A call that flips with the order is a tie. A seat's family is
+its provider: the Harness's own, or the provider an OpenCode Model names.
+The panel votes one vote per family by default, each family taking its own
+majority first; `--panel-vote model` gives each Model a vote, with seats
+naming the same Model taking their own majority first. A seat from
+either Arm's family is reported but doesn't vote while a seat from another
+family sits on the panel; `--panel-arm-family-rule off` lets it vote. A call
+needs more than half the votes, otherwise it is a tie, and a tied merge call is
+not ready. Every seat's calls and the panel's result are reported beside the
+Verdict, in the text view and under `panel` in
+`thirdshift experiments <id> --json`; they change no Score and no Verdict
+unless the Bar counts them.
+
+The Bar fixes who decides the Verdict before the first Trial. The panel and
+the people are each off, beside the Verdict or counted in it: `--panel off`,
+`beside` (the default with seats) or `counted`, and `--people off`, `beside`
+(the default) or `counted`. Name each reader with `--people-reader`, as the
+Console or the CLI names them (a Console address, a token's person, or a Unix
+user). `--people-sample <n>` gives each reader `n` pairs drawn from the Bar's
+seed, and `--people-overlap <n>` how many of those every reader shares; with
+no sample, every reader reads every pair. Each reader's queue lists their pairs
+on the Experiment page, in the text view and under `people.queues` in
+`--json`, and the Experiment refuses a sample larger than it has pairs, or
+readers when a process Eval task has no pair evidence to read:
+
+```sh
+thirdshift experiment <candidate> \
+  --panel-seat harness=codex,model=gpt-5.5 \
+  --panel-seat harness=kimi,model=kimi-k3.1-pro \
+  --panel counted --people counted \
+  --people-reader ann@example.com --people-reader bo@example.com \
+  --people-sample 7 --people-overlap 4
+```
+
+When the panel or the people are counted, a process Trial passes only if its
+Score passes and whoever decides its pair calls it ready to merge. People's
+call is each reader's latest blind merge call; on a pair two readers share, it
+is ready only if both say so. With only the panel counted, its calls decide
+every pair and people's calls calibrate it. With only the people counted on a
+sample, the Verdict rests on the sampled pairs alone, each pair a unit, and a
+small sample usually comes out inconclusive rather than wrong. With people
+counted on every pair, their calls decide every pair. With both counted, the
+panel stands in on the pairs people didn't read. That needs a voting panel
+spanning `--panel-families` families (two by default), or the Experiment
+refuses to start, and people–panel agreement on the sample of at least
+`--panel-agreement` (0.8 by default) of the merge calls compared, or the
+Verdict is inconclusive and says why. While a reader has a pair still to call,
+the Verdict is `waiting_on_people`; each call recalculates it once the
+Experiment has completed. The Verdict says who decided it and on how many
+pairs. People–people agreement on shared pairs and people–panel agreement are
+reported in every mode.
+
+The estimate shown before the Trials includes the panel: for each seat, its
+remaining sessions (pairs × 2 orders) and their expected cost, priced from the
+Experiment's frozen price table. A seat is priced at the mean of its sessions
+measured in this Experiment once there are some, and otherwise at an assumed
+session of 400k input tokens (80% of them cache reads) and 15k output tokens.
+A seat whose Model has no frozen price is listed without one. Panel spend is
+reported apart from the Arms' cost, in the text view and under `panel_spend`
+in `--json`, and never counts toward an Arm's cost or the Bar's
+`--cost-ceiling`. `--panel-spending-limit 25` caps what each run of the
+Experiment spends on panel sessions, in USD: once this run's priced panel
+sessions reach it, grading pauses before the next session, as it does when a
+Grader is unavailable. A panel session that can't be priced, because its
+Model has no frozen price or it reported no usage, also pauses grading while a
+limit is set, since the limit can't count it; its call is kept. Resuming gets
+the limit afresh and continues from the calls already made; none is graded
+again. When every Trial has run and only panel calls remain, the estimate lists
+just the panel and a terminal asks `Run the remaining Grader panel sessions?`.
+
+After each process Trial, thirdshift searches its Session traces for the
+real fix's merge commit (including abbreviations of at least seven characters),
+pull-request and issue references, branch and title. Matches appear as leak hits
+on the Console's Experiment page and in `thirdshift experiments <id> --json`.
+The Verdict waits on these hits, including hits from measurement-only tasks.
+Review the linked Session evidence, then dismiss a false positive or confirm a
+leak in the Console, or use:
+
+```sh
+thirdshift experiments <id> --leak <hit-id> dismiss --reason 'False positive'
+thirdshift experiments <id> --leak <hit-id> confirm --reason 'Saw the real fix'
+```
+
+Each decision retains the reviewer, time and reason. Dismissals keep the Trial
+and remain on the auditable list; confirmation makes the Trial Void and drops
+its paired Eval task from the Verdict. Original results and Session traces remain
+unchanged. Decisions require the Experiment to have stopped and cannot be
+overwritten. A confirmed leak is excluded when the Experiment resumes.
+
 The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
 timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
+The Grader panel's `--panel-seat`, `--panel-vote`, `--panel-arm-family-rule`,
+`--panel-spending-limit`, `--panel`, `--panel-families` and `--panel-agreement`,
+and the people's `--people`, `--people-reader`, `--people-sample` and
+`--people-overlap`, are part of the Bar too; it has no panel by default, and
+anyone may read any pair beside the Verdict.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
+
+Optional `--cost-ceiling 2` and `--time-ceiling 2` cap the paired median
+Candidate/Baseline ratios at 2×. Both are off by default and fixed with the Bar;
+a ratio above either set ceiling fails the Experiment. Unmeasured ceilings
+cannot pass. Quality statistics still follow ADR-0025. When quality passes,
+the Verdict adds "cheaper" or "faster" when the paired ratio's pass-level
+Bayesian bootstrap interval lies below 1 (at least two paired tasks), or says
+"costs more" or "takes longer" when its median exceeds 1. JSON `verdict.line`,
+the text view and the Console show the same line. See the
+[resource comparison rules](experiment-results.md#verdict-and-bar).
 
 The default pass level is the highest at which an A/A Experiment at the
 measured disagreement rate passes at least 80% of the time on each suite at
@@ -1008,7 +1582,7 @@ both workers. An installation failure makes the Trial void with
 allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
-editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
+for review Trials, editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
 branch, or altering or removing the base or prepared change commit makes an
 otherwise successful Trial void with `repository_changed`. Issue branch commits,
 pushes to the local origin, reports and other working-tree files are allowed.
@@ -1016,12 +1590,13 @@ A review with no reports fails, and the Eval task's mechanical checks must pass.
 Those checks run on a private copy of the prepared repository captured before
 the session, so the session cannot change the code they grade. Checks share
 their own build artifacts. Scores retain each check and its reason.
-Then a fresh model Grader scores one blind packet per Eval task against its
+For review Trials, a fresh model Grader then scores one blind packet per Eval task against its
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.
-When an installed Harness has a configured Model different from both Arms,
-that Model grades; otherwise the User config's default choice grades. The
+When an installed Harness has a configured Model from a family neither Arm
+runs on, as the Grader panel's family rule reads it, that Model grades;
+otherwise the User config's default choice grades. The
 Grader choice and executable are fixed before Trials start. Model Graders run
 in the same sandbox, seeing only their packet workspace. Code Graders run
 offline with their report packet and prepared repository. Neither can read
@@ -1148,7 +1723,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 4`.
+[Experiment results format](experiment-results.md), identified by `format: 10`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1895,7 +2470,55 @@ skipped. While the repository is at its [Command limit](#the-command-limit), a P
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.
 
+Read every setting with its value and default, read one, or set one:
+
+```sh
+thirdshift config
+thirdshift config spec.parallel
+thirdshift config spec.parallel 6
+thirdshift config harness.codex.model gpt-6.1-sol --json
+thirdshift config console.hidden_sections '["done", "resolved"]'
+thirdshift config email.to_by_repo '{ "acme/widgets" = "team@example.com" }'
+```
+
+All three forms accept `--json`, before or after their arguments. The whole
+config returns `{"version":1,"settings":[...]}`; a read or write of one key
+returns its `key`, `value`, `default`, `editable` and `reason`. Strings accept
+bare text or TOML quotes; arrays and maps use TOML. `null` means no default
+for `email.to`. A write validates exactly as `setup` does and preserves the
+other settings, comments and layout. An invalid value leaves the file intact.
+
+Open **User config** in the Console navigation (`/config`) to see the same
+inventory. A session with `admin` can save one setting at a time; a `read`
+session sees values and defaults without edit controls. Saving returns to that
+setting and confirms its key, saved value and machine, for example
+`Saved spec.parallel = 10 on orchestrate`. This works with or without JavaScript,
+including Fleet pages at `/config?machine=<name>`; export endpoints stay redacted
+in the confirmation. Invalid values and remote refusals show an error instead.
+The API requires
+`admin` for both GET `/api/v1/config` and GET `/api/v1/config/<key>`, and for
+POST `/api/v1/config/<key>` with an `application/x-www-form-urlencoded`
+`value` field. Its response equals the CLI's JSON. Session writes need CSRF
+as other Console actions do; bearer writes do not.
+
+The sign-in list (`console.allowed_emails`), address scopes
+(`console.address_scopes`) and Fleet destinations (`console.fleet`)
+cannot be read or written with `config` or its API
+twins. The inventory names them with `null` values and explains the refusal:
+edit the sign-in list on the machine or use `setup`, and use `console scopes`
+for address scopes and `console fleet` for Fleet pairing. They control who
+can get access and which destinations receive Fleet tokens. Credentials are never
+read by this command; nonempty `otlp.endpoint` values are redacted because
+export URLs can contain credentials. Enter a replacement URL to change one,
+or blank to disable export. Every actual config change through these three
+ways in records the caller, key, old value and new value in the Console log,
+with sensitive values redacted. Reads and unchanged saves record no config
+change. New values apply on subsequent config reads; restart the Console
+after changing its listening port.
+
 ```toml
+launch_directories = ["~/repos/widgets"]  # additional known Launch directories for API starts
+
 [merge]
 always = true   # every Ticket run Self-merges, without the merge word
 
@@ -1956,6 +2579,8 @@ effort = "medium"
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
 ```toml
+launch_directories = []  # additional known Launch directories for API starts; cron directories are included automatically; default []
+
 [merge]
 always = false   # every Ticket run Self-merges, without the merge word; default false
 
@@ -2001,7 +2626,7 @@ wait_minutes = 5   # minutes since the latest shaping event before an issue is R
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
-default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse, opencode or kimi; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -2027,6 +2652,10 @@ effort = ""   # how hard that Model reasons; default blank, for Muse Code's own
 model = ""    # the Model OpenCode's sessions run on, provider/model; default blank, for OpenCode's own
 effort = ""   # the Model's variant, passed as #effort; default blank, for OpenCode's own
 
+[harness.kimi]
+model = ""    # the Model alias in Kimi Code's config its sessions run on; default blank, for Kimi Code's default_model
+effort = ""   # leave blank: Kimi Code takes its thinking from its own config; default blank
+
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
@@ -2041,7 +2670,7 @@ memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 
 Every key holds its real value, so a Ticket run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Ticket run never looks the suggestion up: `--email` with no address, no matching `email.to_by_repo` entry and no `email.to` still stops the Ticket run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
 
-1. The Harness for every Ticket run's sessions (`harness.default`), listing only those installed on `PATH`. An unavailable Harness or unknown name is refused and asked again. The default is the configured Harness when installed, else the first installed in `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` order. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Ticket run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For agy, Setup lists `agy models` and its supported Efforts, checks each answer without a model turn, and writes the canonical names regardless of case. For Grok Build, Setup lists `grok models` and the chosen Model's Efforts from its refreshed cache, and checks each answer against them. Muse proposes `muse-spark-1.3` and checks the answers against its cache, or with a minimal call; a refusal asks for the Model and Effort again. OpenCode proposes no Model and checks the Model and Effort with a minimal standalone call, asking again on a refusal. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
+1. The Harness for every Ticket run's sessions (`harness.default`), listing only those installed on `PATH`. An unavailable Harness or unknown name is refused and asked again. The default is the configured Harness when installed, else the first installed in `claude`, `codex`, `agy`, `grok`, `muse`, `opencode`, `kimi` order. Then the Model (`harness.<name>.model`) and the Effort (`harness.<name>.effort`) for the Harness chosen only, each defaulting to the User config's, where Enter on none keeps the Harness's own default and `-` clears one. They're checked as a Ticket run checks them (see [Harness, Model and Effort](#harness-model-and-effort)). For Claude, a named Model gets the test call; if Claude refuses it, Setup shows what Claude said and asks the Model and Effort again. For Codex, Setup lists the Models `codex debug models` offers, by slug and display name, then the Efforts the Model chosen supports; each answer is matched regardless of case and written as Codex names it, so `GPT-6.1-Sol` and `Max` are written as `gpt-6.1-sol` and `max`, and a Model or Effort the catalog doesn't have is asked again, with the valid choices. For agy, Setup lists `agy models` and its supported Efforts, checks each answer without a model turn, and writes the canonical names regardless of case. For Grok Build, Setup lists `grok models` and the chosen Model's Efforts from its refreshed cache, and checks each answer against them. Muse proposes `muse-spark-1.3` and checks the answers against its cache, or with a minimal call; a refusal asks for the Model and Effort again. OpenCode proposes no Model and checks the Model and Effort with a minimal standalone call, asking again on a refusal. For Kimi Code, Setup lists the Model aliases `kimi provider list --json` prints and asks for a Model only, since Kimi takes no Effort; an alias its config lacks is asked again. The other Harnesses' sections are left as they are. With no Harness installed here, Setup says so, asks none of this, and leaves the harness settings as they are.
 2. `Every Ticket run Self-merges?` (`merge.always`)
 3. `Every Ticket run may start a Base fix when the Base branch's CI is red?` (`base.fix`), whatever the Self-merge answer. Pressing Enter keeps the current `base.fix` value.
 4. `Every Ticket run first fast-forwards your checkout of the Base branch?` (`launch.pull`)
@@ -2102,7 +2731,7 @@ A Ticket run reads the file before any work. One that isn't valid TOML, or that 
 
 ### Harness, Model and Effort
 
-The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) and OpenCode (`opencode`).
+The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`), OpenCode (`opencode`) and Kimi Code (`kimi`).
 
 Every session of a command, its implement session, each Repair and Resume, a Spec review, an Architecture review, each Ticket run and a Base fix, runs on one **Harness**, with one **Model** and one **Effort**. The one exception is a [Security review](#security-review): with `security.harness` set in the User config, it runs on that Harness ([ADR-0021](adr/0021-a-command-may-run-its-security-review-on-another-harness.md)). `harness <name>`, `model <name>` and `effort <level>` (or `--harness`, `--model` and `--effort`) choose them for one command, before or after the Issue URL, and on `architect` (but not with `--plan-only`) and `pickup` too:
 
@@ -2139,6 +2768,26 @@ With `harness opencode`, every session, Resume and preflight check runs `opencod
 OpenCode takes the Model id from your provider config, as `<provider>/<model>`, including MiMo-V2.6-Pro when your provider routes it. Model and Effort are passed together as `-m <provider>/<model>#<effort>`; an explicit Effort replaces a variant already in the Model id, and needs a Model set too. Before any work, thirdshift makes a minimal standalone test call with the same stdin, flags and environment. `provider.no-route` identifies a bad Model or Effort without a model turn; a successful check uses a model call because OpenCode has no free catalog without its service. Setup checks its answers the same way, proposing no default Model.
 
 The session id comes from `sessionID` in the stream, and a Resume uses `-s <id>` with every flag and environment override again. OpenCode creates a new session for an unknown id, so thirdshift only resumes an id it read from the stream. Progress comes from `step_start`, `tool_use`, `step_finish` and `error`. After exit, thirdshift reads `opencode session export --standalone <id>`: an exported `failed` outcome fails the Ticket run even with exit 0, the final message is the last assistant message's last text part, and usage and cost are summed over assistant messages to exclude the automatic title call. Input totals include cache reads and writes, output totals include reasoning, and each subtotal is shown. If export fails or is unreadable, the last stream `text` supplies the final message and no usage is shown. A stream error or nonzero exit also fails the Ticket run with OpenCode's error. An interrupt sends SIGTERM through the whole process tree, then SIGKILL after the grace period if needed.
+
+With `harness kimi`, every session runs **Kimi Code CLI** (`@moonshot-ai/kimi-code`, which installs `kimi`) as `kimi --output-format stream-json -p <prompt>`, with `-m <model>` when set, stdin null, `KIMI_CODE_TRUST_WORKSPACE=1`, `KIMI_CODE_NO_AUTO_UPDATE=1` and `KIMI_DISABLE_TELEMETRY=1`. Print mode approves every action itself and refuses `--yolo` and `--auto` beside `-p`; the trust override lets the worktree's project MCP servers start, which an untrusted folder skips ([ADR-0013](adr/0013-every-harness-runs-unattended-and-fully-trusted.md)). Each session also gets `KIMI_CODE_HOME` set: yours when you set it, else `~/.kimi-code`, or the private home's `.kimi-code` where a sandbox gives the session its own `HOME`. Kimi Code reads `AGENTS.md` (and `.kimi-code/AGENTS.md`) from the project root down to the working directory, and `~/.kimi-code/AGENTS.md`; it does not read `CLAUDE.md` or `~/.claude/`. When root `CLAUDE.md` exists and `AGENTS.md` does not, thirdshift links `AGENTS.md` to it and excludes that link from git, as for OpenCode. It loads skills from the project's `.kimi-code/skills/` and `.agents/skills/` and the user's `~/.kimi-code/skills/` and `~/.agents/skills/`. The Factory skills are linked into `.agents/skills/` and kept out of git, and the prompt tells the model to load its skill with its `Skill` tool; a session whose stream shows no successful load gets a warning, without failing or retrying.
+
+A Kimi Model is a model alias in Kimi Code's own config, as `kimi provider list --json` prints it, and reaches Kimi as `-m <alias>`. Before any work, and in Setup, the Model is checked against that list, which costs no tokens; an unknown alias fails naming the configured ones. No Model leaves the choice to Kimi Code's `default_model`. Kimi Code has no Effort flag, so any Effort fails before work: set thinking in Kimi Code's config instead. To run Kimi K3.1 Pro on Fireworks, add Fireworks to Kimi Code's `config.toml` as an OpenAI-compatible provider whose key comes from an environment variable, never written into a repository, and an alias for its Model:
+
+```toml
+[providers.fireworks]
+type = "openai"
+base_url = "https://api.fireworks.ai/inference/v1"
+api_key_env = "FIREWORKS_API_KEY"
+
+[models."kimi-k3.1-pro"]
+provider = "fireworks"
+model = "accounts/fireworks/models/kimi-k3p1-pro"
+max_context_size = 262144
+```
+
+Then `harness kimi model kimi-k3.1-pro`, with `FIREWORKS_API_KEY` exported. Signing in with `kimi login` instead adds the managed Kimi Code provider's aliases.
+
+Kimi's stream carries assistant and tool messages, which supply the progress lines and the final message, and after a completed turn a `session.resume_hint` with the session id; a Resume runs `kimi --session <id>` with the same flags. The stream carries no usage. After exit, thirdshift reads the session's own record, `wire.jsonl` under `<KIMI_CODE_HOME>/sessions/<workspace>/<id>/agents/<agent>/`, and totals the usage of every `step.end` event of this turn, for the main agent and its subagents, by the Model alias each agent was bound to. A Resume appends to the same record, so only steps from the last user message carrying this session's prompt count. A turn that fails prints no session id; thirdshift then finds the session folder whose record holds that prompt, newest first, so a failed turn's usage still counts. Input totals include cache reads and writes, which are each shown, as Kimi's own `vis` sums them. A session with no `step.end` usage, or no record, shows no usage rather than zero. An `error` line or a nonzero exit fails the Ticket run. An interrupt sends SIGTERM through the whole process tree, then SIGKILL after the grace period if needed.
 
 The Command log's opening lines (`sessions run on claude · claude-opus-5-5 · high`), the Activity log's start line, the pull request's body and the Run notification each name the Harness, Model and Effort, `default model` or `default effort` where the Harness's own is used. In the pull request's body, the Spec PR's included, thirdshift writes the line itself once the opening session has ended, such as `Built with claude 2.1.11 · claude-opus-5-5 · high`, replacing any it wrote there before. The Harness version comes from the same detection as its Session trace: stream metadata when available, otherwise its version command, shared across the Command's sessions and child Runs. An unavailable version is `unknown`. Older Built-with lines without a version still read.
 
@@ -2192,7 +2841,7 @@ no Resend API key. Either:
     (a crontab line, CI secret, or a shell profile the Ticket run's shell reads)
 ```
 
-Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it, as `api_key` under `[opencode]`; without it, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
+Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values, and an `[opencode.keys]` table of quoted keys by OpenCode provider name. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it: one per provider under `[opencode.keys]`, such as `fireworks-ai = "…"` and `baseten = "…"`, or a single `api_key` under `[opencode]` for any provider without its own. Each OpenCode session takes the key for the provider its Model names, so two OpenCode sessions on different providers, such as two Graders in a Grader panel, each get their own; without one, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 
@@ -3082,11 +3731,11 @@ Concurrent hosts serialize evidence reads, re-running, filing and commenting wit
 
 ### The Failure limit
 
-A Pickup run takes nothing while the repository is at its **Failure limit**: as many open issues the factory failed on, labelled `agent-failed`, as the limit, which is 3 unless you set it. Three failures in a row on one repository usually mean a broken Base branch or Harness, not three bad issues, so the factory stops spending sessions on the rest of the backlog until you look. A pull request that is ready for review, or merged, never counts: the factory keeps working while reviews wait.
+A Pickup run or Triage Pass takes nothing while the repository is at its **Failure limit**: as many open issues the factory failed on, labelled `agent-failed`, as the limit, which is 3 unless you set it. Three failures in a row on one repository usually mean a broken Base branch or Harness, not three bad issues, so the factory stops spending sessions on the rest of the backlog until you look. A failed Triage run leaves `ready-for-human` and `agent-failed`; that still waits for you until you put `ready-for-agent` back, remove `agent-failed`, or close it. A pull request that is ready for review, or merged, never counts: the factory keeps working while reviews wait.
 
 - thirdshift labels an issue `agent-failed` when a [Failed ticket run](#failed-ticket-runs) or a Failed spec run [keeps its Claim](#when-the-claim-ends), whoever started it: a Pickup run, an Architect run, a Security run, or you on its Issue URL. A failed Security fix is labelled too, as is an issue a failed [Custom process](#custom-processes) run on it keeps its Claim on. stderr says `labelling #<n> agent-failed, so it waits for the Day shift`. The label is added to the repository if it lacks it, and labelling finishes after Ctrl-C, as ending the Claim does; a failure is a `warning:` naming the command to run by hand.
 - Nothing is labelled when the Claim is released because nothing of the run is on `origin`, when a [Stop](#stopping-a-command) ended the run, when a policy, security or merge hold held a Self-merge and left its pull request ready, or when a bug Ticket run ended with `needs-info`.
-- The label comes off when you act on the failure. Before it counts, each Pickup run takes it off every open issue that has `ready-for-agent` again, handed back, or has neither `in-progress` nor `needs-triage`, taken over, and doesn't count that issue: stderr says `taking agent-failed off #<n>, which the Day shift handed back` or `took over`. The [Sweep](#the-sweep) takes it off closed issues, the issue's next Claim takes it off, and you can take it off by hand. A failure to take it off is a `warning:` line, and the issue is still not counted.
+- To acknowledge a failure, put `ready-for-agent` back, take `agent-failed` off by hand, or close the issue. Removing `ready-for-human` alone is not acknowledgement. Each Pickup run or Triage Pass clears the label when readiness is restored; the [Sweep](#the-sweep) clears closed issues and a new Claim clears it too. Until the coordinated Claim-ending change in [#1902](https://github.com/JacobStephens2/thirdshift/issues/1902) lands, the legacy takeover check remains, with `ready-for-human` treated as a waiting state so factory cleanup does not erase a Triage failure. Use the explicit actions above rather than relying on that interim inference. A failure to take the label off is a `warning:` line.
 - `pickup.failure_limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. `failure_limit = 1` stops at the first failure. There is no command-line flag for it.
 - At or over the limit, the pass is skipped: exit `0`, stdout empty, no Run notification, and the reason on stderr names every counted issue, lowest number first, along with the limit, such as `at the Failure limit on acme/widgets: #924, #936 and #953 are labelled agent-failed, pickup.failure_limit is 3`. No Ready issue is looked for, and no session is started.
 - If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
@@ -3094,7 +3743,7 @@ A Pickup run takes nothing while the repository is at its **Failure limit**: as 
 
 ### The Sweep
 
-In the **Sweep**, each Pickup run, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
+In the **Sweep**, each Pickup run or Triage Pass, once it holds its slot and before it counts, lists the repository's closed issues labelled `in-progress` or `agent-failed` and takes both labels off each, so an issue whose pull request you merged by hand doesn't look taken, or failed, for ever. It also removes `in-progress` from closed pull requests.
 
 - Only `in-progress` and `agent-failed` are removed, in one request per issue: the closed issue's other labels stay. stderr says `taking in-progress off #<n>, which is closed`, or `taking in-progress and agent-failed off #<n>, which is closed`.
 - It runs on every pass that gets a slot, one that is then skipped for the Failure limit or for having no Ready issue included, and not on one skipped for the Command limit.
@@ -3187,6 +3836,35 @@ When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](htt
 
 ## Triage runs
 
+With no issue or `--file`, `thirdshift triage [base <branch>]` is an unattended **Pass** when stdin is a terminal or reaches EOF without non-whitespace text. This includes `/dev/null` under cron. Non-empty piped stdin remains a Report, read before command startup. An explicitly named empty Report file is an error.
+
+```sh
+thirdshift triage
+thirdshift triage base release </dev/null
+# In crontab, from the repository's Launch directory:
+*/5 * * * * cd /srv/widgets && thirdshift triage base main
+```
+
+A Triage Pass checks the [Command limit](#the-command-limit), runs the [Sweep](#the-sweep), clears `agent-failed` from open issues the Day shift has acted on, and checks `pickup.failure_limit`. It then selects one open `needs-triage` issue in `pickup.order` (lowest number first by default). Each issue passed over gets a progress line explaining why: another triage state (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), `in-progress`, `agent-failed`, sub-issues of its own, or an untrusted author or title/body edit. It reserves the first eligible issue on origin and rechecks its state and trust; a reserved or stale issue is passed over for the next candidate. The selected issue is triaged in place as below. With `--recommend-only`, a Pass still reserves its selection but makes no Claim or publication.
+
+A skipped Triage Pass exits `0`, prints nothing on stdout and sends no Run notification. Its reason is recorded in the Activity log only when it changes; `activity.quiet_skips` also suppresses terminal output. A Pass that takes an issue keeps its Command log and Session trace, records the Triage run in the Activity log and sends the configured Run notification.
+
+To investigate an existing open issue in place, name its Issue URL or number, optionally followed by `base <branch>`:
+
+```sh
+thirdshift triage 123
+thirdshift triage https://github.com/acme/widgets/issues/123 base release
+thirdshift triage 123 --recommend-only
+```
+
+The Base branch defaults to the Launch directory's checked-out branch. The issue must belong to that repository, have a Trusted-account author and have no title or body edits by other accounts. Any current triage state is accepted. The session receives `.thirdshift-issue.md` with the title, body and only Trusted-account comments. Combining an issue with `--file` is refused.
+
+Before the session starts, thirdshift downloads up to ten unique images from Markdown images and HTML `img` tags in the trusted body and comments. Only HTTPS URLs on `github.com` or subdomains of `githubusercontent.com` are eligible. Each download has a 30-second timeout and a 20 MiB limit; failures and excess images produce warnings and the investigation continues. Successful images are kept under `.thirdshift-issue-images/` in the throwaway worktree, with their original URLs and local paths appended to `.thirdshift-issue.md`, so the session can inspect them with `--read-machine` too.
+
+Unless `--recommend-only` is given, thirdshift reserves the issue on origin and replaces its prior triage state and `agent-failed` with an `in-progress` Claim. It posts one AI-attributed comment with the Agent Brief, investigation and questionnaire, or wontfix explanation, preserves existing category labels (adding the recommendation's category only when none exists), and replaces the Claim with the resulting state. `wontfix` closes the issue. A duplicate can also get a cross-reference comment on the other open issue. Splits into several Tickets or a Spec go to `ready-for-human` with a questionnaire proposing the split. Without readiness permission, recommended `ready-for-agent` becomes `ready-for-human` with a notice in the Agent Brief. The recommendation's issue entry and Run notification name the existing issue's URL.
+
+An error or interruption ends that Claim with `ready-for-human` and `agent-failed`. `thirdshift stop` instead uses `ready-for-human` without `agent-failed`; `thirdshift stop --requeue` uses `needs-triage` without `agent-failed`. The origin reservation is released after cleanup. `--recommend-only` checks the recommendation against GitHub and prints its JSON without reserving, claiming or publishing.
+
 Give a Report on standard input or with `--file` from the repository's Launch directory:
 
 ```sh
@@ -3195,6 +3873,8 @@ thirdshift triage --file report.txt
 thirdshift triage --read-machine --file report.txt
 thirdshift triage --recommend-only --file report.txt email alerts@example.com
 ```
+
+Both Report forms also accept `base <branch>`, for example `thirdshift triage --file report.txt base release` or `printf '%s\n' 'Investigate cache misses.' | thirdshift triage base release`. Without it, the Base branch is the Launch directory's checked-out branch.
 
 For a pasted multi-line Report, such as a chat thread or email, use a single-quoted heredoc:
 
@@ -3215,11 +3895,13 @@ For a `needs-info` or `ready-for-human` issue, the embedded `thirdshift-to-quest
 
 By default, a recommendation of `ready-for-agent` becomes `needs-triage`, with a note saying what was recommended. Give `--allow-ready-for-agent` to keep it, or enable the default in `thirdshift setup`, which sets `allow_ready_for_agent = true` under `[triage]` in the User config. thirdshift enforces this permission when filing. This can make the issue eligible for a later Pickup run; the Triage run itself only files it.
 
-Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state. After filing completes, the final progress lines on stderr list every issue filed or commented on, one link per line; the Run notification includes the same readable list. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The Run notification presents the investigation, issue titles with their category and state, comment target URLs and any questionnaires as readable text. It omits the full recommendation JSON and issue and comment bodies; the full result remains on stdout. The notification is saved locally and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An absent or empty Report explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
+Standard output is one JSON object with `category`, `state`, `issues` (titles, bodies and a `questionnaire` when a person must answer), `investigation`, and, when an existing issue covers a problem, `comments` (issue URLs and comment bodies). Filed issues also include their URL and applied category and state. After filing completes, the final progress lines on stderr list every issue filed or commented on, one link per line; the Run notification includes the same readable list. With `--recommend-only`, issues and comments remain proposals, including each existing issue's URL. The Run notification presents the investigation, issue titles with their category and state, comment target URLs and any questionnaires as readable text. It omits the full recommendation JSON and issue and comment bodies; the full result remains on stdout. The notification is saved locally and emailed when `email` or the User config asks. Harness, Model and Effort flags work as for other Commands. An explicitly named empty Report file explains how to supply one. An incomplete session recommendation fails the Command, as does one GitHub would refuse: a comment on an issue that is closed or in another repository, or a category that is not one of the repository's labels or is a factory label such as `agent-failed`.
 
 If publication fails partway, links to issues already filed or commented on still appear after the failure diagnostics and in the Run notification. Proposed writes that failed get no link in that list.
 
-The Command record, Activity log, `status` and Run notification name it a **Triage run**. It counts toward the Command limit but is never skipped for it: a Report is work already supplied, not a Pass. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
+When triaging an existing issue labelled `security-finding`, the Run notification carries only its recorded title and link. Investigation text, questionnaires and failure diagnostics stay on the private issue or in local output and logs, including when triage fails; they are not emailed through Resend.
+
+The Command record, Activity log, `status` and Run notification name it a **Triage run**. A Report or explicitly named issue always takes a Command slot, even above the Command limit; unattended Triage Passes honour that limit. Its worktree is removed when it ends. The session is instructed to investigate read-only within that worktree; it uses the ordinary trusted Harness launch, without an additional filesystem sandbox.
 
 Add `--read-machine`, or name the repository in `read_machine` under `[triage]` in the User config (`read_machine = ["acme/widgets"]`), to let the session read outside the worktree, subject to the OS account's normal read permissions. This opt-in requires Bubblewrap (`bwrap` on `PATH`) and working Linux user namespaces. The sandbox mounts the host filesystem read-only and makes only the throwaway worktree writable; scratch files stay there. A private Harness home inside it holds copies of the usual settings and file-based login, so session state and login refreshes leave the originals unchanged. The network stays available for the Harness and read-only GitHub queries. Unix-domain sockets are refused, so a host service cannot write for the session. TCP stays available. The session keeps Git history and GitHub unchanged; thirdshift publishes its proposed issues and comments unless `--recommend-only` was given. If the sandbox cannot start, the Triage run fails with its diagnostic instead of running unsandboxed. Without either, the launch and worktree-only prompt stay as before.
 
@@ -3433,7 +4115,7 @@ Editing a skill in `skills/` has no effect until you rebuild and reinstall ([ADR
 
 The [Prompts and skills page](https://thirdshift.app/prompts/) is generated from the prompts, the `claude` and `codex` arguments and the skills, and each Session prompt is also generated as a Markdown file in [`prompts/`](../prompts), with a [`README.md`](../prompts/README.md) that lists them with the `claude` and `codex` command lines. `cargo test` fails until they are regenerated after a change to any of them. Regenerate the page and `prompts/` with `UPDATE_PROMPTS=1 cargo test prompts_page`, which also deletes any file in `prompts/` that it doesn't generate.
 
-The integration tests swap in a fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse` and `opencode`, from [`tests/fakes.rs`](../tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
+The integration tests swap in a fake `gh`, `claude`, `codex`, `agy`, `grok`, `muse`, `opencode` and `kimi`, from [`tests/fakes.rs`](../tests/fakes.rs). The first test that needs them builds them with `rustc` (the one on `PATH`, or `$RUSTC`), so the suite needs nothing else on `PATH` beyond `git` and `bash`.
 
 ### The Rust version
 
@@ -3463,7 +4145,10 @@ so the Experiment prints its cost without asking about it.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to `main` during interruption does
-not change the Candidate on restart. The pin is removed after the branch push,
+not change the Candidate on restart. If a release tag now on `main` is not an
+ancestor of that pin, the script selects a new base. It also rechecks that the
+requested version is higher than `main` before reusing a pin, refusing if not.
+The pin is removed after the branch push,
 when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
 intervals and asks `release anyway? [y/N]`, including without `--review`.
@@ -3478,7 +4163,9 @@ open or merged bump PR before tagging. An already pushed tag waits for publicati
 an open PR, skipping the Experiment unless recovering with a newer green base. Python 3 is needed to read the Experiment results.
 
 The release base is the newest commit on `main` whose latest push `CI` run
-succeeded, newer than the last release tag. The script uses it immediately even
+succeeded, strictly newer than and descending from the last release tag on
+`origin/main`. A green commit from before that tag merged into `main` cannot
+qualify. The script uses a qualifying commit immediately even
 if the tip's CI is pending or failed. If none qualifies, it waits for a run to
 succeed, still considering older pending commits when `main` moves. The
 Experiment's Candidate is that release base. The tag names exactly that content
@@ -3491,11 +4178,22 @@ From a clone of this repo, signed in to `gh` and the User config's default Harne
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the PR checks fail, it stops before tagging and leaves the pull request open and untagged. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the PR checks fail, it stops before tagging and leaves the pull request open and untagged. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Neither wait has an overall timeout.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
-If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done, without the checks above, which the first run passed. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
+If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.
+
+An untagged pushed branch or open bump PR is re-cut if its content base does
+not descend from the last release tag now on `origin/main`, excluding its own
+tag. After validating the existing version-only bump, the script rechecks that
+the requested version is higher than `main` and waits for a green base
+descending from that release tag. It prints the new base, runs the Experiment
+when requested, regenerates the summary and version diff, force-pushes the
+branch, and updates an open PR's body or opens its PR before waiting for checks
+on the new head. With `--review`, declining the new summary exits `1` before
+moving the branch or changing the PR body. Tagged and merged releases keep
+their existing resume behavior.
 
 On resume after a completed failed release workflow with no GitHub Release yet, the script looks for the newest `main` commit newer than the bump commit's parent whose latest push `CI` run succeeded. When one exists, it re-cuts `release-<version>` from that commit: it runs the release Experiment when `--with-experiment` is passed, regenerates the summary and version diff (honoring `--review`), force-pushes the new bump commit to the branch, updates the open PR body, waits for its new checks, then force-pushes `v<version>` to the new bump commit. An old merged bump gets a new bump PR. The summary and Experiment exclude the unpublished tag and retain the prior release boundary; release Experiments accept `--baseline <ref>` for this recovery. It waits for the new release workflow before merging. A recovery stopped between pushing the branch and moving the tag resumes that checked version bump. If no newer green commit exists, it automatically runs `gh run rerun --failed <run id>`, prints a stamped progress line, and waits for the rerun before merging. A published GitHub Release is never re-cut: its branch and tag are never moved. If the publication check cannot be completed, the script refuses and moves nothing. A tag on an unrelated commit is still refused. You can stop either wait with Ctrl-C and run the script again to continue.
 

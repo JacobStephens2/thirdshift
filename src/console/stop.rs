@@ -21,6 +21,26 @@ pub(super) async fn show(
     RawQuery(query): RawQuery,
 ) -> Response {
     let command = super::query_value(&query, "command");
+    let machine = super::query_value(&query, "machine");
+    if !machine.is_empty() {
+        return super::api::read(super::api::Format::Html, move || {
+            let config = UserConfig::load()?;
+            Ok(Html(
+                super::fleet_actions::Page {
+                    page: super::PageContext::new(&config, &viewer.scopes),
+                    csrf: viewer.csrf,
+                    machine,
+                    command,
+                    confirm: true,
+                    undo: false,
+                    answer: String::new(),
+                }
+                .render()?,
+            )
+            .into_response())
+        })
+        .await;
+    }
     let scopes = viewer.scopes.clone();
     let csrf = viewer.csrf;
     match tokio::task::spawn_blocking(move || -> Result<Option<String>> {
@@ -52,6 +72,8 @@ pub(super) async fn show(
 pub(super) struct StopForm {
     command: String,
     #[serde(default)]
+    machine: String,
+    #[serde(default)]
     confirmed: String,
     #[serde(default)]
     ending: String,
@@ -78,6 +100,17 @@ pub(super) async fn submit(
     }
     if form.confirmed != "yes" || !matches!(form.ending.as_str(), "triage" | "requeue") {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !form.machine.is_empty() {
+        return super::fleet_actions::submit(
+            viewer,
+            form.machine,
+            form.command,
+            super::fleet_actions::Action::Stop {
+                requeue: form.ending == "requeue",
+            },
+        )
+        .await;
     }
     let location = crate::logs::status::inspect::url("/stop", &form.command, None);
     let result = tokio::task::spawn_blocking(move || {

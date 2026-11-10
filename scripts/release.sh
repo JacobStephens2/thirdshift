@@ -20,9 +20,10 @@
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
 # tag that already exists locally or on origin. The bump starts from the newest
-# main commit whose latest push CI run succeeded, newer than the last release
-# tag. If none qualifies, it waits for a run to succeed, still considering older
-# pending commits when main moves. It never waits just for the tip to go green.
+# main commit whose latest push CI run succeeded, newer than and descending
+# from the last release tag on main. If none qualifies, it waits for a run to
+# succeed, still considering older pending commits when main moves. It never
+# waits just for the tip to go green.
 # With --with-experiment, an Experiment compares that content commit with its
 # last release tag, selecting touched suites. A pass carries on; pending Scores
 # are listed and waited for; fail/inconclusive Verdicts show intervals and
@@ -33,9 +34,12 @@
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
-# on an open PR, tags its bump commit, waits for publication, then merges it,
-# without the refusals
-# above, which the first run passed. A merged PR is tagged at its bump head too.
+# on an open PR, tags its bump commit, waits for publication, then merges it.
+# If an untagged branch or open PR's base predates the last release tag now on
+# main, it checks the version again and waits for a green main descendant of
+# that tag. It re-cuts the bump, regenerates the summary (honoring --review),
+# force-pushes the branch, and updates an open PR's body before waiting for CI.
+# A merged PR is tagged at its bump head too.
 # If v<version> is already on origin at the bump head, it waits for the release
 # workflow, then merges an open PR. If the workflow succeeded or the GitHub
 # Release exists, it merges immediately. A bump PR
@@ -59,7 +63,9 @@
 # interrupted between branch and tag pushes resumes that exact version bump;
 # unrelated tags are refused.
 # Before the branch exists, a local Git ref pins the content commit so a
-# restart keeps the same Candidate even if main advances during interruption.
+# restart keeps the same Candidate even if main advances during interruption,
+# unless a new release tag on main invalidates its ancestry or the requested
+# version is no longer higher than main. An invalid pin is selected again.
 # Main can gain content after selection: the tagged tree is still exactly the
 # Candidate plus the version bump, and merging later preserves it in history.
 #
@@ -128,14 +134,18 @@ main() {
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
 			validate_bump_pr
-			if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
-			write_summary "no PR was opened"
+			recut_untagged_bump
+			if [ -z "$recut" ]; then
+				if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
+				write_summary "no PR was opened"
+			fi
 		fi
 		open_pr
 		;;
 	OPEN)
 		progress "resuming: $url is open"
-		if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
+		recut_untagged_bump
+		if [ -z "$tagged" ] && [ -z "$recut" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
 		;;
 	MERGED)
 		progress "resuming: $url was merged as ${merge:0:7}"
@@ -159,6 +169,24 @@ main() {
 	fi
 	if [ "$pr_state" != MERGED ]; then merge_bump_pr; fi
 	progress "released $tag at $published_url"
+}
+
+# Called only after validating an existing branch or OPEN PR. A newer release
+# merged into main can invalidate its base while this bump is interrupted.
+recut_untagged_bump() {
+	local previous base
+	recut=
+	if [ -n "$tagged" ]; then return; fi
+	previous=$(last_release_tag)
+	if [ -z "$previous" ] || git merge-base --is-ancestor "$previous" "$head^1"; then return; fi
+	base=$(check_can_release "$version" "$tag")
+	progress "re-cutting untagged $tag from main at ${base:0:7}"
+	commit_bump "$base"
+	write_summary "the release branch was not moved and the PR was not changed"
+	git push --force --quiet origin "$head:refs/heads/$branch"
+	git update-ref -d "refs/thirdshift/release-candidates/$version"
+	if [ "$pr_state" = OPEN ]; then edit_pr; fi
+	recut=1
 }
 
 # recover_failed_release
@@ -346,15 +374,19 @@ find_existing_tag() {
 # Selects and saves main's checked content commit, or reuses that selection
 # after interruption, then commits the bump in a worktree and sets head to it.
 commit_bump() {
-	local base=${1-} candidate_ref=refs/thirdshift/release-candidates/$version
+	local base=${1-} saved= candidate_ref=refs/thirdshift/release-candidates/$version
 	if [ -z "$base" ]; then
-		if is_plain_version "$version" && base=$(git rev-parse --quiet --verify "$candidate_ref^{commit}"); then
+		if is_plain_version "$version"; then
+			saved=$(git rev-parse --quiet --verify "$candidate_ref^{commit}" || true)
+		fi
+		if [ -n "$saved" ] && saved_candidate_is_current "$saved"; then
+			base=$saved
 			progress "resuming release Experiment from saved content commit ${base:0:7}"
 		else
 			base=$(check_can_release "$version" "$tag")
 			# Keep the selection even if the Experiment is interrupted before a
-			# branch exists. The empty old value refuses a competing selection.
-			git update-ref "$candidate_ref" "$base" ''
+			# branch exists. Compare the old value to refuse a competing selection.
+			git update-ref "$candidate_ref" "$base" "$saved"
 		fi
 	fi
 	# The content commit is stable across interruptions before the push;
@@ -373,6 +405,16 @@ commit_bump() {
 		git commit --quiet --allow-empty --all --message "Release $version"
 	)
 	head=$(git -C "$work" rev-parse HEAD)
+}
+
+# A pin survives ordinary main content, but not a newer release boundary or
+# a main version that has caught up with the requested version.
+saved_candidate_is_current() {
+	local current previous
+	current=$(git show origin/main:Cargo.toml | package_field version)
+	is_higher "$version" "$current" || return 1
+	previous=$(last_release_tag)
+	[ -z "$previous" ] || git merge-base --is-ancestor "$previous" "$1"
 }
 
 # wait_for_experiment <content commit>
@@ -397,7 +439,7 @@ wait_for_experiment() {
 		read -r outcome id <<<"$status"
 		case $outcome in
 		pass | skip) return ;;
-		waiting_on_rechecks)
+		waiting_on_rechecks | waiting_on_leaks)
 			sleep "$poll_seconds"
 			snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiments "$id" --json)
 			;;
@@ -555,8 +597,9 @@ refuse() {
 # check_can_release <version> <tag>
 # Refuses unless <version> is plain X.Y.Z and higher than the version in the
 # manifest on main, and no <tag> exists on origin or locally. Prints the newest
-# main commit since the last release whose latest push CI succeeded. When none
-# is green yet, polls all candidates so moving main never restarts the wait.
+# main descendant of the last release tag whose latest push CI succeeded.
+# When none is green yet, polls all candidates so moving main never restarts
+# the wait.
 check_can_release() {
 	local current base previous waiting=
 	if ! is_plain_version "$1"; then
@@ -568,7 +611,7 @@ check_can_release() {
 	if ! is_higher "$1" "$current"; then refuse "it is not higher than $current on main"; fi
 	if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then refuse "$2 already exists on origin"; fi
 	if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then refuse "$2 already exists locally"; fi
-	previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main 2>/dev/null || true)
+	previous=$(last_release_tag)
 	while :; do
 		base=$(newest_green_main "$previous")
 		if [ -n "$base" ]; then printf '%s\n' "$base"; return; fi
@@ -582,11 +625,13 @@ check_can_release() {
 }
 
 # newest_green_main <exclusive ancestor>
-# The newest main commit since that ancestor whose latest push CI succeeded,
-# or nothing. Recovery does not wait for a newer commit to turn green.
+# The newest main commit since that ancestor, descending from the last release
+# tag, whose latest push CI succeeded, or nothing. Recovery does not wait.
 newest_green_main() {
-	local base latest sha status conclusion
+	local base latest sha status conclusion previous
+	previous=$(last_release_tag)
 	for base in $(git rev-list --first-parent origin/main ${1:+^$1}); do
+		if [ -n "$previous" ] && ! git merge-base --is-ancestor "$previous" "$base"; then continue; fi
 		latest=$(gh run list --branch main --workflow ci.yml --event push --commit "$base" --limit 1 \
 			--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
 		read -r sha status conclusion <<<"$latest"
@@ -595,6 +640,12 @@ newest_green_main() {
 			return
 		fi
 	done
+}
+
+# The current release may already be tagged on main during failed-release
+# recovery. Keep the published release boundary instead of that failed tag.
+last_release_tag() {
+	git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude="$tag" origin/main 2>/dev/null || true
 }
 
 # is_plain_version <version>

@@ -106,7 +106,7 @@ function apply(settings) {
   // Hiding an explicit filter returns to Overview, as the server would.
   if (current?.hidden) document.querySelector('#inbox .folders a[data-group="overview"]').click();
   else if (current) showFolder(current.dataset.group);
-  if (!sections.open) for (const checkbox of document.querySelectorAll('#section-options input')) checkbox.checked = !settings.hidden_sections.includes(checkbox.value);
+  if (!sections?.open) for (const checkbox of document.querySelectorAll('#section-options input')) checkbox.checked = !settings.hidden_sections.includes(checkbox.value);
   if (!themes.open) document.querySelector('#theme-name').value = settings.theme;
   activity();
 }
@@ -140,7 +140,7 @@ export async function loadLook() {
       picker.replaceChildren(...settings.themes.map(name => new Option(name.replace('-', ' · '), name)));
       picker.value = settings.themes.includes(selected) ? selected : settings.theme;
     }
-    if (!document.querySelector('#section-options input')) {
+    if (sections && !document.querySelector('#section-options input')) {
       for (const name of settings.sections) {
         const label = document.createElement('label');
         const checkbox = document.createElement('input');
@@ -183,7 +183,7 @@ if (themes) {
       editorStatus.textContent = copy ? 'Choose a name and edit the tokens, then save.' : 'Exported JSON. Copy it to a file or paste it into another Console.';
     } catch (error) { editorStatus.textContent = `Could not export Theme: ${error.message}`; }
   };
-  document.querySelector('#edit-theme').addEventListener('click', () => exportDocument(true));
+  document.querySelector('#edit-theme')?.addEventListener('click', () => exportDocument(true));
   document.querySelector('#export-theme').addEventListener('click', () => exportDocument(false));
   document.querySelector('#theme-editor').addEventListener('submit', async event => {
     event.preventDefault();
@@ -196,19 +196,20 @@ if (themes) {
       if (!response.ok || response.redirected) throw new Error(await response.text());
       editor.value = JSON.stringify(await response.json(), null, 2);
       await refreshThemeStyles();
-      editorStatus.textContent = 'Theme saved. Choose it above to apply.';
+      editorStatus.textContent = document.querySelector('#theme-form button')
+        ? 'Theme saved. Choose it above to apply.' : 'Theme saved.';
     } catch (error) { editorStatus.textContent = `Could not save Theme: ${error.message}`; }
     finally { saving = false; }
     await loadLook();
   });
   document.querySelector('[data-open-themes]').addEventListener('click', async () => { await loadLook(); themes.showModal(); });
   document.querySelector('[data-close-themes]').addEventListener('click', () => themes.close());
-  document.querySelector('[data-open-sections]').addEventListener('click', async () => { await loadLook(); sections.showModal(); });
-  document.querySelector('[data-close-sections]').addEventListener('click', () => sections.close());
+  document.querySelector('[data-open-sections]')?.addEventListener('click', async () => { await loadLook(); sections.showModal(); });
+  document.querySelector('[data-close-sections]')?.addEventListener('click', () => sections.close());
   document.querySelector('#theme-form').addEventListener('submit', event => {
     event.preventDefault(); save('/theme', { theme: document.querySelector('#theme-name').value });
   });
-  document.querySelector('#sections-form').addEventListener('submit', event => {
+  document.querySelector('#sections-form')?.addEventListener('submit', event => {
     event.preventDefault();
     const options = [...document.querySelectorAll('#section-options input')];
     save('/sections', { hide: options.filter(c => !c.checked).map(c => c.value).join(','), show: options.filter(c => c.checked).map(c => c.value).join(',') });

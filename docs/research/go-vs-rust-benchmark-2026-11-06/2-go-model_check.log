@@ -1,0 +1,13 @@
+$ /tmp/thirdshift-benchmark-f7shrf8g/go-tests '-test.run=^TestPickupModel' -test.count=1 -test.v
+=== RUN   TestPickupModelSafety
+    pickup_model_test.go:267: ADR-0017: 1993250 unique states
+--- PASS: TestPickupModelSafety (4.15s)
+=== RUN   TestPickupModelMutations
+=== RUN   TestPickupModelMutations/WithoutClaimCount
+    pickup_model_test.go:285: WithoutClaimCount: 119601 states; shortest dispatch trace (19): [ListReady(0) SelectHistory(0) CreateReservation(0) RefreshIssue(0) RefreshHistory(0) ListReady(1) SelectHistory(1) PutClaimLabels(0) PrepareWorktree(0) Dispatch(0) KeepClaimWithOriginWork(0) ReleaseReservation(0) CreateReservation(1) DayHandsBack RefreshIssue(1) RefreshHistory(1) PutClaimLabels(1) PrepareWorktree(1) Dispatch(1)]; shortest claimed trace (19): [ListReady(0) SelectHistory(0) CreateReservation(0) RefreshIssue(0) RefreshHistory(0) ListReady(1) SelectHistory(1) PutClaimLabels(0) PrepareWorktree(0) Dispatch(0) KeepClaimWithOriginWork(0) ReleaseReservation(0) CreateReservation(1) DayHandsBack RefreshIssue(1) RefreshHistory(1) PutClaimLabels(1) PrepareWorktree(1) Dispatch(1)]
+=== RUN   TestPickupModelMutations/UnconditionalCreate
+    pickup_model_test.go:285: UnconditionalCreate: 223036 states; shortest dispatch trace (16): [ListReady(0) SelectHistory(0) CreateReservation(0) RefreshIssue(0) RefreshHistory(0) ListReady(1) SelectHistory(1) CreateReservation(1) RefreshIssue(1) RefreshHistory(1) PutClaimLabels(0) PrepareWorktree(0) Dispatch(0) PutClaimLabels(1) PrepareWorktree(1) Dispatch(1)]; shortest claimed trace (16): [ListReady(0) SelectHistory(0) CreateReservation(0) RefreshIssue(0) RefreshHistory(0) ListReady(1) SelectHistory(1) CreateReservation(1) RefreshIssue(1) RefreshHistory(1) PutClaimLabels(0) PrepareWorktree(0) Dispatch(0) PutClaimLabels(1) PrepareWorktree(1) Dispatch(1)]
+--- PASS: TestPickupModelMutations (0.65s)
+    --- PASS: TestPickupModelMutations/WithoutClaimCount (0.20s)
+    --- PASS: TestPickupModelMutations/UnconditionalCreate (0.46s)
+PASS

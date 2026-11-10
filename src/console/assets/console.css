@@ -22,7 +22,18 @@ header::after { grid-column: 1 / -1; }
 h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; text-transform: var(--head-case); text-shadow: var(--title-shadow); }
 nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; }
 a { color: var(--link); overflow-wrap: anywhere; }
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover, header h1 a:focus-visible { text-decoration: underline; }
+p[role="alert"] { overflow-wrap: anywhere; }
 .page-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 8px; }
+.start-controls { margin: 16px 0; padding: 12px; border: 1px solid var(--rule); border-radius: var(--radius); }
+.start-form > label, .start-options > label, .start-field { display: grid; gap: 4px; margin: 10px 0; min-width: 0; }
+.start-field select { min-width: 0; max-width: 100%; }
+.start-form input { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); }
+.start-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 0 16px; }
+.run-passes { padding-left: 20px; }
+.run-passes li { margin: 12px 0; overflow-wrap: anywhere; }
+#start-confirm pre, [data-start-result] { white-space: pre-wrap; overflow-wrap: anywhere; }
 h2 { margin: 0; font-weight: var(--head-weight); }
 .peek-heading { white-space: normal; overflow-wrap: anywhere; }
 .peek-heading > span { display: block; }
@@ -105,6 +116,13 @@ button, select { font: inherit; background: var(--panel); color: var(--text); bo
 form { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 form label { min-width: 0; }
 .judgment-form { display: block; max-width: 520px; }
+.user-config { max-width: 900px; }
+.config-setting { padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.config-setting h2 { font-size: 18px; overflow-wrap: anywhere; }
+.config-setting form { display: block; }
+.config-setting label { display: block; margin-bottom: 6px; }
+.config-setting textarea { display: block; box-sizing: border-box; width: 100%; max-width: 100%; resize: vertical; margin-bottom: 8px; padding: 8px; font: 13px/1.5 var(--font-mono); color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); }
+.config-setting button { max-width: 100%; overflow-wrap: anywhere; }
 .judgment-form fieldset { min-width: 0; margin: 12px 0; border: 1px solid var(--rule); border-radius: var(--radius); }
 .judgment-form label { display: block; margin: 8px 0; }
 .judgment-form textarea, .judgment-form input:not([type="hidden"]) { display: block; width: 100%; max-width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px; }
@@ -165,6 +183,7 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @keyframes stopping { from { transform: scaleX(.2); } to { transform: scaleX(1); } }
 @media (prefers-reduced-motion: reduce) { .stopping-bar { animation: none; } }
 .log-list li { margin: 10px 0; overflow-wrap: anywhere; }
+.log-name { overflow-wrap: anywhere; }
 .log-list span { display: block; color: var(--dim); }
 .log-group > summary { padding: 8px 0; cursor: pointer; }
 .log-group > summary .live-count { margin-left: 8px; font-size: 13px; }
@@ -265,6 +284,12 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 /* A Command name must never push its repository out of view. */
 .row-head > .subject:has(> .subject-command) { min-width: 0; max-width: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .subject-command { display: block; color: var(--dim); }
+.machine-filter select { max-width: 100%; }
+.machine-filter, .fleet-machines { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.one-line .command > .machine-tag { display: block; padding: 4px 10px 0; font-size: .8em; color: var(--dim); overflow-wrap: anywhere; }
+.command.stale, .command.stale .state, .command.stale .gist, .command.stale .issue-title, .command.stale a { color: var(--dim); filter: grayscale(1); }
+.command.stale .heartbeat { display: none; }
+
 @media (scripting: enabled) and (min-width: 761px) {
   .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
   .one-line .subject > .account-tag { flex: none; }

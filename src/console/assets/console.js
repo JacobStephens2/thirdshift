@@ -2,6 +2,7 @@ import { activity, loadLook, motionAllowed, showFolder } from './look.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
+import { initStarts } from './start.js';
 let spanTree;
 
 // Elapsed Pass ages keep advancing even when no Command or file changes.
@@ -192,6 +193,7 @@ function startUpdates() {
 }
 const observesCommands = document.getElementById('inbox') || timePage;
 if (observesCommands) startUpdates();
+initStarts(() => observesCommands ? refresh() : Promise.resolve());
 
 function stopPeekUpdates() {
   if (observesCommands) return;
@@ -204,14 +206,17 @@ const content = document.querySelector('#peek-content');
 const help = document.querySelector('#keys');
 const jumps = document.querySelector('#jumps');
 let selected = null;
-let peekCommand = null;
+let peekUrl = null;
 let pendingPeek = null;
 // Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
+function dismissalKey(form) {
+  return JSON.stringify([form.elements.machine?.value ?? '', form.elements.command.value]);
+}
 
 function showDismissal() {
   for (const form of document.querySelectorAll('form[data-dismiss]')) {
-    const state = dismissals.get(form.elements.command.value);
+    const state = dismissals.get(dismissalKey(form));
     form.querySelector('button').disabled = state?.pending ?? false;
     form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
       ? state.message : '';
@@ -220,12 +225,12 @@ function showDismissal() {
 
 function removeDismissalNotice(command) {
   for (const form of document.querySelectorAll('#dismissal-notices form')) {
-    if (form.elements.command.value === command) form.parentElement.remove();
+    if (dismissalKey(form) === command) form.parentElement.remove();
   }
 }
 
 function dismissalNotice(form, subject) {
-  const command = form.elements.command.value;
+  const command = dismissalKey(form);
   removeDismissalNotice(command);
   const notices = document.querySelector('#dismissal-notices');
   const notice = document.createElement('div');
@@ -235,6 +240,7 @@ function dismissalNotice(form, subject) {
   undo.action = '/dismiss/undo';
   undo.dataset.dismiss = '';
   for (const name of ['command', 'csrf']) undo.append(form.elements[name].cloneNode(true));
+  if (form.elements.machine) undo.append(form.elements.machine.cloneNode(true));
   const button = document.createElement('button');
   button.textContent = 'Undo';
   const status = document.createElement('span');
@@ -253,12 +259,12 @@ function dismissalNotice(form, subject) {
 
 function initializeSpanTree() { return initSpanTree({
   openDetails() {
-    peekCommand = null;
+    peekUrl = null;
     pendingPeek?.abort();
     pendingPeek = null;
   },
   openCommand: span => {
-    peekCommand = null;
+    peekUrl = null;
     togglePeek({ dataset: { command: span.command, peek: span.command_url } });
   }
 }); }
@@ -279,15 +285,15 @@ function closePeek() {
   stopPeekUpdates();
   pendingPeek?.abort();
   pendingPeek = null;
-  peekCommand = null;
+  peekUrl = null;
   peek.hidden = true;
   document.body.classList.remove('peek-open');
 }
 
 async function togglePeek(row) {
   if (!row.dataset.command) return;
-  if (peekCommand === row.dataset.command) { closePeek(); return; }
-  peekCommand = row.dataset.command;
+  if (peekUrl === row.dataset.peek) { closePeek(); return; }
+  peekUrl = row.dataset.peek;
   content.textContent = 'Loading details…';
   peek.hidden = false;
   document.body.classList.add('peek-open');
@@ -295,7 +301,7 @@ async function togglePeek(row) {
 }
 
 function showPeek(row) {
-  if (peekCommand !== row.dataset.command) togglePeek(row);
+  if (peekUrl !== row.dataset.peek) togglePeek(row);
 }
 
 // Overview combines the current groups; a folder filters to one section.
@@ -335,8 +341,8 @@ if (mailbox) {
 }
 
 async function refreshPeek() {
-  if (peekCommand && !pendingPeek) {
-    await loadPeek(`/peek?${new URLSearchParams({ command: peekCommand })}`);
+  if (peekUrl && !pendingPeek) {
+    await loadPeek(peekUrl);
   }
 }
 
@@ -364,7 +370,7 @@ function keepCopy() {
 // Command details open folded; a refresh of the same Command keeps what was opened.
 let foldsCommand = null;
 function keepFolds(url) {
-  const command = new URL(url, location.href).searchParams.get('command');
+  const command = new URL(url, location.href).href;
   const open = command === foldsCommand
     ? new Set([...content.querySelectorAll('details[data-fact][open]')].map(fold => fold.dataset.fact))
     : new Set();
@@ -385,7 +391,9 @@ async function loadPeek(url) {
   }, 10000);
   try {
     const response = await fetch(url, { signal: request.signal, cache: 'no-store' });
-    if (!response.ok) throw new Error('Details unavailable');
+    // Remote refusals use an escaped local template, including the missing
+    // scope and the owning Console link. Keep that explanation in the pane.
+    if (!response.ok && !response.headers.get('content-type')?.startsWith('text/html')) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
     const restoreCopy = keepCopy();
@@ -506,7 +514,7 @@ document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
   event.preventDefault();
-  const command = form.elements.command.value;
+  const command = dismissalKey(form);
   if (dismissals.get(command)?.pending) return;
   const undo = new URL(form.action).pathname === '/dismiss/undo';
   const row = form.closest('.one-line .command');
@@ -528,7 +536,7 @@ document.addEventListener('submit', async event => {
     saved = true;
     if (row && !undo) {
       dismissalNotice(form, subject);
-      if (selected?.dataset.command === command) {
+      if (selected === row) {
         const nextRow = next !== row ? document.getElementById(next?.id) : null;
         select(nextRow);
         nextRow?.focus({ preventScroll: true });
@@ -574,7 +582,7 @@ document.addEventListener('keydown', event => {
   if (event.target.matches('summary') && (!event.target.closest('.group') || event.target.closest('#inbox')) && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
-  if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
+  if (document.querySelector('#themes[open], #sections-chooser[open], #start-confirm[open]')) return;
   if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]')?.click(); return; }
   if (event.key === 'Escape') {
     event.preventDefault();

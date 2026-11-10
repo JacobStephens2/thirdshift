@@ -116,7 +116,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::ReviewRun { .. } => CommandKind::Review,
             Begin::FixRun { .. } => CommandKind::Fix,
-            Begin::TriageRun => CommandKind::Triage,
+            Begin::TriageRun { .. } => CommandKind::Triage,
             Begin::Experiment => CommandKind::Experiment,
             Begin::Process { .. } => CommandKind::Process,
         };
@@ -133,7 +133,7 @@ impl<O: Outside> Record<O> {
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::ReviewRun { pass } => ("Review run starting".into(), pass),
             Begin::FixRun { pass } => ("Fix run starting".into(), pass),
-            Begin::TriageRun => ("Triage run starting".into(), false),
+            Begin::TriageRun { pass } => ("Triage run starting".into(), pass),
             Begin::Experiment => ("Experiment starting".into(), false),
             Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
@@ -202,8 +202,8 @@ impl<O: Outside> Record<O> {
             CommandKind::Secure => Pass::Security,
             CommandKind::Review => Pass::Review,
             CommandKind::Fix => Pass::Fix,
+            CommandKind::Triage => Pass::Triage,
             CommandKind::Issue
-            | CommandKind::Triage
             | CommandKind::Scoring
             | CommandKind::Experiment
             | CommandKind::Process => return,
@@ -286,7 +286,16 @@ impl<O: Outside> Record<O> {
                 | Work::Experiment(_) => None,
             },
         };
-        let line = format!("{} started: {command_log}, on {harness}", started.subject());
+        let actor = self
+            .command_record
+            .as_ref()
+            .and_then(|(_, tree)| tree.command.started_by.as_ref())
+            .map(|actor| format!(", {actor}"))
+            .unwrap_or_default();
+        let line = format!(
+            "{} started: {command_log}, on {harness}{actor}",
+            started.subject()
+        );
         if self.activity_started.is_none() {
             self.activity_started = Some(started);
             self.activity_write(&root, &line, None);

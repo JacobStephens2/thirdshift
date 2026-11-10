@@ -2,14 +2,51 @@
 import json
 import os
 from pathlib import Path
+import re
+import runpy
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
+from test_python_minimum import rejection, run_as
+
 
 SELECTOR = Path(__file__).with_name("affected-tests").resolve()
+
+
+def assert_doc_references_covered(root):
+    """Guard literal Markdown inputs in repository code, including new files.
+
+    Only existing docs count: target-repository threat models and example paths
+    aren't inputs here. The selector and this test inventory paths, not read them.
+    Ignore comment-only lines and URLs; neither makes a doc a build/test input.
+    """
+    exceptions = {os.fsdecode(path) for path in runpy.run_path(str(SELECTOR))["DOC_CHECKS"]}
+    paths = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+    ).decode().split("\0")
+    reference = re.compile(
+        r'''["'`](?:\./|\.\./)*((?:docs/[^"'`\n]+|GLOSSARY|CODING_STANDARDS)\.md)["'`]'''
+    )
+    code_suffixes = {".rs", ".py", ".js", ".cjs", ".mjs", ".ts", ".tsx",
+                     ".go", ".sh", ".toml", ".yml", ".yaml"}
+    missing = []
+    for name in sorted(set(paths) - {"scripts/affected-tests", "scripts/test_affected_tests.py", ""}):
+        source = root / name
+        if not source.is_file() or (source.suffix not in code_suffixes
+                                    and not name.startswith("scripts/")):
+            continue
+        for number, line in enumerate(source.read_text(errors="replace").splitlines(), 1):
+            if line.lstrip().startswith(("#", "//", "*")):
+                continue
+            for doc in reference.findall(line):
+                if (root / doc).is_file() and doc not in exceptions:
+                    missing.append(f"{name}:{number} reads {doc}; add it to DOC_CHECKS")
+    if missing:
+        raise AssertionError("\n".join(missing))
 
 
 class AffectedTests(unittest.TestCase):
@@ -29,12 +66,14 @@ class AffectedTests(unittest.TestCase):
             CALLS=str(self.calls), NEXTEST="yes",
             EXPECT_ROOT=str(self.root),
         )
-        for tool in ["cargo", "npm", "python3"]:
+        for tool in ["cargo", "npm", "python3", "go", "bun"]:
             path = self.tools / tool
             path.write_text(
                 f"#!{sys.executable}\n"
                 "import json, os, pathlib, sys\n"
-                "assert os.getcwd() == os.environ['EXPECT_ROOT']\n"
+                "expected = pathlib.Path(os.environ['EXPECT_ROOT'])\n"
+                "if pathlib.Path(sys.argv[0]).name == 'go': expected /= 'prototype/go'\n"
+                "assert pathlib.Path.cwd() == expected\n"
                 "if sys.argv[1:] == ['nextest', '--version']:\n"
                 "    sys.exit(0 if os.environ['NEXTEST'] == 'yes' else 1)\n"
                 "with open(os.environ['CALLS'], 'a') as calls:\n"
@@ -73,6 +112,11 @@ class AffectedTests(unittest.TestCase):
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
         return result, calls
 
+    def run_selector_as(self, version):
+        result = run_as(version, SELECTOR, "base", cwd=self.root, env=self.env)
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return result, calls
+
     def select_for_only(self, path):
         self.git("branch", "-f", "base", "HEAD")
         self.change(path)
@@ -86,6 +130,89 @@ class AffectedTests(unittest.TestCase):
         result, calls = self.run_selector()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
+
+    def test_python_older_than_3_11_is_rejected_before_any_check(self):
+        self.change("src/main.rs")
+        for version in [(3, 9, 18), (3, 10, 14)]:
+            with self.subTest(version=version):
+                result, calls = self.run_selector_as(version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, rejection(version))
+
+    def test_python_3_11_selects_as_before(self):
+        self.change("src/main.rs")
+        result, calls = self.run_selector_as((3, 11, 0))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["cargo", "nextest", "run"]])
+
+    def test_go_prototype_only_runs_go_in_its_module(self):
+        self.change("prototype/go/main.go")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["go", "test", "./..."]])
+
+    def test_go_and_site_keep_targeted_checks_without_full_rust(self):
+        self.change("prototype/go/main.go", "site/index.html")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["go", "test", "./..."],
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
+
+    def test_typescript_only_runs_its_typecheck_and_tests(self):
+        self.change("prototypes/typescript/src/ticket.ts")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+        ])
+
+    def test_typescript_and_rust_run_both_suites(self):
+        self.change("prototypes/typescript/src/ticket.ts", "src/main.rs")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+            ["cargo", "nextest", "run"],
+        ])
+
+    def test_typescript_and_site_do_not_select_full_rust(self):
+        self.change("prototypes/typescript/src/ticket.ts", "site/index.html")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
+
+    def test_go_and_rust_run_both_suites(self):
+        self.change("prototype/go/main.go", "src/main.rs")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [["go", "test", "./..."], ["cargo", "nextest", "run"]])
+
+    def test_both_prototypes_and_site_keep_targeted_checks_without_full_rust(self):
+        self.change("prototype/go/main.go", "prototypes/typescript/src/ticket.ts", "site/index.html")
+        result, calls = self.run_selector()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [
+            ["go", "test", "./..."],
+            ["bun", "run", "--cwd", "prototypes/typescript", "typecheck"],
+            ["bun", "test", "--cwd", "prototypes/typescript"],
             ["npm", "test", "--prefix", "site"],
             ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
             ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
@@ -205,6 +332,91 @@ class AffectedTests(unittest.TestCase):
             ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
             ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
         ])
+
+    def test_unread_markdown_runs_no_checks(self):
+        for path in ["docs/adr/example.md", "docs/research/note.md",
+                     "docs/grill-with-docs/plan.md", "docs/agents/example.md",
+                     "docs/testing.md", "CODING_STANDARDS.md"]:
+            with self.subTest(path=path):
+                result, calls = self.select_for_only(path)
+                self.assertEqual(calls, [])
+                self.assertIn(f"No checks for docs-only {path!r}.", result.stdout)
+
+    def test_docs_do_not_broaden_other_areas(self):
+        for path in ["src/main.rs", "site/index.html", "scripts/release.sh",
+                     "console/tests/inbox.test.cjs", "prototype/go/main.go",
+                     "prototypes/typescript/src/ticket.ts"]:
+            with self.subTest(path=path):
+                _, expected = self.select_for_only(path)
+                self.change("docs/adr/example.md", commit=False)
+                result, calls = self.run_selector()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(calls, expected)
+                (self.root / "docs/adr/example.md").unlink()
+                self.calls.unlink(missing_ok=True)
+
+    def test_docs_consumers_and_non_markdown_keep_checks(self):
+        for path in ["docs/experiment-results.md",
+                     "docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md",
+                     "docs/research/go-vs-rust-prototype.md",
+                     "docs/research/replay.py", "README.md", "AGENTS.md"]:
+            with self.subTest(path=path):
+                _, calls = self.select_for_only(path)
+                self.assertEqual(calls, [["cargo", "nextest", "run"]])
+
+    def test_console_split_report_runs_its_consumers_checks(self):
+        _, calls = self.select_for_only("docs/research/console-core-split.md")
+        self.assertEqual(calls, [
+            ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+        ])
+
+    def test_console_split_sources_add_checks_and_keep_the_full_rust_suite(self):
+        for path in ["prototypes/console-split/prepare.py",
+                     "prototypes/console-split/test_report.py",
+                     "prototypes/console-split/results.json"]:
+            with self.subTest(path=path):
+                _, calls = self.select_for_only(path)
+                self.assertEqual(calls, [
+                    ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+                    ["cargo", "nextest", "run"],
+                ])
+
+    def test_glossary_gets_its_site_consumers_checks(self):
+        _, calls = self.select_for_only("GLOSSARY.md")
+        self.assertEqual(calls, [
+            ["npm", "test", "--prefix", "site"],
+            ["cargo", "test", "--test", "share_card", "--test", "site_deploy"],
+            ["cargo", "test", "--bin", "thirdshift", "prompts_page"],
+        ])
+
+    def test_repository_doc_references_are_listed(self):
+        assert_doc_references_covered(SELECTOR.parent.parent)
+
+    def test_new_doc_consumer_fails_the_reference_guard(self):
+        self.change("docs/adr/example.md", "tests/reads_doc.rs")
+        (self.root / "tests/reads_doc.rs").write_text(
+            'const DOC: &str = include_str!("../docs/adr/example.md");\n'
+        )
+        with self.assertRaisesRegex(AssertionError, r"tests/reads_doc.rs:1 reads docs/adr/example.md"):
+            assert_doc_references_covered(self.root)
+
+    def test_new_backtick_doc_consumer_fails_the_reference_guard(self):
+        self.change("docs/adr/example.md", "tests/reads_doc.cjs")
+        (self.root / "tests/reads_doc.cjs").write_text(
+            'const fs = require("node:fs");\n'
+            'const doc = fs.readFileSync(`docs/adr/example.md`, "utf8");\n'
+        )
+        with self.assertRaisesRegex(AssertionError, r"tests/reads_doc.cjs:2 reads docs/adr/example.md"):
+            assert_doc_references_covered(self.root)
+
+    def test_reference_guard_ignores_comments_and_external_docs(self):
+        self.change("docs/adr/example.md", "src/example.rs")
+        (self.root / "src/example.rs").write_text(
+            '// See "docs/adr/example.md"\n'
+            'const URL: &str = "https://example.com/docs/adr/example.md";\n'
+            'const TARGET: &str = "docs/THREAT-MODEL.md";\n'
+        )
+        assert_doc_references_covered(self.root)
 
     def test_nextest_unavailable_prints_the_cargo_test_fallback(self):
         self.change("src/main.rs")

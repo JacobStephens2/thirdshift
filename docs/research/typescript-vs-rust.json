@@ -1,0 +1,3126 @@
+{
+  "schemaVersion": 1,
+  "commit": "8700be5db20737f285c5295996e96b4033afeb2e",
+  "timestamp": "2026-11-06T23:13:40.425Z",
+  "versions": {
+    "bun": "1.4.4",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "git": "git version 2.52.0"
+  },
+  "host": {
+    "platform": "linux",
+    "release": "5.14.0-687.51.1.el9_8.x86_64",
+    "cpu": "DO-Regular",
+    "logicalCpus": 8,
+    "memoryBytes": 16496074752
+  },
+  "methodology": {
+    "cold": "Fresh detached worktree; dependencies installed/fetched first; independent empty build outputs for typecheck, build and test. OS and download caches retained.",
+    "incremental": "Immediate no-edit repeat in the same worktree, retaining that operation's outputs. tsc explicitly enables incremental metadata; Bun rebuilds/retests; Cargo reuses artifacts.",
+    "model": "Two standalone process runs after test compilation; excludes Rust compilation, includes runner startup and all model assertions/mutations. Not a cold compilation measurement.",
+    "rust": "Full production binary, release size/build; dev check/test; four build jobs; three test threads, one model thread; compiler wrappers and Rust flags cleared.",
+    "scope": "TypeScript Ticket/Pickup/Console slice versus Rust fresh_run/pickup_run/pickup_model plus Console status/OpenAPI/Dismissal tests. Not feature-equivalent workloads; TypeScript also runs Playwright.",
+    "samples": 1,
+    "runtimeMemory": "Linux child ru_maxrss converted from KiB to bytes for one standalone status --json invocation per executable with empty isolated HOME/XDG state. Excludes compiler and Python parent; not aggregate process-tree or steady-state Console/Harness memory. Supplemental provenance is in runtimeMemoryEvidence."
+  },
+  "measurements": [
+    {
+      "language": "typescript",
+      "operation": "typecheck",
+      "cache": "cold",
+      "commands": [
+        [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "--incremental",
+          "--tsBuildInfoFile",
+          "build/typecheck.tsbuildinfo"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 4.921138279000001,
+      "exitCode": 0,
+      "output": "$ bun node_modules/typescript/bin/tsc --noEmit --incremental --tsBuildInfoFile build/typecheck.tsbuildinfo\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "typecheck",
+      "cache": "incremental",
+      "commands": [
+        [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "--incremental",
+          "--tsBuildInfoFile",
+          "build/typecheck.tsbuildinfo"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 2.2066565870000003,
+      "exitCode": 0,
+      "output": "$ bun node_modules/typescript/bin/tsc --noEmit --incremental --tsBuildInfoFile build/typecheck.tsbuildinfo\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "build",
+      "cache": "cold",
+      "commands": [
+        [
+          "bun",
+          "run",
+          "build.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 0.7341224760000005,
+      "exitCode": 0,
+      "output": "$ bun run build.ts\n  [87ms]  bundle  88 modules\n [502ms] compile  build/thirdshift\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "build",
+      "cache": "incremental",
+      "commands": [
+        [
+          "bun",
+          "run",
+          "build.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 0.7999143050000003,
+      "exitCode": 0,
+      "output": "$ bun run build.ts\n  [84ms]  bundle  88 modules\n [585ms] compile  build/thirdshift\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "test",
+      "cache": "cold",
+      "commands": [
+        [
+          "bun",
+          "test",
+          "tests/ticket.test.ts",
+          "tests/ready.test.ts",
+          "tests/console.test.ts",
+          "tests/pickup-model.test.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 103.711119106,
+      "exitCode": 0,
+      "output": "$ bun test tests/ticket.test.ts tests/ready.test.ts tests/console.test.ts tests/pickup-model.test.ts\nbun test v1.4.4 (38afee6c8)\nCurrent: 5832 unique states; exhausted BFS\nWithoutClaimCount: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nWithoutClaimCount: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\n\ntests/console.test.ts:\n(pass) every registered Console route has OpenAPI, page, CLI and scope parity [249.05ms]\n(pass) Playwright Inbox rows match status and inline Dismissal/Undo persist at desktop and mobile [2312.43ms]\n(pass) standalone status --json reads the shared Inbox payload [84.49ms]\n(pass) Console status and Dismissal/Undo have identical CLI twins and enforce scopes [499.38ms]\n\ntests/pickup-model.test.ts:\n(pass) ADR-0017 BFS exhausts three-host interleavings with both safety properties [349.04ms]\n(pass) BFS finds minimal counterexamples for WithoutClaimCount [126.06ms]\n(pass) BFS finds minimal counterexamples for UnconditionalCreate [240.10ms]\n\ntests/ready.test.ts:\n(pass) Pickup rejects an active Claim whose GitHub label uses another case [2.60ms]\n\ntests/ticket.test.ts:\n(pass) standalone Ticket run claims, links embedded skills and streams a Harness session [1737.69ms]\n(pass) Delivery does not adopt or mark ready a fork pull request for the Issue branch [1659.50ms]\n(pass) green Delivery pushes the committed head and leaves a ready pull request [1674.19ms]\n(pass) CI failure starts a Repair and watches the repaired head before readiness [2253.55ms]\n(pass) Failed ticket run via https://github.com/test/project/issues/7 salvages committed work as a draft and preserves the Claim [1178.11ms]\n(pass) Failed ticket run via pickup salvages committed work as a draft and preserves the Claim [1978.70ms]\n(pass) merge-conflict Repair commits the Base branch merge and re-verifies CI [2581.65ms]\n(pass) Repair limit bounds permanently failing CI and keeps a draft with its Claim [5325.04ms]\n(pass) Delivery watches pending CI before readiness [3063.81ms]\n(pass) Delivery watches register CI before readiness [3702.86ms]\n(pass) Delivery watches status-recover CI before readiness [2491.11ms]\n(pass) Delivery watches absent CI before readiness [5438.98ms]\n(pass) failed conflict Repair aborts the merge and salvages the original committed head [1893.40ms]\n(pass) a session with no commits fails Delivery and releases its Claim with nothing on origin [772.46ms]\n(pass) Origin match fails before claiming or starting a session [132.23ms]\n(pass) a non-canonical Issue URL is rejected before any GitHub call [133.46ms]\n(pass) issue file write does not follow a symlink outside the worktree [682.94ms]\n(pass) Pickup selects the lowest Ready issue and holds a source-free reservation through Claim ending [2619.42ms]\n(pass) Pickup passes over another host's reservation and takes the next Ready issue [3192.72ms]\n(pass) Pickup re-verifies after reservation: no-ready [3675.80ms]\n(pass) Pickup re-verifies after reservation: intervening-claim [4067.09ms]\n(pass) Pickup rejects unsafe Ready input: author [367.09ms]\n(pass) Pickup rejects unsafe Ready input: ready-actor [458.02ms]\n(pass) Pickup rejects unsafe Ready input: body-edit [706.07ms]\n(pass) Pickup rejects unsafe Ready input: title-edit [807.84ms]\n(pass) Pickup rejects unsafe Ready input: active-history [718.02ms]\n(pass) Pickup rejects unsafe Ready input: cased-history [762.43ms]\n(pass) Pickup rejects unsafe Ready input: unready-label [416.29ms]\n(pass) Pickup accepts a differently cased Ready label and preserves unrelated spelling [2807.91ms]\n(pass) Pickup reads later edit-history pages before trusting the issue [770.15ms]\n(pass) Pickup fails closed on an origin error without a competing token [700.82ms]\n(pass) Pickup release preserves a changed reservation and names recovery evidence [2636.38ms]\n(pass) Pickup interruption ends the Claim before releasing its reservation [3394.96ms]\n(pass) interruption stops descendants and ends the Claim (leader exits: false) [2807.65ms]\n(pass) interruption stops descendants and ends the Claim (leader exits: true) [2740.19ms]\n(pass) Harness JSON is decoded and streamed before the session ends [1681.39ms]\n(pass) Harness failures release a new Claim and preserve other issue labels [6932.11ms]\n(pass) a pushed Issue branch keeps its Claim [1823.11ms]\n(pass) an existing Claim is left in place [1459.50ms]\n(pass) interruption while applying the Claim still restores its prior labels [2521.60ms]\n(pass) Claim ending respects the Day shift removing its Claim [1703.00ms]\n(pass) closed and untrusted issues fail before applying a Claim [400.31ms]\n(pass) shared skill exclusions are added once across Ticket runs [3189.39ms]\n(pass) missing repository Claim label is created before applying it [1806.34ms]\n(pass) closed issue clears an existing Claim [1613.24ms]\n(pass) Failed salvage drafts an existing ready PR even when repaired commits cannot push [3703.47ms]\n\n 54 pass\n 0 fail\n 318 expect() calls\nRan 54 tests across 4 files. [103.69s]\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "test",
+      "cache": "incremental",
+      "commands": [
+        [
+          "bun",
+          "test",
+          "tests/ticket.test.ts",
+          "tests/ready.test.ts",
+          "tests/console.test.ts",
+          "tests/pickup-model.test.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 100.53099698600002,
+      "exitCode": 0,
+      "output": "$ bun test tests/ticket.test.ts tests/ready.test.ts tests/console.test.ts tests/pickup-model.test.ts\nbun test v1.4.4 (38afee6c8)\nCurrent: 5832 unique states; exhausted BFS\nWithoutClaimCount: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nWithoutClaimCount: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\n\ntests/console.test.ts:\n(pass) every registered Console route has OpenAPI, page, CLI and scope parity [221.13ms]\n(pass) Playwright Inbox rows match status and inline Dismissal/Undo persist at desktop and mobile [1522.63ms]\n(pass) standalone status --json reads the shared Inbox payload [107.46ms]\n(pass) Console status and Dismissal/Undo have identical CLI twins and enforce scopes [450.93ms]\n\ntests/pickup-model.test.ts:\n(pass) ADR-0017 BFS exhausts three-host interleavings with both safety properties [275.46ms]\n(pass) BFS finds minimal counterexamples for WithoutClaimCount [110.72ms]\n(pass) BFS finds minimal counterexamples for UnconditionalCreate [227.43ms]\n\ntests/ready.test.ts:\n(pass) Pickup rejects an active Claim whose GitHub label uses another case [1.81ms]\n\ntests/ticket.test.ts:\n(pass) standalone Ticket run claims, links embedded skills and streams a Harness session [1675.94ms]\n(pass) Delivery does not adopt or mark ready a fork pull request for the Issue branch [1727.36ms]\n(pass) green Delivery pushes the committed head and leaves a ready pull request [1785.26ms]\n(pass) CI failure starts a Repair and watches the repaired head before readiness [2225.45ms]\n(pass) Failed ticket run via https://github.com/test/project/issues/7 salvages committed work as a draft and preserves the Claim [1177.95ms]\n(pass) Failed ticket run via pickup salvages committed work as a draft and preserves the Claim [2350.36ms]\n(pass) merge-conflict Repair commits the Base branch merge and re-verifies CI [2472.50ms]\n(pass) Repair limit bounds permanently failing CI and keeps a draft with its Claim [5058.42ms]\n(pass) Delivery watches pending CI before readiness [2843.20ms]\n(pass) Delivery watches register CI before readiness [3542.43ms]\n(pass) Delivery watches status-recover CI before readiness [2302.06ms]\n(pass) Delivery watches absent CI before readiness [5218.57ms]\n(pass) failed conflict Repair aborts the merge and salvages the original committed head [1863.23ms]\n(pass) a session with no commits fails Delivery and releases its Claim with nothing on origin [806.24ms]\n(pass) Origin match fails before claiming or starting a session [147.21ms]\n(pass) a non-canonical Issue URL is rejected before any GitHub call [133.84ms]\n(pass) issue file write does not follow a symlink outside the worktree [679.83ms]\n(pass) Pickup selects the lowest Ready issue and holds a source-free reservation through Claim ending [2911.27ms]\n(pass) Pickup passes over another host's reservation and takes the next Ready issue [3512.27ms]\n(pass) Pickup re-verifies after reservation: no-ready [3490.21ms]\n(pass) Pickup re-verifies after reservation: intervening-claim [3892.40ms]\n(pass) Pickup rejects unsafe Ready input: author [315.47ms]\n(pass) Pickup rejects unsafe Ready input: ready-actor [456.76ms]\n(pass) Pickup rejects unsafe Ready input: body-edit [657.78ms]\n(pass) Pickup rejects unsafe Ready input: title-edit [657.46ms]\n(pass) Pickup rejects unsafe Ready input: active-history [442.93ms]\n(pass) Pickup rejects unsafe Ready input: cased-history [467.43ms]\n(pass) Pickup rejects unsafe Ready input: unready-label [336.24ms]\n(pass) Pickup accepts a differently cased Ready label and preserves unrelated spelling [2606.46ms]\n(pass) Pickup reads later edit-history pages before trusting the issue [742.54ms]\n(pass) Pickup fails closed on an origin error without a competing token [712.27ms]\n(pass) Pickup release preserves a changed reservation and names recovery evidence [2576.08ms]\n(pass) Pickup interruption ends the Claim before releasing its reservation [3401.76ms]\n(pass) interruption stops descendants and ends the Claim (leader exits: false) [2870.21ms]\n(pass) interruption stops descendants and ends the Claim (leader exits: true) [2749.67ms]\n(pass) Harness JSON is decoded and streamed before the session ends [1844.65ms]\n(pass) Harness failures release a new Claim and preserve other issue labels [7306.93ms]\n(pass) a pushed Issue branch keeps its Claim [1781.00ms]\n(pass) an existing Claim is left in place [1491.65ms]\n(pass) interruption while applying the Claim still restores its prior labels [2496.79ms]\n(pass) Claim ending respects the Day shift removing its Claim [1614.00ms]\n(pass) closed and untrusted issues fail before applying a Claim [371.39ms]\n(pass) shared skill exclusions are added once across Ticket runs [2915.09ms]\n(pass) missing repository Claim label is created before applying it [1680.53ms]\n(pass) closed issue clears an existing Claim [1425.35ms]\n(pass) Failed salvage drafts an existing ready PR even when repaired commits cannot push [3670.32ms]\n\n 54 pass\n 0 fail\n 318 expect() calls\nRan 54 tests across 4 files. [100.51s]\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "model",
+      "cache": "cold",
+      "commands": [
+        [
+          "bun",
+          "test",
+          "tests/pickup-model.test.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 0.7225032840000059,
+      "exitCode": 0,
+      "output": "$ bun test tests/pickup-model.test.ts\nbun test v1.4.4 (38afee6c8)\nCurrent: 5832 unique states; exhausted BFS\nWithoutClaimCount: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nWithoutClaimCount: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\n\ntests/pickup-model.test.ts:\n(pass) ADR-0017 BFS exhausts three-host interleavings with both safety properties [303.34ms]\n(pass) BFS finds minimal counterexamples for WithoutClaimCount [123.19ms]\n(pass) BFS finds minimal counterexamples for UnconditionalCreate [255.86ms]\n\n 3 pass\n 0 fail\n 16 expect() calls\nRan 3 tests across 1 file. [713.00ms]\n"
+    },
+    {
+      "language": "typescript",
+      "operation": "model",
+      "cache": "incremental",
+      "commands": [
+        [
+          "bun",
+          "test",
+          "tests/pickup-model.test.ts"
+        ]
+      ],
+      "cwd": "prototypes/typescript",
+      "seconds": 0.7013921240000054,
+      "exitCode": 0,
+      "output": "$ bun test tests/pickup-model.test.ts\nbun test v1.4.4 (38afee6c8)\nCurrent: 5832 unique states; exhausted BFS\nWithoutClaimCount: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nWithoutClaimCount: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=0, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=0, Ready=false, Claim=true)\nH0.KeepClaim (generation=1, owner=0, Ready=false, Claim=true)\nH0.ReleaseReservation (generation=1, owner=null, Ready=false, Claim=true)\nH1.CreateReservation (generation=1, owner=1, Ready=false, Claim=true)\nDayHandsBack (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=1, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=1, owner=1, Ready=true, Claim=false)\nH1.PutClaimLabels (generation=2, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=2, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nUnconditionalCreate: shortest claimed-dispatch counterexample\nInitial (generation=0, owner=null, Ready=true, Claim=false)\nH0.ListReady (generation=0, owner=null, Ready=true, Claim=false)\nH0.SelectHistory (generation=0, owner=null, Ready=true, Claim=false)\nH0.CreateReservation (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshIssue (generation=0, owner=0, Ready=true, Claim=false)\nH0.RefreshHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.ListReady (generation=0, owner=0, Ready=true, Claim=false)\nH1.SelectHistory (generation=0, owner=0, Ready=true, Claim=false)\nH1.CreateReservation (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshIssue (generation=0, owner=1, Ready=true, Claim=false)\nH1.RefreshHistory (generation=0, owner=1, Ready=true, Claim=false)\nH0.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH0.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\nH1.PutClaimLabels (generation=1, owner=1, Ready=false, Claim=true)\nH1.Dispatch (generation=1, owner=1, Ready=false, Claim=true)\n\ntests/pickup-model.test.ts:\n(pass) ADR-0017 BFS exhausts three-host interleavings with both safety properties [306.19ms]\n(pass) BFS finds minimal counterexamples for WithoutClaimCount [118.23ms]\n(pass) BFS finds minimal counterexamples for UnconditionalCreate [231.54ms]\n\n 3 pass\n 0 fail\n 16 expect() calls\nRan 3 tests across 1 file. [690.00ms]\n"
+    },
+    {
+      "language": "rust",
+      "operation": "typecheck",
+      "cache": "cold",
+      "commands": [
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 110.72950115799998,
+      "exitCode": 0,
+      "output": "$ cargo check --locked --bin thirdshift\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.26\n   Compiling quote v1.0.47\n   Compiling libc v0.2.189\n    Checking cfg-if v1.0.5\n    Checking stable_deref_trait v1.2.1\n    Checking smallvec v1.16.2\n    Checking itoa v1.0.18\n    Checking pin-project-lite v0.2.17\n   Compiling find-msvc-tools v0.1.13\n   Compiling serde_core v1.0.229\n   Compiling shlex v2.0.1\n   Compiling syn v3.0.6\n    Checking bytes v1.12.1\n   Compiling jobserver v0.1.35\n   Compiling cc v1.4.7\n    Checking log v0.4.34\n    Checking futures-core v0.3.34\n   Compiling pkg-config v0.3.34\n   Compiling parking_lot_core v0.9.12\n   Compiling dunce v1.0.5\n   Compiling fs_extra v1.3.0\n   Compiling cmake v0.1.58\n    Checking errno v0.3.14\n    Checking once_cell v1.21.4\n    Checking scopeguard v1.2.0\n    Checking lock_api v0.4.14\n   Compiling aws-lc-sys v0.45.0\n    Checking signal-hook-registry v1.4.8\n    Checking mio v1.2.3\n   Compiling syn v2.0.119\n    Checking subtle v2.6.1\n    Checking parking_lot v0.12.5\n    Checking socket2 v0.6.5\n    Checking http v1.5.0\n   Compiling synstructure v0.14.0\n   Compiling aws-lc-rs v1.18.1\n    Checking percent-encoding v2.3.2\n    Checking bitflags v2.13.2\n    Checking writeable v0.6.4\n    Checking futures-sink v0.3.34\n    Checking litemap v0.8.3\n    Checking memchr v2.8.3\n   Compiling zerofrom-derive v0.1.8\n   Compiling yoke-derive v0.8.3\n    Checking zerofrom v0.1.8\n   Compiling zerovec-derive v0.11.6\n    Checking yoke v0.8.3\n   Compiling displaydoc v0.2.7\n   Compiling serde_derive v1.0.229\n    Checking zerovec v0.11.8\n   Compiling tokio-macros v2.7.2\n    Checking tinystr v0.8.4\n    Checking zeroize v1.9.0\n    Checking tokio v1.53.1\n    Checking icu_locale_core v2.3.0\n    Checking potential_utf v0.1.6\n    Checking zerotrie v0.2.5\n    Checking http-body v1.1.0\n   Compiling icu_normalizer_data v2.3.0\n    Checking utf8_iter v1.0.4\n   Compiling icu_properties_data v2.3.0\n    Checking icu_collections v2.3.0\n    Checking icu_provider v2.3.1\n    Checking rustls-pki-types v1.15.1\n   Compiling httparse v1.10.1\n    Checking tower-service v0.3.3\n    Checking slab v0.4.12\n    Checking futures-io v0.3.34\n   Compiling version_check v0.9.5\n   Compiling libm v0.2.16\n   Compiling autocfg v1.5.1\n    Checking futures-task v0.3.34\n    Checking futures-util v0.3.34\n   Compiling num-traits v0.2.19\n   Compiling generic-array v0.14.7\n   Compiling tracing-attributes v0.1.31\n    Checking tracing-core v0.1.36\n   Compiling rustls v0.23.45\n    Checking try-lock v0.2.5\n    Checking untrusted v0.9.0\n   Compiling serde v1.0.229\n    Checking want v0.3.1\n    Checking tracing v0.1.44\n    Checking icu_properties v2.3.0\n    Checking icu_normalizer v2.3.0\n    Checking futures-channel v0.3.34\n    Checking form_urlencoded v1.2.2\n    Checking sync_wrapper v1.0.2\n    Checking httpdate v1.0.3\n    Checking typenum v1.20.1\n    Checking tower-layer v0.3.3\n   Compiling zmij v1.0.23\n    Checking rand_core v0.10.1\n    Checking atomic-waker v1.1.2\n    Checking hyper v1.11.1\n    Checking idna_adapter v1.2.2\n    Checking ipnet v2.12.2\n    Checking base64 v0.23.1\n   Compiling getrandom v0.4.3\n   Compiling thiserror v2.0.21\n   Compiling serde_json v1.0.151\n    Checking hyper-util v0.1.21\n    Checking idna v1.1.0\n    Checking tower v0.5.3\n    Checking http-body-util v0.1.5\n   Compiling miette-derive v7.6.0\n   Compiling thiserror-impl v2.0.21\n   Compiling cfg_aliases v0.2.2\n    Checking ryu v1.0.23\n    Checking openssl-probe v0.2.1\n    Checking unicode-width v0.1.14\n    Checking rustls-native-certs v0.8.4\n    Checking serde_urlencoded v0.7.1\n    Checking miette v7.6.0\n   Compiling nix v0.30.1\n   Compiling winnow v1.0.4\n    Checking url v2.5.8\n    Checking block-buffer v0.10.4\n    Checking crypto-common v0.1.7\n    Checking mime v0.3.17\n    Checking pxfm v0.1.30\n    Checking same-file v1.0.6\n   Compiling rustix v1.1.5\n   Compiling rustc-hash v2.1.3\n   Compiling inotify-sys v0.1.8\n   Compiling camino v1.2.6\n   Compiling askama_parser v0.16.1\n    Checking walkdir v2.5.0\n    Checking digest v0.10.7\n    Checking tower-http v0.6.11\n   Compiling basic-toml v0.1.10\n    Checking getrandom v0.2.17\n   Compiling glob v0.3.4\n    Checking moxcms v0.8.1\n    Checking linux-raw-sys v0.12.1\n    Checking bytemuck v1.25.2\n    Checking cpufeatures v0.3.1\n    Checking byteorder-lite v0.1.0\n    Checking chacha20 v0.10.2\n    Checking toml_parser v1.1.3+spec-1.1.0\n   Compiling askama_derive v0.16.1\n    Checking image v0.25.10\n    Checking rand_core v0.6.4\n    Checking toml_datetime v1.1.1+spec-1.1.0\n    Checking semver v1.0.28\n    Checking lazy_static v1.5.0\n    Checking fastrand v2.5.0\n    Checking toml_writer v1.1.2+spec-1.1.0\n    Checking equivalent v1.0.2\n   Compiling anyhow v1.0.104\n   Compiling signal-hook v0.4.4\n    Checking base64ct v1.8.3\n    Checking hashbrown v0.17.1\n    Checking cpufeatures v0.2.17\n    Checking password-hash v0.5.0\n    Checking tempfile v3.27.0\n    Checking indexmap v2.14.2\n    Checking axotag v0.3.0\n    Checking inotify v0.11.5\n    Checking homedir v0.3.6\n    Checking rand v0.10.3\n    Checking blake2 v0.10.6\n   Compiling askama_macros v0.16.1\n    Checking axum-core v0.5.6\n    Checking axoprocess v0.2.1\n    Checking notify-types v2.1.0\n    Checking serde_path_to_error v0.1.20\n    Checking serde_spanned v1.1.1\n   Compiling include_dir_macros v0.7.4\n    Checking matchit v0.8.4\n    Checking iana-time-zone v0.1.65\n    Checking include_dir v0.7.4\n    Checking chrono v0.4.45\n    Checking toml v1.1.6+spec-1.1.0\n    Checking axum v0.8.9\n    Checking notify v8.2.0\n    Checking rand_distr v0.6.0\n    Checking askama v0.16.1\n    Checking argon2 v0.5.3\n    Checking toml_edit v0.25.15+spec-1.1.0\n    Checking sha2 v0.10.9\n    Checking rand_pcg v0.10.2\n    Checking sysinfo v0.38.4\n    Checking rustls-webpki v0.103.15\n    Checking tokio-rustls v0.26.5\n    Checking rustls-platform-verifier v0.7.1\n    Checking hyper-rustls v0.27.10\n    Checking reqwest v0.13.5\n    Checking axoasset v2.0.1\n    Checking axoupdater v0.10.2\n    Checking thirdshift v0.22.0 (/tmp/thirdshift-benchmark-Hlg6zl/worktree)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 50s\n"
+    },
+    {
+      "language": "rust",
+      "operation": "typecheck",
+      "cache": "incremental",
+      "commands": [
+        [
+          "cargo",
+          "check",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 0.5308705590000027,
+      "exitCode": 0,
+      "output": "$ cargo check --locked --bin thirdshift\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s\n"
+    },
+    {
+      "language": "rust",
+      "operation": "build",
+      "cache": "cold",
+      "commands": [
+        [
+          "cargo",
+          "build",
+          "--release",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 351.612465608,
+      "exitCode": 0,
+      "output": "$ cargo build --release --locked --bin thirdshift\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.26\n   Compiling quote v1.0.47\n   Compiling libc v0.2.189\n   Compiling cfg-if v1.0.5\n   Compiling smallvec v1.16.2\n   Compiling stable_deref_trait v1.2.1\n   Compiling itoa v1.0.18\n   Compiling shlex v2.0.1\n   Compiling syn v3.0.6\n   Compiling pin-project-lite v0.2.17\n   Compiling serde_core v1.0.229\n   Compiling find-msvc-tools v0.1.13\n   Compiling bytes v1.12.1\n   Compiling jobserver v0.1.35\n   Compiling cc v1.4.7\n   Compiling futures-core v0.3.34\n   Compiling dunce v1.0.5\n   Compiling fs_extra v1.3.0\n   Compiling pkg-config v0.3.34\n   Compiling cmake v0.1.58\n   Compiling log v0.4.34\n   Compiling parking_lot_core v0.9.12\n   Compiling aws-lc-sys v0.45.0\n   Compiling errno v0.3.14\n   Compiling once_cell v1.21.4\n   Compiling scopeguard v1.2.0\n   Compiling lock_api v0.4.14\n   Compiling signal-hook-registry v1.4.8\n   Compiling synstructure v0.14.0\n   Compiling mio v1.2.3\n   Compiling syn v2.0.119\n   Compiling subtle v2.6.1\n   Compiling parking_lot v0.12.5\n   Compiling zerofrom-derive v0.1.8\n   Compiling yoke-derive v0.8.3\n   Compiling zerofrom v0.1.8\n   Compiling zerovec-derive v0.11.6\n   Compiling yoke v0.8.3\n   Compiling displaydoc v0.2.7\n   Compiling serde_derive v1.0.229\n   Compiling zerovec v0.11.8\n   Compiling tinystr v0.8.4\n   Compiling tokio-macros v2.7.2\n   Compiling http v1.5.0\n   Compiling socket2 v0.6.5\n   Compiling percent-encoding v2.3.2\n   Compiling writeable v0.6.4\n   Compiling zeroize v1.9.0\n   Compiling futures-sink v0.3.34\n   Compiling litemap v0.8.3\n   Compiling memchr v2.8.3\n   Compiling bitflags v2.13.2\n   Compiling aws-lc-rs v1.18.1\n   Compiling icu_locale_core v2.3.0\n   Compiling http-body v1.1.0\n   Compiling tokio v1.53.1\n   Compiling potential_utf v0.1.6\n   Compiling zerotrie v0.2.5\n   Compiling utf8_iter v1.0.4\n   Compiling icu_properties_data v2.3.0\n   Compiling icu_normalizer_data v2.3.0\n   Compiling icu_collections v2.3.0\n   Compiling icu_provider v2.3.1\n   Compiling rustls-pki-types v1.15.1\n   Compiling libm v0.2.16\n   Compiling slab v0.4.12\n   Compiling futures-io v0.3.34\n   Compiling tower-service v0.3.3\n   Compiling version_check v0.9.5\n   Compiling autocfg v1.5.1\n   Compiling futures-task v0.3.34\n   Compiling httparse v1.10.1\n   Compiling futures-util v0.3.34\n   Compiling num-traits v0.2.19\n   Compiling generic-array v0.14.7\n   Compiling tracing-attributes v0.1.31\n   Compiling tracing-core v0.1.36\n   Compiling untrusted v0.9.0\n   Compiling try-lock v0.2.5\n   Compiling rustls v0.23.45\n   Compiling serde v1.0.229\n   Compiling want v0.3.1\n   Compiling tracing v0.1.44\n   Compiling icu_normalizer v2.3.0\n   Compiling icu_properties v2.3.0\n   Compiling futures-channel v0.3.34\n   Compiling form_urlencoded v1.2.2\n   Compiling sync_wrapper v1.0.2\n   Compiling zmij v1.0.23\n   Compiling httpdate v1.0.3\n   Compiling typenum v1.20.1\n   Compiling rand_core v0.10.1\n   Compiling atomic-waker v1.1.2\n   Compiling tower-layer v0.3.3\n   Compiling hyper v1.11.1\n   Compiling idna_adapter v1.2.2\n   Compiling thiserror v2.0.21\n   Compiling ipnet v2.12.2\n   Compiling getrandom v0.4.3\n   Compiling serde_json v1.0.151\n   Compiling base64 v0.23.1\n   Compiling hyper-util v0.1.21\n   Compiling idna v1.1.0\n   Compiling tower v0.5.3\n   Compiling http-body-util v0.1.5\n   Compiling miette-derive v7.6.0\n   Compiling thiserror-impl v2.0.21\n   Compiling cfg_aliases v0.2.2\n   Compiling openssl-probe v0.2.1\n   Compiling unicode-width v0.1.14\n   Compiling ryu v1.0.23\n   Compiling winnow v1.0.4\n   Compiling serde_urlencoded v0.7.1\n   Compiling miette v7.6.0\n   Compiling rustls-native-certs v0.8.4\n   Compiling nix v0.30.1\n   Compiling url v2.5.8\n   Compiling block-buffer v0.10.4\n   Compiling crypto-common v0.1.7\n   Compiling camino v1.2.6\n   Compiling rustix v1.1.5\n   Compiling inotify-sys v0.1.8\n   Compiling pxfm v0.1.30\n   Compiling same-file v1.0.6\n   Compiling rustc-hash v2.1.3\n   Compiling mime v0.3.17\n   Compiling askama_parser v0.16.1\n   Compiling walkdir v2.5.0\n   Compiling moxcms v0.8.1\n   Compiling digest v0.10.7\n   Compiling tower-http v0.6.11\n   Compiling basic-toml v0.1.10\n   Compiling getrandom v0.2.17\n   Compiling byteorder-lite v0.1.0\n   Compiling bytemuck v1.25.2\n   Compiling glob v0.3.4\n   Compiling linux-raw-sys v0.12.1\n   Compiling cpufeatures v0.3.1\n   Compiling chacha20 v0.10.2\n   Compiling askama_derive v0.16.1\n   Compiling image v0.25.10\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling rand_core v0.6.4\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling equivalent v1.0.2\n   Compiling base64ct v1.8.3\n   Compiling anyhow v1.0.104\n   Compiling semver v1.0.28\n   Compiling fastrand v2.5.0\n   Compiling hashbrown v0.17.1\n   Compiling signal-hook v0.4.4\n   Compiling lazy_static v1.5.0\n   Compiling cpufeatures v0.2.17\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling tempfile v3.27.0\n   Compiling indexmap v2.14.2\n   Compiling axotag v0.3.0\n   Compiling password-hash v0.5.0\n   Compiling inotify v0.11.5\n   Compiling homedir v0.3.6\n   Compiling askama_macros v0.16.1\n   Compiling rand v0.10.3\n   Compiling blake2 v0.10.6\n   Compiling axum-core v0.5.6\n   Compiling axoprocess v0.2.1\n   Compiling notify-types v2.1.0\n   Compiling serde_spanned v1.1.1\n   Compiling serde_path_to_error v0.1.20\n   Compiling include_dir_macros v0.7.4\n   Compiling matchit v0.8.4\n   Compiling iana-time-zone v0.1.65\n   Compiling chrono v0.4.45\n   Compiling axum v0.8.9\n   Compiling include_dir v0.7.4\n   Compiling toml v1.1.6+spec-1.1.0\n   Compiling notify v8.2.0\n   Compiling rand_distr v0.6.0\n   Compiling argon2 v0.5.3\n   Compiling askama v0.16.1\n   Compiling toml_edit v0.25.15+spec-1.1.0\n   Compiling sha2 v0.10.9\n   Compiling rand_pcg v0.10.2\n   Compiling sysinfo v0.38.4\n   Compiling rustls-webpki v0.103.15\n   Compiling tokio-rustls v0.26.5\n   Compiling rustls-platform-verifier v0.7.1\n   Compiling hyper-rustls v0.27.10\n   Compiling reqwest v0.13.5\n   Compiling axoasset v2.0.1\n   Compiling axoupdater v0.10.2\n   Compiling thirdshift v0.22.0 (/tmp/thirdshift-benchmark-Hlg6zl/worktree)\n    Finished `release` profile [optimized] target(s) in 5m 51s\n"
+    },
+    {
+      "language": "rust",
+      "operation": "build",
+      "cache": "incremental",
+      "commands": [
+        [
+          "cargo",
+          "build",
+          "--release",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 0.5882715799999423,
+      "exitCode": 0,
+      "output": "$ cargo build --release --locked --bin thirdshift\n    Finished `release` profile [optimized] target(s) in 0.45s\n"
+    },
+    {
+      "language": "rust",
+      "operation": "test",
+      "cache": "cold",
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "fresh_run",
+          "--test",
+          "pickup_run",
+          "--test",
+          "pickup_model",
+          "--",
+          "--test-threads=3"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "api::inbox_api_equals_status_json_without_sign_in",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "api::openapi_equals_cli_and_describes_operations_without_local_secrets",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "dismiss",
+          "--",
+          "--test-threads=3"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 448.0799030310001,
+      "exitCode": 0,
+      "output": "$ cargo test --locked --test fresh_run --test pickup_run --test pickup_model -- --test-threads=3\n\nrunning 27 tests\ntest a_direct_run_warns_about_an_untrusted_author_and_still_delivers_its_pr ... ok\ntest a_direct_run_warns_when_never_labelled_ready_and_still_delivers_its_pr ... ok\ntest a_clean_failed_acquisition_releases_its_claim_and_can_retry_without_starting_a_session ... ok\ntest a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push ... ok\ntest a_repository_that_has_the_in_progress_label_keeps_it_as_it_is ... ok\ntest a_direct_run_warns_when_trust_cannot_be_checked_and_still_delivers_its_pr ... ok\ntest a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim ... ok\ntest a_run_whose_claim_cannot_be_made_stops_before_any_work_naming_the_cause ... ok\ntest another_issues_branch_and_pr_do_not_count_as_this_issues ... ok\ntest finds_every_factory_skill_in_the_worktree_as_thirdshift_skill ... ok\ntest a_second_run_adds_no_second_exclude_entry ... ok\ntest gives_the_agent_the_fresh_prompt ... ok\ntest leaves_no_worktree_local_issue_branch_or_temp_directory_behind ... ok\ntest logs_the_session_stream_under_the_home_directory ... ok\ntest marks_a_draft_pr_ready_and_succeeds ... ok\ntest prints_only_the_pr_url_and_exits_zero ... ok\ntest pushes_the_issue_branch_when_the_agent_did_not ... ok\ntest ordinary_runs_keep_working_after_claude_and_codex_quota_warnings ... ok\ntest runs_claude_headless_in_auto_mode_in_a_sibling_worktree_on_the_issue_branch ... ok\ntest ships_the_mattpocock_skills_mit_notice_with_the_factory_skills ... ok\ntest support::child_lifetime::fixture_guardian ... ignored, subprocess entry point for owned fixture commands\ntest succeeds_when_the_agent_pushed_the_branch_itself ... ok\ntest ships_cloudflares_security_audit_with_its_license_and_provenance_on_both_harnesses ... ok\ntest the_claim_is_made_in_one_request_before_the_worktree_is_created ... ok\ntest the_in_progress_label_is_created_when_the_repository_lacks_it ... ok\ntest the_linked_skills_are_kept_out_of_git ... ok\ntest the_session_gets_the_issue_with_a_placeholder_for_each_comment_by_an_untrusted_account ... ok\n\ntest result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 40.86s\n\n\nrunning 5 tests\ntest assert_requested_property ... ignored, known pre-Claim dispatch finding; run explicitly to see the failure\ntest current_protocol_reports_pre_claim_dispatch_counterexample ... ok\ntest removing_claim_count_recheck_is_detected ... ok\ntest removing_empty_create_lease_is_detected ... ok\ntest pickup_claimed_dispatch_safety ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.41s\n\n\nrunning 144 tests\ntest a_base_branch_ahead_of_origin_stops_the_pass_before_any_label_changes ... ok\ntest a_closed_issue_labelled_ready_for_agent_is_not_taken ... ok\ntest a_detached_head_without_base_stops_the_pass_before_any_label_changes ... ok\ntest a_failed_label_actor_membership_lookup_starts_no_work ... ok\ntest a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_requests ... ok\ntest a_closed_issue_labelled_agent_failed_does_not_count_and_is_swept ... ok\ntest a_dispatched_run_that_fails_fails_the_pickup_run_as_a_failed_run_does ... ok\ntest a_failure_the_day_shift_handed_back_or_took_over_loses_agent_failed_and_does_not_count ... ok\ntest a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted ... ok\ntest a_handed_back_spec_with_no_startable_ticket_is_passed_over ... ok\ntest a_handed_back_branch_is_continued_without_losing_interrupted_work ... ok\ntest a_legacy_reservation_without_a_host_is_not_stolen ... ok\ntest a_missing_git_identity_stops_the_pass_before_any_label_changes ... ok\ntest a_handed_back_open_pr_is_continued_using_its_base ... ok\ntest a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_work ... ok\ntest a_named_branch_that_is_not_on_origin_stops_the_pass_before_any_label_changes ... ok\ntest a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_lock_and_takes_it_itself ... ok\ntest a_pass_skipped_for_having_no_ready_issue_sends_no_notification ... ok\ntest a_pass_skipped_for_the_failure_limit_sends_no_notification ... ok\ntest a_pass_skipped_for_the_lock_sends_no_notification ... ok\ntest a_killed_pickup_run_or_ticket_run_frees_its_slot_for_the_next_pass ... ok\ntest a_pass_that_cant_tell_whether_its_issue_is_a_spec_fails_before_saying_it_took_it ... ok\ntest a_pass_that_would_be_skipped_for_having_no_ready_issue_still_stops_on_the_notifications_checks ... ok\ntest a_pass_that_took_an_issue_sends_one_notification_when_asked ... ok\ntest a_pickup_failure_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key ... ok\ntest a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_code_nor_stdout ... ok\ntest a_pass_that_would_be_skipped_for_the_lock_still_stops_on_the_notifications_checks ... ok\ntest a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_running ... ok\ntest a_pickup_order_flag_beats_pickup_order_in_the_user_config ... ok\ntest a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_run_is_still_going ... ok\ntest a_pickup_routes_its_notification_to_the_repository_address ... ok\ntest a_ready_labelling_whose_account_github_no_longer_knows_is_untrusted ... ok\ntest a_recent_hand_back_on_a_later_history_page_waits_for_settling ... ok\ntest a_rejected_reservation_of_the_next_ready_issue_fails_before_any_claim_or_session ... ok\ntest a_ready_issue_another_host_reserved_is_passed_over_for_the_next_in_its_order ... ok\ntest a_reservation_push_rejection_fails_before_any_claim_or_session ... ok\ntest a_rejecting_pre_push_hook_does_not_block_reserving_or_releasing_a_ready_issue ... ok\ntest a_run_that_fails_on_an_inherited_failure_offers_the_command_that_retries_its_issue_by_hand ... ok\ntest a_same_second_hand_back_across_history_pages_continues_the_branch ... ok\ntest a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_five_minutes_ago_is_not_taken ... ok\ntest a_ready_issue_with_sub_issues_is_run_as_a_spec_run_and_ends_as_that_spec_run_does ... ok\ntest a_spec_whose_only_open_ticket_is_unready_is_passed_over_changing_nothing ... ok\ntest a_spec_whose_open_tickets_are_all_blocked_names_why_each_cant_start ... ok\ntest a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures ... ok\ntest a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_is_taken ... ok\ntest a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines ... ok\ntest a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken ... ok\ntest a_sweep_that_fails_prints_a_warning_and_the_pass_carries_on ... ok\ntest an_edit_whose_account_github_no_longer_knows_is_untrusted ... ok\ntest a_spec_with_one_ticket_still_open_is_taken ... ok\ntest an_invalid_pickup_order_stops_the_pass_naming_the_file_and_key ... ok\ntest an_interrupted_pickup_releases_its_reservation_after_ending_its_claim ... ok\ntest an_issue_labelled_ready_for_agent_less_than_five_minutes_ago_is_not_taken ... ok\ntest an_invalid_pickup_wait_stops_the_pass_naming_the_file_and_key ... ok\ntest an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken ... ok\ntest an_issue_labelled_ready_for_agent_more_than_five_minutes_ago_is_taken ... ok\ntest an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken ... ok\ntest a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_that_skips_a_pass ... ok\ntest an_issue_with_an_issue_branch_on_origin_is_not_taken ... ok\ntest an_issue_that_stopped_being_ready_once_reserved_is_released_and_the_next_taken ... ok\ntest an_issue_with_no_ready_labelling_history_is_passed_over ... ok\ntest an_issue_without_ready_for_agent_is_never_taken_and_with_no_ready_issue_the_pass_is_skipped ... ok\ntest an_issue_written_by_an_untrusted_account_is_passed_over ... ok\ntest an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is ... ok\ntest an_old_pickup_limit_is_ignored_with_a_warning_naming_pickup_failure_limit ... ok\ntest an_origin_that_is_not_on_github_stops_the_pass_before_any_label_changes ... ok\ntest an_older_pass_cannot_restart_while_a_newer_pickup_is_live ... ok\ntest an_uncertain_push_reserving_the_next_ready_issue_retains_it_without_dispatching ... ok\ntest an_uncertain_successful_push_retains_the_reservation_without_dispatching ... ok\ntest an_untrusted_edit_is_found_before_a_later_edit_with_no_time ... ok\ntest an_untrusted_edit_past_the_first_page_of_edit_history_is_found ... ok\ntest asked_for_a_notification_with_no_address_known_the_pass_stops_before_any_work ... ok\ntest asked_for_a_notification_with_no_resend_api_key_the_pass_stops_before_any_work ... ok\ntest an_unusable_security_harness_falls_back_before_the_pickup_dispatches_its_run ... ok\ntest at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_a_pass_from_before_the_command_limit ... ok\ntest an_older_pass_stays_excluded_until_the_last_overlapping_new_pass_ends ... ok\ntest at_a_command_limit_of_2_a_pickup_run_is_skipped_until_a_pass_from_before_the_command_limit_ends ... ok\ntest base_ci::a_green_rerun_files_one_flaky_ticket_even_after_the_ticket_closes ... ok\ntest base_ci::a_needs_info_ci_red_ticket_does_not_block_a_new_failure ... ok\ntest at_the_default_command_limit_a_pass_beside_a_hand_started_ticket_run_names_the_count_and_limit ... ok\ntest base_ci::a_renamed_flaky_ticket_still_covers_its_recorded_test ... ok\ntest base_ci::a_similarly_named_test_does_not_suppress_a_flaky_report ... ok\ntest base_ci::an_occupied_ci_reservation_also_prevents_reruns_and_comments ... ok\ntest base_ci::an_open_ci_red_ticket_gets_new_commit_evidence_only_once ... ok\ntest at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_naming_the_count ... ok\ntest base_ci::an_untrusted_ci_red_issue_receives_no_owner_comment ... ok\ntest base_ci::an_open_flaky_ticket_naming_the_same_test_suppresses_a_new_report ... ok\ntest base_ci::an_untrusted_comment_cannot_hide_a_new_failing_commit ... ok\ntest base_ci::dotted_node_test_names_do_not_cover_a_different_test ... ok\ntest base_ci::an_occupied_ci_reservation_skips_filing_and_keeps_its_owners_ref ... ok\ntest base_ci::first_failed_attempt_is_rerun_immediately_without_filing ... ok\ntest base_ci::an_untrusted_issue_cannot_suppress_a_flaky_report ... ok\ntest base_ci::new_ci_evidence_is_commented_on_the_trusted_ticket_only ... ok\ntest base_ci::node_failure_summary_does_not_make_different_tests_duplicates ... ok\ntest base_ci::node_spec_flakes_keep_evidence_and_deduplicate_by_test ... ok\ntest base_ci::pickup_files_ci_red_for_the_named_base_and_does_not_take_it ... ok\ntest base_ci::pickup_deduplicates_across_bases_and_labels_but_closed_tickets_allow_filing ... ok\ntest base_ci::pickup_files_one_ci_red_ticket_without_job_names_logs_or_ready_for_agent ... ok\ntest base_ci::refused_or_impossible_first_reruns_warn_and_fall_back_to_filing ... ok\ntest base_ci::pickup_ignores_green_pending_and_young_latest_push_runs ... ok\ntest base_ci::unreadable_job_logs_still_file_a_ci_red_ticket_without_log_lines ... ok\ntest base_fix_reaches_the_dispatched_run ... ok\ntest base_makes_the_named_branch_the_dispatched_runs_base_branch_whatever_is_checked_out ... ok\ntest claims_whose_pull_requests_are_ready_draft_or_merged_never_count ... ok\ntest delayed_selector_after_failed_winner_passes_over_its_stale_selection_for_the_next ... ok\ntest base_makes_the_named_branch_the_dispatched_spec_runs_base_branch ... ok\ntest base_ci::unreadable_ci_files_nothing_and_does_not_stop_ready_dispatch ... ok\ntest delayed_selector_after_failed_winner_still_starts_only_one_run ... ok\ntest ending_a_pickup_does_not_delete_a_replaced_reservation ... ok\ntest label_history_is_read_past_one_page_before_accepting_or_rejecting_a_hand_back ... ok\ntest merge_reaches_the_dispatched_run ... ok\ntest once_a_pickup_run_has_ended_the_next_takes_the_next_ready_issue ... ok\ntest parallel_is_ignored_without_error_for_an_issue_that_is_not_a_spec ... ok\ntest once_its_ticket_is_no_longer_unready_the_next_pass_takes_the_spec ... ok\ntest pickup_failure_limit_in_the_user_config_raises_and_lowers_the_failure_limit ... ok\ntest pickup_order_in_the_user_config_sets_which_ready_issue_is_run ... ok\ntest pickup_reservation_does_not_publish_unrelated_local_head ... ok\ntest pickup_reservation_records_the_host_holding_it ... ok\ntest parallel_reaches_a_dispatched_spec_run ... ok\ntest stale_listing_must_not_adopt_an_active_claim_generation ... ok\ntest ready_labels_are_read_from_label_events_and_their_actors_trusted_by_membership ... ok\ntest support::child_lifetime::fixture_guardian ... ignored, subprocess entry point for owned fixture commands\ntest started_work_requires_a_hand_back_after_the_last_claim_ended ... ok\ntest the_higher_numbered_of_two_ready_issues_is_run_with_highest_first ... ok\ntest the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched ... ok\ntest the_lower_numbered_of_two_ready_issues_is_run_with_lowest_first ... ok\ntest the_next_ready_issue_tried_is_reserved_recording_the_host_holding_it ... ok\ntest the_model_reaches_the_dispatched_run_once_the_pass_has_checked_it ... ok\ntest the_notification_of_a_failed_run_has_its_pull_request_and_its_cause ... ok\ntest the_notification_of_a_failed_spec_run_has_each_tickets_outcome ... ok\ntest the_notification_of_a_merge_run_says_it_merged ... ok\ntest the_notification_of_a_run_left_ready_for_review_is_that_runs ... ok\ntest the_notification_of_an_interrupted_run_says_it_was_interrupted ... ok\ntest the_notifications_checks_come_before_the_checks_on_the_clone ... ok\ntest the_sweep_does_not_run_on_a_pass_skipped_for_the_lock ... ok\ntest the_sweep_takes_the_label_off_as_the_closed_issue_spells_it ... ok\ntest pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling ... ok\ntest the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket ... ok\ntest when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_taken ... ok\ntest with_every_ready_issue_reserved_elsewhere_the_pass_is_skipped_with_no_notification ... ok\ntest with_only_a_spec_whose_tickets_are_all_closed_the_pass_is_skipped_changing_nothing ... ok\ntest two_machines_racing_for_two_ready_issues_each_take_one ... ok\ntest two_machines_racing_for_a_ready_issue_start_exactly_one_run ... ok\ntest zero_pickup_wait_ignores_server_timestamps_ahead_of_local_clock ... ok\n\ntest result: ok. 143 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 195.87s\n\n   Compiling unicode-ident v1.0.26\n   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling libc v0.2.189\n   Compiling cfg-if v1.0.5\n   Compiling pin-project-lite v0.2.17\n   Compiling memchr v2.8.3\n   Compiling smallvec v1.16.2\n   Compiling serde_core v1.0.229\n   Compiling futures-core v0.3.34\n   Compiling syn v3.0.6\n   Compiling stable_deref_trait v1.2.1\n   Compiling itoa v1.0.18\n   Compiling bytes v1.12.1\n   Compiling jobserver v0.1.35\n   Compiling log v0.4.34\n   Compiling once_cell v1.21.4\n   Compiling parking_lot_core v0.9.12\n   Compiling find-msvc-tools v0.1.13\n   Compiling shlex v2.0.1\n   Compiling cc v1.4.7\n   Compiling syn v2.0.119\n   Compiling scopeguard v1.2.0\n   Compiling futures-sink v0.3.34\n   Compiling lock_api v0.4.14\n   Compiling cmake v0.1.58\n   Compiling fs_extra v1.3.0\n   Compiling pkg-config v0.3.34\n   Compiling synstructure v0.14.0\n   Compiling dunce v1.0.5\n   Compiling aws-lc-sys v0.45.0\n   Compiling errno v0.3.14\n   Compiling percent-encoding v2.3.2\n   Compiling version_check v0.9.5\n   Compiling signal-hook-registry v1.4.8\n   Compiling parking_lot v0.12.5\n   Compiling mio v1.2.3\n   Compiling zerofrom-derive v0.1.8\n   Compiling yoke-derive v0.8.3\n   Compiling zerovec-derive v0.11.6\n   Compiling zerofrom v0.1.8\n   Compiling displaydoc v0.2.7\n   Compiling yoke v0.8.3\n   Compiling serde_derive v1.0.229\n   Compiling futures-macro v0.3.34\n   Compiling zerovec v0.11.8\n   Compiling futures-task v0.3.34\n   Compiling slab v0.4.12\n   Compiling futures-io v0.3.34\n   Compiling subtle v2.6.1\n   Compiling futures-util v0.3.34\n   Compiling tinystr v0.8.4\n   Compiling tokio-macros v2.7.2\n   Compiling socket2 v0.6.5\n   Compiling http v1.5.0\n   Compiling litemap v0.8.3\n   Compiling zeroize v1.9.0\n   Compiling aws-lc-rs v1.18.1\n   Compiling bitflags v2.13.2\n   Compiling writeable v0.6.4\n   Compiling http-body v1.1.0\n   Compiling tokio v1.53.1\n   Compiling icu_locale_core v2.3.0\n   Compiling potential_utf v0.1.6\n   Compiling zerotrie v0.2.5\n   Compiling icu_properties_data v2.3.0\n   Compiling icu_normalizer_data v2.3.0\n   Compiling serde v1.0.229\n   Compiling utf8_iter v1.0.4\n   Compiling icu_provider v2.3.1\n   Compiling icu_collections v2.3.0\n   Compiling rustls-pki-types v1.15.1\n   Compiling futures-channel v0.3.34\n   Compiling autocfg v1.5.1\n   Compiling httparse v1.10.1\n   Compiling tower-service v0.3.3\n   Compiling thiserror v2.0.21\n   Compiling httpdate v1.0.3\n   Compiling libm v0.2.16\n   Compiling num-traits v0.2.19\n   Compiling tracing-attributes v0.1.31\n   Compiling thiserror-impl v2.0.21\n   Compiling generic-array v0.14.7\n   Compiling tracing-core v0.1.36\n   Compiling untrusted v0.9.0\n   Compiling zerocopy v0.8.63\n   Compiling getrandom v0.3.4\n   Compiling rustls v0.23.45\n   Compiling zmij v1.0.23\n   Compiling try-lock v0.2.5\n   Compiling want v0.3.1\n   Compiling tracing v0.1.44\n   Compiling icu_properties v2.3.0\n   Compiling icu_normalizer v2.3.0\n   Compiling form_urlencoded v1.2.2\n   Compiling sync_wrapper v1.0.2\n   Compiling atomic-waker v1.1.2\n   Compiling serde_json v1.0.151\n   Compiling rand_core v0.10.1\n   Compiling tower-layer v0.3.3\n   Compiling typenum v1.20.1\n   Compiling hyper v1.11.1\n   Compiling idna_adapter v1.2.2\n   Compiling base64 v0.23.1\n   Compiling ipnet v2.12.2\n   Compiling getrandom v0.4.3\n   Compiling hyper-util v0.1.21\n   Compiling idna v1.1.0\n   Compiling tower v0.5.3\n   Compiling http-body-util v0.1.5\n   Compiling miette-derive v7.6.0\n   Compiling anyhow v1.0.104\n   Compiling unicode-width v0.1.14\n   Compiling openssl-probe v0.2.1\n   Compiling ryu v1.0.23\n   Compiling cfg_aliases v0.2.2\n   Compiling nix v0.30.1\n   Compiling serde_urlencoded v0.7.1\n   Compiling rustls-native-certs v0.8.4\n   Compiling ppv-lite86 v0.2.21\n   Compiling url v2.5.8\n   Compiling miette v7.6.0\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling rand_core v0.9.5\n   Compiling winnow v1.0.4\n   Compiling cpufeatures v0.2.17\n   Compiling mime v0.3.17\n   Compiling pxfm v0.1.30\n   Compiling same-file v1.0.6\n   Compiling rustix v1.1.5\n   Compiling rustc-hash v2.1.3\n   Compiling inotify-sys v0.1.8\n   Compiling camino v1.2.6\n   Compiling walkdir v2.5.0\n   Compiling askama_parser v0.16.1\n   Compiling rand_chacha v0.9.0\n   Compiling digest v0.10.7\n   Compiling tower-http v0.6.11\n   Compiling basic-toml v0.1.10\n   Compiling moxcms v0.8.1\n   Compiling getrandom v0.2.17\n   Compiling byteorder-lite v0.1.0\n   Compiling linux-raw-sys v0.12.1\n   Compiling bytemuck v1.25.2\n   Compiling either v1.19.0\n   Compiling glob v0.3.4\n   Compiling crossbeam-utils v0.8.23\n   Compiling cpufeatures v0.3.1\n   Compiling chacha20 v0.10.2\n   Compiling askama_derive v0.16.1\n   Compiling toml_parser v1.1.3+spec-1.1.0\n   Compiling image v0.25.10\n   Compiling itertools v0.14.0\n   Compiling rand_core v0.6.4\n   Compiling rand v0.9.5\n   Compiling ahash v0.8.12\n   Compiling toml_datetime v1.1.1+spec-1.1.0\n   Compiling fastrand v2.5.0\n   Compiling lazy_static v1.5.0\n   Compiling toml_writer v1.1.2+spec-1.1.0\n   Compiling equivalent v1.0.2\n   Compiling base64ct v1.8.3\n   Compiling signal-hook v0.4.4\n   Compiling hashbrown v0.17.1\n   Compiling semver v1.0.28\n   Compiling password-hash v0.5.0\n   Compiling axotag v0.3.0\n   Compiling tempfile v3.27.0\n   Compiling inotify v0.11.5\n   Compiling indexmap v2.14.2\n   Compiling prost-derive v0.14.4\n   Compiling homedir v0.3.6\n   Compiling askama_macros v0.16.1\n   Compiling rand v0.10.3\n   Compiling blake2 v0.10.6\n   Compiling axum-core v0.5.6\n   Compiling axoprocess v0.2.1\n   Compiling opentelemetry v0.33.1\n   Compiling futures-executor v0.3.34\n   Compiling notify-types v2.1.0\n   Compiling serde_path_to_error v0.1.20\n   Compiling serde_spanned v1.1.1\n   Compiling include_dir_macros v0.7.4\n   Compiling matchit v0.8.4\n   Compiling chunked_transfer v1.5.0\n   Compiling hashbrown v0.14.5\n   Compiling iana-time-zone v0.1.65\n   Compiling ascii v1.1.0\n   Compiling chrono v0.4.45\n   Compiling tiny_http v0.12.0\n   Compiling dashmap v6.2.1\n   Compiling axum v0.8.9\n   Compiling include_dir v0.7.4\n   Compiling toml v1.1.6+spec-1.1.0\n   Compiling opentelemetry_sdk v0.33.1\n   Compiling notify v8.2.0\n   Compiling argon2 v0.5.3\n   Compiling prost v0.14.4\n   Compiling rand_distr v0.6.0\n   Compiling toml_edit v0.25.15+spec-1.1.0\n   Compiling askama v0.16.1\n   Compiling sha2 v0.10.9\n   Compiling const-hex v1.19.3\n   Compiling rand_pcg v0.10.2\n   Compiling sysinfo v0.38.4\n   Compiling choice v0.0.2\n   Compiling id-set v0.2.2\n   Compiling base64 v0.22.1\n   Compiling nohash-hasher v0.2.0\n   Compiling stateright v0.31.0\n   Compiling opentelemetry-proto v0.33.1\n   Compiling rustls-webpki v0.103.15\n   Compiling tokio-rustls v0.26.5\n   Compiling rustls-platform-verifier v0.7.1\n   Compiling hyper-rustls v0.27.10\n   Compiling reqwest v0.13.5\n   Compiling axoasset v2.0.1\n   Compiling axoupdater v0.10.2\n   Compiling thirdshift v0.22.0 (/tmp/thirdshift-benchmark-Hlg6zl/worktree)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 06s\n     Running tests/fresh_run.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/fresh_run-698863528a40010f)\n     Running tests/pickup_model.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_model-867028bc056c5a13)\n     Running tests/pickup_run.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_run-6753c73530d49b62)\n\n$ cargo test --locked --test console api::inbox_api_equals_status_json_without_sign_in -- --exact --test-threads=1\n\nrunning 1 test\ntest api::inbox_api_equals_status_json_without_sign_in ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 236 filtered out; finished in 0.13s\n\n   Compiling thirdshift v0.22.0 (/tmp/thirdshift-benchmark-Hlg6zl/worktree)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.73s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n\n$ cargo test --locked --test console api::openapi_equals_cli_and_describes_operations_without_local_secrets -- --exact --test-threads=1\n\nrunning 1 test\ntest api::openapi_equals_cli_and_describes_operations_without_local_secrets ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 236 filtered out; finished in 0.38s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n\n$ cargo test --locked --test console dismiss -- --test-threads=3\n\nrunning 8 tests\ntest accounts::dismiss::console_dismiss_accumulates_kinds_when_a_silent_command_fails ... ok\ntest accounts::dismiss::console_dismiss_and_undo_refuse_missing_sessions_bad_csrf_and_gets ... ok\ntest accounts::dismiss::console_dismiss_availability_follows_the_kept_github_answer ... ok\ntest accounts::dismiss::console_dismiss_is_unavailable_for_commands_that_are_not_waiting ... ok\ntest accounts::dismiss::console_dismiss_and_undo_update_open_pages_and_name_the_account ... ok\ntest actions::act_scope_dismisses_and_undoes_with_audit_and_token_activity ... ok\ntest accounts::dismiss::console_dismiss_is_unavailable_for_mixed_collapsed_rows ... ok\ntest accounts::dismiss::dismissing_a_silent_command_keeps_it_running_and_offers_stop_and_undo ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 229 filtered out; finished in 10.53s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n"
+    },
+    {
+      "language": "rust",
+      "operation": "test",
+      "cache": "incremental",
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "fresh_run",
+          "--test",
+          "pickup_run",
+          "--test",
+          "pickup_model",
+          "--",
+          "--test-threads=3"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "api::inbox_api_equals_status_json_without_sign_in",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "api::openapi_equals_cli_and_describes_operations_without_local_secrets",
+          "--",
+          "--exact",
+          "--test-threads=1"
+        ],
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "console",
+          "dismiss",
+          "--",
+          "--test-threads=3"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 236.131522721,
+      "exitCode": 0,
+      "output": "$ cargo test --locked --test fresh_run --test pickup_run --test pickup_model -- --test-threads=3\n\nrunning 27 tests\ntest a_direct_run_warns_when_never_labelled_ready_and_still_delivers_its_pr ... ok\ntest a_direct_run_warns_about_an_untrusted_author_and_still_delivers_its_pr ... ok\ntest a_clean_failed_acquisition_releases_its_claim_and_can_retry_without_starting_a_session ... ok\ntest a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_push ... ok\ntest a_repository_that_has_the_in_progress_label_keeps_it_as_it_is ... ok\ntest a_direct_run_warns_when_trust_cannot_be_checked_and_still_delivers_its_pr ... ok\ntest a_run_that_ends_with_its_pr_ready_for_review_keeps_its_claim ... ok\ntest a_run_whose_claim_cannot_be_made_stops_before_any_work_naming_the_cause ... ok\ntest another_issues_branch_and_pr_do_not_count_as_this_issues ... ok\ntest finds_every_factory_skill_in_the_worktree_as_thirdshift_skill ... ok\ntest a_second_run_adds_no_second_exclude_entry ... ok\ntest gives_the_agent_the_fresh_prompt ... ok\ntest leaves_no_worktree_local_issue_branch_or_temp_directory_behind ... ok\ntest logs_the_session_stream_under_the_home_directory ... ok\ntest marks_a_draft_pr_ready_and_succeeds ... ok\ntest prints_only_the_pr_url_and_exits_zero ... ok\ntest pushes_the_issue_branch_when_the_agent_did_not ... ok\ntest ordinary_runs_keep_working_after_claude_and_codex_quota_warnings ... ok\ntest runs_claude_headless_in_auto_mode_in_a_sibling_worktree_on_the_issue_branch ... ok\ntest ships_the_mattpocock_skills_mit_notice_with_the_factory_skills ... ok\ntest support::child_lifetime::fixture_guardian ... ignored, subprocess entry point for owned fixture commands\ntest succeeds_when_the_agent_pushed_the_branch_itself ... ok\ntest ships_cloudflares_security_audit_with_its_license_and_provenance_on_both_harnesses ... ok\ntest the_claim_is_made_in_one_request_before_the_worktree_is_created ... ok\ntest the_in_progress_label_is_created_when_the_repository_lacks_it ... ok\ntest the_linked_skills_are_kept_out_of_git ... ok\ntest the_session_gets_the_issue_with_a_placeholder_for_each_comment_by_an_untrusted_account ... ok\n\ntest result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 42.48s\n\n\nrunning 5 tests\ntest assert_requested_property ... ignored, known pre-Claim dispatch finding; run explicitly to see the failure\ntest current_protocol_reports_pre_claim_dispatch_counterexample ... ok\ntest removing_claim_count_recheck_is_detected ... ok\ntest removing_empty_create_lease_is_detected ... ok\ntest pickup_claimed_dispatch_safety ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.41s\n\n\nrunning 144 tests\ntest a_base_branch_ahead_of_origin_stops_the_pass_before_any_label_changes ... ok\ntest a_closed_issue_labelled_ready_for_agent_is_not_taken ... ok\ntest a_detached_head_without_base_stops_the_pass_before_any_label_changes ... ok\ntest a_failed_label_actor_membership_lookup_starts_no_work ... ok\ntest a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_requests ... ok\ntest a_closed_issue_labelled_agent_failed_does_not_count_and_is_swept ... ok\ntest a_dispatched_run_that_fails_fails_the_pickup_run_as_a_failed_run_does ... ok\ntest a_failure_the_day_shift_handed_back_or_took_over_loses_agent_failed_and_does_not_count ... ok\ntest a_failure_whose_label_cannot_be_taken_off_is_a_warning_and_is_not_counted ... ok\ntest a_handed_back_branch_is_continued_without_losing_interrupted_work ... ok\ntest a_handed_back_spec_with_no_startable_ticket_is_passed_over ... ok\ntest a_legacy_reservation_without_a_host_is_not_stolen ... ok\ntest a_missing_git_identity_stops_the_pass_before_any_label_changes ... ok\ntest a_handed_back_open_pr_is_continued_using_its_base ... ok\ntest a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_work ... ok\ntest a_named_branch_that_is_not_on_origin_stops_the_pass_before_any_label_changes ... ok\ntest a_pass_is_skipped_while_a_thirdshift_from_before_the_command_limit_holds_its_lock_and_takes_it_itself ... ok\ntest a_pass_skipped_for_having_no_ready_issue_sends_no_notification ... ok\ntest a_pass_skipped_for_the_failure_limit_sends_no_notification ... ok\ntest a_pass_skipped_for_the_lock_sends_no_notification ... ok\ntest a_killed_pickup_run_or_ticket_run_frees_its_slot_for_the_next_pass ... ok\ntest a_pass_that_cant_tell_whether_its_issue_is_a_spec_fails_before_saying_it_took_it ... ok\ntest a_pass_that_would_be_skipped_for_having_no_ready_issue_still_stops_on_the_notifications_checks ... ok\ntest a_pass_that_took_an_issue_sends_one_notification_when_asked ... ok\ntest a_pickup_failure_limit_that_is_not_a_whole_number_from_1_up_stops_the_pass_naming_the_file_and_key ... ok\ntest a_notification_that_cant_be_sent_is_a_warning_that_changes_neither_the_exit_code_nor_stdout ... ok\ntest a_pass_that_would_be_skipped_for_the_lock_still_stops_on_the_notifications_checks ... ok\ntest a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_running ... ok\ntest a_pickup_order_flag_beats_pickup_order_in_the_user_config ... ok\ntest a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_run_is_still_going ... ok\ntest a_pickup_routes_its_notification_to_the_repository_address ... ok\ntest a_ready_labelling_whose_account_github_no_longer_knows_is_untrusted ... ok\ntest a_recent_hand_back_on_a_later_history_page_waits_for_settling ... ok\ntest a_rejected_reservation_of_the_next_ready_issue_fails_before_any_claim_or_session ... ok\ntest a_ready_issue_another_host_reserved_is_passed_over_for_the_next_in_its_order ... ok\ntest a_reservation_push_rejection_fails_before_any_claim_or_session ... ok\ntest a_rejecting_pre_push_hook_does_not_block_reserving_or_releasing_a_ready_issue ... ok\ntest a_run_that_fails_on_an_inherited_failure_offers_the_command_that_retries_its_issue_by_hand ... ok\ntest a_same_second_hand_back_across_history_pages_continues_the_branch ... ok\ntest a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_five_minutes_ago_is_not_taken ... ok\ntest a_ready_issue_with_sub_issues_is_run_as_a_spec_run_and_ends_as_that_spec_run_does ... ok\ntest a_spec_whose_only_open_ticket_is_unready_is_passed_over_changing_nothing ... ok\ntest a_spec_whose_open_tickets_are_all_blocked_names_why_each_cant_start ... ok\ntest a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_is_taken ... ok\ntest a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures ... ok\ntest a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken ... ok\ntest a_spec_that_is_a_ready_issue_is_taken_and_its_tickets_get_no_lines ... ok\ntest a_sweep_that_fails_prints_a_warning_and_the_pass_carries_on ... ok\ntest an_edit_whose_account_github_no_longer_knows_is_untrusted ... ok\ntest a_spec_with_one_ticket_still_open_is_taken ... ok\ntest an_invalid_pickup_order_stops_the_pass_naming_the_file_and_key ... ok\ntest an_interrupted_pickup_releases_its_reservation_after_ending_its_claim ... ok\ntest an_issue_labelled_ready_for_agent_less_than_five_minutes_ago_is_not_taken ... ok\ntest an_invalid_pickup_wait_stops_the_pass_naming_the_file_and_key ... ok\ntest an_issue_that_also_has_a_label_that_makes_an_unready_ticket_is_not_taken ... ok\ntest an_issue_labelled_ready_for_agent_more_than_five_minutes_ago_is_taken ... ok\ntest an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken ... ok\ntest an_issue_that_stopped_being_ready_once_reserved_is_released_and_the_next_taken ... ok\ntest an_issue_with_an_issue_branch_on_origin_is_not_taken ... ok\ntest an_issue_with_no_ready_labelling_history_is_passed_over ... ok\ntest an_issue_without_ready_for_agent_is_never_taken_and_with_no_ready_issue_the_pass_is_skipped ... ok\ntest an_issue_written_by_an_untrusted_account_is_passed_over ... ok\ntest a_ticket_run_started_by_hand_is_never_refused_at_the_limit_and_fills_a_slot_that_skips_a_pass ... ok\ntest an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is ... ok\ntest an_old_pickup_limit_is_ignored_with_a_warning_naming_pickup_failure_limit ... ok\ntest an_origin_that_is_not_on_github_stops_the_pass_before_any_label_changes ... ok\ntest an_uncertain_push_reserving_the_next_ready_issue_retains_it_without_dispatching ... ok\ntest an_older_pass_cannot_restart_while_a_newer_pickup_is_live ... ok\ntest an_uncertain_successful_push_retains_the_reservation_without_dispatching ... ok\ntest an_untrusted_edit_is_found_before_a_later_edit_with_no_time ... ok\ntest an_untrusted_edit_past_the_first_page_of_edit_history_is_found ... ok\ntest asked_for_a_notification_with_no_address_known_the_pass_stops_before_any_work ... ok\ntest asked_for_a_notification_with_no_resend_api_key_the_pass_stops_before_any_work ... ok\ntest an_unusable_security_harness_falls_back_before_the_pickup_dispatches_its_run ... ok\ntest at_a_command_limit_of_2_an_architect_run_or_a_security_run_is_skipped_beside_a_pass_from_before_the_command_limit ... ok\ntest an_older_pass_stays_excluded_until_the_last_overlapping_new_pass_ends ... ok\ntest at_a_command_limit_of_2_a_pickup_run_is_skipped_until_a_pass_from_before_the_command_limit_ends ... ok\ntest at_the_default_command_limit_a_pass_beside_a_hand_started_ticket_run_names_the_count_and_limit ... ok\ntest base_ci::a_needs_info_ci_red_ticket_does_not_block_a_new_failure ... ok\ntest base_ci::a_green_rerun_files_one_flaky_ticket_even_after_the_ticket_closes ... ok\ntest base_ci::a_renamed_flaky_ticket_still_covers_its_recorded_test ... ok\ntest base_ci::a_similarly_named_test_does_not_suppress_a_flaky_report ... ok\ntest base_ci::an_occupied_ci_reservation_also_prevents_reruns_and_comments ... ok\ntest base_ci::an_open_ci_red_ticket_gets_new_commit_evidence_only_once ... ok\ntest base_ci::an_open_flaky_ticket_naming_the_same_test_suppresses_a_new_report ... ok\ntest at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_naming_the_count ... ok\ntest base_ci::an_untrusted_ci_red_issue_receives_no_owner_comment ... ok\ntest base_ci::an_untrusted_comment_cannot_hide_a_new_failing_commit ... ok\ntest base_ci::dotted_node_test_names_do_not_cover_a_different_test ... ok\ntest base_ci::first_failed_attempt_is_rerun_immediately_without_filing ... ok\ntest base_ci::an_occupied_ci_reservation_skips_filing_and_keeps_its_owners_ref ... ok\ntest base_ci::an_untrusted_issue_cannot_suppress_a_flaky_report ... ok\ntest base_ci::new_ci_evidence_is_commented_on_the_trusted_ticket_only ... ok\ntest base_ci::node_failure_summary_does_not_make_different_tests_duplicates ... ok\ntest base_ci::pickup_files_ci_red_for_the_named_base_and_does_not_take_it ... ok\ntest base_ci::node_spec_flakes_keep_evidence_and_deduplicate_by_test ... ok\ntest base_ci::pickup_deduplicates_across_bases_and_labels_but_closed_tickets_allow_filing ... ok\ntest base_ci::pickup_files_one_ci_red_ticket_without_job_names_logs_or_ready_for_agent ... ok\ntest base_ci::refused_or_impossible_first_reruns_warn_and_fall_back_to_filing ... ok\ntest base_ci::pickup_ignores_green_pending_and_young_latest_push_runs ... ok\ntest base_ci::unreadable_job_logs_still_file_a_ci_red_ticket_without_log_lines ... ok\ntest base_fix_reaches_the_dispatched_run ... ok\ntest base_makes_the_named_branch_the_dispatched_runs_base_branch_whatever_is_checked_out ... ok\ntest claims_whose_pull_requests_are_ready_draft_or_merged_never_count ... ok\ntest delayed_selector_after_failed_winner_passes_over_its_stale_selection_for_the_next ... ok\ntest base_makes_the_named_branch_the_dispatched_spec_runs_base_branch ... ok\ntest base_ci::unreadable_ci_files_nothing_and_does_not_stop_ready_dispatch ... ok\ntest delayed_selector_after_failed_winner_still_starts_only_one_run ... ok\ntest ending_a_pickup_does_not_delete_a_replaced_reservation ... ok\ntest label_history_is_read_past_one_page_before_accepting_or_rejecting_a_hand_back ... ok\ntest merge_reaches_the_dispatched_run ... ok\ntest once_a_pickup_run_has_ended_the_next_takes_the_next_ready_issue ... ok\ntest parallel_is_ignored_without_error_for_an_issue_that_is_not_a_spec ... ok\ntest once_its_ticket_is_no_longer_unready_the_next_pass_takes_the_spec ... ok\ntest pickup_failure_limit_in_the_user_config_raises_and_lowers_the_failure_limit ... ok\ntest pickup_order_in_the_user_config_sets_which_ready_issue_is_run ... ok\ntest pickup_reservation_does_not_publish_unrelated_local_head ... ok\ntest pickup_reservation_records_the_host_holding_it ... ok\ntest parallel_reaches_a_dispatched_spec_run ... ok\ntest stale_listing_must_not_adopt_an_active_claim_generation ... ok\ntest ready_labels_are_read_from_label_events_and_their_actors_trusted_by_membership ... ok\ntest support::child_lifetime::fixture_guardian ... ignored, subprocess entry point for owned fixture commands\ntest started_work_requires_a_hand_back_after_the_last_claim_ended ... ok\ntest the_higher_numbered_of_two_ready_issues_is_run_with_highest_first ... ok\ntest the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched ... ok\ntest the_lower_numbered_of_two_ready_issues_is_run_with_lowest_first ... ok\ntest the_next_ready_issue_tried_is_reserved_recording_the_host_holding_it ... ok\ntest the_model_reaches_the_dispatched_run_once_the_pass_has_checked_it ... ok\ntest the_notification_of_a_failed_run_has_its_pull_request_and_its_cause ... ok\ntest the_notification_of_a_failed_spec_run_has_each_tickets_outcome ... ok\ntest the_notification_of_a_merge_run_says_it_merged ... ok\ntest the_notification_of_a_run_left_ready_for_review_is_that_runs ... ok\ntest the_notification_of_an_interrupted_run_says_it_was_interrupted ... ok\ntest the_notifications_checks_come_before_the_checks_on_the_clone ... ok\ntest the_sweep_does_not_run_on_a_pass_skipped_for_the_lock ... ok\ntest the_sweep_takes_the_label_off_as_the_closed_issue_spells_it ... ok\ntest pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling ... ok\ntest the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket ... ok\ntest when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_taken ... ok\ntest with_every_ready_issue_reserved_elsewhere_the_pass_is_skipped_with_no_notification ... ok\ntest with_only_a_spec_whose_tickets_are_all_closed_the_pass_is_skipped_changing_nothing ... ok\ntest two_machines_racing_for_two_ready_issues_each_take_one ... ok\ntest two_machines_racing_for_a_ready_issue_start_exactly_one_run ... ok\ntest zero_pickup_wait_ignores_server_timestamps_ahead_of_local_clock ... ok\n\ntest result: ok. 143 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 179.16s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running tests/fresh_run.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/fresh_run-698863528a40010f)\n     Running tests/pickup_model.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_model-867028bc056c5a13)\n     Running tests/pickup_run.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_run-6753c73530d49b62)\n\n$ cargo test --locked --test console api::inbox_api_equals_status_json_without_sign_in -- --exact --test-threads=1\n\nrunning 1 test\ntest api::inbox_api_equals_status_json_without_sign_in ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 236 filtered out; finished in 0.12s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n\n$ cargo test --locked --test console api::openapi_equals_cli_and_describes_operations_without_local_secrets -- --exact --test-threads=1\n\nrunning 1 test\ntest api::openapi_equals_cli_and_describes_operations_without_local_secrets ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 236 filtered out; finished in 0.34s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n\n$ cargo test --locked --test console dismiss -- --test-threads=3\n\nrunning 8 tests\ntest accounts::dismiss::console_dismiss_accumulates_kinds_when_a_silent_command_fails ... ok\ntest accounts::dismiss::console_dismiss_and_undo_refuse_missing_sessions_bad_csrf_and_gets ... ok\ntest accounts::dismiss::console_dismiss_availability_follows_the_kept_github_answer ... ok\ntest accounts::dismiss::console_dismiss_is_unavailable_for_commands_that_are_not_waiting ... ok\ntest accounts::dismiss::console_dismiss_and_undo_update_open_pages_and_name_the_account ... ok\ntest actions::act_scope_dismisses_and_undoes_with_audit_and_token_activity ... ok\ntest accounts::dismiss::console_dismiss_is_unavailable_for_mixed_collapsed_rows ... ok\ntest accounts::dismiss::dismissing_a_silent_command_keeps_it_running_and_offers_stop_and_undo ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 229 filtered out; finished in 10.55s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s\n     Running tests/console.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/console-7fc8078405925ff0)\n"
+    },
+    {
+      "language": "rust",
+      "operation": "model",
+      "cache": "cold",
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "pickup_model",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 2.234682031000033,
+      "exitCode": 0,
+      "output": "$ cargo test --locked --test pickup_model -- --test-threads=1 --nocapture\n\nrunning 5 tests\ntest assert_requested_property ... ignored, known pre-Claim dispatch finding; run explicitly to see the failure\ntest current_protocol_reports_pre_claim_dispatch_counterexample ... ok\ntest pickup_claimed_dispatch_safety ... ok\ntest removing_claim_count_recheck_is_detected ... ok\ntest removing_empty_create_lease_is_detected ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.75s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s\n     Running tests/pickup_model.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_model-867028bc056c5a13)\nCurrent, Dispatch: 7093 unique states\nKNOWN FINDING: the literal dispatch property fails: Path[14]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- FailBeforeClaim(0)\n- ReleaseReservation(0)\n- ListReady(1)\n- SelectHistory(1)\n- CreateReservation(1)\n- RefreshIssue(1)\n- RefreshHistory(1)\n- Dispatch(1)\n\nCurrent, ClaimedDispatch: 86745 unique states\nWithoutClaimCount, ClaimedDispatch: 20675 unique states\nClaim-count mutation counterexample: Path[19]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- ReadClaimLabels(0)\n- ListReady(1)\n- SelectHistory(1)\n- PutClaimLabels(0)\n- KeepClaim(0)\n- ReleaseReservation(0)\n- CreateReservation(1)\n- DayHandsBack\n- RefreshIssue(1)\n- RefreshHistory(1)\n- Dispatch(1)\n- ReadClaimLabels(1)\n- PutClaimLabels(1)\n\nUnconditionalCreate, ClaimedDispatch: 22520 unique states\nEmpty-lease mutation counterexample: Path[15]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- ReadClaimLabels(0)\n- ListReady(1)\n- SelectHistory(1)\n- CreateReservation(1)\n- RefreshIssue(1)\n- RefreshHistory(1)\n- PutClaimLabels(0)\n- Dispatch(1)\n- ReadClaimLabels(1)\n\n"
+    },
+    {
+      "language": "rust",
+      "operation": "model",
+      "cache": "incremental",
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "--locked",
+          "--test",
+          "pickup_model",
+          "--",
+          "--test-threads=1",
+          "--nocapture"
+        ]
+      ],
+      "cwd": ".",
+      "seconds": 2.3046782870001623,
+      "exitCode": 0,
+      "output": "$ cargo test --locked --test pickup_model -- --test-threads=1 --nocapture\n\nrunning 5 tests\ntest assert_requested_property ... ignored, known pre-Claim dispatch finding; run explicitly to see the failure\ntest current_protocol_reports_pre_claim_dispatch_counterexample ... ok\ntest pickup_claimed_dispatch_safety ... ok\ntest removing_claim_count_recheck_is_detected ... ok\ntest removing_empty_create_lease_is_detected ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.84s\n\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running tests/pickup_model.rs (/tmp/thirdshift-benchmark-Hlg6zl/targets/test/debug/deps/pickup_model-867028bc056c5a13)\nCurrent, Dispatch: 7093 unique states\nKNOWN FINDING: the literal dispatch property fails: Path[14]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- FailBeforeClaim(0)\n- ReleaseReservation(0)\n- ListReady(1)\n- SelectHistory(1)\n- CreateReservation(1)\n- RefreshIssue(1)\n- RefreshHistory(1)\n- Dispatch(1)\n\nCurrent, ClaimedDispatch: 86745 unique states\nWithoutClaimCount, ClaimedDispatch: 20675 unique states\nClaim-count mutation counterexample: Path[19]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- ReadClaimLabels(0)\n- ListReady(1)\n- SelectHistory(1)\n- PutClaimLabels(0)\n- KeepClaim(0)\n- ReleaseReservation(0)\n- CreateReservation(1)\n- DayHandsBack\n- RefreshIssue(1)\n- RefreshHistory(1)\n- Dispatch(1)\n- ReadClaimLabels(1)\n- PutClaimLabels(1)\n\nUnconditionalCreate, ClaimedDispatch: 22520 unique states\nEmpty-lease mutation counterexample: Path[15]:\n- ListReady(0)\n- SelectHistory(0)\n- CreateReservation(0)\n- RefreshIssue(0)\n- RefreshHistory(0)\n- Dispatch(0)\n- ReadClaimLabels(0)\n- ListReady(1)\n- SelectHistory(1)\n- CreateReservation(1)\n- RefreshIssue(1)\n- RefreshHistory(1)\n- PutClaimLabels(0)\n- Dispatch(1)\n- ReadClaimLabels(1)\n\n"
+    }
+  ],
+  "binaryBytes": {
+    "typescript": 109766832,
+    "rust": 27849936
+  },
+  "runtimeMemory": {
+    "typescript": {
+      "command": [
+        "/home/jstephens/repos/thirdshift-issue-1831/prototypes/typescript/build/thirdshift",
+        "status",
+        "--json"
+      ],
+      "peakRssBytes": 26378240,
+      "exitCode": 0,
+      "output": "{\"activeRuns\":0,\"rows\":[]}\n",
+      "stderr": ""
+    },
+    "rust": {
+      "command": [
+        "/home/jstephens/repos/thirdshift-issue-1831/target/release/thirdshift",
+        "status",
+        "--json"
+      ],
+      "peakRssBytes": 7077888,
+      "exitCode": 0,
+      "output": "{\n  \"version\": 1,\n  \"hostname\": \"dev.etadventures.com\",\n  \"active_runs\": 0,\n  \"commands\": [],\n  \"idle_passes\": [],\n  \"pass_starts\": [],\n  \"github_answer_age_seconds\": null,\n  \"github_last_answered_at\": null,\n  \"github_failure\": null\n}\n",
+      "stderr": ""
+    }
+  },
+  "runtimeMemoryEvidence": {
+    "commit": "cb0c7068975978f933f863b304a9c9c036b66c72",
+    "timestamp": "2026-11-07T00:37:24.736136+00:00",
+    "python": "Python 3.9.25",
+    "bun": "1.4.4",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "buildCommands": {
+      "typescript": {
+        "cwd": "prototypes/typescript",
+        "command": [
+          "bun",
+          "run",
+          "build"
+        ]
+      },
+      "rust": {
+        "cwd": ".",
+        "command": [
+          "cargo",
+          "build",
+          "--release",
+          "--locked",
+          "--bin",
+          "thirdshift"
+        ],
+        "env": {
+          "CARGO_BUILD_JOBS": "4"
+        }
+      }
+    },
+    "sourceEquivalence": "git diff 8700be5d cb0c7068 -- prototypes/typescript/src src Cargo.toml Cargo.lock prototypes/typescript/build.ts prototypes/typescript/bun.lock is empty",
+    "samples": 1,
+    "scope": "Supplemental startup/status measurement on the same Linux host, with empty isolated HOME/XDG state; original timing observations retained."
+  },
+  "sources": {
+    "typescript": {
+      "production": {
+        "lines": 1146,
+        "files": [
+          {
+            "path": "prototypes/typescript/src/ci.ts",
+            "lines": 48
+          },
+          {
+            "path": "prototypes/typescript/src/claim.ts",
+            "lines": 73
+          },
+          {
+            "path": "prototypes/typescript/src/console/client.ts",
+            "lines": 75
+          },
+          {
+            "path": "prototypes/typescript/src/console/inbox.ts",
+            "lines": 46
+          },
+          {
+            "path": "prototypes/typescript/src/console/index.html",
+            "lines": 44
+          },
+          {
+            "path": "prototypes/typescript/src/console/routes.ts",
+            "lines": 61
+          },
+          {
+            "path": "prototypes/typescript/src/console/schema.ts",
+            "lines": 24
+          },
+          {
+            "path": "prototypes/typescript/src/console/server.ts",
+            "lines": 36
+          },
+          {
+            "path": "prototypes/typescript/src/delivery.ts",
+            "lines": 180
+          },
+          {
+            "path": "prototypes/typescript/src/github.ts",
+            "lines": 56
+          },
+          {
+            "path": "prototypes/typescript/src/harness.ts",
+            "lines": 18
+          },
+          {
+            "path": "prototypes/typescript/src/main.ts",
+            "lines": 38
+          },
+          {
+            "path": "prototypes/typescript/src/pickup.ts",
+            "lines": 33
+          },
+          {
+            "path": "prototypes/typescript/src/process.ts",
+            "lines": 91
+          },
+          {
+            "path": "prototypes/typescript/src/ready.ts",
+            "lines": 127
+          },
+          {
+            "path": "prototypes/typescript/src/reservation.ts",
+            "lines": 41
+          },
+          {
+            "path": "prototypes/typescript/src/ticket.ts",
+            "lines": 112
+          },
+          {
+            "path": "prototypes/typescript/src/worktree.ts",
+            "lines": 43
+          }
+        ]
+      },
+      "model": {
+        "lines": 158,
+        "files": [
+          {
+            "path": "prototypes/typescript/tests/pickup-model.test.ts",
+            "lines": 158
+          }
+        ]
+      }
+    },
+    "rust": {
+      "production": {
+        "lines": 155462,
+        "files": [
+          {
+            "path": "src/architect/conclusion.rs",
+            "lines": 51
+          },
+          {
+            "path": "src/architect/test_support.rs",
+            "lines": 49
+          },
+          {
+            "path": "src/architect.rs",
+            "lines": 1138
+          },
+          {
+            "path": "src/args.rs",
+            "lines": 2738
+          },
+          {
+            "path": "src/asks.rs",
+            "lines": 992
+          },
+          {
+            "path": "src/base_fix.rs",
+            "lines": 1353
+          },
+          {
+            "path": "src/branch.rs",
+            "lines": 699
+          },
+          {
+            "path": "src/child_run/asks.rs",
+            "lines": 46
+          },
+          {
+            "path": "src/child_run/execution_tests.rs",
+            "lines": 707
+          },
+          {
+            "path": "src/child_run/runs.rs",
+            "lines": 93
+          },
+          {
+            "path": "src/child_run.rs",
+            "lines": 1287
+          },
+          {
+            "path": "src/ci.rs",
+            "lines": 2952
+          },
+          {
+            "path": "src/claim.rs",
+            "lines": 1367
+          },
+          {
+            "path": "src/command.rs",
+            "lines": 204
+          },
+          {
+            "path": "src/command_limit.rs",
+            "lines": 298
+          },
+          {
+            "path": "src/config/console/themes.rs",
+            "lines": 321
+          },
+          {
+            "path": "src/config/console.rs",
+            "lines": 363
+          },
+          {
+            "path": "src/config/review.rs",
+            "lines": 37
+          },
+          {
+            "path": "src/config/scoring.rs",
+            "lines": 70
+          },
+          {
+            "path": "src/config/settings.rs",
+            "lines": 324
+          },
+          {
+            "path": "src/config.rs",
+            "lines": 2575
+          },
+          {
+            "path": "src/console/account.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/account_base.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/account_commands.rs",
+            "lines": 134
+          },
+          {
+            "path": "src/console/account_log.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/accounts/codes.rs",
+            "lines": 92
+          },
+          {
+            "path": "src/console/accounts/tests.rs",
+            "lines": 274
+          },
+          {
+            "path": "src/console/accounts.rs",
+            "lines": 377
+          },
+          {
+            "path": "src/console/api.rs",
+            "lines": 111
+          },
+          {
+            "path": "src/console/assets/changes.js",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/console.css",
+            "lines": 302
+          },
+          {
+            "path": "src/console/assets/console.js",
+            "lines": 632
+          },
+          {
+            "path": "src/console/assets/experiments.css",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/experiments.js",
+            "lines": 86
+          },
+          {
+            "path": "src/console/assets/logs.js",
+            "lines": 108
+          },
+          {
+            "path": "src/console/assets/look.js",
+            "lines": 219
+          },
+          {
+            "path": "src/console/assets/notifications.js",
+            "lines": 112
+          },
+          {
+            "path": "src/console/assets/resources.js",
+            "lines": 24
+          },
+          {
+            "path": "src/console/assets/spans.css",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/spans.js",
+            "lines": 315
+          },
+          {
+            "path": "src/console/assets/stages.js",
+            "lines": 93
+          },
+          {
+            "path": "src/console/assets/start.js",
+            "lines": 79
+          },
+          {
+            "path": "src/console/assets/stop.js",
+            "lines": 12
+          },
+          {
+            "path": "src/console/assets/themes.css",
+            "lines": 320
+          },
+          {
+            "path": "src/console/assets/vendor/htmx-2.0.7.min.js",
+            "lines": 1
+          },
+          {
+            "path": "src/console/assets/vendor/htmx-ext-sse-2.2.3.js",
+            "lines": 290
+          },
+          {
+            "path": "src/console/assets/vendor/idiomorph-0.7.4.min.js",
+            "lines": 1
+          },
+          {
+            "path": "src/console/assets.rs",
+            "lines": 71
+          },
+          {
+            "path": "src/console/auth/password.rs",
+            "lines": 142
+          },
+          {
+            "path": "src/console/auth/rate_limit.rs",
+            "lines": 100
+          },
+          {
+            "path": "src/console/auth/reply.rs",
+            "lines": 52
+          },
+          {
+            "path": "src/console/auth.rs",
+            "lines": 778
+          },
+          {
+            "path": "src/console/auth_reply.html",
+            "lines": 16
+          },
+          {
+            "path": "src/console/brand.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/bug_origins.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/bug_origins.rs",
+            "lines": 71
+          },
+          {
+            "path": "src/console/changes.rs",
+            "lines": 420
+          },
+          {
+            "path": "src/console/chrome.html",
+            "lines": 47
+          },
+          {
+            "path": "src/console/commands.rs",
+            "lines": 226
+          },
+          {
+            "path": "src/console/conversation.rs",
+            "lines": 352
+          },
+          {
+            "path": "src/console/cronjobs.html",
+            "lines": 26
+          },
+          {
+            "path": "src/console/cronjobs.rs",
+            "lines": 46
+          },
+          {
+            "path": "src/console/dismiss.rs",
+            "lines": 58
+          },
+          {
+            "path": "src/console/evals.rs",
+            "lines": 21
+          },
+          {
+            "path": "src/console/experiments/render.rs",
+            "lines": 1204
+          },
+          {
+            "path": "src/console/experiments.html",
+            "lines": 21
+          },
+          {
+            "path": "src/console/experiments.rs",
+            "lines": 111
+          },
+          {
+            "path": "src/console/fact.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/filters.rs",
+            "lines": 139
+          },
+          {
+            "path": "src/console/github.rs",
+            "lines": 22
+          },
+          {
+            "path": "src/console/header-status.html",
+            "lines": 7
+          },
+          {
+            "path": "src/console/header.html",
+            "lines": 4
+          },
+          {
+            "path": "src/console/host-resources.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/identity.rs",
+            "lines": 80
+          },
+          {
+            "path": "src/console/inbox.html",
+            "lines": 78
+          },
+          {
+            "path": "src/console/install.rs",
+            "lines": 257
+          },
+          {
+            "path": "src/console/live.rs",
+            "lines": 63
+          },
+          {
+            "path": "src/console/logs.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/logs.rs",
+            "lines": 319
+          },
+          {
+            "path": "src/console/look.rs",
+            "lines": 252
+          },
+          {
+            "path": "src/console/nav.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/notifications.html",
+            "lines": 2
+          },
+          {
+            "path": "src/console/openapi.rs",
+            "lines": 486
+          },
+          {
+            "path": "src/console/parity.rs",
+            "lines": 322
+          },
+          {
+            "path": "src/console/pass_start.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/password_off.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/peek.html",
+            "lines": 22
+          },
+          {
+            "path": "src/console/peek.rs",
+            "lines": 549
+          },
+          {
+            "path": "src/console/reader.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/resources.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/resources.rs",
+            "lines": 100
+          },
+          {
+            "path": "src/console/restart.rs",
+            "lines": 49
+          },
+          {
+            "path": "src/console/row.html",
+            "lines": 20
+          },
+          {
+            "path": "src/console/scores.html",
+            "lines": 21
+          },
+          {
+            "path": "src/console/scoring.rs",
+            "lines": 96
+          },
+          {
+            "path": "src/console/set_password.html",
+            "lines": 25
+          },
+          {
+            "path": "src/console/set_password_code.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/sign_in.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/start/experiment.rs",
+            "lines": 89
+          },
+          {
+            "path": "src/console/start.rs",
+            "lines": 635
+          },
+          {
+            "path": "src/console/start_confirm.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/start_controls.rs",
+            "lines": 258
+          },
+          {
+            "path": "src/console/start_form.html",
+            "lines": 30
+          },
+          {
+            "path": "src/console/stop.html",
+            "lines": 20
+          },
+          {
+            "path": "src/console/stop.rs",
+            "lines": 98
+          },
+          {
+            "path": "src/console/subscription/tests.rs",
+            "lines": 260
+          },
+          {
+            "path": "src/console/subscription.rs",
+            "lines": 117
+          },
+          {
+            "path": "src/console/time.html",
+            "lines": 64
+          },
+          {
+            "path": "src/console/time.rs",
+            "lines": 47
+          },
+          {
+            "path": "src/console/tokens.rs",
+            "lines": 243
+          },
+          {
+            "path": "src/console/update.html",
+            "lines": 15
+          },
+          {
+            "path": "src/console/update.rs",
+            "lines": 74
+          },
+          {
+            "path": "src/console/user_config.html",
+            "lines": 27
+          },
+          {
+            "path": "src/console/user_config.rs",
+            "lines": 113
+          },
+          {
+            "path": "src/console/watching.rs",
+            "lines": 173
+          },
+          {
+            "path": "src/console/waterfall.html",
+            "lines": 35
+          },
+          {
+            "path": "src/console/waterfall.rs",
+            "lines": 97
+          },
+          {
+            "path": "src/console.rs",
+            "lines": 1824
+          },
+          {
+            "path": "src/cronjobs.rs",
+            "lines": 116
+          },
+          {
+            "path": "src/delivery/repair_loop.rs",
+            "lines": 2180
+          },
+          {
+            "path": "src/delivery/stage.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/delivery/test_support.rs",
+            "lines": 236
+          },
+          {
+            "path": "src/delivery/tests.rs",
+            "lines": 167
+          },
+          {
+            "path": "src/delivery.rs",
+            "lines": 1506
+          },
+          {
+            "path": "src/email.rs",
+            "lines": 173
+          },
+          {
+            "path": "src/evals/approval.rs",
+            "lines": 61
+          },
+          {
+            "path": "src/evals/arms.rs",
+            "lines": 202
+          },
+          {
+            "path": "src/evals/bug_origin.rs",
+            "lines": 124
+          },
+          {
+            "path": "src/evals/experiment/cost.rs",
+            "lines": 242
+          },
+          {
+            "path": "src/evals/experiment/difficulty.rs",
+            "lines": 110
+          },
+          {
+            "path": "src/evals/experiment/evidence.rs",
+            "lines": 40
+          },
+          {
+            "path": "src/evals/experiment/execution/monitor.rs",
+            "lines": 150
+          },
+          {
+            "path": "src/evals/experiment/execution/tests.rs",
+            "lines": 1074
+          },
+          {
+            "path": "src/evals/experiment/execution/toolchains.rs",
+            "lines": 164
+          },
+          {
+            "path": "src/evals/experiment/execution.rs",
+            "lines": 343
+          },
+          {
+            "path": "src/evals/experiment/grading/tests.rs",
+            "lines": 494
+          },
+          {
+            "path": "src/evals/experiment/grading.rs",
+            "lines": 523
+          },
+          {
+            "path": "src/evals/experiment/integrity.rs",
+            "lines": 210
+          },
+          {
+            "path": "src/evals/experiment/model_grader.rs",
+            "lines": 252
+          },
+          {
+            "path": "src/evals/experiment/names.rs",
+            "lines": 98
+          },
+          {
+            "path": "src/evals/experiment/options.rs",
+            "lines": 243
+          },
+          {
+            "path": "src/evals/experiment/reading/tests.rs",
+            "lines": 362
+          },
+          {
+            "path": "src/evals/experiment/reading.rs",
+            "lines": 127
+          },
+          {
+            "path": "src/evals/experiment/rechecks.rs",
+            "lines": 182
+          },
+          {
+            "path": "src/evals/experiment/release.rs",
+            "lines": 46
+          },
+          {
+            "path": "src/evals/experiment/retention.rs",
+            "lines": 99
+          },
+          {
+            "path": "src/evals/experiment/session_evidence/tests.rs",
+            "lines": 279
+          },
+          {
+            "path": "src/evals/experiment/session_evidence.rs",
+            "lines": 149
+          },
+          {
+            "path": "src/evals/experiment/store.rs",
+            "lines": 549
+          },
+          {
+            "path": "src/evals/experiment/trace.rs",
+            "lines": 260
+          },
+          {
+            "path": "src/evals/experiment/trial/tests.rs",
+            "lines": 425
+          },
+          {
+            "path": "src/evals/experiment/trial.rs",
+            "lines": 193
+          },
+          {
+            "path": "src/evals/experiment/trial_results/files/observed.rs",
+            "lines": 51
+          },
+          {
+            "path": "src/evals/experiment/trial_results/files.rs",
+            "lines": 79
+          },
+          {
+            "path": "src/evals/experiment/trial_results/tests.rs",
+            "lines": 279
+          },
+          {
+            "path": "src/evals/experiment/trial_results.rs",
+            "lines": 254
+          },
+          {
+            "path": "src/evals/experiment/trial_sessions/tests.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/evals/experiment/trial_sessions.rs",
+            "lines": 82
+          },
+          {
+            "path": "src/evals/experiment/usage.rs",
+            "lines": 102
+          },
+          {
+            "path": "src/evals/experiment/workers.rs",
+            "lines": 101
+          },
+          {
+            "path": "src/evals/experiment.rs",
+            "lines": 539
+          },
+          {
+            "path": "src/evals/format.rs",
+            "lines": 162
+          },
+          {
+            "path": "src/evals/import.rs",
+            "lines": 375
+          },
+          {
+            "path": "src/evals/repository/tests.rs",
+            "lines": 251
+          },
+          {
+            "path": "src/evals/repository.rs",
+            "lines": 312
+          },
+          {
+            "path": "src/evals/suite.rs",
+            "lines": 164
+          },
+          {
+            "path": "src/evals.rs",
+            "lines": 144
+          },
+          {
+            "path": "src/failed_run.rs",
+            "lines": 108
+          },
+          {
+            "path": "src/fix/base_ci.rs",
+            "lines": 128
+          },
+          {
+            "path": "src/fix.rs",
+            "lines": 215
+          },
+          {
+            "path": "src/git/execution_tests.rs",
+            "lines": 459
+          },
+          {
+            "path": "src/git/transport.rs",
+            "lines": 108
+          },
+          {
+            "path": "src/git.rs",
+            "lines": 798
+          },
+          {
+            "path": "src/github/advisories/description.rs",
+            "lines": 262
+          },
+          {
+            "path": "src/github/advisories.rs",
+            "lines": 920
+          },
+          {
+            "path": "src/github/advisories_tests.rs",
+            "lines": 939
+          },
+          {
+            "path": "src/github/base_ci.rs",
+            "lines": 592
+          },
+          {
+            "path": "src/github/check_read.rs",
+            "lines": 77
+          },
+          {
+            "path": "src/github/execution_tests.rs",
+            "lines": 1472
+          },
+          {
+            "path": "src/github/quota.rs",
+            "lines": 84
+          },
+          {
+            "path": "src/github/review.rs",
+            "lines": 503
+          },
+          {
+            "path": "src/github/scoring/origins/review.rs",
+            "lines": 159
+          },
+          {
+            "path": "src/github/scoring/origins.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/github/scoring/packet.rs",
+            "lines": 190
+          },
+          {
+            "path": "src/github/scoring.rs",
+            "lines": 197
+          },
+          {
+            "path": "src/github/session_issue.rs",
+            "lines": 147
+          },
+          {
+            "path": "src/github/trust.rs",
+            "lines": 162
+          },
+          {
+            "path": "src/github.rs",
+            "lines": 2024
+          },
+          {
+            "path": "src/harness/adapter.rs",
+            "lines": 163
+          },
+          {
+            "path": "src/harness/agy/catalog.rs",
+            "lines": 218
+          },
+          {
+            "path": "src/harness/agy/events.rs",
+            "lines": 182
+          },
+          {
+            "path": "src/harness/agy/stream.rs",
+            "lines": 392
+          },
+          {
+            "path": "src/harness/agy.rs",
+            "lines": 254
+          },
+          {
+            "path": "src/harness/built_with.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/harness/claude.rs",
+            "lines": 284
+          },
+          {
+            "path": "src/harness/codex/catalog.rs",
+            "lines": 162
+          },
+          {
+            "path": "src/harness/codex/events.rs",
+            "lines": 216
+          },
+          {
+            "path": "src/harness/codex/limits.rs",
+            "lines": 102
+          },
+          {
+            "path": "src/harness/codex/patches.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/harness/codex/stream.rs",
+            "lines": 668
+          },
+          {
+            "path": "src/harness/codex.rs",
+            "lines": 297
+          },
+          {
+            "path": "src/harness/grok/catalog.rs",
+            "lines": 195
+          },
+          {
+            "path": "src/harness/grok.rs",
+            "lines": 228
+          },
+          {
+            "path": "src/harness/instructions.rs",
+            "lines": 40
+          },
+          {
+            "path": "src/harness/interpretation/event.rs",
+            "lines": 564
+          },
+          {
+            "path": "src/harness/interpretation/event_tests.rs",
+            "lines": 561
+          },
+          {
+            "path": "src/harness/interpretation/limits.rs",
+            "lines": 163
+          },
+          {
+            "path": "src/harness/interpretation/models.rs",
+            "lines": 29
+          },
+          {
+            "path": "src/harness/interpretation/security.rs",
+            "lines": 75
+          },
+          {
+            "path": "src/harness/interpretation/stream/events.rs",
+            "lines": 472
+          },
+          {
+            "path": "src/harness/interpretation/stream/tests.rs",
+            "lines": 1028
+          },
+          {
+            "path": "src/harness/interpretation/stream.rs",
+            "lines": 590
+          },
+          {
+            "path": "src/harness/interpretation.rs",
+            "lines": 479
+          },
+          {
+            "path": "src/harness/interpretation_tests.rs",
+            "lines": 1586
+          },
+          {
+            "path": "src/harness/muse/catalog.rs",
+            "lines": 131
+          },
+          {
+            "path": "src/harness/muse/events.rs",
+            "lines": 364
+          },
+          {
+            "path": "src/harness/muse/log.rs",
+            "lines": 371
+          },
+          {
+            "path": "src/harness/muse/stream.rs",
+            "lines": 351
+          },
+          {
+            "path": "src/harness/muse.rs",
+            "lines": 227
+          },
+          {
+            "path": "src/harness/opencode/events.rs",
+            "lines": 310
+          },
+          {
+            "path": "src/harness/opencode/export.rs",
+            "lines": 199
+          },
+          {
+            "path": "src/harness/opencode/stream.rs",
+            "lines": 250
+          },
+          {
+            "path": "src/harness/opencode.rs",
+            "lines": 220
+          },
+          {
+            "path": "src/harness/process.rs",
+            "lines": 54
+          },
+          {
+            "path": "src/harness/settings/tests.rs",
+            "lines": 998
+          },
+          {
+            "path": "src/harness/settings.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/harness/skill_load.rs",
+            "lines": 38
+          },
+          {
+            "path": "src/harness/summary.rs",
+            "lines": 37
+          },
+          {
+            "path": "src/harness/version.rs",
+            "lines": 130
+          },
+          {
+            "path": "src/harness.rs",
+            "lines": 666
+          },
+          {
+            "path": "src/host.rs",
+            "lines": 13
+          },
+          {
+            "path": "src/implement.rs",
+            "lines": 99
+          },
+          {
+            "path": "src/interrupt.rs",
+            "lines": 81
+          },
+          {
+            "path": "src/issue.rs",
+            "lines": 192
+          },
+          {
+            "path": "src/labels.rs",
+            "lines": 486
+          },
+          {
+            "path": "src/launch.rs",
+            "lines": 1071
+          },
+          {
+            "path": "src/launch_directories.rs",
+            "lines": 214
+          },
+          {
+            "path": "src/local_time.rs",
+            "lines": 142
+          },
+          {
+            "path": "src/logs/accounts.rs",
+            "lines": 147
+          },
+          {
+            "path": "src/logs/activity.rs",
+            "lines": 85
+          },
+          {
+            "path": "src/logs/actor.rs",
+            "lines": 57
+          },
+          {
+            "path": "src/logs/command_record.rs",
+            "lines": 470
+          },
+          {
+            "path": "src/logs/dismiss.rs",
+            "lines": 392
+          },
+          {
+            "path": "src/logs/effects.rs",
+            "lines": 116
+          },
+          {
+            "path": "src/logs/export.rs",
+            "lines": 237
+          },
+          {
+            "path": "src/logs/github.rs",
+            "lines": 549
+          },
+          {
+            "path": "src/logs/metrics/bug_origins.rs",
+            "lines": 34
+          },
+          {
+            "path": "src/logs/metrics/trends.rs",
+            "lines": 337
+          },
+          {
+            "path": "src/logs/metrics.rs",
+            "lines": 165
+          },
+          {
+            "path": "src/logs/owner/tests.rs",
+            "lines": 166
+          },
+          {
+            "path": "src/logs/owner.rs",
+            "lines": 371
+          },
+          {
+            "path": "src/logs/pass_starts.rs",
+            "lines": 75
+          },
+          {
+            "path": "src/logs/process_identity.rs",
+            "lines": 46
+          },
+          {
+            "path": "src/logs/reading/attribution.rs",
+            "lines": 97
+          },
+          {
+            "path": "src/logs/reading/attribution_tests.rs",
+            "lines": 180
+          },
+          {
+            "path": "src/logs/reading/cache/retained_signals.rs",
+            "lines": 82
+          },
+          {
+            "path": "src/logs/reading/cache.rs",
+            "lines": 231
+          },
+          {
+            "path": "src/logs/reading/captured_activity.rs",
+            "lines": 71
+          },
+          {
+            "path": "src/logs/reading/catalog.rs",
+            "lines": 325
+          },
+          {
+            "path": "src/logs/reading/health.rs",
+            "lines": 150
+          },
+          {
+            "path": "src/logs/reading/history.rs",
+            "lines": 347
+          },
+          {
+            "path": "src/logs/reading/inbox.rs",
+            "lines": 1062
+          },
+          {
+            "path": "src/logs/reading/inventory.rs",
+            "lines": 404
+          },
+          {
+            "path": "src/logs/reading/inventory_tests.rs",
+            "lines": 608
+          },
+          {
+            "path": "src/logs/reading/metrics_tests.rs",
+            "lines": 253
+          },
+          {
+            "path": "src/logs/reading/reader.rs",
+            "lines": 189
+          },
+          {
+            "path": "src/logs/reading/reader_tests.rs",
+            "lines": 409
+          },
+          {
+            "path": "src/logs/reading/run_kinds_tests.rs",
+            "lines": 157
+          },
+          {
+            "path": "src/logs/reading/selection.rs",
+            "lines": 502
+          },
+          {
+            "path": "src/logs/reading/tests.rs",
+            "lines": 913
+          },
+          {
+            "path": "src/logs/reading.rs",
+            "lines": 658
+          },
+          {
+            "path": "src/logs/recording/tests.rs",
+            "lines": 1509
+          },
+          {
+            "path": "src/logs/recording.rs",
+            "lines": 849
+          },
+          {
+            "path": "src/logs/run_metrics.rs",
+            "lines": 157
+          },
+          {
+            "path": "src/logs/session.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/logs/session_signals/destructive.rs",
+            "lines": 464
+          },
+          {
+            "path": "src/logs/session_signals.rs",
+            "lines": 295
+          },
+          {
+            "path": "src/logs/spans/session.rs",
+            "lines": 357
+          },
+          {
+            "path": "src/logs/spans.rs",
+            "lines": 436
+          },
+          {
+            "path": "src/logs/start_notice.rs",
+            "lines": 76
+          },
+          {
+            "path": "src/logs/status/inbox.rs",
+            "lines": 589
+          },
+          {
+            "path": "src/logs/status/inspect.rs",
+            "lines": 315
+          },
+          {
+            "path": "src/logs/status/time.rs",
+            "lines": 436
+          },
+          {
+            "path": "src/logs/status/watching.rs",
+            "lines": 65
+          },
+          {
+            "path": "src/logs/status.rs",
+            "lines": 347
+          },
+          {
+            "path": "src/logs/stop.rs",
+            "lines": 312
+          },
+          {
+            "path": "src/logs/trace/ancestry/tests.rs",
+            "lines": 332
+          },
+          {
+            "path": "src/logs/trace/ancestry.rs",
+            "lines": 147
+          },
+          {
+            "path": "src/logs/trace.rs",
+            "lines": 134
+          },
+          {
+            "path": "src/logs/usual_range.rs",
+            "lines": 94
+          },
+          {
+            "path": "src/logs.rs",
+            "lines": 644
+          },
+          {
+            "path": "src/main.rs",
+            "lines": 748
+          },
+          {
+            "path": "src/notification.rs",
+            "lines": 1175
+          },
+          {
+            "path": "src/otlp_jsonl/integer.rs",
+            "lines": 84
+          },
+          {
+            "path": "src/otlp_jsonl/tests.rs",
+            "lines": 592
+          },
+          {
+            "path": "src/otlp_jsonl/value.rs",
+            "lines": 163
+          },
+          {
+            "path": "src/otlp_jsonl.rs",
+            "lines": 338
+          },
+          {
+            "path": "src/pass.rs",
+            "lines": 1194
+          },
+          {
+            "path": "src/pickup.rs",
+            "lines": 1021
+          },
+          {
+            "path": "src/poll.rs",
+            "lines": 93
+          },
+          {
+            "path": "src/process/faults.rs",
+            "lines": 49
+          },
+          {
+            "path": "src/process/session.rs",
+            "lines": 197
+          },
+          {
+            "path": "src/process/testing.rs",
+            "lines": 10
+          },
+          {
+            "path": "src/process/tests.rs",
+            "lines": 1041
+          },
+          {
+            "path": "src/process/tree.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/process.rs",
+            "lines": 572
+          },
+          {
+            "path": "src/processes/architect/tests.rs",
+            "lines": 216
+          },
+          {
+            "path": "src/processes/architect.rs",
+            "lines": 166
+          },
+          {
+            "path": "src/processes/architecture.rs",
+            "lines": 96
+          },
+          {
+            "path": "src/processes/builtin.rs",
+            "lines": 45
+          },
+          {
+            "path": "src/processes/catalog.rs",
+            "lines": 200
+          },
+          {
+            "path": "src/processes/findings.rs",
+            "lines": 220
+          },
+          {
+            "path": "src/processes/fix.rs",
+            "lines": 21
+          },
+          {
+            "path": "src/processes/identity.rs",
+            "lines": 66
+          },
+          {
+            "path": "src/processes/review/conflicts.rs",
+            "lines": 102
+          },
+          {
+            "path": "src/processes/review/delivery.rs",
+            "lines": 256
+          },
+          {
+            "path": "src/processes/review.rs",
+            "lines": 798
+          },
+          {
+            "path": "src/processes/security.rs",
+            "lines": 192
+          },
+          {
+            "path": "src/processes/security_audit.rs",
+            "lines": 183
+          },
+          {
+            "path": "src/processes/spec.rs",
+            "lines": 120
+          },
+          {
+            "path": "src/processes/spec_review.rs",
+            "lines": 93
+          },
+          {
+            "path": "src/processes/ticket/tests.rs",
+            "lines": 172
+          },
+          {
+            "path": "src/processes/ticket.rs",
+            "lines": 141
+          },
+          {
+            "path": "src/processes.rs",
+            "lines": 3752
+          },
+          {
+            "path": "src/progress.rs",
+            "lines": 250
+          },
+          {
+            "path": "src/prompt.rs",
+            "lines": 1129
+          },
+          {
+            "path": "src/prompts_page.rs",
+            "lines": 1347
+          },
+          {
+            "path": "src/proxy.rs",
+            "lines": 794
+          },
+          {
+            "path": "src/pull_request/findings.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/pull_request.rs",
+            "lines": 2031
+          },
+          {
+            "path": "src/ready.rs",
+            "lines": 1596
+          },
+          {
+            "path": "src/recovery.rs",
+            "lines": 381
+          },
+          {
+            "path": "src/resend_key.rs",
+            "lines": 452
+          },
+          {
+            "path": "src/reservation.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/resources.rs",
+            "lines": 193
+          },
+          {
+            "path": "src/review/reservation.rs",
+            "lines": 61
+          },
+          {
+            "path": "src/review.rs",
+            "lines": 70
+          },
+          {
+            "path": "src/run.rs",
+            "lines": 1479
+          },
+          {
+            "path": "src/run_ending.rs",
+            "lines": 1552
+          },
+          {
+            "path": "src/sandbox/code_grader.rs",
+            "lines": 269
+          },
+          {
+            "path": "src/sandbox/triage.rs",
+            "lines": 526
+          },
+          {
+            "path": "src/sandbox.rs",
+            "lines": 2103
+          },
+          {
+            "path": "src/scope/testing.rs",
+            "lines": 96
+          },
+          {
+            "path": "src/scope.rs",
+            "lines": 913
+          },
+          {
+            "path": "src/scoring/calibration.rs",
+            "lines": 119
+          },
+          {
+            "path": "src/scoring/grader.rs",
+            "lines": 140
+          },
+          {
+            "path": "src/scoring/origins/settlement.rs",
+            "lines": 250
+          },
+          {
+            "path": "src/scoring/origins.rs",
+            "lines": 259
+          },
+          {
+            "path": "src/scoring/packet.rs",
+            "lines": 130
+          },
+          {
+            "path": "src/scoring/sample.rs",
+            "lines": 95
+          },
+          {
+            "path": "src/scoring/store/confirmed/tests.rs",
+            "lines": 270
+          },
+          {
+            "path": "src/scoring/store/confirmed.rs",
+            "lines": 99
+          },
+          {
+            "path": "src/scoring/store/tests.rs",
+            "lines": 178
+          },
+          {
+            "path": "src/scoring/store.rs",
+            "lines": 172
+          },
+          {
+            "path": "src/scoring.rs",
+            "lines": 332
+          },
+          {
+            "path": "src/security/audit.rs",
+            "lines": 325
+          },
+          {
+            "path": "src/security/close.rs",
+            "lines": 63
+          },
+          {
+            "path": "src/security/findings.rs",
+            "lines": 185
+          },
+          {
+            "path": "src/security/fixing/publication/tests.rs",
+            "lines": 1202
+          },
+          {
+            "path": "src/security/fixing/publication.rs",
+            "lines": 485
+          },
+          {
+            "path": "src/security/fixing.rs",
+            "lines": 83
+          },
+          {
+            "path": "src/security/reproduction.rs",
+            "lines": 214
+          },
+          {
+            "path": "src/security/review/step.rs",
+            "lines": 37
+          },
+          {
+            "path": "src/security/review/tests.rs",
+            "lines": 29
+          },
+          {
+            "path": "src/security/review.rs",
+            "lines": 464
+          },
+          {
+            "path": "src/security/tests/sequence.rs",
+            "lines": 554
+          },
+          {
+            "path": "src/security/tests.rs",
+            "lines": 272
+          },
+          {
+            "path": "src/security.rs",
+            "lines": 399
+          },
+          {
+            "path": "src/session/execution_tests.rs",
+            "lines": 672
+          },
+          {
+            "path": "src/session/kind.rs",
+            "lines": 346
+          },
+          {
+            "path": "src/session/limits.rs",
+            "lines": 113
+          },
+          {
+            "path": "src/session/private/tests.rs",
+            "lines": 490
+          },
+          {
+            "path": "src/session/private.rs",
+            "lines": 342
+          },
+          {
+            "path": "src/session/recording/lifetime_tests.rs",
+            "lines": 315
+          },
+          {
+            "path": "src/session/recording/tests.rs",
+            "lines": 1424
+          },
+          {
+            "path": "src/session/recording.rs",
+            "lines": 535
+          },
+          {
+            "path": "src/session/review_reports.rs",
+            "lines": 226
+          },
+          {
+            "path": "src/session/trace/attributes.rs",
+            "lines": 110
+          },
+          {
+            "path": "src/session/trace/calls/tests.rs",
+            "lines": 311
+          },
+          {
+            "path": "src/session/trace/calls.rs",
+            "lines": 224
+          },
+          {
+            "path": "src/session/trace/export.rs",
+            "lines": 69
+          },
+          {
+            "path": "src/session/trace/tests.rs",
+            "lines": 206
+          },
+          {
+            "path": "src/session/trace.rs",
+            "lines": 488
+          },
+          {
+            "path": "src/session/usage/tests.rs",
+            "lines": 333
+          },
+          {
+            "path": "src/session/usage.rs",
+            "lines": 368
+          },
+          {
+            "path": "src/session.rs",
+            "lines": 1096
+          },
+          {
+            "path": "src/setup/console_tests.rs",
+            "lines": 319
+          },
+          {
+            "path": "src/setup/questions.rs",
+            "lines": 394
+          },
+          {
+            "path": "src/setup/sandbox.rs",
+            "lines": 152
+          },
+          {
+            "path": "src/setup.rs",
+            "lines": 2296
+          },
+          {
+            "path": "src/skill.rs",
+            "lines": 92
+          },
+          {
+            "path": "src/skills/directory.rs",
+            "lines": 134
+          },
+          {
+            "path": "src/skills/tests.rs",
+            "lines": 393
+          },
+          {
+            "path": "src/skills.rs",
+            "lines": 437
+          },
+          {
+            "path": "src/spec_run/tests/process.rs",
+            "lines": 246
+          },
+          {
+            "path": "src/spec_run/ticket_board.rs",
+            "lines": 675
+          },
+          {
+            "path": "src/spec_run.rs",
+            "lines": 1618
+          },
+          {
+            "path": "src/terminal.rs",
+            "lines": 89
+          },
+          {
+            "path": "src/test_support/executable.rs",
+            "lines": 25
+          },
+          {
+            "path": "src/test_support/guidance.rs",
+            "lines": 20
+          },
+          {
+            "path": "src/test_support.rs",
+            "lines": 149
+          },
+          {
+            "path": "src/triage.rs",
+            "lines": 530
+          },
+          {
+            "path": "src/trial/reports.rs",
+            "lines": 107
+          },
+          {
+            "path": "src/trial.rs",
+            "lines": 441
+          },
+          {
+            "path": "src/trust.rs",
+            "lines": 594
+          },
+          {
+            "path": "src/update.rs",
+            "lines": 115
+          },
+          {
+            "path": "src/verdict/levels.rs",
+            "lines": 159
+          },
+          {
+            "path": "src/verdict/prediction.rs",
+            "lines": 89
+          },
+          {
+            "path": "src/verdict/tests.rs",
+            "lines": 562
+          },
+          {
+            "path": "src/verdict.rs",
+            "lines": 373
+          },
+          {
+            "path": "src/worktree/acquisition.rs",
+            "lines": 651
+          },
+          {
+            "path": "src/worktree/acquisition_tests.rs",
+            "lines": 2320
+          },
+          {
+            "path": "src/worktree/advice.rs",
+            "lines": 179
+          },
+          {
+            "path": "src/worktree/cleanup_tests/disposal_tests.rs",
+            "lines": 638
+          },
+          {
+            "path": "src/worktree/cleanup_tests.rs",
+            "lines": 1761
+          },
+          {
+            "path": "src/worktree/ownership.rs",
+            "lines": 762
+          },
+          {
+            "path": "src/worktree/preservation_tests.rs",
+            "lines": 1321
+          },
+          {
+            "path": "src/worktree/review_recovery.rs",
+            "lines": 487
+          },
+          {
+            "path": "src/worktree/review_recovery_tests.rs",
+            "lines": 784
+          },
+          {
+            "path": "src/worktree/skill.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/worktree/synchronization_tests.rs",
+            "lines": 1374
+          },
+          {
+            "path": "src/worktree.rs",
+            "lines": 701
+          }
+        ]
+      },
+      "model": {
+        "lines": 426,
+        "files": [
+          {
+            "path": "tests/pickup_model.rs",
+            "lines": 426
+          }
+        ]
+      }
+    }
+  },
+  "slices": {
+    "typescript": {
+      "ticket": {
+        "lines": 659,
+        "files": [
+          {
+            "path": "prototypes/typescript/src/ci.ts",
+            "lines": 48
+          },
+          {
+            "path": "prototypes/typescript/src/claim.ts",
+            "lines": 73
+          },
+          {
+            "path": "prototypes/typescript/src/delivery.ts",
+            "lines": 180
+          },
+          {
+            "path": "prototypes/typescript/src/github.ts",
+            "lines": 56
+          },
+          {
+            "path": "prototypes/typescript/src/harness.ts",
+            "lines": 18
+          },
+          {
+            "path": "prototypes/typescript/src/main.ts",
+            "lines": 38
+          },
+          {
+            "path": "prototypes/typescript/src/process.ts",
+            "lines": 91
+          },
+          {
+            "path": "prototypes/typescript/src/ticket.ts",
+            "lines": 112
+          },
+          {
+            "path": "prototypes/typescript/src/worktree.ts",
+            "lines": 43
+          }
+        ]
+      },
+      "pickup": {
+        "lines": 201,
+        "files": [
+          {
+            "path": "prototypes/typescript/src/pickup.ts",
+            "lines": 33
+          },
+          {
+            "path": "prototypes/typescript/src/ready.ts",
+            "lines": 127
+          },
+          {
+            "path": "prototypes/typescript/src/reservation.ts",
+            "lines": 41
+          }
+        ]
+      },
+      "console": {
+        "lines": 286,
+        "files": [
+          {
+            "path": "prototypes/typescript/src/console/client.ts",
+            "lines": 75
+          },
+          {
+            "path": "prototypes/typescript/src/console/inbox.ts",
+            "lines": 46
+          },
+          {
+            "path": "prototypes/typescript/src/console/index.html",
+            "lines": 44
+          },
+          {
+            "path": "prototypes/typescript/src/console/routes.ts",
+            "lines": 61
+          },
+          {
+            "path": "prototypes/typescript/src/console/schema.ts",
+            "lines": 24
+          },
+          {
+            "path": "prototypes/typescript/src/console/server.ts",
+            "lines": 36
+          }
+        ]
+      }
+    },
+    "rust": {
+      "ticket": {
+        "lines": 45054,
+        "files": [
+          {
+            "path": "src/ci.rs",
+            "lines": 2952
+          },
+          {
+            "path": "src/claim.rs",
+            "lines": 1367
+          },
+          {
+            "path": "src/delivery/repair_loop.rs",
+            "lines": 2180
+          },
+          {
+            "path": "src/delivery/stage.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/delivery/test_support.rs",
+            "lines": 236
+          },
+          {
+            "path": "src/delivery/tests.rs",
+            "lines": 167
+          },
+          {
+            "path": "src/delivery.rs",
+            "lines": 1506
+          },
+          {
+            "path": "src/github/advisories/description.rs",
+            "lines": 262
+          },
+          {
+            "path": "src/github/advisories.rs",
+            "lines": 920
+          },
+          {
+            "path": "src/github/advisories_tests.rs",
+            "lines": 939
+          },
+          {
+            "path": "src/github/base_ci.rs",
+            "lines": 592
+          },
+          {
+            "path": "src/github/check_read.rs",
+            "lines": 77
+          },
+          {
+            "path": "src/github/execution_tests.rs",
+            "lines": 1472
+          },
+          {
+            "path": "src/github/quota.rs",
+            "lines": 84
+          },
+          {
+            "path": "src/github/review.rs",
+            "lines": 503
+          },
+          {
+            "path": "src/github/scoring/origins/review.rs",
+            "lines": 159
+          },
+          {
+            "path": "src/github/scoring/origins.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/github/scoring/packet.rs",
+            "lines": 190
+          },
+          {
+            "path": "src/github/scoring.rs",
+            "lines": 197
+          },
+          {
+            "path": "src/github/session_issue.rs",
+            "lines": 147
+          },
+          {
+            "path": "src/github/trust.rs",
+            "lines": 162
+          },
+          {
+            "path": "src/github.rs",
+            "lines": 2024
+          },
+          {
+            "path": "src/harness/adapter.rs",
+            "lines": 163
+          },
+          {
+            "path": "src/harness/agy/catalog.rs",
+            "lines": 218
+          },
+          {
+            "path": "src/harness/agy/events.rs",
+            "lines": 182
+          },
+          {
+            "path": "src/harness/agy/stream.rs",
+            "lines": 392
+          },
+          {
+            "path": "src/harness/agy.rs",
+            "lines": 254
+          },
+          {
+            "path": "src/harness/built_with.rs",
+            "lines": 137
+          },
+          {
+            "path": "src/harness/claude.rs",
+            "lines": 284
+          },
+          {
+            "path": "src/harness/codex/catalog.rs",
+            "lines": 162
+          },
+          {
+            "path": "src/harness/codex/events.rs",
+            "lines": 216
+          },
+          {
+            "path": "src/harness/codex/limits.rs",
+            "lines": 102
+          },
+          {
+            "path": "src/harness/codex/patches.rs",
+            "lines": 222
+          },
+          {
+            "path": "src/harness/codex/stream.rs",
+            "lines": 668
+          },
+          {
+            "path": "src/harness/codex.rs",
+            "lines": 297
+          },
+          {
+            "path": "src/harness/grok/catalog.rs",
+            "lines": 195
+          },
+          {
+            "path": "src/harness/grok.rs",
+            "lines": 228
+          },
+          {
+            "path": "src/harness/instructions.rs",
+            "lines": 40
+          },
+          {
+            "path": "src/harness/interpretation/event.rs",
+            "lines": 564
+          },
+          {
+            "path": "src/harness/interpretation/event_tests.rs",
+            "lines": 561
+          },
+          {
+            "path": "src/harness/interpretation/limits.rs",
+            "lines": 163
+          },
+          {
+            "path": "src/harness/interpretation/models.rs",
+            "lines": 29
+          },
+          {
+            "path": "src/harness/interpretation/security.rs",
+            "lines": 75
+          },
+          {
+            "path": "src/harness/interpretation/stream/events.rs",
+            "lines": 472
+          },
+          {
+            "path": "src/harness/interpretation/stream/tests.rs",
+            "lines": 1028
+          },
+          {
+            "path": "src/harness/interpretation/stream.rs",
+            "lines": 590
+          },
+          {
+            "path": "src/harness/interpretation.rs",
+            "lines": 479
+          },
+          {
+            "path": "src/harness/interpretation_tests.rs",
+            "lines": 1586
+          },
+          {
+            "path": "src/harness/muse/catalog.rs",
+            "lines": 131
+          },
+          {
+            "path": "src/harness/muse/events.rs",
+            "lines": 364
+          },
+          {
+            "path": "src/harness/muse/log.rs",
+            "lines": 371
+          },
+          {
+            "path": "src/harness/muse/stream.rs",
+            "lines": 351
+          },
+          {
+            "path": "src/harness/muse.rs",
+            "lines": 227
+          },
+          {
+            "path": "src/harness/opencode/events.rs",
+            "lines": 310
+          },
+          {
+            "path": "src/harness/opencode/export.rs",
+            "lines": 199
+          },
+          {
+            "path": "src/harness/opencode/stream.rs",
+            "lines": 250
+          },
+          {
+            "path": "src/harness/opencode.rs",
+            "lines": 220
+          },
+          {
+            "path": "src/harness/process.rs",
+            "lines": 54
+          },
+          {
+            "path": "src/harness/settings/tests.rs",
+            "lines": 998
+          },
+          {
+            "path": "src/harness/settings.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/harness/skill_load.rs",
+            "lines": 38
+          },
+          {
+            "path": "src/harness/summary.rs",
+            "lines": 37
+          },
+          {
+            "path": "src/harness/version.rs",
+            "lines": 130
+          },
+          {
+            "path": "src/harness.rs",
+            "lines": 666
+          },
+          {
+            "path": "src/interrupt.rs",
+            "lines": 81
+          },
+          {
+            "path": "src/process/faults.rs",
+            "lines": 49
+          },
+          {
+            "path": "src/process/session.rs",
+            "lines": 197
+          },
+          {
+            "path": "src/process/testing.rs",
+            "lines": 10
+          },
+          {
+            "path": "src/process/tests.rs",
+            "lines": 1041
+          },
+          {
+            "path": "src/process/tree.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/process.rs",
+            "lines": 572
+          },
+          {
+            "path": "src/run.rs",
+            "lines": 1479
+          },
+          {
+            "path": "src/worktree/acquisition.rs",
+            "lines": 651
+          },
+          {
+            "path": "src/worktree/acquisition_tests.rs",
+            "lines": 2320
+          },
+          {
+            "path": "src/worktree/advice.rs",
+            "lines": 179
+          },
+          {
+            "path": "src/worktree/cleanup_tests/disposal_tests.rs",
+            "lines": 638
+          },
+          {
+            "path": "src/worktree/cleanup_tests.rs",
+            "lines": 1761
+          },
+          {
+            "path": "src/worktree/ownership.rs",
+            "lines": 762
+          },
+          {
+            "path": "src/worktree/preservation_tests.rs",
+            "lines": 1321
+          },
+          {
+            "path": "src/worktree/review_recovery.rs",
+            "lines": 487
+          },
+          {
+            "path": "src/worktree/review_recovery_tests.rs",
+            "lines": 784
+          },
+          {
+            "path": "src/worktree/skill.rs",
+            "lines": 138
+          },
+          {
+            "path": "src/worktree/synchronization_tests.rs",
+            "lines": 1374
+          },
+          {
+            "path": "src/worktree.rs",
+            "lines": 701
+          }
+        ]
+      },
+      "pickup": {
+        "lines": 2754,
+        "files": [
+          {
+            "path": "src/pickup.rs",
+            "lines": 1021
+          },
+          {
+            "path": "src/ready.rs",
+            "lines": 1596
+          },
+          {
+            "path": "src/reservation.rs",
+            "lines": 137
+          }
+        ]
+      },
+      "console": {
+        "lines": 18017,
+        "files": [
+          {
+            "path": "src/console/account.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/account_base.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/account_commands.rs",
+            "lines": 134
+          },
+          {
+            "path": "src/console/account_log.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/accounts/codes.rs",
+            "lines": 92
+          },
+          {
+            "path": "src/console/accounts/tests.rs",
+            "lines": 274
+          },
+          {
+            "path": "src/console/accounts.rs",
+            "lines": 377
+          },
+          {
+            "path": "src/console/api.rs",
+            "lines": 111
+          },
+          {
+            "path": "src/console/assets/changes.js",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/console.css",
+            "lines": 302
+          },
+          {
+            "path": "src/console/assets/console.js",
+            "lines": 632
+          },
+          {
+            "path": "src/console/assets/experiments.css",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/experiments.js",
+            "lines": 86
+          },
+          {
+            "path": "src/console/assets/logs.js",
+            "lines": 108
+          },
+          {
+            "path": "src/console/assets/look.js",
+            "lines": 219
+          },
+          {
+            "path": "src/console/assets/notifications.js",
+            "lines": 112
+          },
+          {
+            "path": "src/console/assets/resources.js",
+            "lines": 24
+          },
+          {
+            "path": "src/console/assets/spans.css",
+            "lines": 68
+          },
+          {
+            "path": "src/console/assets/spans.js",
+            "lines": 315
+          },
+          {
+            "path": "src/console/assets/stages.js",
+            "lines": 93
+          },
+          {
+            "path": "src/console/assets/start.js",
+            "lines": 79
+          },
+          {
+            "path": "src/console/assets/stop.js",
+            "lines": 12
+          },
+          {
+            "path": "src/console/assets/themes.css",
+            "lines": 320
+          },
+          {
+            "path": "src/console/assets/vendor/htmx-2.0.7.min.js",
+            "lines": 1
+          },
+          {
+            "path": "src/console/assets/vendor/htmx-ext-sse-2.2.3.js",
+            "lines": 290
+          },
+          {
+            "path": "src/console/assets/vendor/idiomorph-0.7.4.min.js",
+            "lines": 1
+          },
+          {
+            "path": "src/console/assets.rs",
+            "lines": 71
+          },
+          {
+            "path": "src/console/auth/password.rs",
+            "lines": 142
+          },
+          {
+            "path": "src/console/auth/rate_limit.rs",
+            "lines": 100
+          },
+          {
+            "path": "src/console/auth/reply.rs",
+            "lines": 52
+          },
+          {
+            "path": "src/console/auth.rs",
+            "lines": 778
+          },
+          {
+            "path": "src/console/auth_reply.html",
+            "lines": 16
+          },
+          {
+            "path": "src/console/brand.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/bug_origins.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/bug_origins.rs",
+            "lines": 71
+          },
+          {
+            "path": "src/console/changes.rs",
+            "lines": 420
+          },
+          {
+            "path": "src/console/chrome.html",
+            "lines": 47
+          },
+          {
+            "path": "src/console/commands.rs",
+            "lines": 226
+          },
+          {
+            "path": "src/console/conversation.rs",
+            "lines": 352
+          },
+          {
+            "path": "src/console/cronjobs.html",
+            "lines": 26
+          },
+          {
+            "path": "src/console/cronjobs.rs",
+            "lines": 46
+          },
+          {
+            "path": "src/console/dismiss.rs",
+            "lines": 58
+          },
+          {
+            "path": "src/console/evals.rs",
+            "lines": 21
+          },
+          {
+            "path": "src/console/experiments/render.rs",
+            "lines": 1204
+          },
+          {
+            "path": "src/console/experiments.html",
+            "lines": 21
+          },
+          {
+            "path": "src/console/experiments.rs",
+            "lines": 111
+          },
+          {
+            "path": "src/console/fact.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/filters.rs",
+            "lines": 139
+          },
+          {
+            "path": "src/console/github.rs",
+            "lines": 22
+          },
+          {
+            "path": "src/console/header-status.html",
+            "lines": 7
+          },
+          {
+            "path": "src/console/header.html",
+            "lines": 4
+          },
+          {
+            "path": "src/console/host-resources.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/identity.rs",
+            "lines": 80
+          },
+          {
+            "path": "src/console/inbox.html",
+            "lines": 78
+          },
+          {
+            "path": "src/console/install.rs",
+            "lines": 257
+          },
+          {
+            "path": "src/console/live.rs",
+            "lines": 63
+          },
+          {
+            "path": "src/console/logs.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/logs.rs",
+            "lines": 319
+          },
+          {
+            "path": "src/console/look.rs",
+            "lines": 252
+          },
+          {
+            "path": "src/console/nav.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/notifications.html",
+            "lines": 2
+          },
+          {
+            "path": "src/console/openapi.rs",
+            "lines": 486
+          },
+          {
+            "path": "src/console/parity.rs",
+            "lines": 322
+          },
+          {
+            "path": "src/console/pass_start.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/password_off.html",
+            "lines": 1
+          },
+          {
+            "path": "src/console/peek.html",
+            "lines": 22
+          },
+          {
+            "path": "src/console/peek.rs",
+            "lines": 549
+          },
+          {
+            "path": "src/console/reader.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/resources.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/resources.rs",
+            "lines": 100
+          },
+          {
+            "path": "src/console/restart.rs",
+            "lines": 49
+          },
+          {
+            "path": "src/console/row.html",
+            "lines": 20
+          },
+          {
+            "path": "src/console/scores.html",
+            "lines": 21
+          },
+          {
+            "path": "src/console/scoring.rs",
+            "lines": 96
+          },
+          {
+            "path": "src/console/set_password.html",
+            "lines": 25
+          },
+          {
+            "path": "src/console/set_password_code.html",
+            "lines": 11
+          },
+          {
+            "path": "src/console/sign_in.html",
+            "lines": 17
+          },
+          {
+            "path": "src/console/start/experiment.rs",
+            "lines": 89
+          },
+          {
+            "path": "src/console/start.rs",
+            "lines": 635
+          },
+          {
+            "path": "src/console/start_confirm.html",
+            "lines": 8
+          },
+          {
+            "path": "src/console/start_controls.rs",
+            "lines": 258
+          },
+          {
+            "path": "src/console/start_form.html",
+            "lines": 30
+          },
+          {
+            "path": "src/console/stop.html",
+            "lines": 20
+          },
+          {
+            "path": "src/console/stop.rs",
+            "lines": 98
+          },
+          {
+            "path": "src/console/subscription/tests.rs",
+            "lines": 260
+          },
+          {
+            "path": "src/console/subscription.rs",
+            "lines": 117
+          },
+          {
+            "path": "src/console/time.html",
+            "lines": 64
+          },
+          {
+            "path": "src/console/time.rs",
+            "lines": 47
+          },
+          {
+            "path": "src/console/tokens.rs",
+            "lines": 243
+          },
+          {
+            "path": "src/console/update.html",
+            "lines": 15
+          },
+          {
+            "path": "src/console/update.rs",
+            "lines": 74
+          },
+          {
+            "path": "src/console/user_config.html",
+            "lines": 27
+          },
+          {
+            "path": "src/console/user_config.rs",
+            "lines": 113
+          },
+          {
+            "path": "src/console/watching.rs",
+            "lines": 173
+          },
+          {
+            "path": "src/console/waterfall.html",
+            "lines": 35
+          },
+          {
+            "path": "src/console/waterfall.rs",
+            "lines": 97
+          },
+          {
+            "path": "src/console.rs",
+            "lines": 1824
+          },
+          {
+            "path": "src/logs/dismiss.rs",
+            "lines": 392
+          },
+          {
+            "path": "src/logs/reading/inbox.rs",
+            "lines": 1062
+          },
+          {
+            "path": "src/logs/status/inbox.rs",
+            "lines": 589
+          },
+          {
+            "path": "src/logs/status/inspect.rs",
+            "lines": 315
+          },
+          {
+            "path": "src/logs/status/time.rs",
+            "lines": 436
+          },
+          {
+            "path": "src/logs/status/watching.rs",
+            "lines": 65
+          },
+          {
+            "path": "src/logs/status.rs",
+            "lines": 347
+          }
+        ]
+      }
+    }
+  }
+}

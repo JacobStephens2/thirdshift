@@ -2,18 +2,18 @@
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::UserConfig;
 use crate::logs::pass_starts::{self, PassStart};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct CronJobs {
     pub jobs: Vec<CronJob>,
     pub pass_starts: Vec<PassStart>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
@@ -27,7 +27,7 @@ pub(crate) fn load() -> Result<CronJobs> {
     })
 }
 
-fn jobs() -> Result<Vec<CronJob>> {
+pub(crate) fn jobs() -> Result<Vec<CronJob>> {
     let output = Command::new("crontab")
         .arg("-l")
         .env("LC_ALL", "C")
@@ -91,8 +91,18 @@ fn entry(line: &str) -> Option<CronJob> {
         schedule.push(&command[..end]);
         command = command[end..].trim_start();
     }
-    // Cron sends everything after its first unescaped % to stdin, even inside
-    // shell quotes. Keep it for display, but don't match input as a command.
+    // Keep stdin text for display, but don't match it as a command.
+    let mentions_thirdshift = shell_command(command)
+        .split(|c: char| c.is_whitespace() || "'\";&|()<>".contains(c))
+        .any(|word| word.rsplit('/').next() == Some("thirdshift"));
+    mentions_thirdshift.then(|| CronJob {
+        schedule: schedule.join(" "),
+        command: command.into(),
+    })
+}
+
+/// Cron sends everything after its first unescaped % to stdin, even in quotes.
+pub(crate) fn shell_command(command: &str) -> &str {
     let mut escaped = false;
     let command_end = command
         .char_indices()
@@ -102,13 +112,5 @@ fn entry(line: &str) -> Option<CronJob> {
             separator.then_some(index)
         })
         .unwrap_or(command.len());
-    // Match literal executable names, including quoted paths and commands
-    // after cd, env or flock. Never evaluate the shell text to discover jobs.
-    let mentions_thirdshift = command[..command_end]
-        .split(|c: char| c.is_whitespace() || "'\";&|()<>".contains(c))
-        .any(|word| word.rsplit('/').next() == Some("thirdshift"));
-    mentions_thirdshift.then(|| CronJob {
-        schedule: schedule.join(" "),
-        command: command.into(),
-    })
+    &command[..command_end]
 }

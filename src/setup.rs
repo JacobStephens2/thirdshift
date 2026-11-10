@@ -1085,7 +1085,7 @@ to = \"me@example.com\"  # my inbox
             .render(None);
         assert_eq!(outside.effects(), [&Call::Replace(completed.clone())]);
         assert!(
-            completed.starts_with(
+            crate::config::without_launch_directories_default(&completed).starts_with(
                 "# My machine: always merge.\n[merge]\nalways = true   # I trust the factory\n"
             ),
             "{completed}"
@@ -1240,6 +1240,7 @@ to = \"me@example.com\"  # my inbox
     #[test]
     fn on_a_terminal_pressing_enter_throughout_keeps_an_existing_user_config() {
         let mine = "\
+launch_directories = []
 [merge]
 always = true
 
@@ -1275,7 +1276,7 @@ address = \"\"
 port = 8711
 allowed_emails = []
 address_scopes = {}
-other_consoles = []
+fleet = []
 other_accounts = \"none\"
 theme = \"focus-auto\"
 hidden_sections = []
@@ -1332,6 +1333,10 @@ model = \"\"
 effort = \"\"
 
 [harness.opencode]
+model = \"\"
+effort = \"\"
+
+[harness.kimi]
 model = \"\"
 effort = \"\"
 

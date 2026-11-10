@@ -3,13 +3,30 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cron jobs · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main><div class="page-title"><h1>Cron jobs</h1><code>thirdshift cronjobs --json</code></div>
+{% include "console/machine_controls.html" %}
+{% if !machine.is_empty() %}<p>Machine: {{ machine }}</p>{% endif %}
 <p>thirdshift entries in this account's crontab (<code>crontab -l</code>). Schedules use cron's time zone. Reload to see changes.</p>
 <p>Other accounts, system crontabs and other schedulers are outside this view.</p>
+{% if show_jobs %}
 {% if !inventory.jobs.is_empty() %}<pre class="crontab" tabindex="0" role="region" aria-label="thirdshift crontab entries"><code>{% for job in inventory.jobs %}<bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi>
 {% endfor %}</code></pre>{% endif %}
 {% if inventory.jobs.is_empty() %}<p>No thirdshift cron jobs in this account's crontab.</p>{% endif %}
+{% endif %}
+{% if can_run %}
+<section class="start-controls" aria-label="Run Passes now" data-start-area data-csrf="{{ csrf }}" data-machine="{{ machine }}">
+  <h2>Run Passes now</h2>
+  <noscript><p>Run now requires JavaScript for confirmation.</p></noscript>
+  {% if let Some(error) = start_error %}<p role="alert">Could not load startable Passes: {{ error }}</p>{% endif %}
+  <ul class="run-passes">{% for pass in passes %}<li><code>{{ pass.command|one_line }}</code> <button type="button" data-start-request="{{ pass.request }}" data-start-harness="{{ pass.harness }}" data-start-enable disabled>Run now</button></li>{% endfor %}</ul>
+  {% if passes.is_empty() %}<p>No startable cron Passes found. Run now needs a literal <code>cd</code> Launch directory and Pass arguments; shell expressions stay display-only.</p>{% endif %}
+  <p data-start-result role="status" aria-live="polite"></p>
+</section>
+{% include "console/start_confirm.html" %}
+{% endif %}
+{% if show_jobs %}
 <h2>Last fired by repository</h2>
 <p>Observed Pass starts on this host, including manual launches and skipped Passes. A start does not identify which scheduler launched it.</p>
 <ul>{% for pass in inventory.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
 {% if inventory.pass_starts.is_empty() %}<p>No Pass start times recorded on this host.</p>{% endif %}
+{% endif %}
 </main>{% include "console/chrome.html" %}</body></html>

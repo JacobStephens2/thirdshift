@@ -128,6 +128,7 @@ After=network.target
 User={owner}
 Environment={environment}
 ExecStart={executable} console{mode}
+KillMode=process
 Restart=always
 RestartSec=5
 

@@ -29,6 +29,20 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+fn assert_config_preserved(completed: &str, original: &str) {
+    // A new root setting must precede the retained sections in valid TOML.
+    // Keep the original text byte-for-byte, allowing only that default before it.
+    let (prefix, _) = completed
+        .split_once(original)
+        .unwrap_or_else(|| panic!("the original config text changed:\n{completed}"));
+    let added: toml::Table = prefix.parse().unwrap();
+    assert_eq!(added.len(), 1, "{prefix}");
+    assert_eq!(
+        added["launch_directories"].as_array().map(Vec::is_empty),
+        Some(true)
+    );
+}
+
 #[test]
 fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
@@ -230,6 +244,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[harness.kimi]",
             "[triage]",
             "[security]",
             "[scoring]",
@@ -267,12 +282,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
         "{text}"
     );
     assert_eq!(config["console"]["theme"].as_str(), Some("focus-auto"));
-    assert!(
-        config["console"]["other_consoles"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(config["console"]["fleet"].as_array().unwrap().is_empty());
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(
@@ -301,7 +311,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["trial"]["memory_max"].as_str(), Some("2G"));
     assert_eq!(config["trial"]["memory_swap_max"].as_str(), Some("1G"));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         for key in ["model", "effort"] {
             assert_eq!(config["harness"][harness][key].as_str(), Some(""), "{text}");
         }
@@ -389,6 +399,7 @@ effort = 'high' # my Effort
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
+            "[harness.kimi]",
             "[triage]",
             "[security]",
             "[scoring]",
@@ -477,7 +488,7 @@ fn setup_preserves_repository_email_routes_and_their_spelling() {
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let text = user_config(&scenario).unwrap();
-        assert!(text.starts_with(routes), "{text}");
+        assert_config_preserved(&text, routes);
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(
             config["email"]["to_by_repo"]["Acme/Widgets"].as_str(),
@@ -506,7 +517,7 @@ fn completing_an_existing_file_replaces_it_atomically_keeps_permissions_and_then
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let text = user_config(&scenario).unwrap();
-    assert!(text.starts_with(original), "{text}");
+    assert_config_preserved(&text, original);
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["logs"]["dir"].as_str(), Some("/var/log/ts"));
     assert_eq!(config["logs"]["waiting_line_minutes"].as_integer(), Some(2));
@@ -646,6 +657,50 @@ fn a_claude_setup_token_is_saved_with_hidden_input_even_without_notifications() 
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn setup_offers_an_installed_kimi_and_checks_its_model_against_kimis_config() {
+    let scenario = Scenario::new();
+    let steps: Vec<_> = [
+        (HARNESS, "kimi"),
+        ("Model for kimi", "kimi-k9"),
+        ("Model for kimi", "kimi-k3.1-pro"),
+        (MERGE, ""),
+        (BASE_FIX, ""),
+        (PULL, ""),
+        (TRIAGE_READY, ""),
+        (SECURITY_FIX, ""),
+        (SECURITY_REVIEW, ""),
+        (NOTIFY, "n"),
+        (CLAUDE_TOKEN, ""),
+        (CONSOLE, "n"),
+    ]
+    .into_iter()
+    .map(TerminalStep::from)
+    .collect();
+    let result =
+        scenario.run_terminal_bounded(&["setup"], &[], &steps, std::time::Duration::from_secs(10));
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    for said in [
+        "or opencode or kimi [claude]",
+        "Kimi Code's Models: kimi-code/kimi-for-coding, kimi-k3.1-pro",
+        "the Model kimi-k9 is not in Kimi Code's config",
+    ] {
+        assert!(
+            result.stderr.contains(said),
+            "missing {said:?}: {}",
+            result.stderr
+        );
+    }
+    let config: toml::Table = result.user_config.unwrap().parse().unwrap();
+    assert_eq!(config["harness"]["default"].as_str(), Some("kimi"));
+    assert_eq!(
+        config["harness"]["kimi"]["model"].as_str(),
+        Some("kimi-k3.1-pro")
+    );
+    assert_eq!(config["harness"]["kimi"]["effort"].as_str(), Some(""));
 }
 
 #[test]
@@ -878,7 +933,7 @@ fn setup_can_enable_triage_readiness_keep_it_and_turn_it_off() {
             config["triage"]["allow_ready_for_agent"].as_bool(),
             Some(enabled)
         );
-        assert!(text.starts_with("[triage] # my triage settings\n"));
+        assert_config_preserved(&text, "[triage] # my triage settings\n");
         assert!(text.contains("# readiness\n"));
     }
 }
@@ -1006,7 +1061,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
         assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
-        assert!(text.starts_with("# my Security settings\n[security]\n"));
+        assert_config_preserved(&text, "# my Security settings\n[security]\n");
         assert!(text.contains("# keep this choice\n"));
         assert!(text.contains("harness = 'codex' # use Codex\n"));
     }
@@ -1079,6 +1134,7 @@ fn cancelling_the_other_setup_checks_neither_retries_nor_keeps_settings() {
         ("grok", None, libc::SIGINT),
         ("muse", Some("muse-spark-1.3"), libc::SIGTERM),
         ("opencode", Some("provider/model"), libc::SIGHUP),
+        ("kimi", None, libc::SIGTERM),
     ] {
         let scenario = Scenario::new();
         let saved = "# keep my answers\n[harness]\ndefault = \"claude\"\n";

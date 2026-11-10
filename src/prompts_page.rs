@@ -179,6 +179,13 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::grader(),
         },
         Prompt {
+            id: "prompt-panel-grader",
+            title: "Panel Grader",
+            when: "In an Experiment whose Bar names a Grader panel, starts a fresh session for each seat on each pair of process Trials, once in each presentation order.",
+            sender: Experiment,
+            text: prompt::panel_grader(),
+        },
+        Prompt {
             id: "prompt-fresh",
             title: "Fresh",
             when: "Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.",
@@ -255,6 +262,13 @@ fn prompts() -> Vec<Prompt> {
             when: "Investigates a Report read-only in a throwaway worktree without waiting for a person. thirdshift files the recommended issues or comments on existing open issues unless --recommend-only is given, and retains the result for stdout and the Run notification.",
             sender: TriageRun,
             text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
+        },
+        Prompt {
+            id: "prompt-triage-issue",
+            title: "Existing-issue Triage run",
+            when: "Investigates one existing open issue against the selected Base branch. thirdshift supplies the issue file, owns the reservation and Claim, and publishes the recommendation in place unless --recommend-only is given.",
+            sender: TriageRun,
+            text: prompt::triage_issue(std::path::Path::new(SKILL_PATH), &issue, false),
         },
         Prompt {
             id: "prompt-security-review",

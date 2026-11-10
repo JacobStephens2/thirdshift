@@ -77,13 +77,46 @@ impl Attempt {
 
     pub fn outcome(&mut self, outcome: crate::trial::Outcome) {
         self.spans[0].status = Some(Status {
-            code: if outcome == crate::trial::Outcome::Succeeded {
+            code: if matches!(
+                outcome,
+                crate::trial::Outcome::Succeeded | crate::trial::Outcome::Delivered
+            ) {
                 1
             } else {
                 2
             },
             message: outcome.to_string(),
         });
+    }
+
+    pub fn steps(&mut self, steps: &[crate::trial::Step]) -> Result<()> {
+        for (index, step) in steps.iter().enumerate() {
+            let nanos = |text: &str| -> Result<u64> {
+                Ok(chrono::DateTime::parse_from_rfc3339(text)?
+                    .timestamp_nanos_opt()
+                    .unwrap_or_default()
+                    .try_into()?)
+            };
+            self.spans.push(Span {
+                trace_id: Some(self.context.trace),
+                span_id: Some(id(&[&self.context.stage.0, b"step", &index.to_le_bytes()])),
+                parent_span_id: Some(self.context.stage),
+                name: format!("Step {}", step.name),
+                kind: 1,
+                start_time_unix_nano: nanos(&step.started_at)?,
+                end_time_unix_nano: nanos(&step.ended_at)?,
+                status: Some(Status {
+                    code: if step.outcome == crate::trial::Outcome::Succeeded {
+                        1
+                    } else {
+                        2
+                    },
+                    message: step.outcome.to_string(),
+                }),
+                ..Default::default()
+            });
+        }
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<()> {
@@ -111,7 +144,16 @@ impl Attempt {
                     {
                         span.trace_id = Some(self.context.trace);
                         if span.name.starts_with("invoke_agent ") {
-                            span.parent_span_id = Some(self.context.stage);
+                            span.parent_span_id = self
+                                .spans
+                                .iter()
+                                .find(|step| {
+                                    step.name.starts_with("Step ")
+                                        && step.start_time_unix_nano <= span.start_time_unix_nano
+                                        && span.start_time_unix_nano <= step.end_time_unix_nano
+                                })
+                                .and_then(|step| step.span_id)
+                                .or(Some(self.context.stage));
                         }
                     }
                 }

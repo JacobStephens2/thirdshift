@@ -1,0 +1,69 @@
+$ /tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/pickup_model-1d72f02ce05acf2e --test-threads=1 --nocapture
+
+running 5 tests
+test assert_requested_property ... ignored, known pre-Claim dispatch finding; run explicitly to see the failure
+test current_protocol_reports_pre_claim_dispatch_counterexample ... Current, Dispatch: 7093 unique states
+KNOWN FINDING: the literal dispatch property fails: Path[14]:
+- ListReady(0)
+- SelectHistory(0)
+- CreateReservation(0)
+- RefreshIssue(0)
+- RefreshHistory(0)
+- Dispatch(0)
+- FailBeforeClaim(0)
+- ReleaseReservation(0)
+- ListReady(1)
+- SelectHistory(1)
+- CreateReservation(1)
+- RefreshIssue(1)
+- RefreshHistory(1)
+- Dispatch(1)
+
+ok
+test pickup_claimed_dispatch_safety ... Current, ClaimedDispatch: 86745 unique states
+ok
+test removing_claim_count_recheck_is_detected ... WithoutClaimCount, ClaimedDispatch: 20675 unique states
+Claim-count mutation counterexample: Path[19]:
+- ListReady(0)
+- SelectHistory(0)
+- CreateReservation(0)
+- RefreshIssue(0)
+- RefreshHistory(0)
+- Dispatch(0)
+- ReadClaimLabels(0)
+- ListReady(1)
+- SelectHistory(1)
+- PutClaimLabels(0)
+- KeepClaim(0)
+- ReleaseReservation(0)
+- CreateReservation(1)
+- DayHandsBack
+- RefreshIssue(1)
+- RefreshHistory(1)
+- Dispatch(1)
+- ReadClaimLabels(1)
+- PutClaimLabels(1)
+
+ok
+test removing_empty_create_lease_is_detected ... UnconditionalCreate, ClaimedDispatch: 22520 unique states
+Empty-lease mutation counterexample: Path[15]:
+- ListReady(0)
+- SelectHistory(0)
+- CreateReservation(0)
+- RefreshIssue(0)
+- RefreshHistory(0)
+- Dispatch(0)
+- ReadClaimLabels(0)
+- ListReady(1)
+- SelectHistory(1)
+- CreateReservation(1)
+- RefreshIssue(1)
+- RefreshHistory(1)
+- PutClaimLabels(0)
+- Dispatch(1)
+- ReadClaimLabels(1)
+
+ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.12s
+

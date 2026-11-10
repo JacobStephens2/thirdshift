@@ -30,6 +30,7 @@ fn result(task: &Task, arm: Arm, passed: bool, wrong_finding: bool) -> TrialResu
             rechecks: Vec::new(),
         }),
         attempts: Vec::new(),
+        leaks: Vec::new(),
     }
 }
 
@@ -45,8 +46,12 @@ fn bar(suites: &[&str]) -> Bar {
 fn observation(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Value {
     let baseline = setup();
     let inputs = serde_json::to_value((tasks, results, bar)).unwrap();
-    let first = serde_json::to_value(assess(tasks, results, bar, &baseline).unwrap()).unwrap();
-    let second = serde_json::to_value(assess(tasks, results, bar, &baseline).unwrap()).unwrap();
+    let first =
+        serde_json::to_value(assess(tasks, results, bar, &baseline, &Decided::default()).unwrap())
+            .unwrap();
+    let second =
+        serde_json::to_value(assess(tasks, results, bar, &baseline, &Decided::default()).unwrap())
+            .unwrap();
     assert_eq!(first, second, "fixed-seed assessment repeats completely");
     assert_eq!(inputs, serde_json::to_value((tasks, results, bar)).unwrap());
     first
@@ -54,6 +59,8 @@ fn observation(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Value {
 
 fn setup() -> Setup {
     Setup {
+        process: None,
+        process_digest: None,
         commit: "a".repeat(40),
         harness: "claude".into(),
         model: None,
@@ -473,7 +480,7 @@ fn rejected_assessments_repeat_and_leave_all_inputs_unchanged_including_void_pai
             };
             let inputs = serde_json::to_value((&tasks, &results, &bar)).unwrap();
             for _ in 0..2 {
-                let error = assess(&tasks, &results, &bar, &setup())
+                let error = assess(&tasks, &results, &bar, &setup(), &Decided::default())
                     .err()
                     .expect("assessment must fail");
                 assert_eq!(error.to_string(), expected, "{invalid}, Void={void}");

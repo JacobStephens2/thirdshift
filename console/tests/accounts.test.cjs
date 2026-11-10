@@ -7,9 +7,17 @@ const { tmpdir, hostname } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("./playwright.cjs");
+const { createServer } = require("node:http");
 
-let home, server, exited, browser, origin;
+let home, server, exited, browser, origin, releases;
 before(async () => {
+  releases = createServer((request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ tag_name: "v99.0.0", name: "v99.0.0", url: "http://localhost/release", prerelease: false,
+      assets: [{ name: "thirdshift-installer.sh", url: "http://localhost/installer", browser_download_url: "http://localhost/installer" }] }));
+  });
+  releases.listen(0, "127.0.0.1");
+  await once(releases, "listening");
   home = await mkdtemp(join(tmpdir(), "thirdshift-console-accounts-"));
   const root = join(home, ".thirdshift");
   await mkdir(root);
@@ -23,7 +31,7 @@ before(async () => {
     }
   }), { mode: 0o600 });
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift"), ["console"], {
-    env: { ...process.env, HOME: home }, stdio: ["ignore", "pipe", "inherit"]
+    env: { ...process.env, HOME: home, THIRDSHIFT_INSTALLER_GHE_BASE_URL: `http://127.0.0.1:${releases.address().port}/` }, stdio: ["ignore", "pipe", "inherit"]
   });
   exited = once(server, "exit");
   const lines = createInterface({ input: server.stdout });
@@ -35,7 +43,98 @@ after(async () => {
   await browser?.close();
   if (server && server.exitCode === null) server.kill();
   await exited;
+  if (releases) await new Promise(resolve => releases.close(resolve));
   if (home) await rm(home, { recursive: true, force: true });
+});
+
+test("Update shows versions only for admin and Theme import controls follow admin", async t => {
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
+  const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
+  t.after(() => scopes("read,security,act,run,admin"));
+  for (const scope of ["read,act", "read,act,admin", "admin"]) {
+    scopes(scope);
+    for (const viewport of [{width:1440,height:900}, {width:390,height:844}]) {
+      const context = await browser.newContext({viewport});
+      try {
+        const page = await context.newPage();
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await page.goto(`${origin}/sign-in`);
+        await page.getByLabel("Email").fill("owner@example.test");
+        await page.getByLabel("Password", {exact:true}).fill("browser test password");
+        await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", {name:"Sign in",exact:true}).click()]);
+        // Admin alone may administer the machine even without access to Inbox.
+        if (scope === "admin") await page.goto(`${origin}/config`);
+        const admin = scope.includes("admin");
+        assert.equal(await page.getByRole("link", {name:"Update thirdshift",exact:true}).count(), admin ? 1 : 0);
+        await page.locator("[data-open-themes]").click();
+        assert.equal(await page.locator("#edit-theme").count(), admin ? 1 : 0);
+        assert.equal(await page.locator("#save-theme").count(), admin ? 1 : 0);
+        await page.locator("#export-theme").click();
+        await page.waitForFunction(() => document.querySelector("#theme-document").value.length > 0);
+        if (scope === "admin") {
+          const theme = JSON.parse(await page.locator("#theme-document").inputValue());
+          theme.name = `admin-only-${viewport.width}`;
+          await page.locator("#theme-document").fill(JSON.stringify(theme));
+          await page.locator("#save-theme").click();
+          await page.getByText("Theme saved.", {exact:true}).waitFor();
+          await page.locator("#theme-name").selectOption(theme.name);
+          await page.locator("#export-theme").click();
+          await page.waitForFunction(name => JSON.parse(document.querySelector("#theme-document").value).name === name, theme.name);
+          assert.equal(await page.getByRole("button", {name:"Apply Theme",exact:true}).count(), 0);
+          assert.equal(await page.locator("[data-open-sections]").count(), 0);
+        }
+        const response = await page.goto(`${origin}/update`);
+        assert.equal(response.status(), admin ? 200 : 403);
+        if (admin) {
+          await page.getByText("Latest stable version: 99.0.0", {exact:true}).waitFor();
+          assert.match(await page.locator("main").textContent(), /Current version:/);
+          await page.getByRole("button", {name:"Update thirdshift",exact:true}).waitFor();
+          assert.equal((await context.request.post(`${origin}/update`)).status(), 403, "CSRF is required");
+          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        }
+        assert.deepEqual(errors, []);
+      } finally { await context.close(); }
+    }
+  }
+});
+
+test("User config is editable for admin sessions and read-only for read sessions", async t => {
+  const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, "../../target/debug/thirdshift");
+  const scopes = value => execFileSync(binary, ["console", "scopes", "--scopes", value], { env: { ...process.env, HOME: home } });
+  t.after(() => scopes("read,security,act,run,admin"));
+  for (const scope of ["read", "admin"]) {
+    scopes(scope);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const context = await browser.newContext({ viewport, javaScriptEnabled: false });
+      try {
+        const page = await context.newPage();
+        await page.goto(`${origin}/sign-in`);
+        await page.getByLabel("Email").fill("owner@example.test");
+        await page.getByLabel("Password", { exact: true }).fill("browser test password");
+        await Promise.all([page.waitForURL(`${origin}/`), page.getByRole("button", { name: "Sign in", exact: true }).click()]);
+        const response = await page.goto(`${origin}/config`);
+        assert.equal(response.status(), 200);
+        await page.getByRole("heading", { name: "User config", exact: true }).waitFor();
+        await page.getByRole("link", { name: "User config", exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        const setting = page.locator("section").filter({ has: page.getByRole("heading", { name: "spec.parallel", exact: true }) });
+        await setting.getByText("Default: 3", { exact: true }).waitFor();
+        if (scope === "read") {
+          assert.equal(await page.locator('main textarea, main button[type="submit"]').count(), 0);
+          await setting.getByText("Value: 3", { exact: true }).waitFor();
+        } else {
+          const field = page.getByLabel("Value for spec.parallel", { exact: true });
+          await field.fill("6");
+          await Promise.all([page.waitForURL(`${origin}/config`), page.getByRole("button", { name: "Save spec.parallel", exact: true }).click()]);
+          assert.equal(await page.getByLabel("Value for spec.parallel", { exact: true }).inputValue(), "6");
+          const saved = JSON.parse(execFileSync(binary, ["config", "spec.parallel", "--json"], { env: { ...process.env, HOME: home } }));
+          assert.equal(saved.value, 6);
+        }
+        assert.equal(await page.locator('form[action="/config/console.allowed_emails"], form[action="/config/console.address_scopes"]').count(), 0);
+      } finally { await context.close(); }
+    }
+  }
 });
 
 test("sign-in and sign-out work on a phone without JavaScript using secure cookies", async t => {
@@ -62,7 +161,7 @@ test("sign-in and sign-out work on a phone without JavaScript using secure cooki
   assert.ok(session.expires > Date.now() / 1000 + 29 * 86400);
   assert.equal((await context.request.post(`${origin}/sign-out`)).status(), 403);
   await Promise.all([page.waitForURL(`${origin}/console-log`), page.getByRole("link", { name: "Console log", exact: true }).click()]);
-  await page.getByText(/owner@example.test · sign-in/).waitFor();
+  await page.getByText(/owner@example.test · sign-in/).first().waitFor();
   assert.equal(await page.title(), `Console log · ${hostname()} · thirdshift`);
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
   await Promise.all([page.waitForURL(`${origin}/account`), page.getByRole("link", { name: "Account", exact: true }).click()]);

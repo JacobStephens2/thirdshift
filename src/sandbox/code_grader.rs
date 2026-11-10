@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Seek};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -27,16 +28,92 @@ pub(crate) struct Check {
     pub reason: String,
 }
 
+/// A check and whether its command reached an exit status. A check that did
+/// not (it timed out, never started or could not be collected) failed without
+/// saying anything about the code.
+pub(crate) struct CheckRun {
+    pub check: Check,
+    pub exited: bool,
+}
+
+pub(crate) enum Timeout {
+    PerCheck(Duration),
+    Deadline(Instant),
+}
+
+impl Timeout {
+    fn deadline(&self) -> Instant {
+        match self {
+            Self::PerCheck(timeout) => Instant::now() + *timeout,
+            Self::Deadline(deadline) => *deadline,
+        }
+    }
+}
+
+/// Python puts the check's working directory, and the script's own directory,
+/// ahead of the standard library. A process Trial can commit `pathlib.py` or
+/// `unittest.py` there, including `tests/pathlib.py` when the selector is
+/// `python3 tests/check.py`, and the reference tests then import the Trial's
+/// module and pass without the fix. This startup file moves every path inside
+/// the repository behind the standard library. It does not read `sys.environ`:
+/// site imports it before that attribute exists.
+const IMPORT_GUARD: &str = "\
+import sys
+class Guard:
+    def find_spec(self, fullname, path, target=None):
+        if path is not None:
+            return None
+        import os
+        cwd = os.path.normpath(os.getcwd())
+        prefix = cwd + os.sep
+        front, back = [], []
+        for entry in list(sys.path):
+            candidate = cwd if entry == \"\" else os.path.normpath(os.path.abspath(entry))
+            if candidate == cwd or candidate.startswith(prefix):
+                back.append(entry)
+            else:
+                front.append(entry)
+        if back:
+            sys.path[:] = front + back
+        return None
+sys.meta_path.insert(0, Guard())
+";
+
 /// Run ordered checks against one private snapshot. Each process and its
 /// scope/status finish before the packet can be released, including on errors.
+/// `guard_imports` is for a snapshot that contains a Trial commit.
 pub(crate) fn execute(
     repository: &Path,
     reports: &Reports,
     commands: &[Vec<String>],
-    timeout: Duration,
+    timeout: Timeout,
     caps: &Caps,
+    guard_imports: bool,
 ) -> Result<Vec<Check>> {
-    let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
+    Ok(
+        execute_runs(repository, reports, commands, timeout, caps, guard_imports)?
+            .into_iter()
+            .map(|ran| ran.check)
+            .collect(),
+    )
+}
+
+/// [`execute`], keeping whether each check's command ran to an exit status.
+pub(crate) fn execute_runs(
+    repository: &Path,
+    reports: &Reports,
+    commands: &[Vec<String>],
+    timeout: Timeout,
+    caps: &Caps,
+    guard_imports: bool,
+) -> Result<Vec<CheckRun>> {
+    let packet = tempfile::Builder::new()
+        .prefix("grader-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    if guard_imports {
+        fs::write(packet.path().join("sitecustomize.py"), IMPORT_GUARD)?;
+    }
     // Bind sources remain visible in /proc/self/mountinfo. A neutral
     // destination alone cannot hide the original Trial's Arm pathname.
     let snapshot = packet.path().join("repository");
@@ -52,6 +129,17 @@ pub(crate) fn execute(
     }
     let mut checks = Vec::new();
     for command in commands {
+        if matches!(&timeout, Timeout::Deadline(deadline) if *deadline <= Instant::now()) {
+            checks.push(CheckRun {
+                check: Check {
+                    command: Some(command.clone()),
+                    passed: false,
+                    reason: "code Grader timed out before starting the next check".into(),
+                },
+                exited: false,
+            });
+            break;
+        }
         let mut child = launch(&snapshot, packet.path(), command, caps)?;
         let result = process::output_until(
             &mut child.invocation,
@@ -61,7 +149,7 @@ pub(crate) fn execute(
                 interruption: Interruption::Ordinary,
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
-            Instant::now() + timeout,
+            timeout.deadline(),
             &|| Ok(()),
         );
         crate::interrupt::check()?;
@@ -71,7 +159,7 @@ pub(crate) fn execute(
             bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
         }
         child.check_started(&result)?;
-        let (passed, reason) = match result {
+        let (passed, reason, exited) = match result {
             Ok(result) => (
                 result.status.success(),
                 format!(
@@ -80,13 +168,17 @@ pub(crate) fn execute(
                     String::from_utf8_lossy(&result.stdout),
                     String::from_utf8_lossy(&result.stderr)
                 ),
+                true,
             ),
-            Err(error) => (false, format!("{error:#}")),
+            Err(error) => (false, format!("{error:#}"), false),
         };
-        checks.push(Check {
-            command: Some(command.clone()),
-            passed,
-            reason,
+        checks.push(CheckRun {
+            check: Check {
+                command: Some(command.clone()),
+                passed,
+                reason,
+            },
+            exited,
         });
     }
     Ok(checks)
@@ -134,6 +226,12 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
             } else {
                 OsString::new()
             },
+        ));
+    }
+    if packet.join("sitecustomize.py").is_file() {
+        packet_env.push((
+            OsString::from("PYTHONPATH"),
+            packet_path.as_os_str().to_owned(),
         ));
     }
     // An unlinked status file stays outside the packet and the sandbox. Only
@@ -265,5 +363,131 @@ impl LaunchedCheck {
             _ => return Ok(()),
         };
         Err(anyhow::Error::new(Unavailable { diagnostic }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scope::Caps;
+    use crate::scope::testing::{Fixture, with_grader};
+    use crate::trial::Reports;
+    use std::process::Command;
+    use std::time::Duration;
+
+    /// `THIRDSHIFT_TRIAL_NO_SANDBOX` is process-wide. The check runs in a
+    /// child test process so other tests keep the sandboxed launcher.
+    fn isolated(name: &str, exercise: impl FnOnce()) {
+        const ROOT: &str = "THIRDSHIFT_CODE_GRADER_PACKET_TEST";
+        if std::env::var_os(ROOT).is_some() {
+            exercise();
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("sandbox::code_grader::tests::{name}"),
+                "--nocapture",
+            ])
+            .env(ROOT, "1")
+            .env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn the_code_grader_packet_directory_is_private_to_its_owner() {
+        isolated(
+            "the_code_grader_packet_directory_is_private_to_its_owner",
+            || {
+                let fixture = Fixture::new();
+                let repository = fixture.path("repository");
+                fs::create_dir(&repository).unwrap();
+                let standards = fixture.path("standards.md");
+                fs::write(&standards, "no findings\n").unwrap();
+                let mode_path = fixture.path("mode");
+                let report_mode = fixture.path("report-mode");
+                crate::test_support::write_executable(
+                    &report_mode,
+                    r#"#!/usr/bin/env python3
+import os, pathlib, sys
+report = pathlib.Path(os.environ["THIRDSHIFT_TRIAL_STANDARDS_REPORT"])
+mode = report.parent.stat().st_mode & 0o777
+pathlib.Path(sys.argv[1]).write_text(f"{mode:03o}")
+"#,
+                );
+                let checks = with_grader(&fixture, || {
+                    execute(
+                        &repository,
+                        &Reports {
+                            standards: Some(standards),
+                            spec: None,
+                        },
+                        &[vec![
+                            report_mode.display().to_string(),
+                            mode_path.display().to_string(),
+                        ]],
+                        Timeout::PerCheck(Duration::from_secs(10)),
+                        &Caps::default(),
+                        false,
+                    )
+                })
+                .unwrap();
+                assert!(checks[0].passed, "{}", checks[0].reason);
+                assert_eq!(fs::read_to_string(mode_path).unwrap(), "700");
+            },
+        );
+    }
+
+    /// Python puts the script's directory ahead of the standard library.
+    /// Process selectors run `python3 tests/check.py`, so a Trial can commit
+    /// `tests/pathlib.py` and satisfy the reference check without the fix.
+    #[test]
+    fn a_script_directory_cannot_shadow_the_standard_library() {
+        isolated(
+            "a_script_directory_cannot_shadow_the_standard_library",
+            || {
+                let fixture = Fixture::new();
+                let repository = fixture.path("repository");
+                let tests = repository.join("tests");
+                fs::create_dir_all(&tests).unwrap();
+                fs::write(repository.join("feature.txt"), "broken\n").unwrap();
+                fs::write(
+                    tests.join("pathlib.py"),
+                    "class Path:\n    def __init__(self, *args, **kwargs):\n        self.name = args[0] if args else ''\n    def read_text(self, *args, **kwargs):\n        return 'implemented\\n'\n",
+                )
+                .unwrap();
+                fs::write(
+                    tests.join("test_feature.py"),
+                    "import pathlib\nvalue = pathlib.Path('feature.txt').read_text()\nraise SystemExit(0 if value == 'implemented\\n' else 1)\n",
+                )
+                .unwrap();
+                let checks = with_grader(&fixture, || {
+                    execute(
+                        &repository,
+                        &Reports {
+                            standards: None,
+                            spec: None,
+                        },
+                        &[vec!["python3".into(), "tests/test_feature.py".into()]],
+                        Timeout::PerCheck(Duration::from_secs(10)),
+                        &Caps::default(),
+                        true,
+                    )
+                })
+                .unwrap();
+                assert!(
+                    !checks[0].passed,
+                    "script directory shadowed pathlib: {}",
+                    checks[0].reason
+                );
+            },
+        );
     }
 }

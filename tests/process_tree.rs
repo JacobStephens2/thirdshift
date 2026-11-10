@@ -30,12 +30,18 @@ fn interrupting_a_live_grok_catalog_stops_before_work() {
 }
 
 #[test]
+fn interrupting_a_live_kimi_catalog_stops_before_work() {
+    assert_owned_check_stopped("kimi", "kimi-k3.1-pro", DuringCheck::Live, "TERM");
+}
+
+#[test]
 fn interrupting_each_migrated_check_stops_its_owned_detached_descendant() {
     for (harness, model, signal) in [
         ("claude", "opus", "TERM"),
         ("codex", "gpt-6.1-sol", "HUP"),
         ("agy", "gemini-3.8-flash-high", "INT"),
         ("grok", "grok-4.7", "TERM"),
+        ("kimi", "kimi-k3.1-pro", "INT"),
     ] {
         assert_owned_check_stopped(harness, model, DuringCheck::Detached, signal);
     }
@@ -293,6 +299,11 @@ fn interrupting_a_grok_run_stops_a_command_in_its_own_session() {
 #[test]
 fn interrupting_a_muse_run_stops_a_command_in_its_own_session() {
     assert_session_command_stopped("muse", During::Session);
+}
+
+#[test]
+fn interrupting_a_kimi_run_stops_a_command_in_its_own_session() {
+    assert_session_command_stopped("kimi", During::Session);
 }
 
 fn assert_session_command_stopped(harness: &str, during: During) {

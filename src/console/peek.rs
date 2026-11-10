@@ -31,6 +31,9 @@ pub(super) struct Peek {
     pub resume_command: Option<String>,
     pub fix_command: Option<String>,
     pub output: Option<String>,
+    pub log_url: String,
+    pub waterfall_url: String,
+    pub owning_console: Option<String>,
 }
 
 pub(super) struct Log {
@@ -41,6 +44,9 @@ pub(super) struct Log {
 pub(super) struct Advisory {
     label: &'static str,
     finding: crate::security::RecordedFinding,
+    /// Whether the finding URL may be the href of its title. Local records
+    /// keep their stored link. A received record must name a GitHub advisory.
+    linked: bool,
 }
 
 impl Advisory {
@@ -50,7 +56,11 @@ impl Advisory {
         )
         .unwrap_or_default()
         .into_iter()
-        .map(|finding| Self { label, finding })
+        .map(|finding| Self {
+            label,
+            finding,
+            linked: true,
+        })
         .collect()
     }
 }
@@ -77,10 +87,79 @@ impl Peek {
         csrf: String,
         config: &crate::config::UserConfig,
     ) -> Self {
-        let value = inspection.details;
-        let output = value["command_log"]
+        let output = inspection.details["command_log"]
             .as_str()
             .and_then(|path| super::logs::preview(config, std::path::Path::new(path)).ok());
+        let steps = step_facts(
+            &inspection.details,
+            inspection.accepted_log_directory.as_deref(),
+        );
+        let mut peek = Self::from_details(command.clone(), inspection.details);
+        peek.output = output;
+        peek.facts.extend(steps);
+        peek.fix_command = inspection.fix_command;
+        peek.dismissal = inspection.dismissal.map(|action| {
+            let (path, label, suffix) = match action {
+                crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),
+                crate::logs::dismiss::Action::Undo => ("/dismiss/undo", "Undo", " --undo"),
+            };
+            DismissAction {
+                path,
+                label,
+                cli: format!(
+                    "thirdshift dismiss '{}'{suffix}",
+                    command.replace('\'', "'\\''")
+                ),
+            }
+        });
+        peek.csrf = csrf;
+        peek.can_stop = inspection.can_stop;
+        peek.stopping = inspection.stopping;
+        peek.branches = inspection.branches;
+        peek.pull_requests = inspection.pull_requests;
+        peek
+    }
+
+    pub fn remote(
+        command: String,
+        value: Value,
+        output: Option<String>,
+        remote: &super::fleet::read::Remote,
+    ) -> Self {
+        // This constructor only renders values. In particular, none of the
+        // owning machine's absolute paths are opened on this machine.
+        let mut peek = Self::from_details(command.clone(), value);
+        // A received document chooses the issue URL and each advisory URL
+        // independently of the text beside them. Keep a link only when it is
+        // the GitHub record that text names. The visible text stays either way.
+        if !crate::logs::status::subject_link_matches(&peek.subject, peek.issue_url.as_deref()) {
+            peek.issue_url = None;
+        }
+        for advisory in &mut peek.advisories {
+            advisory.linked = github_advisory_url(&advisory.finding.url);
+        }
+        peek.output = output.map(|text| super::logs::recent_output(text.as_bytes()));
+        peek.log_url = remote.url(&peek.log_url);
+        peek.waterfall_url = remote.url(&peek.waterfall_url);
+        for log in &mut peek.logs {
+            log.url = remote.url(&log.url);
+        }
+        peek.cli.push_str(&format!(
+            " --machine '{}'",
+            remote.entry.name.replace('\'', "'\\''")
+        ));
+        peek.owning_console = Some(super::fleet::read::owning_url(
+            &remote.entry,
+            &crate::logs::status::inspect::url("/peek", &command, None),
+        ));
+        // Experiment pages, recovery commands and actions belong to their
+        // own workflows; remote details offer the owning Console for them.
+        peek.experiment_url = None;
+        peek.resume_command = None;
+        peek
+    }
+
+    fn from_details(command: String, value: Value) -> Self {
         let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
         let name = value["name"]
             .as_str()
@@ -123,8 +202,11 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
-            output,
-            fix_command: inspection.fix_command,
+            output: None,
+            log_url: crate::logs::status::inspect::url("/log", &command, None),
+            waterfall_url: crate::logs::status::inspect::url("/waterfall", &command, None),
+            owning_console: None,
+            fix_command: None,
             failure_reason: failure_reason(&value),
             pause_reason: (value["outcome"] == "paused")
                 .then(|| value["cause"].as_str().map(str::to_owned))
@@ -133,27 +215,14 @@ impl Peek {
                 .then(|| value["resume_command"].as_str().map(str::to_owned))
                 .flatten(),
             account: value["account"].as_str().map(str::to_owned),
-            dismissal: inspection.dismissal.map(|action| {
-                let (path, label, suffix) = match action {
-                    crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),
-                    crate::logs::dismiss::Action::Undo => ("/dismiss/undo", "Undo", " --undo"),
-                };
-                DismissAction {
-                    path,
-                    label,
-                    cli: format!(
-                        "thirdshift dismiss '{}'{suffix}",
-                        command.replace('\'', "'\\''")
-                    ),
-                }
-            }),
-            csrf,
+            dismissal: None,
+            csrf: String::new(),
             live: value["state"] == "live",
             stop_cli: format!("thirdshift stop '{}'", command.replace('\'', "'\\''")),
-            can_stop: inspection.can_stop,
-            stopping: inspection.stopping,
-            branches: inspection.branches,
-            pull_requests: inspection.pull_requests,
+            can_stop: false,
+            stopping: false,
+            branches: Vec::new(),
+            pull_requests: Vec::new(),
             advisories,
             issue_url,
             experiment_url,
@@ -161,18 +230,51 @@ impl Peek {
             title,
             command,
             cli,
-            facts: {
-                let steps = step_facts(&value, inspection.accepted_log_directory.as_deref());
-                let mut facts = Fact::children(value, false, "");
-                facts.extend(steps);
-                facts
-            },
+            facts: Fact::children(value, false, ""),
             logs,
         }
     }
     fn fact<'a>(&self, fact: &'a Fact) -> FactTemplate<'a> {
         FactTemplate { fact }
     }
+}
+
+/// A repository advisory on `github.com`, with no userinfo, query, fragment,
+/// or extra path. The host is the parsed host, so a lookalike suffix does
+/// not qualify.
+fn github_advisory_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https"
+        || parsed.port().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || !parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return false;
+    }
+    let mut parts = parsed
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty());
+    let Some(owner) = parts.next() else {
+        return false;
+    };
+    let Some(repo) = parts.next() else {
+        return false;
+    };
+    parts.next() == Some("security")
+        && parts.next() == Some("advisories")
+        && parts.next().is_some_and(|id| !id.is_empty())
+        && parts.next().is_none()
+        && !owner.is_empty()
+        && !repo.is_empty()
 }
 
 fn failure_reason(value: &Value) -> Option<String> {
@@ -195,7 +297,13 @@ fn unsuccessful(value: &Value) -> bool {
         outcome.contains("failed")
             || matches!(
                 outcome,
-                "interrupted" | "review required" | "fail" | "inconclusive" | "waiting_on_rechecks"
+                "interrupted"
+                    | "review required"
+                    | "fail"
+                    | "inconclusive"
+                    | "waiting_on_rechecks"
+                    | "waiting_on_leaks"
+                    | "waiting_on_people"
             )
     })
 }
@@ -450,6 +558,8 @@ mod tests {
             "fail",
             "inconclusive",
             "waiting_on_rechecks",
+            "waiting_on_leaks",
+            "waiting_on_people",
         ] {
             let html = render_peek(json!({
                 "state": "ended", "outcome": outcome, "cause": "Command could not finish"
@@ -545,5 +655,127 @@ mod tests {
     fn experiment_record_without_an_id_carries_no_experiment_link() {
         let html = render_peek(json!({"kind": "Experiment"}));
         assert!(!html.contains("/experiments/"), "{html}");
+    }
+
+    fn remote_details(value: Value) -> String {
+        let remote =
+            super::super::fleet::read::Remote::for_render_test("other", "https://machine.example");
+        Peek::remote("acme/widgets#7".into(), value, None, &remote)
+            .render()
+            .unwrap()
+    }
+
+    fn heading(html: &str) -> &str {
+        html.split("<h2")
+            .nth(1)
+            .unwrap()
+            .split("</h2>")
+            .next()
+            .unwrap()
+    }
+
+    fn paragraph(html: &str, label: &str) -> String {
+        let prefix = format!("<p>{label}: ");
+        let start = html
+            .find(&prefix)
+            .unwrap_or_else(|| panic!("{label}: {html}"));
+        let rest = &html[start..];
+        let end = rest.find("</p>").unwrap();
+        rest[..=end + 3].to_string()
+    }
+
+    /// A received Command chooses its visible repository, issue number, advisory
+    /// title, and URLs independently. Command details must not lend the visible
+    /// text to a different site. The Inbox already drops that subject href.
+    #[test]
+    fn remote_details_keep_issue_and_advisory_links_on_the_named_github_records() {
+        let lookalike = remote_details(json!({
+            "repository": "acme/widgets",
+            "kind": "Security run",
+            "name": "secure-fixture",
+            "state": "ended",
+            "issue": {
+                "number": 7,
+                "url": "https://github.com.evil.example/acme/widgets/issues/7",
+                "title": "Widgets"
+            },
+            "security_fix_findings": [{
+                "title": "Open redirect in widgets",
+                "severity": "low",
+                "url": "https://evil.example/advisory"
+            }],
+            "dispatched": [{
+                "security_fix_findings": [{
+                    "title": "Lookalike advisory",
+                    "severity": "high",
+                    "url": "https://github.com.evil.example/acme/widgets/security/advisories/GHSA-fake"
+                }]
+            }]
+        }));
+        let lookalike_heading = heading(&lookalike);
+        assert!(!lookalike_heading.contains("href="), "{lookalike_heading}");
+        assert!(
+            lookalike_heading.contains("acme/widgets#7"),
+            "{lookalike_heading}"
+        );
+        assert_eq!(
+            paragraph(&lookalike, "Fixes advisory"),
+            "<p>Fixes advisory: Open redirect in widgets · low</p>"
+        );
+        assert_eq!(
+            paragraph(&lookalike, "Fix dispatched for advisory"),
+            "<p>Fix dispatched for advisory: Lookalike advisory · high</p>"
+        );
+
+        let other_repo = remote_details(json!({
+            "repository": "acme/widgets",
+            "kind": "Run",
+            "name": "acme/widgets#7",
+            "state": "ended",
+            "issue": {
+                "number": 7,
+                "url": "https://github.com/attacker/phish/issues/7",
+                "title": "Widgets"
+            },
+            "security_fix_findings": [{
+                "title": "Unrelated repository",
+                "severity": "low",
+                "url": "https://github.com/attacker/phish"
+            }]
+        }));
+        let other_heading = heading(&other_repo);
+        assert!(!other_heading.contains("href="), "{other_heading}");
+        assert!(other_heading.contains("acme/widgets#7"), "{other_heading}");
+        assert_eq!(
+            paragraph(&other_repo, "Fixes advisory"),
+            "<p>Fixes advisory: Unrelated repository · low</p>"
+        );
+
+        let matching = remote_details(json!({
+            "repository": "acme/widgets",
+            "kind": "Run",
+            "name": "acme/widgets#7",
+            "state": "ended",
+            "issue": {
+                "number": 7,
+                "url": "https://github.com/acme/widgets/issues/7",
+                "title": "Widgets"
+            },
+            "security_fix_findings": [{
+                "title": "Bound input",
+                "severity": "medium",
+                "url": "https://github.com/acme/widgets/security/advisories/GHSA-first"
+            }]
+        }));
+        assert!(
+            heading(&matching).contains(
+                "<a href=\"https://github.com/acme/widgets/issues/7\">acme/widgets#7</a>"
+            ),
+            "{matching}"
+        );
+        assert_eq!(
+            paragraph(&matching, "Fixes advisory"),
+            "<p>Fixes advisory: <a href=\"https://github.com/acme/widgets/security/advisories/GHSA-first\">Bound input</a> · medium</p>"
+        );
     }
 }

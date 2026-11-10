@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+fn remote_details_name_the_signed_in_person_and_honor_the_owning_allowlist_and_scopes() {
+    let caller_home = configured();
+    let owner_home = configured();
+    let mut security = record(owner_home.path(), 7, Some("failed"), 0);
+    security["kind"] = json!("Security run");
+    security["security_findings"] = json!([{"title": "Private finding for this person", "url": "https://github.com/acme/widgets/security/advisories/GHSA-test", "severity": "high"}]);
+    write_record(owner_home.path(), 7, &security);
+    assert!(
+        password(caller_home.path(), None, PASSWORD, PASSWORD)
+            .0
+            .success()
+    );
+    api::cli(
+        owner_home.path(),
+        &[
+            "console", "scopes", "--email", EMAIL, "--scopes", "read", "--json",
+        ],
+    );
+    let token = tokens::create(owner_home.path(), "watcher", &["--scopes", "read,security"]);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let owner = Console::start(binary, owner_home.path());
+    assert!(
+        crate::fleet::add(caller_home.path(), "remote", &owner.address, &token)
+            .status
+            .success()
+    );
+    let caller = Console::start_mode(binary, caller_home.path(), false);
+    let session = cookie(&sign_in(&caller, EMAIL, PASSWORD));
+    let path = "/peek?machine=remote&command=widgets%237";
+    let denied = get(&caller, path, &session);
+    assert_eq!(denied.status(), 403);
+    assert!(
+        denied
+            .text()
+            .unwrap()
+            .contains("needs the `security` scope on `remote`")
+    );
+    api::cli(
+        owner_home.path(),
+        &[
+            "console",
+            "scopes",
+            "--email",
+            EMAIL,
+            "--scopes",
+            "read,security",
+            "--json",
+        ],
+    );
+    let allowed = get(&caller, path, &session);
+    assert_eq!(allowed.status(), 200);
+    assert!(
+        allowed
+            .text()
+            .unwrap()
+            .contains("Private finding for this person")
+    );
+    allow(owner_home.path(), false);
+    let denied = get(&caller, path, &session);
+    assert_eq!(denied.status(), 403);
+    let message = denied.text().unwrap();
+    assert!(message.contains("not on this machine"), "{message}");
+    assert!(!message.contains("Private finding"));
+}
+
+#[test]
 fn restricted_sessions_can_sign_out_of_their_own_browser_with_csrf() {
     for scopes in ["read", ""] {
         let home = configured();
@@ -264,8 +330,36 @@ fn http_cannot_write_or_show_address_scopes_even_with_admin() {
             "{route}"
         );
     }
+    // The config read now exists, but there is no bulk config write.
+    assert_eq!(
+        actions::post(
+            &console,
+            &token,
+            "/api/v1/config",
+            &[("address_scopes", "admin")]
+        )
+        .status(),
+        405
+    );
+    for (key, value) in [
+        ("console.allowed_emails", "['stranger@example.test']"),
+        ("console.address_scopes", "{}"),
+    ] {
+        let response = actions::post(
+            &console,
+            &token,
+            &format!("/api/v1/config/{key}"),
+            &[("value", value)],
+        );
+        assert_eq!(response.status(), 422, "{key}");
+        assert!(
+            response.json::<Value>().unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("access")
+        );
+    }
     for route in [
-        "/api/v1/config",
         "/api/v1/scopes",
         "/api/v1/allowed-emails",
         "/console/scopes",

@@ -138,10 +138,10 @@ fn bearer_read_updates_last_use_and_revoke_takes_effect_on_the_next_request() {
     let token = create(home.path(), "reader", &[]);
     let console = server(home.path());
     assert_eq!(list(home.path())[0]["last_use"], Value::Null);
-    let expected = api::cli(home.path(), &["status", "--json"]);
-    assert_eq!(
+    let expected = api::cli(home.path(), &["status", "--local", "--json"]);
+    api::assert_status_facts_equal(
         api::json(request(&console, &token, "/api/v1/status").send().unwrap()),
-        expected
+        expected,
     );
     assert!(list(home.path())[0]["last_use"].as_str().is_some());
     let description = api::json(
@@ -174,7 +174,19 @@ fn route_scopes_refuse_a_token_missing_read_and_name_the_scope() {
         json!(["security", "act", "run", "admin"])
     );
     let console = server(home.path());
-    for path in ["/api/v1/status", "/api/v1/whoami", "/api/v1/openapi.json"] {
+    // Pairing can inspect a run/admin token's own identity without granting
+    // it read access to Commands or the rest of the machine's API.
+    let identity = api::json(request(&console, &token, "/api/v1/whoami").send().unwrap());
+    assert_eq!(
+        identity["scopes"],
+        json!(["security", "act", "run", "admin"])
+    );
+    assert_eq!(
+        identity["identity"],
+        json!({"kind": "token", "holder": "actor"})
+    );
+    assert!(!identity.to_string().contains(&token));
+    for path in ["/api/v1/status", "/api/v1/openapi.json"] {
         let response = request(&console, &token, path).send().unwrap();
         assert_eq!(response.status(), 403, "{path}");
         assert!(
@@ -523,9 +535,10 @@ fn read_scope_cannot_read_security_findings() {
     );
 }
 
-/// A read token may see an ordinary Command's waterfall. A Security session
-/// attached to that Command is still a Security trace: the log route refuses
-/// it, and the span routes must not return its prompt or tool output either.
+/// A read token may see an ordinary Run's waterfall and its other stages. A
+/// Security session on that Run is still a Security trace: the log route
+/// refuses it, and span, waterfall and single-span reads omit its prompt and
+/// tool output. A security token still receives that trace.
 #[test]
 fn read_scope_cannot_read_a_security_session_through_spans() {
     let home = tempfile::tempdir().unwrap();
@@ -536,15 +549,45 @@ fn read_scope_cannot_read_a_security_session_through_spans() {
         .join(".thirdshift/logs/acme/widgets/commands/issue");
     let security = directory.join("7-20261105T120000-0500-security-review.logs.jsonl");
     let ordinary = directory.join("7-20261105T120100-0500-implement.logs.jsonl");
-    write_session_prompt(&security, "CANARY-SECURITY-SESSION-PROMPT");
-    write_session_prompt(&ordinary, "CANARY-ORDINARY-SESSION-PROMPT");
+    write_session_spans(
+        &security,
+        &json!([
+            session_span("bbbbbbbbbbbbbbbb", "CANARY-SECURITY-SESSION-PROMPT"),
+            {
+                "spanId": "cccccccccccccccc",
+                "parentSpanId": "bbbbbbbbbbbbbbbb",
+                "name": "execute_tool Bash",
+                "startTimeUnixNano": "1790856020000000000",
+                "endTimeUnixNano": "1790856030000000000",
+                "attributes": [
+                    {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+                    {"key": "gen_ai.tool.name", "value": {"stringValue": "Bash"}},
+                    {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "CANARY-SECURITY-TOOL-ARGS"}},
+                    {"key": "gen_ai.tool.call.result", "value": {"stringValue": "CANARY-SECURITY-TOOL-OUTPUT"}}
+                ]
+            }
+        ]),
+    );
+    write_session_spans(
+        &ordinary,
+        &json!([session_span(
+            "2222222222222222",
+            "CANARY-ORDINARY-SESSION-PROMPT"
+        )]),
+    );
     let began_at = command["started_at"].clone();
+    command["kind"] = json!("Run");
     command["session_log"] = json!(ordinary);
     command["stages"][0]["session_log"] = json!(ordinary);
     command["stages"].as_array_mut().unwrap().push(json!({
         "name": "security review",
         "began_at": began_at,
         "session_log": security
+    }));
+    command["stages"].as_array_mut().unwrap().push(json!({
+        "name": "pull request",
+        "began_at": began_at,
+        "session_log": null
     }));
     write_record(home.path(), 7, &command);
     let reader = create(home.path(), "reader", &[]);
@@ -559,12 +602,9 @@ fn read_scope_cannot_read_a_security_session_through_spans() {
     .send()
     .unwrap();
     assert_eq!(denied.status(), 403);
-    assert!(
-        !denied
-            .text()
-            .unwrap()
-            .contains("CANARY-SECURITY-SESSION-PROMPT")
-    );
+    let denied_body = denied.text().unwrap();
+    assert!(!denied_body.contains("CANARY-SECURITY-SESSION-PROMPT"));
+    assert!(!denied_body.contains("CANARY-SECURITY-TOOL-OUTPUT"));
 
     for path in [
         "/api/v1/spans?command=widgets%237",
@@ -574,13 +614,14 @@ fn read_scope_cannot_read_a_security_session_through_spans() {
         let status = response.status();
         let body = response.text().unwrap();
         assert_eq!(status, 200, "{path}: {body}");
-        assert!(
-            !body.contains("CANARY-SECURITY-SESSION-PROMPT"),
-            "{path} disclosed a security session trace to a read token: {body}"
-        );
+        assert_omits_security_trace(path, &body);
         assert!(
             body.contains("CANARY-ORDINARY-SESSION-PROMPT"),
             "{path} hid an ordinary session from a read token: {body}"
+        );
+        assert!(
+            body.contains("pull request"),
+            "{path} dropped another stage of the ordinary Run: {body}"
         );
         let allowed = request(&console, &reviewer, path).send().unwrap();
         let allowed_status = allowed.status();
@@ -590,25 +631,84 @@ fn read_scope_cannot_read_a_security_session_through_spans() {
             allowed_body.contains("CANARY-SECURITY-SESSION-PROMPT"),
             "{path} hid a security session from a security token: {allowed_body}"
         );
+        assert!(
+            allowed_body.contains("CANARY-SECURITY-TOOL-OUTPUT"),
+            "{path} hid security tool output from a security token: {allowed_body}"
+        );
     }
+
+    for (path, marker) in [
+        (
+            "/api/v1/spans?command=widgets%237&span=bbbbbbbbbbbbbbbb",
+            "CANARY-SECURITY-SESSION-PROMPT",
+        ),
+        (
+            "/api/v1/spans?command=widgets%237&span=cccccccccccccccc",
+            "CANARY-SECURITY-TOOL-OUTPUT",
+        ),
+    ] {
+        let response = request(&console, &reader, path).send().unwrap();
+        let body = response.text().unwrap();
+        assert_omits_security_trace(path, &body);
+        let allowed = request(&console, &reviewer, path).send().unwrap();
+        let allowed_status = allowed.status();
+        let allowed_body = allowed.text().unwrap();
+        assert_eq!(allowed_status, 200, "{path}: {allowed_body}");
+        assert!(
+            allowed_body.contains(marker),
+            "{path} hid the security trace from a security token: {allowed_body}"
+        );
+    }
+
+    let ordinary_span = request(
+        &console,
+        &reader,
+        "/api/v1/spans?command=widgets%237&span=2222222222222222",
+    )
+    .send()
+    .unwrap();
+    let ordinary_status = ordinary_span.status();
+    let ordinary_body = ordinary_span.text().unwrap();
+    assert_eq!(ordinary_status, 200, "{ordinary_body}");
+    assert!(ordinary_body.contains("CANARY-ORDINARY-SESSION-PROMPT"));
+    assert_omits_security_trace("ordinary span", &ordinary_body);
 }
 
-fn write_session_prompt(log: &Path, secret: &str) {
-    let spans = super::support::session_trace::artifact(log, "spans.jsonl");
+fn assert_omits_security_trace(path: &str, body: &str) {
+    assert!(
+        !body.contains("CANARY-SECURITY-SESSION-PROMPT"),
+        "{path} disclosed a security session prompt: {body}"
+    );
+    assert!(
+        !body.contains("CANARY-SECURITY-TOOL-OUTPUT"),
+        "{path} disclosed security tool output: {body}"
+    );
+    assert!(
+        !body.contains("CANARY-SECURITY-TOOL-ARGS"),
+        "{path} disclosed security tool arguments: {body}"
+    );
+}
+
+fn session_span(id: &str, prompt: &str) -> Value {
+    json!({
+        "spanId": id,
+        "name": "invoke_agent session",
+        "startTimeUnixNano": "1790856010000000000",
+        "endTimeUnixNano": "1790856050000000000",
+        "attributes": [
+            {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+            {"key": "thirdshift.session.prompt", "value": {"stringValue": prompt}}
+        ]
+    })
+}
+
+fn write_session_spans(log: &Path, spans: &Value) {
+    let path = super::support::session_trace::artifact(log, "spans.jsonl");
     fs::write(log, "").unwrap();
     fs::write(
-        spans,
+        path,
         serde_json::to_vec(&json!({
-            "resourceSpans": [{"scopeSpans": [{"spans": [{
-                "spanId": "1111111111111111",
-                "name": "invoke_agent session",
-                "startTimeUnixNano": "1790856010000000000",
-                "endTimeUnixNano": "1790856050000000000",
-                "attributes": [
-                    {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
-                    {"key": "thirdshift.session.prompt", "value": {"stringValue": secret}}
-                ]
-            }]}]}]
+            "resourceSpans": [{"scopeSpans": [{"spans": spans}]}]
         }))
         .unwrap(),
     )

@@ -42,7 +42,7 @@ impl DismissedRow {
         DismissalView {
             who: self.who.clone(),
             dismissed_at: self.at.clone(),
-            source: self.source(),
+            source: self.source().to_owned(),
             kind: current_kind.unwrap_or(&self.kind).to_owned(),
             kinds: self.kinds.clone(),
         }
@@ -52,11 +52,11 @@ impl DismissedRow {
 /// A row's dismissal as `status --json` reports it: who, when, from where
 /// and every kind it covers. `kind` is the current kind, or the last one
 /// dismissed while a live row has no problem.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(crate) struct DismissalView {
     pub who: String,
     pub dismissed_at: String,
-    pub source: &'static str,
+    pub source: String,
     pub kind: String,
     pub kinds: Vec<String>,
 }
@@ -273,13 +273,28 @@ pub(crate) struct Request {
     pub undo: bool,
 }
 
+#[derive(Deserialize)]
 pub(crate) struct Change {
     name: String,
-    group: Group,
+    group: Option<Group>,
     dismissal: Option<DismissalView>,
 }
 
 impl Change {
+    fn print(&self, json: bool) {
+        if json {
+            println!("{}", self.json());
+        } else if self.dismissal.is_some() {
+            println!(
+                "dismissed {} from {}",
+                self.name,
+                self.group.map(Group::title).unwrap_or("Inbox")
+            );
+        } else {
+            println!("took back the dismissal of {}", self.name);
+        }
+    }
+
     pub(crate) fn json(&self) -> serde_json::Value {
         match &self.dismissal {
             Some(dismissal) => serde_json::json!({
@@ -310,13 +325,13 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
             undo,
         },
     )?;
-    if json {
-        println!("{}", change.json());
-    } else if change.dismissal.is_some() {
-        println!("dismissed {} from {}", change.name, change.group.title());
-    } else {
-        println!("took back the dismissal of {}", change.name);
-    }
+    change.print(json);
+    Ok(())
+}
+
+pub(crate) fn print_remote(value: serde_json::Value, json: bool) -> Result<()> {
+    let change: Change = serde_json::from_value(value)?;
+    change.print(json);
     Ok(())
 }
 
@@ -353,7 +368,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         )?;
         return Ok(Change {
             name: target.name,
-            group: target.group,
+            group: Some(target.group),
             dismissal: None,
         });
     }
@@ -386,7 +401,7 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     )?;
     Ok(Change {
         name: target.name,
-        group: target.group,
+        group: Some(target.group),
         dismissal,
     })
 }

@@ -1,0 +1,559 @@
+{
+  "revision": "82cc4dc2f9bad8a93dd7ae111cce1afe34ec30de",
+  "timestamp_utc": "2026-11-06T23:12:51.890391+00:00",
+  "host": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+  "cpu_count": 4,
+  "load_average": [
+    0.59765625,
+    0.5009765625,
+    0.4638671875
+  ],
+  "jobs": 2,
+  "rust_static_target": "x86_64-unknown-linux-musl",
+  "tools": {
+    "go": "go version go1.24.5 linux/amd64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "git": "git version 2.43.0",
+    "readelf": "GNU readelf (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty."
+  },
+  "samples": [
+    {
+      "go": {
+        "seconds": {
+          "cold_build": 10.197248228942044,
+          "incremental_build": 0.6308893270324916,
+          "test_compile": 17.080289611942135,
+          "test_execution": 154.08379880001303,
+          "model_check": 5.298803306999616,
+          "static_build": 0.24893545906525105
+        },
+        "commands": [
+          {
+            "metric": "cold_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-o",
+              "/tmp/thirdshift-benchmark-sl4wkj08/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-cold_build.log"
+          },
+          {
+            "metric": "incremental_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-o",
+              "/tmp/thirdshift-benchmark-sl4wkj08/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-incremental_build.log"
+          },
+          {
+            "metric": "test_compile",
+            "argv": [
+              "go",
+              "test",
+              "-c",
+              "-o",
+              "/tmp/thirdshift-benchmark-sl4wkj08/go-tests",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-test_compile.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/go-tests",
+              "-test.skip=^TestBenchmark",
+              "-test.count=1",
+              "-test.parallel=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-test_execution.log"
+          },
+          {
+            "metric": "model_check",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/go-tests",
+              "-test.run=^TestPickupModel",
+              "-test.count=1",
+              "-test.v"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-model_check.log"
+          },
+          {
+            "metric": "static_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-ldflags=-s -w",
+              "-o",
+              "/tmp/thirdshift-benchmark-sl4wkj08/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree/prototype/go",
+            "log": "1-go-static_build.log"
+          }
+        ],
+        "static_bytes": 3289272
+      },
+      "rust": {
+        "seconds": {
+          "cold_build": 166.9769773290027,
+          "incremental_build": 9.292317796964198,
+          "test_compile": 81.40013830002863,
+          "test_execution": 262.2594986030599,
+          "model_check": 1.1230978259118274,
+          "static_build": 357.9989838870242
+        },
+        "commands": [
+          {
+            "metric": "cold_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-cold_build.log"
+          },
+          {
+            "metric": "incremental_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-incremental_build.log"
+          },
+          {
+            "metric": "test_compile",
+            "argv": [
+              "cargo",
+              "test",
+              "--locked",
+              "--no-run",
+              "--message-format=json",
+              "--test",
+              "fresh_run",
+              "--test",
+              "pickup_run",
+              "--test",
+              "harness",
+              "--test",
+              "ci",
+              "--test",
+              "pickup_model"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_compile.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/fresh_run-8cd13fbb94404779",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/pickup_run-0d766899e6782ad1",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/harness-123ea558a3d165ad",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/ci-54219ff6ab5ab934",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/pickup_model-1d72f02ce05acf2e",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-test_execution.log"
+          },
+          {
+            "metric": "model_check",
+            "argv": [
+              "/tmp/thirdshift-benchmark-sl4wkj08/rust-target/debug/deps/pickup_model-1d72f02ce05acf2e",
+              "--test-threads=1",
+              "--nocapture"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-model_check.log"
+          },
+          {
+            "metric": "static_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--release",
+              "--target",
+              "x86_64-unknown-linux-musl",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-sl4wkj08/worktree",
+            "log": "1-rust-static_build.log"
+          }
+        ],
+        "static_bytes": 21210280
+      }
+    },
+    {
+      "go": {
+        "seconds": {
+          "cold_build": 9.65935393399559,
+          "incremental_build": 0.6011072089895606,
+          "test_compile": 15.55158239195589,
+          "test_execution": 152.8258832580177,
+          "model_check": 5.214108006097376,
+          "static_build": 0.2694852700224146
+        },
+        "commands": [
+          {
+            "metric": "cold_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-o",
+              "/tmp/thirdshift-benchmark-f7shrf8g/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-cold_build.log"
+          },
+          {
+            "metric": "incremental_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-o",
+              "/tmp/thirdshift-benchmark-f7shrf8g/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-incremental_build.log"
+          },
+          {
+            "metric": "test_compile",
+            "argv": [
+              "go",
+              "test",
+              "-c",
+              "-o",
+              "/tmp/thirdshift-benchmark-f7shrf8g/go-tests",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-test_compile.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/go-tests",
+              "-test.skip=^TestBenchmark",
+              "-test.count=1",
+              "-test.parallel=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-test_execution.log"
+          },
+          {
+            "metric": "model_check",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/go-tests",
+              "-test.run=^TestPickupModel",
+              "-test.count=1",
+              "-test.v"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-model_check.log"
+          },
+          {
+            "metric": "static_build",
+            "argv": [
+              "go",
+              "build",
+              "-trimpath",
+              "-ldflags=-s -w",
+              "-o",
+              "/tmp/thirdshift-benchmark-f7shrf8g/thirdshift-go",
+              "."
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree/prototype/go",
+            "log": "2-go-static_build.log"
+          }
+        ],
+        "static_bytes": 3289272
+      },
+      "rust": {
+        "seconds": {
+          "cold_build": 160.73648330604192,
+          "incremental_build": 8.886530747055076,
+          "test_compile": 80.00961200799793,
+          "test_execution": 298.1343800970353,
+          "model_check": 1.1185202499618754,
+          "static_build": 387.148877888103
+        },
+        "commands": [
+          {
+            "metric": "cold_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-cold_build.log"
+          },
+          {
+            "metric": "incremental_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-incremental_build.log"
+          },
+          {
+            "metric": "test_compile",
+            "argv": [
+              "cargo",
+              "test",
+              "--locked",
+              "--no-run",
+              "--message-format=json",
+              "--test",
+              "fresh_run",
+              "--test",
+              "pickup_run",
+              "--test",
+              "harness",
+              "--test",
+              "ci",
+              "--test",
+              "pickup_model"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_compile.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/fresh_run-8cd13fbb94404779",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/pickup_run-0d766899e6782ad1",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/harness-123ea558a3d165ad",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/ci-54219ff6ab5ab934",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_execution.log"
+          },
+          {
+            "metric": "test_execution",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/pickup_model-1d72f02ce05acf2e",
+              "--test-threads=2"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-test_execution.log"
+          },
+          {
+            "metric": "model_check",
+            "argv": [
+              "/tmp/thirdshift-benchmark-f7shrf8g/rust-target/debug/deps/pickup_model-1d72f02ce05acf2e",
+              "--test-threads=1",
+              "--nocapture"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-model_check.log"
+          },
+          {
+            "metric": "static_build",
+            "argv": [
+              "cargo",
+              "build",
+              "--locked",
+              "--release",
+              "--target",
+              "x86_64-unknown-linux-musl",
+              "--bin",
+              "thirdshift"
+            ],
+            "cwd": "/tmp/thirdshift-benchmark-f7shrf8g/worktree",
+            "log": "2-rust-static_build.log"
+          }
+        ],
+        "static_bytes": 21210280
+      }
+    }
+  ],
+  "cpu": "DO-Premium-AMD",
+  "source_lines": {
+    "go": {
+      "lines": 1615,
+      "files": [
+        "prototype/go/ci.go",
+        "prototype/go/claim.go",
+        "prototype/go/delivery.go",
+        "prototype/go/github.go",
+        "prototype/go/main.go",
+        "prototype/go/pickup.go",
+        "prototype/go/process.go",
+        "prototype/go/pull_request.go",
+        "prototype/go/ready.go",
+        "prototype/go/reservation.go",
+        "prototype/go/run.go",
+        "prototype/go/salvage.go",
+        "prototype/go/session.go",
+        "prototype/go/skills.go",
+        "prototype/go/states.go"
+      ]
+    },
+    "rust": {
+      "lines": 29948,
+      "files": [
+        "src/ci.rs",
+        "src/claim.rs",
+        "src/delivery/repair_loop.rs",
+        "src/delivery/stage.rs",
+        "src/delivery.rs",
+        "src/harness/adapter.rs",
+        "src/harness/agy/catalog.rs",
+        "src/harness/agy/events.rs",
+        "src/harness/agy/stream.rs",
+        "src/harness/agy.rs",
+        "src/harness/built_with.rs",
+        "src/harness/claude.rs",
+        "src/harness/codex/catalog.rs",
+        "src/harness/codex/events.rs",
+        "src/harness/codex/limits.rs",
+        "src/harness/codex/patches.rs",
+        "src/harness/codex/stream.rs",
+        "src/harness/codex.rs",
+        "src/harness/grok/catalog.rs",
+        "src/harness/grok.rs",
+        "src/harness/instructions.rs",
+        "src/harness/interpretation/event.rs",
+        "src/harness/interpretation/limits.rs",
+        "src/harness/interpretation/models.rs",
+        "src/harness/interpretation/security.rs",
+        "src/harness/interpretation/stream/events.rs",
+        "src/harness/interpretation/stream.rs",
+        "src/harness/interpretation.rs",
+        "src/harness/muse/catalog.rs",
+        "src/harness/muse/events.rs",
+        "src/harness/muse/log.rs",
+        "src/harness/muse/stream.rs",
+        "src/harness/muse.rs",
+        "src/harness/opencode/events.rs",
+        "src/harness/opencode/export.rs",
+        "src/harness/opencode/stream.rs",
+        "src/harness/opencode.rs",
+        "src/harness/process.rs",
+        "src/harness/settings.rs",
+        "src/harness/skill_load.rs",
+        "src/harness/summary.rs",
+        "src/harness/version.rs",
+        "src/harness.rs",
+        "src/interrupt.rs",
+        "src/main.rs",
+        "src/pickup.rs",
+        "src/process/faults.rs",
+        "src/process/session.rs",
+        "src/process/tree.rs",
+        "src/process.rs",
+        "src/pull_request/findings.rs",
+        "src/pull_request.rs",
+        "src/ready.rs",
+        "src/reservation.rs",
+        "src/run.rs",
+        "src/session/kind.rs",
+        "src/session/limits.rs",
+        "src/session/private.rs",
+        "src/session/recording.rs",
+        "src/session/review_reports.rs",
+        "src/session/trace/attributes.rs",
+        "src/session/trace/calls.rs",
+        "src/session/trace/export.rs",
+        "src/session/trace.rs",
+        "src/session/usage.rs",
+        "src/session.rs"
+      ]
+    }
+  },
+  "input_sha256": {
+    "Cargo.lock": "ba795bd473f7264313428c8ad9c0c805226e5d86edc2298a3ad6e82de9e3da2d",
+    "prototype/go/go.mod": "c610c110713f1062c22ee371a1f017f1dbbd879bd6759cf56ec8e5e91348955d",
+    "prototype/go/factory-skills.json": "4efbb5bb35cff8a190e86feffe902daae74b14c40c3844c583ff0646be436f34"
+  }
+}
