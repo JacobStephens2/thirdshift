@@ -751,7 +751,7 @@ fn a_spec_security_hold_still_repairs_ci_without_repeating_the_review() {
 }
 
 #[test]
-fn a_spec_run_claims_the_spec_and_its_tickets_runs_change_no_label() {
+fn a_spec_run_claims_the_spec_its_tickets_runs_change_no_label_and_ready_for_review_ends_it() {
     let scenario = linear_spec();
     scenario.issue_labelled(SPEC, &["ready-for-agent", "enhancement"]);
     for ticket in [21, 22] {
@@ -761,7 +761,7 @@ fn a_spec_run_claims_the_spec_and_its_tickets_runs_change_no_label() {
     let result = scenario.run(&[&spec_url(&scenario)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.issue_labels(SPEC), ["enhancement", "in-progress"]);
+    assert_eq!(scenario.issue_labels(SPEC), ["enhancement"]);
     for ticket in [21, 22] {
         assert_eq!(scenario.issue_labels(ticket), ["ready-for-agent"]);
     }
@@ -769,7 +769,11 @@ fn a_spec_run_claims_the_spec_and_its_tickets_runs_change_no_label() {
         &result.stderr,
         "thirdshift: labelling #20 in-progress, in place of ready-for-agent\n",
     );
-    assert_eq!(result.stderr.matches(" in-progress").count(), 1);
+    assert_contains(
+        &result.stderr,
+        "thirdshift: removing in-progress from issue #20\n",
+    );
+    assert_eq!(result.stderr.matches(" in-progress").count(), 2);
 }
 
 #[test]
@@ -3079,7 +3083,7 @@ fn a_review_required_spec_pr_stays_ready_without_an_attempt_or_another_round() {
         let spec = spec_pr(&scenario);
         assert_eq!(spec["state"], "OPEN");
         assert_eq!(spec["isDraft"], false);
-        assert_eq!(scenario.issue_labels(SPEC), ["in-progress"]);
+        assert!(scenario.issue_labels(SPEC).is_empty());
         assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20"]);
         assert!(
             scenario

@@ -5084,8 +5084,8 @@ exit 1
         scenario.origin_file("issue-7", "left.txt").as_deref(),
         Some("left\n")
     );
-    // The work on origin keeps the Claim, so the failure is labelled.
-    assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
+    // The work on origin swaps the Claim for agent-failed.
+    assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
     scenario.assert_cleaned_up("issue-7");
 }
 
@@ -5384,6 +5384,24 @@ fn self_merge_after_delivery_merges_when_asked_and_stays_ready_otherwise() {
     );
     assert!(
         !result.stderr.contains("running step land"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_self_merge_whose_issue_could_not_be_closed_keeps_in_progress_until_it_is_closed() {
+    let scenario = prepare_ship(LAND);
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["process", "ship", "issue", "7", "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        !result.stderr.contains("removing in-progress"),
         "{}",
         result.stderr
     );

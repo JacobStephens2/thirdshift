@@ -414,6 +414,15 @@ fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
     );
     assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
     assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    // The issue still owes its closing, so it keeps its Claim until closed.
+    assert!(
+        scenario
+            .issue_labels(7)
+            .iter()
+            .any(|label| label == "in-progress"),
+        "{:?}",
+        scenario.issue_labels(7)
+    );
     assert_eq!(
         result.stderr.lines().last(),
         Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
@@ -1281,8 +1290,9 @@ fn a_required_review_refuses_the_merge_without_another_round_and_names_the_outco
         assert_eq!(gh["prs"][0]["isDraft"], false);
         assert_eq!(gh["issues"]["7"], "OPEN");
         // A hold that leaves the pull request ready adds no agent-failed: it
-        // waits on review, not on a fix.
-        assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+        // waits on review, not on a fix. The Run is no longer live, so the
+        // Claim comes off.
+        assert!(scenario.issue_labels(7).is_empty());
         assert_eq!(
             scenario.origin_log("issue-7").unwrap(),
             ["Add feature", "Initial commit"]

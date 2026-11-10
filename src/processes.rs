@@ -471,6 +471,8 @@ struct IssueRun<'a> {
     process: &'a str,
     /// Delivery left a pull request ready for review, or merged it.
     delivered: bool,
+    /// Delivery merged this run's own pull request.
+    merged: bool,
     pull_request: PullRequest,
     reviews: Vec<crate::security::review::Outcome>,
     spec_tickets: Option<crate::spec_run::AccountedTickets>,
@@ -963,6 +965,7 @@ fn run_issue_branch(
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
     notification.built_with(&prepared.choice);
     let delivered;
+    let merged;
     let result = {
         let mut issue_run = IssueRun {
             checkout: &mut held,
@@ -975,6 +978,7 @@ fn run_issue_branch(
             base_fix: &mut base_fix,
             process: name,
             delivered: false,
+            merged: false,
             pull_request: PullRequest::new(&issue, &branch, &base, GitHub::new()),
             reviews: Vec::new(),
             spec_tickets: None,
@@ -983,6 +987,7 @@ fn run_issue_branch(
         };
         let result = execute_issue_steps(name, &prepared, &mut issue_run);
         delivered = issue_run.delivered;
+        merged = issue_run.merged;
         prepared
             .completed
             .lock()
@@ -999,6 +1004,11 @@ fn run_issue_branch(
     drop(completed);
     if result.is_ok() && not_reproduced {
         claim.end(claim::Ending::NotReproduced);
+    } else if delivered && merged && result.is_ok() {
+        // A Self-merge that merged ends the Claim as a Ticket run's does:
+        // only once the issue is closed, so a closing that failed stays
+        // visible.
+        claim.end(claim::Ending::Reached(Goal::Merged));
     } else if (delivered || (!prepared.spec_branch && result.is_ok())) && !ended_before_delivery {
         claim.remove();
     } else if result.is_ok() {
@@ -1779,6 +1789,7 @@ fn run_delivery(
     match published {
         Ok(url) => {
             issue_run.delivered = true;
+            issue_run.merged = merge;
             prepared
                 .completed
                 .lock()

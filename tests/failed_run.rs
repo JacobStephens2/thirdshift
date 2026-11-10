@@ -1,7 +1,8 @@
 //! The Failed run path: whatever goes wrong after the worktree exists, the
 //! agent's work is committed and pushed, an open PR goes back to draft, the
-//! log path is reported, and cleanup still happens. A failed run that keeps
-//! its Claim labels the issue `agent-failed`, for the Failure limit.
+//! log path is reported, and cleanup still happens. A failed run with work on
+//! origin swaps its Claim's `in-progress` for `agent-failed`, for the Failure
+//! limit.
 
 mod support;
 
@@ -119,7 +120,7 @@ fn ownership_refusal_warns_without_replacing_the_failed_run_cause_or_changing_pr
         assert_eq!(scenario.origin_log("manual"), None);
         assert_eq!(scenario.origin_file("issue-7", "wip.txt"), None);
         assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
-        assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
+        assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
     }
 }
 
@@ -376,12 +377,13 @@ fn an_interrupted_run_that_left_nothing_on_origin_releases_its_claim() {
     );
 }
 
-/// The line saying a failed run labelled #7 `agent-failed`.
-const LABELLING_FAILED: &str =
-    "thirdshift: labelling #7 agent-failed, so it waits for the Day shift\n";
+/// The line saying a failed run labelled #7 `agent-failed` in place of
+/// `in-progress`.
+const LABELLING_FAILED: &str = "thirdshift: labelling #7 agent-failed, in place of in-progress, \
+     so it waits for the Day shift\n";
 
 #[test]
-fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim_and_labels_it_agent_failed() {
+fn a_failed_run_that_pushed_its_issue_branch_swaps_its_claim_for_agent_failed() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
     scenario.repo_has_labels(&["bug", "ready-for-agent", "in-progress"]);
@@ -391,10 +393,7 @@ fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim_and_labels_it_agent
 
     assert_failed(&scenario, &result, "");
     assert!(scenario.origin_log("issue-7").is_some());
-    assert_eq!(
-        scenario.issue_labels(7),
-        ["bug", "in-progress", "agent-failed"]
-    );
+    assert_eq!(scenario.issue_labels(7), ["bug", "agent-failed"]);
     assert!(
         scenario
             .repo_labels()
@@ -417,7 +416,7 @@ fn a_failed_run_that_pushed_its_issue_branch_keeps_its_claim_and_labels_it_agent
 }
 
 #[test]
-fn an_interrupted_run_that_pushed_its_work_still_labels_its_issue_agent_failed() {
+fn an_interrupted_run_that_pushed_its_work_still_swaps_its_claim_for_agent_failed() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);
     scenario.agent_does(&format!(
@@ -432,7 +431,7 @@ fn an_interrupted_run_that_pushed_its_work_still_labels_its_issue_agent_failed()
         scenario.origin_log("issue-7").unwrap()[0],
         "thirdshift: failed ticket run (interrupted)"
     );
-    assert_eq!(scenario.issue_labels(7), ["in-progress", "agent-failed"]);
+    assert_eq!(scenario.issue_labels(7), ["agent-failed"]);
     assert!(
         result.stderr.contains(LABELLING_FAILED),
         "stderr: {}",
@@ -459,5 +458,12 @@ fn a_run_on_an_issue_labelled_agent_failed_takes_the_label_off_with_its_claim() 
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    assert!(
+        result
+            .stderr
+            .contains("thirdshift: removing in-progress from issue #7\n"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.issue_labels(7).is_empty());
 }

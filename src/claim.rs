@@ -1,15 +1,15 @@
 //! The Claim: the mark that the factory has taken an issue, the label
 //! `in-progress` in place of `ready-for-agent`, so the issue list shows what a
-//! Run or a Spec run is working on. It is made before the run's work, and
-//! ended once with how the run ended: removed once its Self-merge has left the
-//! issue closed, kept while its pull request waits for review, and released
-//! when the run failed with nothing on origin to take over, except a failed
-//! Security fix, which stays with the Day shift. A failed run that keeps its
-//! Claim labels the issue `agent-failed`, which the Failure limit counts and
-//! the next Claim takes off. A Stop instead leaves the issue for triage, or
-//! explicitly releases it when asked to requeue. A Custom process's Delivery
-//! removes it when the pull request is ready for review, without putting
-//! `ready-for-agent` back.
+//! Run or a Spec run is working on, and only while that run is live. It is
+//! made before the run's work, and ended once with how the run ended: removed
+//! once its Self-merge has left the issue closed, removed without putting
+//! anything back when its pull request is ready for review, and released when
+//! the run failed with nothing on origin to take over. A failed run with work
+//! on origin, and a failed Security fix, swap it for `agent-failed`, which the
+//! Failure limit counts and the next Claim takes off. A Stop instead leaves
+//! the issue for triage, or explicitly releases it when asked to requeue. A
+//! Custom process's Delivery removes it when the pull request is ready for
+//! review, without putting `ready-for-agent` back.
 //!
 //! What it reads and changes of GitHub and origin, whether the run is
 //! interrupted, and its progress lines all go through [`Outside`]:
@@ -31,9 +31,10 @@ use crate::run::Goal;
 pub const IN_PROGRESS: Label =
     Label::new("in-progress", "A Claim: thirdshift has taken this issue");
 
-/// The label of an issue the factory failed on: a Failed ticket run or a
-/// Failed spec run kept its Claim, and it waits for the Day shift. The
-/// Failure limit counts the open issues that carry it.
+/// The label of an issue the factory failed on: a Failed ticket run, Failed
+/// spec run or failed Custom process left work on origin, or a Security fix
+/// failed, and it waits for the Day shift. It takes the place of the Claim's
+/// `in-progress`. The Failure limit counts the open issues that carry it.
 pub const AGENT_FAILED: Label = Label::new(
     "agent-failed",
     "thirdshift failed on this issue; it waits for the Day shift",
@@ -101,14 +102,15 @@ impl Claim<'_> {
     ///
     /// - Merged: the Claim is removed if the Self-merge left the issue
     ///   closed.
-    /// - Ready for review, or held with its pull request ready: the Claim
-    ///   stays while the pull request waits.
+    /// - Ready for review, or held with its pull request ready: the Claim is
+    ///   removed and nothing put back, open issue or not. The issue is not
+    ///   Ready, so Pickup does not take it again while the pull request waits.
     /// - Not reproduced: a bug Ticket run handed reproduction back to the
     ///   reporter, so the Claim ends without making the issue Ready again,
     ///   including in a Continuation, and even after a Stop.
     /// - Failed: the Claim is released if nothing of the run is on origin to
-    ///   take over, except a Security fix, whose Claim stays. A Claim that
-    ///   stays labels the issue `agent-failed` too.
+    ///   take over, except a Security fix. Otherwise `agent-failed` takes the
+    ///   place of `in-progress` in one label edit.
     /// - Before Delivery: a successful Custom process releases its Claim if
     ///   nothing is on origin, except a Security fix, and adds no failure label.
     /// - Stopped: the issue goes to triage, keeping its Claim only while work
@@ -345,47 +347,63 @@ impl<'a> Claimed<'a> {
         }
         match ending {
             Ending::Reached(Goal::Merged) => self.remove_if_closed(outside),
+            Ending::Reached(Goal::ReadyForReview) | Ending::Held => self.remove(outside),
             // A NotReproduced ending was dealt with above.
-            Ending::Reached(Goal::ReadyForReview) | Ending::Held | Ending::NotReproduced => {}
+            Ending::NotReproduced => {}
             Ending::BeforeDelivery if self.security_fix => {}
             Ending::BeforeDelivery => {
                 self.release_if_nothing_on_origin(outside);
             }
             Ending::Failed if self.security_fix => self.label_failed(outside),
             Ending::Failed => {
-                let claim_stays = self.release_if_nothing_on_origin(outside);
-                if claim_stays {
+                let not_released = self.release_if_nothing_on_origin(outside);
+                if not_released {
                     self.label_failed(outside);
                 }
             }
         }
     }
 
-    /// Label the issue `agent-failed`, in one request that keeps its other
-    /// labels, having added the label to the repository if it lacks it, if
-    /// the issue still carries the Claim: the failure waits for the Day
-    /// shift. One already labelled, or no longer `in-progress`, is left as
-    /// it is. It finishes after an interrupt, and a failure is a warning
-    /// naming what to run by hand.
+    /// Label the issue `agent-failed` in place of `in-progress`, in one
+    /// request that keeps its other labels, having added the label to the
+    /// repository if it lacks it, if the issue still carries the Claim: the
+    /// Run is no longer live, and the failure waits for the Day shift. One
+    /// already labelled `agent-failed` only has `in-progress` taken off, and
+    /// one no longer `in-progress` is left as it is. It finishes after an
+    /// interrupt, and a failure is a warning naming what to run by hand.
     fn label_failed(&self, outside: &mut impl Outside) {
         let issue = self.issue;
         if let Err(error) = retry_if_interrupted(outside, |outside| {
-            let edit = Edit::of(issue, outside.labels(issue)?, &[], &[AGENT_FAILED]);
-            if !is_on(edit.labels()) || !edit.puts_on(AGENT_FAILED) {
+            let edit = Edit::of(
+                issue,
+                outside.labels(issue)?,
+                &[IN_PROGRESS],
+                &[AGENT_FAILED],
+            );
+            if !edit.takes_off(IN_PROGRESS) {
                 return Ok(());
             }
-            outside.step(format!(
-                "labelling #{} {AGENT_FAILED}, so it waits for the Day shift",
-                issue.number
-            ));
+            outside.step(if edit.puts_on(AGENT_FAILED) {
+                format!(
+                    "labelling #{} {AGENT_FAILED}, in place of {IN_PROGRESS}, so it waits for \
+                     the Day shift",
+                    issue.number
+                )
+            } else {
+                format!(
+                    "removing {IN_PROGRESS} from issue #{}, already labelled {AGENT_FAILED}",
+                    issue.number
+                )
+            });
             outside.apply(&edit)
         }) {
             outside.warn(
                 &error,
                 format!(
-                    "could not label #{} {AGENT_FAILED}, so label it by hand: {}",
+                    "could not label #{} {AGENT_FAILED} in place of {IN_PROGRESS}, so do it by \
+                     hand: {}",
                     issue.number,
-                    labels::by_hand(issue, &[], &[AGENT_FAILED])
+                    labels::by_hand(issue, &[IN_PROGRESS], &[AGENT_FAILED])
                 ),
             );
         }
@@ -430,9 +448,10 @@ impl<'a> Claimed<'a> {
     /// only `in-progress` comes off. An issue that is no longer
     /// `in-progress` is left as it is: someone took the Claim off meanwhile.
     /// A Claim that changed no label has nothing to put back, and makes no
-    /// request. Returns whether the Claim stays: the issue was started on
-    /// origin, or was Claimed before this Claim. One released, left as it
-    /// is, or whose release failed does not.
+    /// request. Returns true when the Claim was not released, so is left for
+    /// the ending to end otherwise: the issue was started on origin, or was
+    /// Claimed before this Claim. It returns false for one released, left as
+    /// it is, or whose release failed.
     fn release_if_nothing_on_origin(&self, outside: &mut impl Outside) -> bool {
         if !self.changed_any() {
             return true;
@@ -880,7 +899,7 @@ mod tests {
             [
                 Call::Labels,
                 step("taking agent-failed off #7, which is Claimed again"),
-                edit(&["agent-failed"], &[], &["bug", "in-progress"]),
+                edit(&["agent-failed"], &[], &["in-progress", "bug"]),
             ]
         );
     }
@@ -943,7 +962,7 @@ mod tests {
             [
                 Call::Labels,
                 step("labelling #7 in-progress, in place of ready-for-agent"),
-                edit(&["ready-for-agent"], &[], &["bug", "in-progress"]),
+                edit(&["ready-for-agent"], &[], &["in-progress", "bug"]),
             ]
         );
     }
@@ -1034,30 +1053,83 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_run_ready_for_review_keeps_the_claim_reading_nothing() {
-        let url = seven();
-        let mut issue = InMemory::labelled(&["ready-for-agent"]);
-        let claimed = claimed(&mut issue, &url);
-
-        claimed.end(&mut issue, Ending::Reached(Goal::ReadyForReview));
-
-        assert_eq!(issue.calls, []);
-        assert_eq!(labels(&issue), ["in-progress"]);
-    }
-
-    /// The lines and the Edit that label #7 `agent-failed`, leaving it with
-    /// `labels`.
-    fn labelling_failed(labels: &[&str]) -> [Call; 3] {
+    /// The lines and the Edit that take `in-progress` off #7 and put
+    /// nothing back, leaving it with `labels`.
+    fn removing(labels: &[&str]) -> [Call; 3] {
         [
             Call::Labels,
-            step("labelling #7 agent-failed, so it waits for the Day shift"),
-            edit(&[], &["agent-failed"], labels),
+            step("removing in-progress from issue #7"),
+            edit(&["in-progress"], &[], labels),
         ]
     }
 
     #[test]
-    fn a_failed_run_started_on_origin_keeps_the_claim_and_labels_the_issue_agent_failed() {
+    fn a_run_ready_for_review_removes_the_claim_and_puts_nothing_back() {
+        for open in [true, false] {
+            let url = seven();
+            let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
+            let claimed = claimed(&mut issue, &url);
+            issue.started = true;
+            issue.open = open;
+
+            claimed.end(&mut issue, Ending::Reached(Goal::ReadyForReview));
+
+            assert_eq!(issue.calls, removing(&["bug"]), "open: {open}");
+            assert_eq!(labels(&issue), ["bug"], "open: {open}");
+        }
+    }
+
+    #[test]
+    fn a_run_ready_for_review_whose_claim_someone_took_off_makes_no_edit() {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.labels = vec!["ready-for-human".to_string()];
+
+        claimed.end(&mut issue, Ending::Reached(Goal::ReadyForReview));
+
+        assert_eq!(issue.calls, [Call::Labels]);
+        assert_eq!(labels(&issue), ["ready-for-human"]);
+    }
+
+    #[test]
+    fn a_claim_that_cannot_be_removed_at_ready_for_review_is_tried_again_after_an_interrupt_then_warned_of()
+     {
+        let url = seven();
+        let mut issue = InMemory::labelled(&["ready-for-agent"]);
+        let claimed = claimed(&mut issue, &url);
+        issue.interrupted = true;
+        issue = issue.failing(Fails::Edit);
+
+        claimed.end(&mut issue, Ending::Reached(Goal::ReadyForReview));
+
+        let mut expected: Vec<Call> = removing(&[]).into();
+        expected.push(Call::Interrupted);
+        expected.extend(removing(&[]));
+        expected.push(Call::Warn {
+            error: "gh: Edit failed: HTTP 502".to_string(),
+            warning: "could not remove in-progress from issue #7, so remove it by hand: \
+                 gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress"
+                .to_string(),
+        });
+        assert_eq!(issue.calls, expected);
+        assert_eq!(labels(&issue), ["in-progress"]);
+    }
+
+    /// The lines and the Edit that label #7 `agent-failed` in place of
+    /// `in-progress`, leaving it with `labels`.
+    fn labelling_failed(labels: &[&str]) -> [Call; 3] {
+        [
+            Call::Labels,
+            step(
+                "labelling #7 agent-failed, in place of in-progress, so it waits for the Day shift",
+            ),
+            edit(&["in-progress"], &["agent-failed"], labels),
+        ]
+    }
+
+    #[test]
+    fn a_failed_run_started_on_origin_swaps_the_claim_for_agent_failed() {
         let url = seven();
         let mut issue = InMemory::labelled(&["bug", "ready-for-agent"]);
         let claimed = claimed(&mut issue, &url);
@@ -1066,13 +1138,13 @@ mod tests {
         claimed.end(&mut issue, Ending::Failed);
 
         let mut expected = vec![Call::Started];
-        expected.extend(labelling_failed(&["bug", "in-progress", "agent-failed"]));
+        expected.extend(labelling_failed(&["bug", "agent-failed"]));
         assert_eq!(issue.calls, expected);
-        assert_eq!(labels(&issue), ["bug", "in-progress", "agent-failed"]);
+        assert_eq!(labels(&issue), ["bug", "agent-failed"]);
     }
 
     #[test]
-    fn a_failed_security_fix_keeps_its_claim_with_nothing_on_origin_and_is_labelled_agent_failed() {
+    fn a_failed_security_fix_swaps_its_claim_for_agent_failed_with_nothing_on_origin() {
         let url = seven();
         let mut issue = InMemory::labelled(&["security-fix", "ready-for-agent"]);
         let claimed = claimed(&mut issue, &url);
@@ -1081,12 +1153,12 @@ mod tests {
 
         assert_eq!(
             issue.calls,
-            labelling_failed(&["security-fix", "in-progress", "agent-failed"])
+            labelling_failed(&["security-fix", "agent-failed"])
         );
     }
 
     #[test]
-    fn a_run_held_with_its_pull_request_ready_keeps_the_claim_and_adds_no_label() {
+    fn a_run_held_with_its_pull_request_ready_removes_the_claim_and_adds_no_label() {
         let url = seven();
         let mut issue = InMemory::labelled(&["ready-for-agent"]);
         let claimed = claimed(&mut issue, &url);
@@ -1094,8 +1166,8 @@ mod tests {
 
         claimed.end(&mut issue, Ending::Held);
 
-        assert_eq!(issue.calls, []);
-        assert_eq!(labels(&issue), ["in-progress"]);
+        assert_eq!(issue.calls, removing(&[]));
+        assert_eq!(labels(&issue), [] as [&str; 0]);
     }
 
     #[test]
@@ -1137,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_run_on_an_issue_already_labelled_agent_failed_makes_no_request() {
+    fn a_failed_run_on_an_issue_already_labelled_agent_failed_only_takes_in_progress_off() {
         let url = seven();
         let mut issue = InMemory::labelled(&["in-progress"]);
         let claimed = claimed(&mut issue, &url);
@@ -1145,7 +1217,15 @@ mod tests {
 
         claimed.end(&mut issue, Ending::Failed);
 
-        assert_eq!(issue.calls, [Call::Labels]);
+        assert_eq!(
+            issue.calls,
+            [
+                Call::Labels,
+                step("removing in-progress from issue #7, already labelled agent-failed"),
+                edit(&["in-progress"], &[], &["Agent-Failed"]),
+            ]
+        );
+        assert_eq!(labels(&issue), ["Agent-Failed"]);
     }
 
     #[test]
@@ -1172,14 +1252,15 @@ mod tests {
 
         claimed.end(&mut issue, Ending::Failed);
 
-        let labelling = labelling_failed(&["in-progress", "agent-failed"]);
+        let labelling = labelling_failed(&["agent-failed"]);
         let mut expected = vec![Call::Started];
         expected.extend(labelling.clone());
         expected.push(Call::Interrupted);
         expected.extend(labelling);
         expected.push(Call::Warn {
             error: "gh: Edit failed: HTTP 502".to_string(),
-            warning: "could not label #7 agent-failed, so label it by hand: \
+            warning: "could not label #7 agent-failed in place of in-progress, so do it by \
+                 hand: gh api --method DELETE repos/acme/widgets/issues/7/labels/in-progress && \
                  gh api --method POST repos/acme/widgets/issues/7/labels -f 'labels[]=agent-failed'"
                 .to_string(),
         });
@@ -1261,18 +1342,14 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_that_changed_no_label_keeps_it_and_labels_the_issue_agent_failed_when_the_run_fails()
-    {
+    fn a_claim_that_changed_no_label_is_swapped_for_agent_failed_when_the_run_fails() {
         let url = seven();
         let mut issue = InMemory::labelled(&["in-progress"]);
         let claimed = claimed(&mut issue, &url);
 
         claimed.end(&mut issue, Ending::Failed);
 
-        assert_eq!(
-            issue.calls,
-            labelling_failed(&["in-progress", "agent-failed"])
-        );
+        assert_eq!(issue.calls, labelling_failed(&["agent-failed"]));
     }
 
     #[test]

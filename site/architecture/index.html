@@ -293,7 +293,7 @@
       </details>
       <ol class="arch-stages">
         <li><b>Pre-flight checks</b> stop a Ticket run before anything is created: the Issue URL must match the clone's <code>origin</code>, the issue must be open, and the Base branch must be on <code>origin</code>.</li>
-        <li><b>The Claim</b> labels the issue <code>in-progress</code>, so the issue list shows what the factory is working on.</li>
+        <li><b>The Claim</b> labels the issue <code>in-progress</code> while the run is live, so the issue list shows what the factory is working on. It comes off when the run ends: with nothing put back at ready for review, and swapped for <code>agent-failed</code> when the run fails with work on <code>origin</code>.</li>
         <li><b>A Worktree</b> gives the Ticket run its own checkout beside your clone, so yours is never touched.</li>
         <li><b>Implementation</b> runs the implement session, also available to a Custom process as the <code>implement</code> catalogue Step on its Issue-branch worktree. On issues labelled <code>bug</code>, diagnosis comes first: a reproduced bug gets a failing regression test and fix; a Continuation whose Issue branch is ahead of the Base branch reproduces at their merge base, and a fix already on the branch goes on to review and the pull request; an unreproduced bug ends successfully with triage notes and <code>needs-info</code>, skipping later Steps and cleaning up the Claim and worktree. Flaky-test Tickets use the recorded CI failure as evidence and go straight to implementation. Security fixes and Base fixes keep their own flow. Delivery then pushes the branch and checks that the pull request exists and targets the Base branch. thirdshift, not the agent, marks it ready.</li>
         <li><b>PR evidence</b> includes actual failing-before and passing-after execution output. For visual changes with a headless browser available, the Factory skills capture matching Before and After screenshots or recordings and embed them from a secret Gist, keeping evidence media out of repository branches.</li>
@@ -375,7 +375,7 @@
 <rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
 <text class="bt" x="334" y="301">Failed ticket run</text>
 <text class="bl" x="334" y="318">out of Repairs: push work,</text>
-<text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
+<text class="bl" x="334" y="332.5">PR to draft, agent-failed</text>
 <path class="ar faint" d="M600 310H536" marker-end="url(#fig-run-faint)"/>
 <rect class="box out" x="874.5" y="150.5" width="116" height="64" rx="3"/>
 <text class="bt o" x="884" y="171">PR ready</text>
@@ -458,7 +458,7 @@
 <rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
 <text class="bt" x="334" y="301">Failed ticket run</text>
 <text class="bl" x="334" y="318">out of Repairs: push work,</text>
-<text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
+<text class="bl" x="334" y="332.5">PR to draft, agent-failed</text>
 <path class="ar faint" d="M600 310H536" marker-end="url(#fig-merge-faint)"/>
 <rect class="box agent new" x="690.5" y="8.5" width="170" height="56" rx="3"/>
 <text class="bt" x="700" y="29">Foreign commits</text>
