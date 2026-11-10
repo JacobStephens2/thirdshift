@@ -485,6 +485,14 @@ fn leaves_no_worktree_local_issue_branch_or_temp_directory_behind() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        scenario
+            .entries("tmp")
+            .iter()
+            .all(|name| !name.starts_with("thirdshift-skills-")),
+        "Factory skills left behind: {:?}",
+        scenario.entries("tmp")
+    );
     scenario.assert_cleaned_up("issue-7");
 }
 
