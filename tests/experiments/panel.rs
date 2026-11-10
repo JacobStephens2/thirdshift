@@ -2,6 +2,7 @@
 //! both orders, and its calls and the panel's vote go beside the Verdict, or
 //! count in it, with the people's, when the Bar says who decides.
 use super::*;
+use std::path::Path;
 
 /// Panel Graders by seat. `candidate` and `baseline` judge consistently:
 /// they prefer, and call ready, the side whose diff does or doesn't add the
@@ -696,6 +697,120 @@ fn a_low_spending_limit_pauses_grading_and_a_resume_continues_from_completed_cal
         "{}",
         shown.stdout
     );
+}
+
+#[test]
+fn sparse_multi_seat_calls_resume_with_matching_estimates_and_reports() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    panel_graders(&fixture, &["candidate", "candidate"]);
+    let seats = &SEATS[..4];
+    let run = fixture.run(seats);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let before: Value = serde_json::from_str(&run.stdout).unwrap();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        before["id"].as_str().unwrap()
+    ));
+    let pair = fs::read_dir(directory.join("panel"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    for name in [
+        "seat-1-order-1.json",
+        "seat-2-order-1.json",
+        "seat-2-order-2.json",
+    ] {
+        fs::remove_file(pair.join(name)).unwrap();
+    }
+    let retained = fs::read(pair.join("seat-1-order-2.json")).unwrap();
+    let trials = fixture.trial_calls().len();
+    assert_eq!(fixture.grader_calls().len(), 4);
+    assert_eq!(fixture.experiment()["panel"], json!([]));
+    let resumed = fixture.run(seats);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    for expected in [
+        "Grader panel seat 1 (claude/judge-one): 1 session,",
+        "Grader panel seat 2 (claude/judge-two): 2 sessions (1 pair × 2 orders)",
+    ] {
+        assert!(
+            resumed.stderr.contains(expected),
+            "{expected}: {}",
+            resumed.stderr
+        );
+    }
+    let calls = fixture.grader_calls();
+    assert_eq!(calls.len(), 7);
+    let resumed_names: Vec<_> = calls[4..]
+        .iter()
+        .map(|call| {
+            Path::new(call["cwd"].as_str().unwrap())
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert!(resumed_names[0].ends_with("--seat-1--order-1"));
+    assert!(resumed_names[1].ends_with("--seat-2--order-1"));
+    assert!(resumed_names[2].ends_with("--seat-2--order-2"));
+    assert_eq!(fixture.trial_calls().len(), trials);
+    assert_eq!(
+        fs::read(pair.join("seat-1-order-2.json")).unwrap(),
+        retained
+    );
+    let after: Value = serde_json::from_str(&resumed.stdout).unwrap();
+    assert_eq!(after["panel"], before["panel"]);
+}
+
+#[test]
+fn corrupt_later_panel_calls_stop_resume_before_any_more_sessions() {
+    let fixture = super::process::fixture();
+    super::pairs::pair_fixture(&fixture, super::pairs::CANDIDATE_TEST);
+    priced_panel_graders(&fixture, &["candidate"]);
+    let args = [
+        "--panel-seat",
+        "harness=claude,model=fixture-model",
+        "--panel-spending-limit",
+        "0.01",
+    ];
+    let paused = fixture.run(&args);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let view = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        view["id"].as_str().unwrap()
+    ));
+    let pair = fs::read_dir(directory.join("panel"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    fs::remove_file(pair.join("seat-1-order-1.json")).unwrap();
+    let corrupt = pair.join("seat-1-order-2.json");
+    fs::write(&corrupt, "malformed retained call").unwrap();
+    let before = fixture.grader_calls().len();
+    for extra in [vec![], vec!["--yes"]] {
+        let mut resume = args.to_vec();
+        resume.extend(extra);
+        let refused = fixture.run(&resume);
+        assert_eq!(refused.code, Some(1), "{}", refused.stderr);
+        assert_eq!(fixture.grader_calls().len(), before, "{}", refused.stderr);
+        assert!(
+            refused.stderr.contains("seat 1, order 2"),
+            "{}",
+            refused.stderr
+        );
+        assert!(!pair.join("seat-1-order-1.json").exists());
+        assert_eq!(
+            fs::read_to_string(&corrupt).unwrap(),
+            "malformed retained call"
+        );
+    }
 }
 
 #[test]
