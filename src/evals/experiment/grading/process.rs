@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 
@@ -25,7 +25,7 @@ pub(super) fn execute(
         .process_grading
         .as_ref()
         .context("missing process_grading")?;
-    let snapshot = match snapshot(task, trial) {
+    let snapshot = match snapshot(task, trial, Instant::now() + timeout) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Ok(vec![Check {
@@ -63,7 +63,7 @@ pub(super) fn execute(
     Ok(checks)
 }
 
-fn snapshot(task: &Task, trial: &Path) -> Result<tempfile::TempDir> {
+fn snapshot(task: &Task, trial: &Path, deadline: Instant) -> Result<tempfile::TempDir> {
     let grading = task
         .manifest
         .process_grading
@@ -74,12 +74,14 @@ fn snapshot(task: &Task, trial: &Path) -> Result<tempfile::TempDir> {
         .tempdir()?;
     let destination = snapshot.path().join("repository");
     fs::create_dir(&destination)?;
-    let commit = repository::git(trial, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    for file in files(trial, &commit)? {
-        file.write(trial, &destination)?;
+    let commit =
+        repository::bytes_until(trial, &["rev-parse", "--verify", "HEAD^{commit}"], deadline)?;
+    let commit = std::str::from_utf8(&commit)?.trim();
+    for file in files(trial, commit, deadline)? {
+        file.write(trial, &destination, deadline)?;
     }
     let source = task.directory.join(&task.manifest.repository);
-    let reference = files(&source, &task.manifest.change)?;
+    let reference = files(&source, &task.manifest.change, deadline)?;
     for path in grading.test_files.iter().chain(&grading.test_fakes) {
         let file = reference
             .iter()
@@ -89,7 +91,7 @@ fn snapshot(task: &Task, trial: &Path) -> Result<tempfile::TempDir> {
             matches!(file.mode.as_str(), "100644" | "100755"),
             "reference test must be a regular file: {path}"
         );
-        file.write(&source, &destination)?;
+        file.write(&source, &destination, deadline)?;
     }
     Ok(snapshot)
 }
@@ -100,8 +102,12 @@ struct File {
     object: String,
 }
 
-fn files(repository: &Path, commit: &str) -> Result<Vec<File>> {
-    let tree = repository::bytes(repository, &["ls-tree", "-rz", "--full-tree", commit], None)?;
+fn files(repository: &Path, commit: &str, deadline: Instant) -> Result<Vec<File>> {
+    let tree = repository::bytes_until(
+        repository,
+        &["ls-tree", "-rz", "--full-tree", commit],
+        deadline,
+    )?;
     tree.split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
         .map(|entry| {
@@ -125,7 +131,7 @@ fn files(repository: &Path, commit: &str) -> Result<Vec<File>> {
 }
 
 impl File {
-    fn write(&self, repository: &Path, destination: &Path) -> Result<()> {
+    fn write(&self, repository: &Path, destination: &Path, deadline: Instant) -> Result<()> {
         // Replace Trial symlinks and directories rather than following them
         // while laying trusted tests over the exported commit.
         let mut target = destination.to_path_buf();
@@ -139,7 +145,8 @@ impl File {
         }
         target.push(parts[parts.len() - 1]);
         remove(&target)?;
-        let contents = repository::bytes(repository, &["cat-file", "blob", &self.object], None)?;
+        let contents =
+            repository::bytes_until(repository, &["cat-file", "blob", &self.object], deadline)?;
         match self.mode.as_str() {
             "100644" | "100755" => {
                 fs::write(&target, contents)?;

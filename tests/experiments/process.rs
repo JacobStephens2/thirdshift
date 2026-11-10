@@ -1,5 +1,37 @@
 use super::*;
 
+#[test]
+fn process_grader_export_obeys_the_bar_timeout() {
+    let fixture = fixture();
+    let script = fs::read_to_string(fixture.scenario.path("claude-script.sh")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"{script}
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'Private report file:'; then
+    blob=$(git rev-parse HEAD:feature.txt)
+    first=$(printf '%s' "$blob" | cut -c1-2)
+    rest=$(printf '%s' "$blob" | cut -c3-)
+    object=".git/objects/$first/$rest"
+    rm "$object"
+    mkfifo "$object"
+fi
+"#
+    ));
+    let run = fixture.run(&["--timeout", SHORT_TIMEOUT]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["score"]["passed"], false, "{result}");
+        assert!(
+            result["score"]["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["reason"].as_str().unwrap().contains("timed out")),
+            "{result}"
+        );
+    }
+}
+
 fn fixture() -> Fixture {
     let fixture = Fixture::with_session("process", 1);
     fixture
