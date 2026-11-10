@@ -54,9 +54,16 @@ impl<'a> Execution<'a> {
         ] {
             let harness = directory.join("harnesses").join(name);
             fs::create_dir_all(&harness)?;
-            let link = harness.join(&arm.harness.name);
-            if !link.exists() {
-                symlink(&arm.harness.path, link)?;
+            let harnesses = std::iter::once(&arm.harness).chain(
+                arm.process
+                    .iter()
+                    .flat_map(|process| process.steps.iter().map(|step| &step.harness)),
+            );
+            for fixed in harnesses {
+                let link = harness.join(&fixed.name);
+                if !link.exists() {
+                    symlink(&fixed.path, link)?;
+                }
             }
         }
         Ok(Self {
@@ -87,6 +94,11 @@ impl<'a> Execution<'a> {
             Arm::Baseline => (&self.prepared.baseline, self.setups[0]),
             Arm::Candidate => (&self.prepared.candidate, self.setups[1]),
         };
+        for arm in [&self.prepared.baseline, &self.prepared.candidate] {
+            if let Some(process) = &arm.process {
+                process.verify()?;
+            }
+        }
         let key = request.identity.key();
         let directory = self.directory.join("trials").join(&key);
         fs::create_dir_all(&directory)?;
@@ -164,7 +176,19 @@ impl<'a> Execution<'a> {
             "output_dir": attempt.join("session")
         });
         if task.manifest.session == crate::evals::format::Session::Process {
-            document["process"] = json!(setup.process.as_deref().unwrap_or("ticket-run"));
+            document["process"] = match &arm.process {
+                Some(process) => {
+                    let file = process.install(&attempt.join("home"))?;
+                    // Earlier Arm builds already support the Built-in name.
+                    // Its frozen bytes were read from that exact executable.
+                    if setup.process.as_deref() == Some("ticket-run") {
+                        json!("ticket-run")
+                    } else {
+                        json!(file)
+                    }
+                }
+                None => json!(setup.process.as_deref().unwrap_or("ticket-run")),
+            };
         }
         store::write(&request_path, &document)?;
         fs::OpenOptions::new()
@@ -393,7 +417,19 @@ impl<'a> Execution<'a> {
         launched
             .command()
             .env(limits::SIGNAL_ENV, self.signal)
-            .env("PATH", path_env);
+            .env("PATH", path_env)
+            .env_remove(crate::skills::TRIAL_HOME);
+        if arm.process.is_some()
+            && request.task.manifest.session == crate::evals::format::Session::Process
+        {
+            launched.command().env(
+                crate::skills::TRIAL_HOME,
+                Path::new(path)
+                    .parent()
+                    .context("Trial request has no directory")?
+                    .join("home"),
+            );
+        }
         if let Some(toolchains) = toolchains {
             launched.command().env("CARGO_HOME", toolchains);
         }

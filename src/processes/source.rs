@@ -187,7 +187,15 @@ impl TicketSource {
             Self::Local(local) => {
                 command.choice = local.choice.clone();
                 for step in steps {
-                    step.choice = local.choice.clone();
+                    if !matches!(step.sources.harness, Source::Step) {
+                        step.choice.harness = local.choice.harness;
+                    }
+                    if !matches!(step.sources.model, Source::Step) {
+                        step.choice.model = local.choice.model.clone();
+                    }
+                    if !matches!(step.sources.effort, Source::Step) {
+                        step.choice.effort = local.choice.effort.clone();
+                    }
                 }
             }
         }
@@ -203,7 +211,13 @@ impl TicketSource {
         match self {
             Self::Local(local) => {
                 local
-                    .session(index, &run.steps[index - 1].name, run.choice, action)
+                    .session(
+                        index,
+                        &run.steps[index - 1].name,
+                        worktree,
+                        run.choice,
+                        action,
+                    )
                     .0
             }
             Self::Factory => {
@@ -294,27 +308,33 @@ impl TicketSource {
             Self::Local(local) => {
                 let text = prompt::local_security_review(&local.issue, &local.base, &local.branch);
                 local
-                    .session(index + 1, &step.name, &step.choice, |sessions, _| {
-                        local.ensure_actionable()?;
-                        let review = crate::security::review::run_local(
-                            sessions,
-                            &local.repository,
-                            &local.issue,
-                            &local.base_commit,
-                            &local.output,
-                            &text,
-                        )?;
-                        local.ensure_actionable()?;
-                        retain_killed_work(&prepared.killed_work, index + 1, sessions);
-                        let outcome = crate::security::review::Outcome::of(
-                            Ok(review),
-                            sessions.last_log_of(session::Kind::SecurityReview),
-                        );
-                        if let Some(hold) = outcome.hold() {
-                            return Err(hold.into());
-                        }
-                        Ok(outcome.entry())
-                    })
+                    .session(
+                        index + 1,
+                        &step.name,
+                        &local.repository,
+                        &step.choice,
+                        |sessions, _| {
+                            local.ensure_actionable()?;
+                            let review = crate::security::review::run_local(
+                                sessions,
+                                &local.repository,
+                                &local.issue,
+                                &local.base_commit,
+                                &local.output,
+                                &text,
+                            )?;
+                            local.ensure_actionable()?;
+                            retain_killed_work(&prepared.killed_work, index + 1, sessions);
+                            let outcome = crate::security::review::Outcome::of(
+                                Ok(review),
+                                sessions.last_log_of(session::Kind::SecurityReview),
+                            );
+                            if let Some(hold) = outcome.hold() {
+                                return Err(hold.into());
+                            }
+                            Ok(outcome.entry())
+                        },
+                    )
                     .0
             }
         }
@@ -359,6 +379,7 @@ impl Local {
         &self,
         index: usize,
         role: &str,
+        worktree: &Path,
         choice: &Choice,
         action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
@@ -366,13 +387,39 @@ impl Local {
         let before_each = || {
             self.ensure_actionable()?;
             restore_issue_file(&self.repository, &self.issue_text)?;
+            if worktree != self.repository {
+                skills::exclude(&Git::new(worktree), &format!("/{}", prompt::ISSUE_FILE))?;
+                restore_issue_file(worktree, &self.issue_text)?;
+            }
             Ok(())
         };
         let action = |sessions: &session::Sessions<'_>| action(sessions, index);
-        let result = match &self.sandbox {
+        // Different Step Harnesses need their own login, provider allowlist
+        // and launcher. Keep its guard alive through completion and Resume.
+        let alternate = if self.sandbox.is_some()
+            && (choice.harness != self.choice.harness
+                || (choice.harness == Harness::OpenCode && choice.model != self.choice.model))
+        {
+            match crate::sandbox::for_trial(choice, &self.repository, &self.output) {
+                Ok(sandbox) => sandbox,
+                Err(error) => return (Err(error), None),
+            }
+        } else {
+            None
+        };
+        let launch = alternate
+            .as_ref()
+            .map(|prepared| prepared.launch())
+            .or_else(|| self.sandbox.clone())
+            .map(|launch| {
+                launch
+                    .with_writable_directory(worktree)
+                    .with_writable_directory(&self.output.join("security-reviews"))
+            });
+        let result = match launch.as_ref() {
             Some(sandbox) => session::Sessions::checked_within_sandboxed(
                 &logs,
-                &self.repository,
+                worktree,
                 choice,
                 sandbox,
                 &before_each,
@@ -380,7 +427,7 @@ impl Local {
             ),
             None => session::Sessions::checked_within(
                 &logs,
-                &self.repository,
+                worktree,
                 choice,
                 None,
                 None,
@@ -395,7 +442,7 @@ impl Local {
     }
 }
 
-/// Execute the Built-in Ticket run's non-publishing prefix in a repository
+/// Execute a Process's non-publishing prefix in a repository
 /// the Trial caller already prepared, with its local origin and issue file.
 pub(crate) fn run_local(
     process: &str,
@@ -436,8 +483,7 @@ pub(crate) fn run_local(
         };
         source.ensure_actionable()?;
         skills::exclude(&git, &format!("/{}", prompt::ISSUE_FILE))?;
-        let path = Path::new("processes/ticket-run.toml");
-        let mut file = load_inherited_builtin(process)?;
+        let (path, _, mut file) = local_file(process)?;
         file.security_review = true;
         // Stopping is the caller's policy; the source still refuses a publishing
         // Step if another caller tries to execute one.
@@ -454,7 +500,7 @@ pub(crate) fn run_local(
         let publishing = file.steps[stop].name.clone();
         file.steps.truncate(stop);
         let prepared = prepare_from(
-            path,
+            &path,
             &UserConfig::load()?,
             &Asked {
                 harness: Some(choice.harness),
@@ -487,18 +533,32 @@ pub(crate) fn run_local(
     (result, last_log, steps)
 }
 
-/// Only the Built-in Ticket prefix currently has a local source adapter.
-/// Reject factory acquisition before building Arms or starting sessions.
+fn local_file(process: &str) -> Result<(PathBuf, String, ProcessFile)> {
+    let (path, text) = if process.ends_with(".toml") {
+        let path = PathBuf::from(process);
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("could not read Process {}", path.display()))?;
+        (path, text)
+    } else {
+        Catalog::installed()?.source(process)?
+    };
+    let file = validated(&path, &text)?;
+    Ok((path, text, file))
+}
+
+/// Refuse factory acquisition before building Arms or starting sessions.
 pub(crate) fn validate_local(process: &str) -> Result<()> {
+    let (_, _, file) = local_file(process)?;
+    validate_local_file(process, &file)
+}
+
+fn validate_local_file(process: &str, file: &ProcessFile) -> Result<()> {
     ensure!(
-        catalog::compiled(process).is_some(),
-        "unknown Built-in process: {process}"
+        file.worktrees
+            .iter()
+            .any(|w| w.kind == WorktreeKind::IssueBranch),
+        "Process {process} requires GitHub before its first publishing Step: no Issue-branch worktree"
     );
-    ensure!(
-        process == "ticket-run",
-        "Process {process} requires GitHub before its first publishing Step"
-    );
-    let file = load_inherited_builtin(process)?;
     let mut publishing = false;
     for step in &file.steps {
         match step.kind {
@@ -528,7 +588,100 @@ pub(crate) fn validate_local(process: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) struct LocalInputs {
+    pub name: String,
+    pub text: String,
+    pub steps: Vec<(String, Choice)>,
+    pub skills: Vec<String>,
+}
+
+/// Capture the same Step choices used by the local engine, without probes.
+pub(crate) fn local_inputs(
+    process: &str,
+    choice: &Choice,
+    compiled: Option<&str>,
+) -> Result<LocalInputs> {
+    let (path, text, file) = match compiled {
+        Some(text) => {
+            let path = PathBuf::from("processes").join(format!("{process}.toml"));
+            let file = validated(&path, text)?;
+            (path, text.to_owned(), file)
+        }
+        None => local_file(process)?,
+    };
+    validate_local_file(process, &file)?;
+    let command = CommandChoice {
+        choice: choice.clone(),
+        sources: Sources {
+            harness: Source::Command,
+            model: Source::Command,
+            effort: Source::Command,
+        },
+    };
+    let steps = file
+        .steps
+        .iter()
+        .map(|step| (step.name.clone(), command.step(step).0))
+        .collect();
+    let skills = file
+        .steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            DraftKind::Skill { skill, .. } => Some(skill.clone()),
+            DraftKind::ReviewAndAddress { .. }
+            | DraftKind::Command { .. }
+            | DraftKind::Implement { .. }
+            | DraftKind::ArchitectureReview { .. }
+            | DraftKind::SpecReview { .. }
+            | DraftKind::SecurityReview { .. }
+            | DraftKind::SecurityAudit { .. }
+            | DraftKind::ReproduceFindings { .. }
+            | DraftKind::Delivery { .. }
+            | DraftKind::SelfMerge { .. }
+            | DraftKind::RunPublishedIssue { .. }
+            | DraftKind::LandTickets { .. }
+            | DraftKind::FixFindings { .. }
+            | DraftKind::CloseFindings { .. } => None,
+        })
+        .collect();
+    Ok(LocalInputs {
+        name: path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .context("Process name must be UTF-8")?
+            .into(),
+        text,
+        steps,
+        skills,
+    })
+}
+
 impl TicketSource {
+    pub(super) fn command(
+        &self,
+        worktree: &Path,
+        command: &str,
+        results: &Path,
+        result_file: &Path,
+        input: Option<CommandInput<'_>>,
+    ) -> Result<String> {
+        let sandbox = match self {
+            Self::Local(local) => local
+                .sandbox
+                .clone()
+                .map(|launch| launch.with_writable_directory(worktree)),
+            Self::Factory => None,
+        };
+        run_command(
+            worktree,
+            command,
+            results,
+            result_file,
+            input,
+            sandbox.as_ref(),
+        )
+    }
+
     pub(super) fn record_step(
         &self,
         step: &ResolvedStep,

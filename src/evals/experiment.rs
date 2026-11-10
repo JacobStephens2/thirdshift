@@ -252,8 +252,7 @@ pub fn run(options: Options) -> Result<()> {
             let task = format::Task::load(&directory)?;
             if task.state == format::State::Approved && task.session == format::Session::Process {
                 for setup in [&mut baseline, &mut candidate] {
-                    let process = setup.process.get_or_insert_with(|| "ticket-run".into());
-                    crate::processes::source::validate_local(process)?;
+                    setup.process.get_or_insert_with(|| "ticket-run".into());
                 }
             }
             if task.state == format::State::Approved
@@ -381,11 +380,21 @@ pub fn run(options: Options) -> Result<()> {
         if experiment.description.prepared.is_none() {
             let description = &experiment.description;
             let requested = [
-                arms::Requested::new(&description.baseline.commit, &description.baseline.harness)?,
+                arms::Requested::new(&description.baseline.commit, &description.baseline.harness)?
+                    .with_process(
+                        description.baseline.process.as_deref(),
+                        description.baseline.model.as_deref(),
+                        description.baseline.effort.as_deref(),
+                    ),
                 arms::Requested::new(
                     &description.candidate.commit,
                     &description.candidate.harness,
-                )?,
+                )?
+                .with_process(
+                    description.candidate.process.as_deref(),
+                    description.candidate.model.as_deref(),
+                    description.candidate.effort.as_deref(),
+                ),
             ];
             let record = experiment.directory.join("arms.json");
             if record.exists() {

@@ -181,6 +181,96 @@ fn seeded_arm_commits_are_recorded_without_building() {
 }
 
 #[test]
+fn custom_process_and_home_skill_are_frozen_with_step_choices() {
+    let fixture = Fixture::new();
+    fixture.seed(&fixture.baseline);
+    fixture.seed(&fixture.candidate);
+    let skill = fixture.home.join(".thirdshift/skills/fixture");
+    fs::create_dir_all(skill.join("scripts")).unwrap();
+    fs::write(skill.join("SKILL.md"), "Use scripts/check.sh\n").unwrap();
+    fs::write(skill.join("scripts/check.sh"), "echo frozen\n").unwrap();
+    let process = fixture.root.path().join("candidate.toml");
+    fs::write(
+        &process,
+        r#"version = 1
+description = "Fixture"
+[worktrees.work]
+kind = "issue-branch"
+[[steps]]
+name = "fixture"
+skill = "fixture"
+worktree = "work"
+model = "opus"
+effort = "high"
+[[steps]]
+name = "delivery"
+catalogue = "delivery"
+worktree = "work"
+"#,
+    )
+    .unwrap();
+    let arms = success(
+        fixture
+            .command("arms.json")
+            .args(["--baseline-process", "ticket-run", "--candidate-process"])
+            .arg(&process)
+            .output()
+            .unwrap(),
+    );
+    let frozen = &arms["candidate"]["process"];
+    assert_eq!(frozen["name"], "candidate");
+    assert_eq!(frozen["steps"][0]["model"], "opus");
+    assert_eq!(frozen["steps"][0]["effort"], "high");
+    assert_eq!(frozen["steps"][0]["harness"]["name"], "claude");
+    let files = frozen["files"].as_object().unwrap();
+    assert!(files.contains_key(".thirdshift/processes/candidate.toml"));
+    assert!(files.contains_key(".thirdshift/skills/fixture/SKILL.md"));
+    assert!(files.contains_key(".thirdshift/skills/fixture/scripts/check.sh"));
+    let directory = Path::new(frozen["directory"].as_str().unwrap());
+    fs::write(&process, "changed source").unwrap();
+    fs::write(skill.join("SKILL.md"), "changed skill").unwrap();
+    assert_eq!(
+        fs::read_to_string(directory.join(".thirdshift/skills/fixture/SKILL.md")).unwrap(),
+        "Use scripts/check.sh\n"
+    );
+    assert!(
+        arms["baseline"]["process"]["files"]
+            .as_object()
+            .unwrap()
+            .contains_key(".thirdshift/processes/ticket-run.toml")
+    );
+}
+
+#[test]
+fn builtin_process_is_frozen_from_its_own_arm_binary() {
+    let fixture = Fixture::new();
+    fixture.seed(&fixture.baseline);
+    fixture.seed(&fixture.candidate);
+    let text = format!(
+        "# Baseline build's Process\n{}",
+        include_str!("../processes/ticket-run.toml")
+    );
+    let source = fixture.root.path().join("builtin.toml");
+    fs::write(&source, &text).unwrap();
+    executable(
+        &fixture.cache(&fixture.baseline),
+        &format!("#!/bin/sh\ncat '{}'\n", source.display()),
+    );
+    let arms = success(
+        fixture
+            .command("arms.json")
+            .args(["--baseline-process", "ticket-run"])
+            .output()
+            .unwrap(),
+    );
+    let directory = Path::new(arms["baseline"]["process"]["directory"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(directory.join(".thirdshift/processes/ticket-run.toml")).unwrap(),
+        text
+    );
+}
+
+#[test]
 fn a_failed_build_keeps_its_error_and_publishes_no_arm_record() {
     let fixture = Fixture::new();
     fixture.seed(&fixture.baseline);
