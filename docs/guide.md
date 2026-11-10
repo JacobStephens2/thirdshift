@@ -1415,6 +1415,20 @@ not ready. Every seat's calls and the panel's result are reported beside the
 Verdict, in the text view and under `panel` in
 `thirdshift experiments <id> --json`; they change no Score and no Verdict.
 
+The estimate shown before the Trials includes the panel: for each seat, its
+remaining sessions (pairs × 2 orders) and their expected cost, priced from the
+Experiment's frozen price table. A seat is priced at the mean of its sessions
+measured in this Experiment once there are some, and otherwise at an assumed
+session of 400k input tokens (80% of them cache reads) and 15k output tokens.
+A seat whose Model has no frozen price is listed without one. Panel spend is
+reported apart from the Arms' cost, in the text view and under `panel_spend`
+in `--json`, and never counts toward an Arm's cost or the Bar's
+`--cost-ceiling`. `--panel-spending-limit 25` caps what each run of the
+Experiment spends on panel sessions, in USD: once this run's priced panel
+sessions reach it, grading pauses before the next session, as it does when a
+Grader is unavailable. Resuming gets the limit afresh and continues from the
+calls already made; none is graded again.
+
 After each process Trial, thirdshift searches its Session traces for the
 real fix's merge commit (including abbreviations of at least seven characters),
 pull-request and issue references, branch and title. Matches appear as leak hits
@@ -1440,8 +1454,8 @@ Advisory minimum of `20` discriminating Eval tasks, an `1800`-second per-Trial
 timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--min-discriminating-tasks`, `--timeout` (seconds), or `--void-retries`.
-The Grader panel's `--panel-seat`, `--panel-vote` and `--panel-arm-family-rule`
-are part of the Bar too; it has no panel by default.
+The Grader panel's `--panel-seat`, `--panel-vote`, `--panel-arm-family-rule`
+and `--panel-spending-limit` are part of the Bar too; it has no panel by default.
 Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
 

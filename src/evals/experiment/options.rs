@@ -229,6 +229,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         seats,
         flags.remove("--panel-vote"),
         flags.remove("--panel-arm-family-rule"),
+        flags.remove("--panel-spending-limit"),
     )?;
     number!("--void-retries", bar.void_rules.retries);
     ensure!(

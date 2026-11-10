@@ -100,6 +100,13 @@ needs more than half of the votes, otherwise it is `tie`; the panel's tied
 merge call is `not_ready`. Pairs appear once every seat has called both
 orders. The panel is reported beside the Verdict and changes no Score,
 Verdict or Void cause. Experiments without a panel have none.
+`bar.panel.spending_limit`, when set, is the USD each run of the Experiment
+may spend on panel sessions before grading pauses; a resume gets it afresh
+and keeps every saved call. `panel_spend` prices every retained panel session,
+retries included, from the Experiment's frozen `pricing`, in total and per
+seat; `cost_usd` is null while any of those sessions can't be priced. It is
+null without a panel. Panel spend is never in `accounting`, an Arm's cost or
+the Bar's `cost_ceiling`.
 
 Format 10 also adds each `PairSide`'s `diff`, the Grader panel's optional
 `panel` calls per `Pair`, and `people`. `diff` lists every file the Arm's
@@ -408,6 +415,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     "leak_hits": ["LeakHit"],
     "pairs": ["Pair"],
     "panel": ["PanelPair"],
+    "panel_spend": "PanelSpend?",
     "people": {"reviews": ["PairReview"], "agreement": {"compared": "integer", "agreed": "integer"}},
     "minutes": {"baseline": "number", "candidate": "number"},
     "usage": {"baseline": "Usage", "candidate": "Usage"},
@@ -449,7 +457,11 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   },
   "Panel": {
     "seats": [{"harness": "string", "model": "string", "effort": "string?"}],
-    "vote": "family|model", "arm_family_rule": "boolean"
+    "vote": "family|model", "arm_family_rule": "boolean", "spending_limit?": "number"
+  },
+  "PanelSpend": {"sessions": "integer", "cost_usd": "number?", "seats": ["PanelSeatSpend"]},
+  "PanelSeatSpend": {
+    "harness": "string", "model": "string", "effort": "string?", "sessions": "integer", "cost_usd": "number?"
   },
   "VoidCause": "interrupted|session_unavailable|usage_limit|rate_limit|repository_changed|sandbox_unavailable|host_killed|memory_cap|accounting_gap|fix_leaked",
   "TrialResult": {
