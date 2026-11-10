@@ -196,11 +196,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
-       thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
-         --no-wait                                  Skip the host wait; record competing Commands with the Verdict
+       thirdshift experiment [--release] <candidate> [--no-wait] [options]  Compare Arms after Commands end; --no-wait skips the wait and records competing Command count; --release uses the last tag
        thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
-       thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
+       thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands and named Experiment waits, also shown in the Console
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
@@ -235,9 +234,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode, kimi), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Pass commands: architect, pickup, secure, review --author <login>, fix, triage (no supplied work). For architect, pickup, secure, fix and triage, base <branch> selects an origin branch; fix also accepts author <login>.
-Every Pass, including an issue-less Custom process, skips while an Experiment is live on this machine for this OS account.
-Commands on an Issue or pull request URL still run with a competition warning. Experiments wait for other live Commands before starting Trials; status and the Console name the wait. --no-wait bypasses it.
+Pass commands (no supplied work): architect, pickup, secure, review --author <login>, fix, triage, process <name> without issue. All skip for a live Experiment on this OS account/host; targeted Commands run with a warning. base <branch>: architect/pickup/secure/fix/triage; author <login>: fix.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
