@@ -199,8 +199,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
-       thirdshift cronjobs [--fleet] [--json]          List local or Fleet cron jobs
-       thirdshift launch-directories [--json]         List known Launch directories
+       thirdshift cronjobs [--fleet] [--json] | launch-directories [--json]  List schedules or Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
        thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
