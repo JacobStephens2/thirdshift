@@ -7,7 +7,7 @@ mod toolchains;
 
 use std::cell::RefCell;
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -148,8 +148,11 @@ impl<'a> Execution<'a> {
         {
             None
         } else {
+            // Owner-only: this directory lives in the shared temporary
+            // directory and holds the prepared repository.
             let directory = tempfile::Builder::new()
                 .prefix("prepared-grader-")
+                .permissions(fs::Permissions::from_mode(0o700))
                 .tempdir()?;
             let repository = directory.path().join("repository");
             crate::sandbox::code_grader::copy_repository(&prepared_repo.repository, &repository)?;
