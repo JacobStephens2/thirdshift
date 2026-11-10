@@ -17,6 +17,46 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn console_experiment_does_not_claim_efficiency_is_outside_the_bar() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "c".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["bar"]["cost_ceiling"] = json!(2.0);
+    fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(!html.contains("Efficiency stays outside the Bar"), "{html}");
+}
+
+#[test]
+fn openapi_experiment_format_matches_served_list_and_detail() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let view = api::json(console.get(&format!("/api/v1/experiments/{id}")));
+    let document = api::json(console.get("/api/v1/openapi.json"));
+    for (path, list) in [
+        ("/api/v1/experiments", true),
+        ("/api/v1/experiments/{id}", false),
+    ] {
+        let mut schema = &document["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"];
+        if list {
+            schema = &schema["items"];
+        }
+        assert_eq!(
+            schema["properties"]["format"]["const"], view["format"],
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn api_experiment_changes_and_rechecks_match_cli_views() {
     use sha2::{Digest, Sha256};
     let home = tempfile::tempdir().unwrap();

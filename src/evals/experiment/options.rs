@@ -49,6 +49,7 @@ impl ArmOptions {
             model: choice.model,
             effort: choice.effort,
             process: self.process.clone(),
+            process_digest: None,
         }
     }
 }

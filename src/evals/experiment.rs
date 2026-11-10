@@ -152,9 +152,21 @@ pub(crate) struct Setup {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_digest: Option<String>,
 }
 
 impl Setup {
+    fn requested(&self) -> Result<arms::Requested> {
+        Ok(
+            arms::Requested::new(&self.commit, &self.harness)?.with_process(
+                self.process.as_deref(),
+                self.model.as_deref(),
+                self.effort.as_deref(),
+            ),
+        )
+    }
+
     fn choice(&self) -> Choice {
         Choice {
             harness: Harness::named(&self.harness).expect("validated Arm Harness"),
@@ -288,6 +300,9 @@ pub fn run(options: Options) -> Result<()> {
         bar.trials_per_task.values().all(|n| matches!(n, 1 | 3)),
         "Trials per Eval task must be one or three"
     );
+    for setup in [&mut baseline, &mut candidate] {
+        setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+    }
     let identity = serde_json::to_vec(&(&baseline, &candidate, &suites))?;
     let id = format!("{:x}", Sha256::digest(identity));
     let description = Description {
@@ -397,21 +412,8 @@ pub fn run(options: Options) -> Result<()> {
         if experiment.description.prepared.is_none() {
             let description = &experiment.description;
             let requested = [
-                arms::Requested::new(&description.baseline.commit, &description.baseline.harness)?
-                    .with_process(
-                        description.baseline.process.as_deref(),
-                        description.baseline.model.as_deref(),
-                        description.baseline.effort.as_deref(),
-                    ),
-                arms::Requested::new(
-                    &description.candidate.commit,
-                    &description.candidate.harness,
-                )?
-                .with_process(
-                    description.candidate.process.as_deref(),
-                    description.candidate.model.as_deref(),
-                    description.candidate.effort.as_deref(),
-                ),
+                description.baseline.requested()?,
+                description.candidate.requested()?,
             ];
             let record = experiment.directory.join("arms.json");
             if record.exists() {
@@ -420,6 +422,26 @@ pub fn run(options: Options) -> Result<()> {
             } else {
                 experiment.description.prepared =
                     Some(arms::prepare(&repository, requested, &record)?);
+            }
+            let prepared = experiment
+                .description
+                .prepared
+                .as_ref()
+                .context("missing prepared Arms")?;
+            for (setup, arm) in [
+                (&experiment.description.baseline, &prepared.baseline),
+                (&experiment.description.candidate, &prepared.candidate),
+            ] {
+                if let Some(expected) = &setup.process_digest {
+                    ensure!(
+                        arm.process
+                            .as_ref()
+                            .context("missing frozen Arm Process")?
+                            .digest()?
+                            == *expected,
+                        "Custom process inputs changed during Arm preparation; start the Experiment again"
+                    );
+                }
             }
             experiment.save()?;
             logs::experiment(&experiment.description);

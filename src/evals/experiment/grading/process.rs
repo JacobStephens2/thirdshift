@@ -25,7 +25,8 @@ pub(super) fn execute(
         .process_grading
         .as_ref()
         .context("missing process_grading")?;
-    let snapshot = match snapshot(task, trial, Instant::now() + timeout) {
+    let deadline = Instant::now() + timeout;
+    let snapshot = match snapshot(task, trial, deadline) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Ok(vec![Check {
@@ -48,7 +49,7 @@ pub(super) fn execute(
             spec: None,
         },
         &commands,
-        timeout,
+        code_grader::Timeout::Deadline(deadline),
         caps,
         true,
     )?;

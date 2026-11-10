@@ -1199,7 +1199,7 @@ fn arms(view: &View) -> String {
         &view.voids.baseline.to_string(),
         &view.voids.candidate.to_string(),
     ));
-    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></details></section>");
+    html.push_str("</tbody></table><p>The Bar's optional cost and time ceilings apply to frozen-price accounting. This table shows Harness-reported usage; unknown usage was not reported by the Harness.</p></details></section>");
     html
 }
 

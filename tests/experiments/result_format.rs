@@ -91,8 +91,8 @@ fn documented_format_matches_real_experiment_results() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     assert_eq!(
-        experiment["format"], 7,
-        "format 7 adds optional resource ceilings and the efficiency Verdict line"
+        experiment["format"], 8,
+        "format 8 adds the Custom process content digest to Arm setup"
     );
     assert_documented("Experiment", &serde_json::from_str(&run.stdout).unwrap());
     assert!(

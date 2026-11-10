@@ -1321,6 +1321,9 @@ before its first publishing Step. `--baseline-process <name-or-file.toml>` and
 both default to the Built-in `ticket-run` with `implement` and `security-review`.
 Preparation freezes the Process file and referenced home skills by SHA-256,
 recording each Step's Harness, Model and Effort in the Experiment's description.
+Custom process and home-skill content also identifies the Arm: editing either
+starts a new Experiment and uses separate cost-estimate history. Repeating the
+command with unchanged inputs resumes its frozen Experiment.
 Each Trial gets its own copies in its fresh home. Both Arms' frozen files are
 checked before every Trial; a mismatch pauses the Experiment with the filename.
 A Process needing GitHub before publication is refused at start. The Trial
@@ -1333,7 +1336,8 @@ fail-to-pass and pass-to-pass selectors. The Grader exports the Trial's final
 commit and overlays the reference fix's test files and changed shared test
 fakes, replacing any Trial edits to those files. Python selectors search
 the repository after the standard library, so a committed module cannot
-replace one. Selectors run offline in bwrap, each under the Bar's timeout,
+replace one. Selectors run offline in bwrap, sharing the Bar's timeout with
+preparation of the final-commit snapshot,
 and their failures name the selector in
 the Score's reason. The task's required `process_grading` table declares the
 files and selectors; see [Eval task manifests](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md).
@@ -1581,7 +1585,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 7`.
+[Experiment results format](experiment-results.md), identified by `format: 8`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost

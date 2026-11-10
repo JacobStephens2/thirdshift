@@ -80,7 +80,7 @@ pub(super) fn score(
             repository,
             &output.reports,
             &task.manifest.checks,
-            timeout,
+            code_grader::Timeout::PerCheck(timeout),
             &caps,
             false,
         )?);

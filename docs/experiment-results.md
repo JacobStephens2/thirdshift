@@ -1,4 +1,4 @@
-# Experiment results (format 7)
+# Experiment results (format 8)
 
 `thirdshift experiments <id> --json` emits one UTF-8 JSON object matching
 `Experiment` below. `thirdshift experiments --json` emits an array of those
@@ -9,8 +9,8 @@ These results complement the [Eval task input format](eval-tasks.md) and
 
 ## Stability and versioning
 
-`format: 7` identifies this result contract. All fields and types below, their
-presence/null rules, enum values and meanings are stable within format 7.
+`format: 8` identifies this result contract. All fields and types below, their
+presence/null rules, enum values and meanings are stable within format 8.
 Adding, removing, renaming or retyping a field, changing its meaning or presence
 rules, or changing an enum requires a new format number and an updated document
 and drift test in the same change. Readers should reject unsupported formats.
@@ -55,10 +55,15 @@ Format 7 adds optional `bar.cost_ceiling` and `bar.time_ceiling`, and the
 Verdict's optional `efficiency` and `line`. Saved Verdicts without these fields
 retain their original shape and decision when read.
 
+Format 8 adds optional `Setup.process_digest`, the content digest of a Custom
+process and its referenced home skills. It identifies the Arm for Experiment
+reuse and cost-estimate history. Built-in processes are identified by the build
+and omit this field. Older saved setups also omit it.
+
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
 scored as failed. `outcomes` reports terminal delivered, stopped-to-ask and
 failed counts per Arm, excluding Void attempts. `Setup.process`, when present,
-names the Built-in process. Each process attempt's `steps` retains names,
+names the selected Process or Custom process file. Each process attempt's `steps` retains names,
 outcomes, start/end times and elapsed milliseconds; all sessions remain in the
 shared `sessions` listing. Existing review records omit these optional fields.
 
@@ -275,7 +280,7 @@ run takes it out of Needs you. Dismissal also works. Finished Trials and Scores
 are kept. There is no automatic resume, failure email or failure metric.
 
 The `CommandPause` projection in the contract below covers those fields on
-the Command record and on `show --json`; it does not change Experiment format 7.
+the Command record and on `show --json`; it does not change the Experiment view.
 
 ## Checked field contract
 
@@ -301,7 +306,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
     }
   },
   "Experiment": {
-    "format": 7,
+    "format": 8,
     "name": "string",
     "name_set": "boolean",
     "id": "string",
@@ -347,7 +352,7 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "TrialAccounting": {"id":"string", "arm":"baseline|candidate", "cost_usd":"number?", "time_ms":"integer", "roles":{"*":"TotalAccounting"}, "sessions":["SessionAccounting"]},
   "SessionAccounting": {"attempt?":"integer", "path":"string", "role":"string", "time_ms":"integer", "models":{"*":"Measurement"}, "cost_usd":"number?", "gap":"string?"},
   "OutcomeCounts": {"delivered": "integer", "stopped_to_ask": "integer", "failed": "integer"},
-  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string"},
+  "Setup": {"commit": "string", "harness": "string", "model": "string?", "effort": "string?", "process?": "string", "process_digest?": "string"},
   "Prepared": {"format": 1, "baseline": "PreparedArm", "candidate": "PreparedArm"},
   "PreparedArm": {
     "commit": "string", "binary": "string",

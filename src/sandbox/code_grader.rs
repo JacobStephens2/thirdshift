@@ -28,6 +28,20 @@ pub(crate) struct Check {
     pub reason: String,
 }
 
+pub(crate) enum Timeout {
+    PerCheck(Duration),
+    Deadline(Instant),
+}
+
+impl Timeout {
+    fn deadline(&self) -> Instant {
+        match self {
+            Self::PerCheck(timeout) => Instant::now() + *timeout,
+            Self::Deadline(deadline) => *deadline,
+        }
+    }
+}
+
 /// Python puts the check's working directory ahead of the standard library.
 /// A process Trial can commit `pathlib.py` or `unittest.py`, and the reference
 /// tests then import the Trial's module and pass without the fix. This startup
@@ -60,7 +74,7 @@ pub(crate) fn execute(
     repository: &Path,
     reports: &Reports,
     commands: &[Vec<String>],
-    timeout: Duration,
+    timeout: Timeout,
     caps: &Caps,
     guard_imports: bool,
 ) -> Result<Vec<Check>> {
@@ -86,6 +100,14 @@ pub(crate) fn execute(
     }
     let mut checks = Vec::new();
     for command in commands {
+        if matches!(&timeout, Timeout::Deadline(deadline) if *deadline <= Instant::now()) {
+            checks.push(Check {
+                command: Some(command.clone()),
+                passed: false,
+                reason: "code Grader timed out before starting the next check".into(),
+            });
+            break;
+        }
         let mut child = launch(&snapshot, packet.path(), command, caps)?;
         let result = process::output_until(
             &mut child.invocation,
@@ -95,7 +117,7 @@ pub(crate) fn execute(
                 interruption: Interruption::Ordinary,
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
-            Instant::now() + timeout,
+            timeout.deadline(),
             &|| Ok(()),
         );
         crate::interrupt::check()?;
@@ -375,7 +397,7 @@ pathlib.Path(sys.argv[1]).write_text(f"{mode:03o}")
                             report_mode.display().to_string(),
                             mode_path.display().to_string(),
                         ]],
-                        Duration::from_secs(10),
+                        Timeout::PerCheck(Duration::from_secs(10)),
                         &Caps::default(),
                         false,
                     )

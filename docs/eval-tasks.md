@@ -111,7 +111,8 @@ effort = "high"
   untracked and ignored files. It replaces the named tests and fakes with their
   contents and executable modes from `change`, then runs `fail_to_pass` followed
   by `pass_to_pass`. Selectors share build artifacts in this private copy.
-  They run offline in bwrap, each under the Bar's timeout. Nonzero exits and
+  They run offline in bwrap, sharing the Bar's timeout with preparation of the
+  final-commit snapshot. Nonzero exits and
   timeouts fail checks; the Score records the selector and its reason. Editing
   the overlaid files cannot help a Trial pass. Python selectors search the
   repository after the standard library, so a committed module cannot replace

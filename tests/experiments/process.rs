@@ -385,6 +385,31 @@ fn uncommitted_repairs_do_not_change_the_graded_commit() {
     }
 }
 
+#[test]
+fn process_grading_shares_one_bar_timeout_across_selectors() {
+    let fixture = fixture();
+    let check = ["python3", "-c", "import time; time.sleep(4)"];
+    set_selectors(&fixture, &check, &check);
+    let run = fixture.run(&["--timeout", "6"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let view: Value = serde_json::from_str(&run.stdout).unwrap();
+    for result in view["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "delivered", "{result}");
+        assert_eq!(
+            result["score"]["passed"], false,
+            "combined grading must stop at the Bar timeout: {result}"
+        );
+        assert!(
+            result["score"]["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["reason"].as_str().unwrap().contains("timed out")),
+            "{result}"
+        );
+    }
+}
+
 fn set_selectors(fixture: &Fixture, fail_to_pass: &[&str], pass_to_pass: &[&str]) {
     let task = fixture
         .scenario
@@ -486,7 +511,14 @@ fn a_process_selector_timeout_is_a_failed_check() {
             checks[1]["reason"].as_str().unwrap().contains("timed out"),
             "{checks}"
         );
-        assert_eq!(checks[2]["passed"], true, "{checks}");
+        assert_eq!(checks[2]["passed"], false, "{checks}");
+        assert!(
+            checks[2]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("before starting the next check"),
+            "{checks}"
+        );
     }
 }
 
@@ -698,6 +730,38 @@ worktree = "ticket"
     )
     .unwrap();
     path
+}
+
+#[test]
+fn edited_custom_process_starts_a_new_experiment() {
+    let fixture = fixture();
+    let process = custom_process(&fixture);
+    let args = ["--candidate-process", process.to_str().unwrap()];
+    let first = fixture.run(&args);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let first: Value = serde_json::from_str(&first.stdout).unwrap();
+    let text = fs::read_to_string(&process).unwrap();
+    fs::write(
+        &process,
+        text.replace("command = \"test -f feature.txt\"", "command = \"false\""),
+    )
+    .unwrap();
+    let second = fixture.run(&args);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let second: Value = serde_json::from_str(&second.stdout).unwrap();
+    assert_ne!(
+        first["id"], second["id"],
+        "changed Process bytes must select a new frozen Arm"
+    );
+    assert!(
+        second["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|result| result["arm"] == "candidate")
+            .all(|result| result["outcome"] == "failed"),
+        "{second}"
+    );
 }
 
 #[test]

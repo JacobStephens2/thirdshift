@@ -40,34 +40,35 @@ pub(super) fn pin(
 }
 
 impl Process {
+    pub fn source_digest(request: &Requested) -> Result<Option<String>> {
+        if request
+            .process
+            .as_deref()
+            .is_none_or(|name| name == "ticket-run")
+        {
+            return Ok(None);
+        }
+        let directory = tempfile::tempdir()?;
+        Self::capture(request, directory.path(), None)?;
+        Ok(Some(digest(&serde_json::to_vec(&hashes(
+            directory.path(),
+        )?)?)))
+    }
+
+    pub fn digest(&self) -> Result<String> {
+        Ok(digest(&serde_json::to_vec(&self.files)?))
+    }
+
     pub(super) fn freeze(
         request: &Requested,
         directory: &Path,
         pinned: &mut BTreeMap<String, FixedHarness>,
         compiled: Option<&str>,
     ) -> Result<Option<Self>> {
-        let Some(process) = &request.process else {
+        if request.process.is_none() {
             return Ok(None);
-        };
-        let inputs = crate::processes::source::local_inputs(
-            process,
-            &Choice {
-                harness: request.harness,
-                model: request.model.clone(),
-                effort: request.effort.clone(),
-                chosen_by: ChosenBy::Command,
-            },
-            compiled,
-        )?;
-        let process_dir = directory.join(".thirdshift/processes");
-        fs::create_dir_all(&process_dir)?;
-        fs::write(
-            process_dir.join(format!("{}.toml", inputs.name)),
-            inputs.text,
-        )?;
-        for name in inputs.skills {
-            crate::skills::freeze_home_skill(&name, &directory.join(".thirdshift/skills"))?;
         }
+        let inputs = Self::capture(request, directory, compiled)?;
         let steps = inputs
             .steps
             .into_iter()
@@ -86,6 +87,33 @@ impl Process {
             files: hashes(directory)?,
             steps,
         }))
+    }
+
+    fn capture(
+        request: &Requested,
+        directory: &Path,
+        compiled: Option<&str>,
+    ) -> Result<crate::processes::source::LocalInputs> {
+        let inputs = crate::processes::source::local_inputs(
+            request.process.as_deref().context("missing Arm Process")?,
+            &Choice {
+                harness: request.harness,
+                model: request.model.clone(),
+                effort: request.effort.clone(),
+                chosen_by: ChosenBy::Command,
+            },
+            compiled,
+        )?;
+        let process_dir = directory.join(".thirdshift/processes");
+        fs::create_dir_all(&process_dir)?;
+        fs::write(
+            process_dir.join(format!("{}.toml", inputs.name)),
+            &inputs.text,
+        )?;
+        for name in &inputs.skills {
+            crate::skills::freeze_home_skill(name, &directory.join(".thirdshift/skills"))?;
+        }
+        Ok(inputs)
     }
 
     /// The Built-in file belongs to the selected build, which can differ
