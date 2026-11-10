@@ -1,16 +1,26 @@
 //! The CLI's retained Experiment view, rendered without starting work.
+use std::collections::HashMap;
+
 use askama::Template;
-use axum::Extension;
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Form};
 
 use super::auth::Viewer;
 use super::filters::escaped;
 use crate::config::UserConfig;
 use crate::evals::{approval, experiment};
 
+mod pair;
 mod render;
+
+#[derive(Template)]
+#[template(path = "console/experiment_pair.html")]
+struct PairPage {
+    page: super::PageContext,
+    html: String,
+}
 
 #[derive(Template)]
 #[template(path = "console/experiments.html")]
@@ -54,7 +64,14 @@ async fn show(format: super::api::Format, id: Option<String>, viewer: Viewer) ->
             }
             let (title, html) = if detail {
                 let view = &views[0];
-                (view.name.clone(), render::detail(view))
+                (
+                    view.name.clone(),
+                    render::detail(
+                        view,
+                        &viewer.csrf,
+                        viewer.scopes.contains(&super::Scope::Act),
+                    ),
+                )
             } else {
                 ("Experiments".into(), render::list(&views))
             };
@@ -73,6 +90,105 @@ async fn show(format: super::api::Format, id: Option<String>, viewer: Viewer) ->
         return (StatusCode::NOT_FOUND, "Experiment is unavailable.").into_response();
     }
     response
+}
+
+/// One blind pair, as the signed-in reader may see it.
+pub(super) async fn pair(
+    Path((id, pair)): Path<(String, String)>,
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+) -> Response {
+    let response = super::api::read(format, move || {
+        let config = UserConfig::load()?;
+        let shown = experiment::pairwise::page(&id, &pair, &viewer.activity_actor())?;
+        format.render(&shown, |shown| {
+            Ok(PairPage {
+                page: super::PageContext::new(&config, &viewer.scopes),
+                html: pair::page(
+                    shown,
+                    &viewer.csrf,
+                    viewer.scopes.contains(&super::Scope::Act),
+                ),
+            }
+            .render()?)
+        })
+    })
+    .await;
+    if format == super::api::Format::Html && !response.status().is_success() {
+        return (StatusCode::NOT_FOUND, "Pair is unavailable.").into_response();
+    }
+    response
+}
+
+pub(super) async fn merge_calls(
+    Path((id, pair)): Path<(String, String)>,
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let redirect = format!("/experiments/{id}/pairs/{pair}");
+    super::api::action(format, &redirect, move || {
+        let side = |name: &str| form.get(name).map_or("", String::as_str);
+        experiment::pairwise::merge(&id, &pair, side("a"), side("b"), viewer.activity_actor())
+    })
+    .await
+}
+
+pub(super) async fn preference(
+    Path((id, pair)): Path<(String, String)>,
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Response {
+    let redirect = format!("/experiments/{id}/pairs/{pair}");
+    super::api::action(format, &redirect, move || {
+        // A skipped rubric criterion arrives empty.
+        let rubric: Vec<_> = form
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((name.strip_prefix("rubric_")?.to_owned(), value.clone()))
+            })
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
+        experiment::pairwise::prefer(
+            &id,
+            &pair,
+            form.get("preference").map_or("", String::as_str),
+            &rubric,
+            viewer.activity_actor(),
+        )
+    })
+    .await
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct LeakDecision {
+    decision: String,
+    reason: String,
+}
+
+pub(super) async fn decide_leak(
+    Path((id, hit)): Path<(String, String)>,
+    Extension(viewer): Extension<Viewer>,
+    Extension(format): Extension<super::api::Format>,
+    Form(form): Form<LeakDecision>,
+) -> Response {
+    let redirect = format!("/experiments/{id}");
+    super::api::action(
+        format,
+        &redirect,
+        move || -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::from_str(&experiment::decide_leak(
+                &id,
+                &hit,
+                &form.decision,
+                &form.reason,
+                viewer.activity_actor(),
+                true,
+            )?)?)
+        },
+    )
+    .await
 }
 
 pub(super) async fn approve(

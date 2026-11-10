@@ -118,6 +118,17 @@ impl Labels {
         )
     }
 
+    fn including(mut self, name: Option<&str>) -> Labels {
+        if let Some(name) = name
+            && !self
+                .names()
+                .any(|present| present.eq_ignore_ascii_case(name))
+        {
+            self.0.push(name.to_string());
+        }
+        self
+    }
+
     /// Their names, as spelled, in order: what the GitHub adapter writes.
     /// Only for writing them: a question about them is one of the methods
     /// above, which ignore case.
@@ -134,6 +145,7 @@ pub struct Edit<'a> {
     labels: Labels,
     off: Vec<Label>,
     on: Vec<Label>,
+    repository_label: Option<String>,
 }
 
 /// The request that makes an edit.
@@ -158,19 +170,39 @@ impl<'a> Edit<'a> {
             labels,
             off: off.to_vec(),
             on: on.to_vec(),
+            repository_label: None,
         }
+    }
+
+    /// Put an already-validated repository label on in the same request.
+    /// Unlike factory labels, this label must exist; thirdshift does not
+    /// choose its description or create it.
+    pub fn with_repository_label(mut self, name: &str) -> Self {
+        self.repository_label = Some(name.to_string());
+        self
     }
 
     /// Whether it takes `label` off: one of the labels to take off, and not
     /// one to put on, that the issue has, whatever its case.
     pub fn takes_off(&self, label: Label) -> bool {
-        self.off.contains(&label) && !self.on.contains(&label) && self.labels.has(label)
+        self.off.contains(&label)
+            && !self.on.contains(&label)
+            && !self
+                .repository_label
+                .as_deref()
+                .is_some_and(|name| label.is_named(name))
+            && self.labels.has(label)
     }
 
     /// Whether it puts `label` on: one of the labels to put on that the
     /// issue lacks, whatever its case.
     pub fn puts_on(&self, label: Label) -> bool {
-        self.on.contains(&label) && !self.labels.has(label)
+        (self.on.contains(&label)
+            || self
+                .repository_label
+                .as_deref()
+                .is_some_and(|name| label.is_named(name)))
+            && !self.labels.has(label)
     }
 
     /// The issue's labels, as read.
@@ -200,7 +232,9 @@ impl<'a> Edit<'a> {
     /// The issue's labels once it is made, against its labels as read.
     #[cfg(test)]
     pub fn labels_after(&self) -> Labels {
-        self.labels.swapped(&self.off, &self.on)
+        self.labels
+            .swapped(&self.off, &self.on)
+            .including(self.repository_label.as_deref())
     }
 
     /// Make the change, in one request, having first added each label it
@@ -208,7 +242,12 @@ impl<'a> Edit<'a> {
     /// lacks it. A change of no label makes no request, and taking a single
     /// label off, putting none on, keeps the labels added since the read.
     pub fn apply(&self, github: &GitHub) -> Result<()> {
-        match request(&self.labels, &self.off, &self.on) {
+        match request(
+            &self.labels,
+            &self.off,
+            &self.on,
+            self.repository_label.as_deref(),
+        ) {
             Request::None => Ok(()),
             Request::Delete(label) => github.remove_label(self.issue, &label),
             Request::Put { missing, labels } => {
@@ -223,10 +262,17 @@ impl<'a> Edit<'a> {
 
 /// The request that takes each of `off` off an issue with `labels` and puts
 /// each of `on` on it. A label in both is put on.
-fn request(labels: &Labels, off: &[Label], on: &[Label]) -> Request {
+fn request(
+    labels: &Labels,
+    off: &[Label],
+    on: &[Label],
+    repository_label: Option<&str>,
+) -> Request {
     let taken_off: Vec<&str> = off
         .iter()
-        .filter(|label| !on.contains(label))
+        .filter(|label| {
+            !on.contains(label) && !repository_label.is_some_and(|name| label.is_named(name))
+        })
         .filter_map(|label| labels.spelled(*label))
         .collect();
     let missing: Vec<Label> = on
@@ -234,11 +280,19 @@ fn request(labels: &Labels, off: &[Label], on: &[Label]) -> Request {
         .copied()
         .filter(|label| !labels.has(*label))
         .collect();
-    match (taken_off.as_slice(), missing.is_empty()) {
+    let missing_repository_label = repository_label.is_some_and(|name| {
+        !labels
+            .names()
+            .any(|present| present.eq_ignore_ascii_case(name))
+    });
+    match (
+        taken_off.as_slice(),
+        missing.is_empty() && !missing_repository_label,
+    ) {
         ([], true) => Request::None,
         ([label], true) => Request::Delete(label.to_string()),
         _ => Request::Put {
-            labels: labels.swapped(off, on),
+            labels: labels.swapped(off, on).including(repository_label),
             missing,
         },
     }
@@ -307,10 +361,13 @@ mod tests {
     fn an_edit_that_changes_no_label_whatever_its_case_makes_no_request() {
         let labels = labels(&["bug", "In-Progress"]);
 
-        assert_request(request(&labels, &[], &[]), Request::None);
-        assert_request(request(&labels, &[READY_FOR_AGENT], &[]), Request::None);
+        assert_request(request(&labels, &[], &[], None), Request::None);
         assert_request(
-            request(&labels, &[READY_FOR_AGENT], &[IN_PROGRESS]),
+            request(&labels, &[READY_FOR_AGENT], &[], None),
+            Request::None,
+        );
+        assert_request(
+            request(&labels, &[READY_FOR_AGENT], &[IN_PROGRESS], None),
             Request::None,
         );
     }
@@ -321,11 +378,11 @@ mod tests {
         let labels = labels(&["bug", "In-Progress"]);
 
         assert_request(
-            request(&labels, &[IN_PROGRESS], &[]),
+            request(&labels, &[IN_PROGRESS], &[], None),
             Request::Delete("In-Progress".into()),
         );
         assert_request(
-            request(&triaged, &[IN_PROGRESS], &[NEEDS_TRIAGE]),
+            request(&triaged, &[IN_PROGRESS], &[NEEDS_TRIAGE], None),
             Request::Delete("In-Progress".into()),
         );
     }
@@ -335,11 +392,11 @@ mod tests {
         let labels = labels(&["In-Progress", "bug"]);
 
         assert_request(
-            request(&labels, &[IN_PROGRESS], &[IN_PROGRESS]),
+            request(&labels, &[IN_PROGRESS], &[IN_PROGRESS], None),
             Request::None,
         );
         assert_request(
-            request(&labels, &[IN_PROGRESS, NEEDS_TRIAGE], &[IN_PROGRESS]),
+            request(&labels, &[IN_PROGRESS, NEEDS_TRIAGE], &[IN_PROGRESS], None),
             Request::None,
         );
     }
@@ -349,7 +406,7 @@ mod tests {
         let labels = labels(&["Needs-Triage", "bug", "in-progress"]);
 
         assert_request(
-            request(&labels, &[NEEDS_TRIAGE, IN_PROGRESS], &[]),
+            request(&labels, &[NEEDS_TRIAGE, IN_PROGRESS], &[], None),
             put(&[], &["bug"]),
         );
     }
@@ -359,7 +416,12 @@ mod tests {
         let labels = labels(&["Needs-Triage", "bug", "ARCHITECT-PLAN"]);
 
         assert_request(
-            request(&labels, &[NEEDS_TRIAGE], &[READY_FOR_AGENT, ARCHITECT_PLAN]),
+            request(
+                &labels,
+                &[NEEDS_TRIAGE],
+                &[READY_FOR_AGENT, ARCHITECT_PLAN],
+                None,
+            ),
             put(
                 &[READY_FOR_AGENT],
                 &["bug", "ready-for-agent", "architect-plan"],
@@ -372,7 +434,7 @@ mod tests {
         let labels = labels(&["Ready-For-Agent", "bug"]);
 
         assert_request(
-            request(&labels, &[READY_FOR_AGENT], &[IN_PROGRESS]),
+            request(&labels, &[READY_FOR_AGENT], &[IN_PROGRESS], None),
             put(&[IN_PROGRESS], &["bug", "in-progress"]),
         );
     }

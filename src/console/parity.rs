@@ -75,6 +75,7 @@ const PROCESSES: &[(&str, &str)] = &[
 const EVALS: &[(&str, &str)] = &[
     ("List", "evals list"),
     ("ImportReplays", "evals import-replays"),
+    ("ProposeProcess", "evals propose-process repository"),
     ("Approve", "evals approve suite task"),
     ("Touched", "evals touched src/main.rs"),
     ("Prepare", "evals prepare suite task output"),
@@ -223,11 +224,18 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
             .unwrap_or("read")
             .into(),
         Command::Dismiss { undo, .. } => undo.to_string(),
-        Command::Experiments(args) => ["--name", "--record-difficulty", "--session"]
-            .into_iter()
-            .find(|flag| args.iter().any(|arg| arg == flag))
-            .unwrap_or("read")
-            .into(),
+        Command::Experiments(args) => [
+            "--name",
+            "--record-difficulty",
+            "--session",
+            "--merge",
+            "--prefer",
+            "--pair",
+        ]
+        .into_iter()
+        .find(|flag| args.iter().any(|arg| arg == flag))
+        .unwrap_or("read")
+        .into(),
         Command::Recheck(args) => if args.iter().any(|arg| arg == "--pending") {
             "read"
         } else if args.iter().any(|arg| arg == "--batch") {

@@ -320,8 +320,7 @@ fn gates(
     limit: NonZeroUsize,
     order: PickupOrder,
 ) -> Result<Decision> {
-    sweep(outside);
-    let failed = clear_and_count_failures(outside)?;
+    let failed = failures(outside)?;
     if failed.len() >= limit.get() {
         return Ok(Decision::Skip(Skipped::AtFailureLimit {
             repo: repo.clone(),
@@ -333,6 +332,12 @@ fn gates(
         Some(ready) => Decision::Take(ready),
         None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
     })
+}
+
+/// Shared Sweep and open-failure accounting for Pickup and Triage Passes.
+pub(crate) fn failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
+    sweep(outside);
+    clear_and_count_failures(outside)
 }
 
 /// The labels the Sweep takes off closed issues.
@@ -382,9 +387,9 @@ fn sweep(outside: &mut impl Outside) {
 
 /// The open issues the factory failed on that still wait for the Day shift,
 /// lowest number first: those labelled `agent-failed`, except one the Day
-/// shift has acted on, labelled `ready-for-agent` again, or with neither
-/// `in-progress` nor `needs-triage` left, which has `agent-failed` taken
-/// off instead and is not counted. A failure to take it off is only a
+/// shift has acted on, labelled `ready-for-agent` again, or with none of
+/// `in-progress`, `needs-triage` or `ready-for-human` left, which has
+/// `agent-failed` taken off instead and is not counted. A failure to take it off is only a
 /// warning; a failure to list them fails the Pickup run.
 fn clear_and_count_failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
     let mut failed = Vec::new();
@@ -416,11 +421,16 @@ fn clear_and_count_failures(outside: &mut impl Outside) -> Result<Vec<u64>> {
 
 /// How the Day shift acted on the failure of an open issue with `labels`, if
 /// it did: handed it back with `ready-for-agent`, or took it over, leaving
-/// it with neither `in-progress` nor `needs-triage`.
+/// it with none of `in-progress`, `needs-triage` or `ready-for-human`.
 fn acted_on(labels: &Labels) -> Option<&'static str> {
     if labels.has(READY_FOR_AGENT) {
         Some("handed back")
-    } else if !claim::is_on(labels) && !labels.has(NEEDS_TRIAGE) {
+    } else if !claim::is_on(labels)
+        && !labels.has(NEEDS_TRIAGE)
+        // A failed Triage run releases its Claim into ready-for-human itself.
+        // That state is still waiting, not evidence that the Day shift acted.
+        && !labels.has(labels::READY_FOR_HUMAN)
+    {
         Some("took over")
     } else {
         None

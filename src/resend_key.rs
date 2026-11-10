@@ -5,8 +5,9 @@
 //! the key it is given here too. A broken Credentials file can't block a Run
 //! that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
-//! The same Credentials also keep `claude.setup_token` and `opencode.api_key`,
-//! reserved for Trials; ordinary Runs never receive them.
+//! The same Credentials also keep `claude.setup_token`, `opencode.api_key`
+//! and per-provider OpenCode keys under `[opencode.keys]`, reserved for
+//! Trials; ordinary Runs never receive them.
 //! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name.
 
 use std::collections::BTreeMap;
@@ -94,15 +95,38 @@ pub struct Credentials {
 struct Secrets {
     key: Option<String>,
     claude_setup_token: Option<String>,
-    opencode_api_key: Option<String>,
+    opencode: OpenCodeKeys,
     fleet: BTreeMap<String, String>,
+}
+
+/// OpenCode's provider keys: one per provider, from `[opencode.keys]` by the
+/// provider's OpenCode name, and the single `opencode.api_key` for any
+/// provider without its own.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OpenCodeKeys {
+    single: Option<String>,
+    by_provider: BTreeMap<String, String>,
+}
+
+impl OpenCodeKeys {
+    /// The key for `provider`: its own, else the single key, if any.
+    pub(crate) fn for_provider(&self, provider: &str) -> Option<&str> {
+        self.by_provider
+            .get(provider)
+            .or(self.single.as_ref())
+            .map(String::as_str)
+    }
 }
 
 impl Credentials {
     /// Read the Credentials, as strictly as [`ResendKey::find`] does, with
     /// the same warning if others can read them. A missing file has no secrets.
     pub fn read() -> Result<Self> {
-        let path = path()?;
+        Self::read_from(path()?)
+    }
+
+    /// Read the Credentials at `path`, as [`Credentials::read`] does.
+    pub(crate) fn read_from(path: PathBuf) -> Result<Self> {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -152,11 +176,11 @@ impl Credentials {
         self.secrets.claude_setup_token.clone()
     }
 
-    /// The saved OpenCode provider key, for a Trial's environment, if there
-    /// is one. Ordinary Runs never receive it. Setup asking for it is a later
-    /// Ticket; a missing key fails an OpenCode Trial before its session.
-    pub fn opencode_api_key(&self) -> Option<String> {
-        self.secrets.opencode_api_key.clone()
+    /// The saved OpenCode provider keys, for a Trial's environment. Ordinary
+    /// Runs never receive them. Setup asking for them is a later Ticket; a
+    /// missing key fails an OpenCode Trial before its session.
+    pub(crate) fn opencode_keys(&self) -> OpenCodeKeys {
+        self.secrets.opencode.clone()
     }
 
     pub fn has_fleet_token(&self, name: &str) -> bool {
@@ -288,8 +312,9 @@ fn path() -> Result<PathBuf> {
 }
 
 /// `resend.key` in `text`, the contents of `file`, if it is there and not
-/// empty. Also accepts `claude.setup_token` and `opencode.api_key`, reserved
-/// for Trials. Any other section or key is an error, as in the User config.
+/// empty. Also accepts `claude.setup_token`, `opencode.api_key` and the
+/// `[opencode.keys]` table, reserved for Trials. Any other section or key is
+/// an error, as in the User config.
 fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let table: Table = text
         .parse()
@@ -323,10 +348,26 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
                     bail!("claude.setup_token must be a quoted Claude setup token in {file}")
                 }
                 ("opencode", "api_key", Value::String(api_key)) => {
-                    found.opencode_api_key = nonempty(api_key);
+                    found.opencode.single = nonempty(api_key);
                 }
                 ("opencode", "api_key", _) => {
                     bail!("opencode.api_key must be a quoted OpenCode provider key in {file}")
+                }
+                ("opencode", "keys", Value::Table(keys)) => {
+                    for (provider, key) in keys {
+                        let Value::String(key) = key else {
+                            bail!(
+                                "opencode.keys.{provider} must be a quoted OpenCode \
+                                 provider key in {file}"
+                            )
+                        };
+                        if let Some(key) = nonempty(key) {
+                            found.opencode.by_provider.insert(provider.to_owned(), key);
+                        }
+                    }
+                }
+                ("opencode", "keys", _) => {
+                    bail!("opencode.keys must be the section [opencode.keys] in {file}")
                 }
                 _ => bail!("unknown key {section}.{key} in {file}"),
             }
@@ -425,6 +466,11 @@ mod tests {
             ("[resend]\nkey = true\n", "resend.key"),
             ("resend = 1\n", "resend must be the section [resend]"),
             ("[opencode]\napi_key = true\n", "opencode.api_key"),
+            (
+                "[opencode]\nkeys = \"x\"\n",
+                "opencode.keys must be the section",
+            ),
+            ("[opencode.keys]\nbaseten = true\n", "opencode.keys.baseten"),
             ("[opencode]\nunknown = \"x\"\n", "opencode.unknown"),
             ("[email]\n", "unknown section [email]"),
             ("key = \"re_file_456\"\n", "unknown key key"),
@@ -450,8 +496,8 @@ mod tests {
             Some("sk-ant-oat01-secret".to_string())
         );
         assert_eq!(
-            found.opencode_api_key,
-            Some("opencode-provider-key".to_string())
+            found.opencode.for_provider("anthropic"),
+            Some("opencode-provider-key")
         );
         for text in [
             "",
@@ -460,9 +506,36 @@ mod tests {
             "[claude]\nsetup_token = \"\"\n",
         ] {
             let found = parse(text, &file).unwrap();
-            assert_eq!(found.opencode_api_key, None, "{text:?}");
+            assert_eq!(found.opencode.for_provider("anthropic"), None, "{text:?}");
             assert_eq!(found.claude_setup_token, None, "{text:?}");
         }
+    }
+
+    #[test]
+    fn an_opencode_provider_takes_its_own_key_else_the_single_one() {
+        let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
+
+        let keys = parse(
+            "[opencode]\napi_key = \"single-key\"\n\
+             [opencode.keys]\nfireworks-ai = \"fireworks-key\"\nbaseten = \"baseten-key\"\nxai = \"\"\n",
+            &file,
+        )
+        .unwrap()
+        .opencode;
+        for (provider, key) in [
+            ("fireworks-ai", "fireworks-key"),
+            ("baseten", "baseten-key"),
+            ("anthropic", "single-key"),
+            ("xai", "single-key"),
+        ] {
+            assert_eq!(keys.for_provider(provider), Some(key), "{provider}");
+        }
+
+        let keys = parse("[opencode.keys]\nbaseten = \"baseten-key\"\n", &file)
+            .unwrap()
+            .opencode;
+        assert_eq!(keys.for_provider("baseten"), Some("baseten-key"));
+        assert_eq!(keys.for_provider("fireworks-ai"), None);
     }
 
     #[test]
@@ -477,7 +550,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            parse(&saved, &file).unwrap().opencode_api_key.as_deref(),
+            parse(&saved, &file)
+                .unwrap()
+                .opencode
+                .for_provider("anthropic"),
             Some("opencode-provider-key")
         );
         assert_eq!(

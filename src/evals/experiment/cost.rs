@@ -11,8 +11,11 @@ use super::trial_results::files::{self, Files, Native};
 use super::{Arm, TrialResult, store, trial_results, workers};
 use crate::progress;
 use crate::trial::Outcome;
+use crate::trial::accounting::Prices;
 
 const QUESTION: &str = "Run these Trials? [y/N] ";
+/// Asked instead when every Trial has run and only Grader panel calls remain.
+const PANEL_QUESTION: &str = "Run the remaining Grader panel sessions? [y/N] ";
 
 /// Show the remaining Trials' cost, then ask on a terminal unless `yes`.
 /// Declining returns an error before any Arm is built.
@@ -33,8 +36,16 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     if yes || !std::io::stdin().is_terminal() {
         return Ok(());
     }
+    let (question, declined) = if plan.remaining() == 0 {
+        (
+            PANEL_QUESTION,
+            "Experiment declined; no Grader panel sessions were run",
+        )
+    } else {
+        (QUESTION, "Experiment declined; no Trials were run")
+    };
     let mut stderr = std::io::stderr();
-    let _ = write!(stderr, "{QUESTION}");
+    let _ = write!(stderr, "{question}");
     let _ = stderr.flush();
     let answer = crate::terminal::line()?;
     if answer.is_none() {
@@ -42,27 +53,33 @@ pub(super) fn confirm(experiment: &store::Stored, yes: bool) -> Result<()> {
     }
     match answer.as_deref().map(str::trim) {
         Some("y" | "yes") => Ok(()),
-        _ => bail!("Experiment declined; no Trials were run"),
+        _ => bail!("{declined}"),
     }
 }
 
-/// Completed Trials' minutes, by suite and Harness.
-type History = BTreeMap<(String, String), TrialMinutes>;
+/// Completed Trials' measurements, by suite and exact Arm setup.
+type History = BTreeMap<(String, String), TrialMeasurements>;
 
 #[derive(Clone, Copy, Default)]
-struct TrialMinutes {
-    total: f64,
+struct TrialMeasurements {
+    total_minutes: f64,
     trials: usize,
+    cost_usd: f64,
+    priced_trials: usize,
 }
 
-impl TrialMinutes {
-    fn add(&mut self, minutes: f64) {
-        self.total += minutes;
+impl TrialMeasurements {
+    fn add(&mut self, minutes: f64, cost_usd: Option<f64>) {
+        self.total_minutes += minutes;
         self.trials += 1;
+        if let Some(cost) = cost_usd {
+            self.cost_usd += cost;
+            self.priced_trials += 1;
+        }
     }
 
-    fn per_trial(self) -> f64 {
-        self.total / self.trials as f64
+    fn minutes_per_trial(self) -> f64 {
+        self.total_minutes / self.trials as f64
     }
 }
 
@@ -88,15 +105,22 @@ fn history(files: &impl Files, experiments: &Path, current: &str) -> History {
         };
         for result in results.iter().map(trial_results::Terminal::result) {
             if let Some(minutes) = completed_minutes(result) {
-                let harness = &stored.description.setup(result.arm).harness;
+                let setup = stored.description.setup(result.arm);
                 history
-                    .entry((result.suite.clone(), harness.clone()))
+                    .entry(history_key(&result.suite, setup))
                     .or_default()
-                    .add(minutes);
+                    .add(minutes, super::accounting::trial_total(result).cost_usd);
             }
         }
     }
     history
+}
+
+fn history_key(suite: &str, setup: &super::Setup) -> (String, String) {
+    (
+        suite.into(),
+        serde_json::to_string(setup).expect("Arm setup JSON"),
+    )
 }
 
 /// Every attempt's minutes of a Trial that completed, not void, as the
@@ -117,6 +141,71 @@ struct Plan {
     total: usize,
     timeout_minutes: f64,
     groups: Vec<Group>,
+    seats: Vec<SeatEstimate>,
+    spending_limit: Option<f64>,
+}
+
+/// The remaining sessions of one Grader panel seat.
+struct SeatEstimate {
+    name: String,
+    model: String,
+    sessions: usize,
+    pairs: usize,
+    price: Option<SessionPrice>,
+}
+
+/// What one of a seat's sessions is expected to cost.
+#[derive(Clone, Copy)]
+enum SessionPrice {
+    /// The mean of the seat's sessions priced in this Experiment.
+    Measured(f64),
+    /// [`ASSUMED_SESSION`] priced from the frozen table.
+    Assumed(f64),
+}
+
+impl SessionPrice {
+    fn usd(self) -> f64 {
+        match self {
+            Self::Measured(usd) | Self::Assumed(usd) => usd,
+        }
+    }
+
+    fn basis(self) -> String {
+        match self {
+            Self::Measured(_) => "session measured in this Experiment".into(),
+            Self::Assumed(_) => format!(
+                "assumed {}k-input, {}k-output session",
+                (ASSUMED_SESSION.input + ASSUMED_SESSION.cache_read) / 1000.0,
+                ASSUMED_SESSION.output / 1000.0
+            ),
+        }
+    }
+}
+
+/// A session's tokens: uncached input, cache reads and output.
+struct SessionTokens {
+    input: f64,
+    cache_read: f64,
+    output: f64,
+}
+
+/// The research's assumed pairwise Grader session, until one is measured:
+/// 400k input tokens, 80% of them cache reads, and 15k output tokens.
+const ASSUMED_SESSION: SessionTokens = SessionTokens {
+    input: 80_000.0,
+    cache_read: 320_000.0,
+    output: 15_000.0,
+};
+
+fn assumed_session(prices: Option<&Prices>, model: &str) -> Option<f64> {
+    let rate = prices?.models.get(model)?;
+    let tokens = &ASSUMED_SESSION;
+    Some(
+        (tokens.input * rate.input
+            + tokens.cache_read * rate.cache_read
+            + tokens.output * rate.output)
+            / 1_000_000.0,
+    )
 }
 
 /// The remaining Trials of one suite and Arm.
@@ -126,14 +215,17 @@ struct Group {
     harness: String,
     trials: usize,
     mean: Option<f64>,
+    mean_cost: Option<f64>,
 }
 
 impl Plan {
-    /// `None` when every Trial already has a result.
+    /// `None` when every Trial already has a result and the Grader panel
+    /// has made every call.
     fn new(experiment: &store::Stored, history: &History) -> Option<Self> {
         let description = &experiment.description;
         let remaining = workers::remaining(experiment);
-        if remaining.is_empty() {
+        let seats = seats(experiment);
+        if remaining.is_empty() && seats.is_empty() {
             return None;
         }
         let mut groups = Vec::new();
@@ -151,8 +243,12 @@ impl Plan {
                         harness: setup.harness.clone(),
                         trials,
                         mean: history
-                            .get(&(suite.clone(), setup.harness.clone()))
-                            .map(|minutes| minutes.per_trial()),
+                            .get(&history_key(suite, setup))
+                            .map(|measurements| measurements.minutes_per_trial()),
+                        mean_cost: history
+                            .get(&history_key(suite, setup))
+                            .filter(|past| past.priced_trials == past.trials)
+                            .map(|past| past.cost_usd / past.trials as f64),
                     });
                 }
             }
@@ -167,6 +263,12 @@ impl Plan {
             total,
             timeout_minutes: description.bar.timeout_seconds as f64 / 60.0,
             groups,
+            seats,
+            spending_limit: description
+                .bar
+                .panel
+                .as_ref()
+                .and_then(|panel| panel.spending_limit),
         })
     }
 
@@ -196,6 +298,10 @@ impl Plan {
                 ),
                 None => "no earlier Trials to estimate from".into(),
             };
+            let estimate = match group.mean_cost {
+                Some(cost) => format!("{estimate}, ${:.6}", cost * group.trials as f64),
+                None => estimate,
+            };
             lines.push(format!(
                 "{}, {arm} arm ({}): {}, {estimate}",
                 group.suite,
@@ -203,32 +309,123 @@ impl Plan {
                 trials(group.trials)
             ));
         }
-        lines.push(format!(
-            "Worst case: {} session-minutes ({} × the Bar's {}-minute timeout)",
-            minutes(remaining as f64 * self.timeout_minutes),
-            trials(remaining),
-            minutes(self.timeout_minutes)
-        ));
-        let estimates: Option<Vec<f64>> = self
-            .groups
-            .iter()
-            .map(|group| group.mean.map(|mean| mean * group.trials as f64))
-            .collect();
-        if let Some(estimates) = estimates {
+        if remaining > 0 {
             lines.push(format!(
-                "Estimate: {} session-minutes, from this machine's earlier Experiments",
-                minutes(estimates.iter().sum())
+                "Worst case: {} session-minutes ({} × the Bar's {}-minute timeout)",
+                minutes(remaining as f64 * self.timeout_minutes),
+                trials(remaining),
+                minutes(self.timeout_minutes)
+            ));
+            let estimates: Option<Vec<f64>> = self
+                .groups
+                .iter()
+                .map(|group| group.mean.map(|mean| mean * group.trials as f64))
+                .collect();
+            if let Some(estimates) = estimates {
+                lines.push(format!(
+                    "Estimate: {} session-minutes, from this machine's earlier Experiments",
+                    minutes(estimates.iter().sum())
+                ));
+            }
+        }
+        for (index, seat) in self.seats.iter().enumerate() {
+            let sessions = if seat.sessions == 2 * seat.pairs {
+                format!(
+                    "{} ({} × 2 orders)",
+                    counted(seat.sessions, "session"),
+                    counted(seat.pairs, "pair")
+                )
+            } else {
+                counted(seat.sessions, "session")
+            };
+            let estimate = match seat.price {
+                Some(price) => format!(
+                    "estimate ${:.6} at ${:.6} per {}",
+                    price.usd() * seat.sessions as f64,
+                    price.usd(),
+                    price.basis()
+                ),
+                None => format!("no frozen price for Model {}", seat.model),
+            };
+            lines.push(format!(
+                "Grader panel seat {} ({}): {sessions}, {estimate}",
+                index + 1,
+                seat.name
+            ));
+        }
+        if !self.seats.is_empty() {
+            let priced: f64 = self
+                .seats
+                .iter()
+                .filter_map(|seat| seat.price.map(|price| price.usd() * seat.sessions as f64))
+                .sum();
+            lines.push(format!(
+                "Grader panel estimate: ${priced:.6} for priced seats, apart from the Arms"
+            ));
+        }
+        if let Some(limit) = self.spending_limit {
+            lines.push(format!(
+                "Grader panel spending limit: ${limit:.6} per run, then grading pauses"
             ));
         }
         lines
     }
 }
 
+/// Each panel seat with sessions still to run, priced from the frozen table:
+/// at this Experiment's measured mean once its sessions are all priced,
+/// otherwise at the assumed session size.
+fn seats(experiment: &store::Stored) -> Vec<SeatEstimate> {
+    let Some(panel) = &experiment.description.bar.panel else {
+        return Vec::new();
+    };
+    let prices = experiment.pricing.as_ref();
+    // Unreadable spend only loses the measured price, as unreadable history
+    // narrows the Arms' estimate.
+    let spent = super::panel::spend(
+        &Native,
+        &experiment.directory,
+        &experiment.description,
+        prices,
+    )
+    .ok()
+    .flatten();
+    let remaining = super::panel::remaining(experiment);
+    if remaining.iter().all(|(sessions, _)| *sessions == 0) {
+        return Vec::new();
+    }
+    panel
+        .seats
+        .iter()
+        .zip(remaining)
+        .enumerate()
+        .map(|(index, (seat, (sessions, pairs)))| {
+            let measured = spent
+                .as_ref()
+                .and_then(|spent| spent.seats[index].mean_usd());
+            SeatEstimate {
+                name: format!("{}/{}", seat.harness, seat.model),
+                model: seat.model.clone(),
+                sessions,
+                pairs,
+                price: measured
+                    .map(SessionPrice::Measured)
+                    .or_else(|| assumed_session(prices, &seat.model).map(SessionPrice::Assumed)),
+            }
+        })
+        .collect()
+}
+
 fn trials(count: usize) -> String {
+    counted(count, "Trial")
+}
+
+/// `count` of `noun`, adding `s` unless there is one.
+pub(super) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
-        "1 Trial".into()
+        format!("1 {noun}")
     } else {
-        format!("{count} Trials")
+        format!("{count} {noun}s")
     }
 }
 

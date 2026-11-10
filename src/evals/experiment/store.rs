@@ -19,6 +19,8 @@ pub(super) struct Stored {
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::trial::accounting::Prices>,
     #[serde(flatten)]
     pub details: Details,
     pub(super) created_at: String,
@@ -32,6 +34,8 @@ pub(super) struct Stored {
     pub rechecks: super::rechecks::History,
     #[serde(default)]
     pub pending_rechecks: Vec<super::grading::Pending>,
+    #[serde(default)]
+    pub leak_decisions: super::leaks::History,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -46,6 +50,8 @@ pub(crate) struct View {
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
+    pub pricing: Option<crate::trial::accounting::Prices>,
+    pub accounting: super::accounting::Report,
     #[serde(flatten)]
     pub details: Details,
     pub created_at: String,
@@ -59,7 +65,15 @@ pub(crate) struct View {
     pub minutes: Minutes,
     pub usage: super::usage::Arms,
     pub voids: Voids,
+    pub outcomes: Outcomes,
     pub findings: Vec<String>,
+    pub leak_hits: Vec<super::leaks::Hit>,
+    pub pairs: Vec<super::pairs::Pair>,
+    pub panel: Vec<super::panel::PanelPair>,
+    /// The Grader panel's spend, apart from the Arms' `accounting`.
+    pub panel_spend: Option<super::panel::Spend>,
+    /// People's blind pairwise calls, beside the Verdict.
+    pub people: super::pairwise::People,
 }
 
 /// Facts for readers; these never participate in Experiment identity or the Bar.
@@ -87,6 +101,45 @@ pub(crate) struct Details {
 pub(crate) struct TaskName {
     pub suite: String,
     pub name: String,
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct Outcomes {
+    pub baseline: OutcomeCounts,
+    pub candidate: OutcomeCounts,
+}
+
+#[derive(Default, Serialize)]
+pub(crate) struct OutcomeCounts {
+    pub delivered: usize,
+    pub stopped_to_ask: usize,
+    pub failed: usize,
+}
+
+impl Outcomes {
+    pub(super) fn of(results: &[TrialResult], tasks: &[Task]) -> Self {
+        let mut counts = Self::default();
+        for result in results {
+            if !tasks.iter().any(|task| {
+                task.suite == result.suite
+                    && task.name == result.task
+                    && task.manifest.session == crate::evals::format::Session::Process
+            }) {
+                continue;
+            }
+            let arm = match result.arm {
+                Arm::Baseline => &mut counts.baseline,
+                Arm::Candidate => &mut counts.candidate,
+            };
+            match result.outcome {
+                Outcome::Delivered => arm.delivered += 1,
+                Outcome::StoppedToAsk => arm.stopped_to_ask += 1,
+                Outcome::Failed => arm.failed += 1,
+                Outcome::Succeeded | Outcome::Void => {}
+            }
+        }
+        counts
+    }
 }
 
 #[derive(Default, Serialize)]
@@ -262,6 +315,7 @@ impl Stored {
                 format: 1,
                 description,
                 state: State::Prepared,
+                pricing: Some(crate::trial::accounting::Prices::default()),
                 details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
                 name: None,
@@ -269,6 +323,7 @@ impl Stored {
                 verdict: None,
                 rechecks: BTreeMap::new(),
                 pending_rechecks: Vec::new(),
+                leak_decisions: BTreeMap::new(),
                 directory: PathBuf::new(),
                 lock: None,
             }
@@ -316,21 +371,63 @@ impl Stored {
     }
 
     pub fn results(&self) -> Result<Vec<TrialResult>> {
-        Ok(trial_results::effective(
-            trial_results::terminal(&self.directory)?,
-            &self.rechecks,
-        ))
+        let mut results =
+            trial_results::effective(trial_results::terminal(&self.directory)?, &self.rechecks);
+        super::leaks::apply(&mut results, &self.leak_decisions);
+        Ok(results)
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
-        let (verdict, pending) = super::grading::assess(
+        let results = self.results()?;
+        let (mut verdict, pending) = super::grading::assess(
             &self.tasks,
-            &self.results()?,
+            &results,
             &self.description.bar,
             &self.description.baseline,
+            &self.decided()?,
         )?;
+        if super::leaks::pending(&results) {
+            verdict.verdict = super::Conclusion::WaitingOnLeaks;
+            verdict.update_line();
+        }
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
+        Ok(())
+    }
+
+    fn decided(&self) -> Result<super::deciders::Decided> {
+        super::deciders::read(&Native, &self.directory, &self.description, &self.tasks)
+    }
+
+    /// Recalculate a completed Experiment's Verdict after a people's call
+    /// that counts in it. A running Experiment recalculates as it completes.
+    pub(super) fn refresh_completed(root: &Path, id: &str) -> Result<()> {
+        let directory = Self::directory(root, id)?;
+        if Self::metadata(&Native, directory.clone(), id)?.state != State::Completed {
+            return Ok(());
+        }
+        // Rechecks and leak decisions hold this lock only briefly.
+        let lock = File::create(directory.join("lock"))?;
+        lock.lock()?;
+        let mut stored = Self::metadata(&Native, directory, id)?;
+        stored.lock = Some(lock);
+        stored.refresh_verdict()?;
+        stored.publish_decided()
+    }
+
+    /// Save a stopped Experiment after a human decision, release its Trial
+    /// repositories once the Verdict is final, and update its Command record.
+    pub(super) fn publish_decided(&mut self) -> Result<()> {
+        self.save()?;
+        super::retention::repositories(self);
+        if let (Some(log), Some(verdict)) = (&self.details.command_log, &self.verdict)
+            && let Err(error) =
+                crate::logs::experiment_rechecked(log, &self.description.id, verdict.outcome())
+        {
+            crate::progress::step(format!(
+                "warning: could not update the Command record: {error:#}"
+            ));
+        }
         Ok(())
     }
 
@@ -348,6 +445,7 @@ impl Stored {
                     &self.results()?,
                     &self.description.bar,
                     &self.description.baseline,
+                    &self.decided()?,
                 )?;
                 self.pending_rechecks = pending;
             }
@@ -421,6 +519,21 @@ impl Stored {
         if json {
             Ok(serde_json::to_string(&view)?)
         } else {
+            let mut selection = self
+                .verdict
+                .as_ref()
+                .map_or(String::new(), |verdict| verdict.selection_report());
+            if self.description.baseline.process.is_some()
+                || self.description.candidate.process.is_some()
+            {
+                selection.push_str(&format!("\nProcess Trial outcomes (stopped-to-ask counts as failed):\nBaseline: {} delivered, {} stopped-to-ask, {} failed\nCandidate: {} delivered, {} stopped-to-ask, {} failed", view.outcomes.baseline.delivered, view.outcomes.baseline.stopped_to_ask, view.outcomes.baseline.failed, view.outcomes.candidate.delivered, view.outcomes.candidate.stopped_to_ask, view.outcomes.candidate.failed));
+            }
+            if self.pricing.is_some() {
+                selection.push_str(&view.accounting.render());
+            }
+            if let Some(spend) = &view.panel_spend {
+                selection.push_str(&spend.render());
+            }
             Ok(format!(
                 "{} · {} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}
 Baseline: {}
@@ -433,7 +546,7 @@ Candidate: {}{}{}",
                 view.results.len(),
                 self.verdict
                     .as_ref()
-                    .map_or("pending", |verdict| verdict.outcome())
+                    .map_or("pending", |verdict| verdict.line.as_deref().unwrap_or_else(|| verdict.outcome()))
                     .replace('_', " "),
                 self.verdict
                     .as_ref()
@@ -449,16 +562,25 @@ Candidate: {}{}{}",
                 view.usage.candidate(),
                 view.voids.baseline,
                 view.voids.candidate,
-                view.findings
+                self.verdict
+                    .as_ref()
+                    .and_then(|verdict| verdict.deciders.as_ref())
+                    .map(|deciders| format!("\n{}", deciders.line()))
+                    .into_iter()
+                    .chain(view.findings
                     .iter()
-                    .map(|finding| format!("\nFinding: {finding}"))
+                    .map(|finding| format!("\nFinding: {finding}")))
                     .chain(
                         view.pending_rechecks
                             .iter()
                             .map(|pending| format!("\nRecheck: {pending}"))
                     )
+                    .chain(view.leak_hits.iter().map(|hit| format!("\nLeak hit {}: {} · {} · {} · Session {} line {}{}", hit.id, hit.status(), hit.kind, hit.identifier, hit.session, hit.line, hit.decision.as_ref().map_or_else(|| format!("\nthirdshift experiments {} --leak {} confirm|dismiss --reason '…'", self.description.id, hit.id), |decision| format!(" · {} · {} · {}", decision.reviewer, decision.recorded_at, decision.reason)))))
+                    .chain(std::iter::once(super::pairs::lines(&view.pairs)))
+                    .chain(std::iter::once(super::panel::lines(&view.panel)))
+                    .chain(std::iter::once(super::pairwise::lines(&view.people)))
                     .collect::<String>(),
-                self.verdict.as_ref().map_or(String::new(), |verdict| verdict.selection_report())
+                selection
             ))
         }
     }

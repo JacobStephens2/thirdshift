@@ -93,6 +93,7 @@ impl Drop for Fixture {
 }
 
 fn execute_session(root: &Path) -> anyhow::Error {
+    let _skills = skills::testing::FactorySkills::hold();
     interrupt::install().unwrap();
     logs::begin(logs::Begin::ChildRun(
         "fixture",
@@ -356,6 +357,7 @@ fn with_review_sessions(
     harness: Harness,
     steps: impl FnOnce(&Sessions) -> Result<()>,
 ) -> (Result<()>, PathBuf) {
+    let _skills = skills::testing::FactorySkills::hold();
     logs::begin(logs::Begin::ChildRun(
         "fixture",
         crate::logs::CommandKind::Issue,
@@ -433,6 +435,29 @@ fn keeps_review_reports_beside_each_harness_session_log() {
             .unwrap();
         assert!(output.status.success(), "{harness:?}: {output:?}");
     }
+}
+
+#[test]
+fn session_subprocess_removes_its_factory_skills() {
+    let fixture = review_fixture(LEAVE_REPORTS);
+    let tmp = fixture.path("tmp");
+    fs::create_dir(&tmp).unwrap();
+    let output = fixture
+        .command("session::execution_tests::keeps_review_reports_beside_each_harness_session_log")
+        .env("THIRDSHIFT_REVIEW_TEST_HARNESS", "codex")
+        .env("TMPDIR", &tmp)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let leftovers: Vec<_> = fs::read_dir(&tmp)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().starts_with("thirdshift-skills-"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "Factory skills left behind: {leftovers:?}"
+    );
 }
 
 #[test]

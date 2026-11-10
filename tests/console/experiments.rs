@@ -17,6 +17,112 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn console_experiment_does_not_claim_efficiency_is_outside_the_bar() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "c".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["bar"]["cost_ceiling"] = json!(2.0);
+    fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(!html.contains("Efficiency stays outside the Bar"), "{html}");
+}
+
+#[test]
+fn console_experiment_shows_pair_evidence_as_disagreements_not_scores() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    fs::create_dir_all(directory.join("pairs")).unwrap();
+    let side = |files: &[&str], base: Option<bool>, other: Option<bool>| {
+        json!({"test_files": files, "fails_on_base": base, "passes_on_other": other,
+            "disagreement": other == Some(false), "base": [], "cross": [], "error": null})
+    };
+    fs::write(
+        directory.join("pairs/fixture--pair--0.json"),
+        serde_json::to_vec(&json!({
+            "suite": "process", "task": "fixture", "trial": 0,
+            "baseline": side(&["test_new_baseline.py"], Some(true), Some(true)),
+            "candidate": side(&["test_new_<candidate>.py"], Some(false), Some(false)),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut unfinished = side(&["test_slow.py"], Some(true), None);
+    unfinished["cross"] = json!([{"command": ["python3", "test_slow.py"], "passed": false,
+        "reason": "timed out"}]);
+    fs::write(
+        directory.join("pairs/fixture--pair--1.json"),
+        serde_json::to_vec(&json!({
+            "suite": "process", "task": "fixture", "trial": 1,
+            "baseline": unfinished,
+            "candidate": side(&[], None, None),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    let section = html
+        .split_once("<section aria-label=\"Pair evidence\">")
+        .expect("pair evidence section")
+        .1
+        .split_once("</section>")
+        .unwrap()
+        .0;
+    assert!(section.contains("process/fixture #1"), "{section}");
+    assert!(
+        section.contains("<code>test_new_baseline.py</code>"),
+        "{section}"
+    );
+    assert!(
+        section.contains("test_new_&#60;candidate&#62;.py"),
+        "{section}"
+    );
+    assert!(section.contains("Fails"), "{section}");
+    assert!(section.contains("Passes"), "{section}");
+    assert!(section.contains("Fails: disagreement"), "{section}");
+    assert!(section.contains("changes no Score"), "{section}");
+    assert!(
+        section.contains("process/fixture #2</td><td>Baseline</td><td><code>test_slow.py</code></td><td>Fails</td><td>Did not finish</td>"),
+        "{section}"
+    );
+    assert!(
+        section.contains("<td>Candidate</td><td>None</td><td>—</td><td>—</td>"),
+        "{section}"
+    );
+}
+
+#[test]
+fn openapi_experiment_format_matches_served_list_and_detail() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let view = api::json(console.get(&format!("/api/v1/experiments/{id}")));
+    let document = api::json(console.get("/api/v1/openapi.json"));
+    for (path, list) in [
+        ("/api/v1/experiments", true),
+        ("/api/v1/experiments/{id}", false),
+    ] {
+        let mut schema = &document["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"];
+        if list {
+            schema = &schema["items"];
+        }
+        assert_eq!(
+            schema["properties"]["format"]["const"], view["format"],
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn api_experiment_changes_and_rechecks_match_cli_views() {
     use sha2::{Digest, Sha256};
     let home = tempfile::tempdir().unwrap();
@@ -90,6 +196,56 @@ fn api_experiment_changes_and_rechecks_match_cli_views() {
     assert_eq!(response.status(), 422);
     assert!(response.text().unwrap().contains("stale fingerprint"));
     assert!(pending["fingerprint"].is_string());
+}
+
+#[test]
+fn api_leak_decisions_require_act_scope_and_retain_the_token_reviewer() {
+    use sha2::{Digest, Sha256};
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    let hit = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["state"] = json!("completed");
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let key = format!("{:x}--baseline--0", Sha256::digest(b"code-review\0fixture"));
+    fs::create_dir_all(directory.join("results")).unwrap();
+    fs::write(directory.join("results").join(format!("{key}.json")), serde_json::to_vec(&json!({
+        "suite":"code-review", "task":"fixture", "arm":"baseline", "trial":0,
+        "outcome":"delivered", "score":{"passed":true,"wrong_finding":false,"checks":[]}, "attempts":[],
+        "leaks":[{"id":hit,"trial_id":key,"attempt":0,"session":"f".repeat(64),"kind":"merge_commit","identifier":"abcdef123456","line":1}]
+    })).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let reader = tokens::create(home.path(), "reader", &[]);
+    let actor = tokens::create(home.path(), "reviewer", &["--scopes", "act"]);
+    let post = |token: &str| {
+        reqwest::blocking::Client::new()
+            .post(format!(
+                "{}/api/v1/experiments/{id}/leaks/{hit}",
+                console.address
+            ))
+            .bearer_auth(token)
+            .form(&[("decision", "dismiss"), ("reason", "Unrelated reference")])
+            .send()
+            .unwrap()
+    };
+    assert_eq!(post(&reader).status(), 403);
+    let shown = api::json(post(&actor));
+    assert_eq!(
+        shown["leak_hits"][0]["decision"]["reviewer"]["who"],
+        "token reviewer"
+    );
+    assert_eq!(
+        shown["leak_hits"][0]["decision"]["reviewer"]["from_console"],
+        true
+    );
+    assert_eq!(
+        shown,
+        api::cli(home.path(), &["experiments", &id, "--json"])
+    );
+    assert_eq!(post(&actor).status(), 422);
 }
 
 #[test]
@@ -810,4 +966,50 @@ fn an_experiment_whose_harness_versions_differ_is_not_named_a_slash_a() {
         "{detail}"
     );
     assert!(!detail.contains("<h1>A/A at 71c7a497</h1>"), "{detail}");
+}
+
+#[test]
+fn a_verdict_on_the_peoples_sample_alone_counts_pairs_not_eval_tasks() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "8".repeat(64);
+    let path = fixture(home.path(), &id, "2026-10-29T10:00:00Z").join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut statistics = saved["bar"].clone();
+    statistics["trials_per_task"] = json!(1);
+    statistics["prediction"] =
+        json!({"simulations": 200, "interval_draws": 512, "max_additional_tasks": 2000});
+    saved["state"] = json!("completed");
+    let metric = json!({"difference_counts": [0, 4, 0], "verdict": "inconclusive",
+        "more_tasks": {"target_probability": 0.8, "additional_tasks": 9, "clear_probabilities": []},
+        "interval": {"lower": -0.3, "upper": 0.3}});
+    saved["verdict"] = json!({
+        "verdict": "inconclusive", "provisional_verdict": "inconclusive", "borderline_trials": 0,
+        "suites": {"code-review": {
+            "bar": statistics, "thirdshift_version": "fixture", "method": "paired-dirichlet-v3",
+            "accuracy": metric, "wrong_findings": metric, "verdict": "inconclusive",
+            "retained_tasks": 4, "dropped_tasks": 0, "pass_cubed": null
+        }}
+    });
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    for (people, units) in [
+        (json!(null), "Eval tasks"),
+        (
+            json!({"role": "counted", "readers": ["ann@example.com"], "sample": 4, "overlap": 0}),
+            "pairs",
+        ),
+    ] {
+        saved["bar"]["people"] = people;
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+        assert!(
+            html.contains(&format!("About 9 more {units} would settle it")),
+            "{units}: {html}"
+        );
+        assert!(
+            html.contains(&format!("4 retained {units}; 0 dropped")),
+            "{units}: {html}"
+        );
+    }
 }

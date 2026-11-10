@@ -297,7 +297,13 @@ fn unsuccessful(value: &Value) -> bool {
         outcome.contains("failed")
             || matches!(
                 outcome,
-                "interrupted" | "review required" | "fail" | "inconclusive" | "waiting_on_rechecks"
+                "interrupted"
+                    | "review required"
+                    | "fail"
+                    | "inconclusive"
+                    | "waiting_on_rechecks"
+                    | "waiting_on_leaks"
+                    | "waiting_on_people"
             )
     })
 }
@@ -552,6 +558,8 @@ mod tests {
             "fail",
             "inconclusive",
             "waiting_on_rechecks",
+            "waiting_on_leaks",
+            "waiting_on_people",
         ] {
             let html = render_peek(json!({
                 "state": "ended", "outcome": outcome, "cause": "Command could not finish"

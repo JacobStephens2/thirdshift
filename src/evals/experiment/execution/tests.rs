@@ -117,6 +117,8 @@ impl Fixture {
             task,
             prepared,
             setup: Setup {
+                process: None,
+                process_digest: None,
                 commit: base,
                 harness: "opencode".into(),
                 model: None,
@@ -524,6 +526,38 @@ for path in pathlib.Path(tempfile.gettempdir()).glob('prepared-grader-*/reposito
 }
 
 #[test]
+fn the_prepared_grader_snapshot_directory_is_private_to_its_owner() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(SUCCESS);
+    let tmp = fixture.root.join("grader-tmp");
+    fs::create_dir(&tmp).unwrap();
+    // SAFETY: the test process is single-threaded until the Arm is spawned,
+    // and this env is the snapshot directory both sides must share.
+    unsafe { std::env::set_var("TMPDIR", &tmp) };
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, _, _| {
+            let snapshots: Vec<_> = fs::read_dir(&tmp)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("prepared-grader-")
+                })
+                .collect();
+            assert_eq!(snapshots.len(), 1, "one prepared grader snapshot");
+            let mode = snapshots[0].metadata().unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "snapshot mode is {mode:03o}");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn input_symlink_to_a_fifo_voids_without_blocking_the_supervisor() {
     if isolated(&[]) {
         return;
@@ -658,6 +692,66 @@ fn completed_score_and_evidence_live_through_publication() {
     let spans = fs::read_to_string(attempt.join("trace.spans.jsonl")).unwrap();
     assert!(spans.contains("Grader"));
     assert!(spans.contains("succeeded"));
+}
+
+#[test]
+fn a_claimed_interruption_cannot_hide_a_changed_repository() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(&format!(
+        r#"
+(repository / '{file}').write_text('Edited input')
+report = output / 'standards.md'
+report.write_text('Review complete.\n')
+print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause='interrupted', cause=None, session_id=None, log=None, model_evidence=None)))
+"#,
+        file = crate::prompt::ISSUE_FILE
+    ));
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(
+                output.outcome == Outcome::Void,
+                "a successful Trial kept a mutated repository by claiming interruption: {:?}",
+                output.void_cause
+            );
+            assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+            assert!(!score.passed, "the mutated Trial was scored as a pass");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn a_delivered_review_that_changes_the_repository_is_voided() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(&format!(
+        r#"
+(repository / '{file}').write_text('Edited input')
+report = output / 'standards.md'
+report.write_text('Review complete.\n')
+print(json.dumps(dict(version=1, outcome='delivered', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
+"#,
+        file = crate::prompt::ISSUE_FILE
+    ));
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(
+                output.outcome == Outcome::Void,
+                "a delivered review Trial kept a mutated repository"
+            );
+            assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+            assert!(
+                !score.passed,
+                "the mutated review Trial was scored as a pass"
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

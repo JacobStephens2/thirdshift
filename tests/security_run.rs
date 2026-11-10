@@ -572,7 +572,7 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
 
 #[test]
 fn public_fix_publishing_cannot_write_github_content_with_any_harness() {
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         let scenario = with_reproduced_findings(&["high"]);
         let before = scenario.gh_state();
         scenario.agent_does_in_session(
@@ -644,7 +644,7 @@ gh pr create --base issue-{spec} --head issue-{ticket} --title 'Bound accepted i
 
 #[test]
 fn unauthenticated_public_publishers_stage_single_fixes_and_specs_with_every_harness() {
-    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
+    for harness in ["claude", "codex", "agy", "grok", "muse", "opencode", "kimi"] {
         for spec in [false, true] {
             let scenario = with_reproduced_findings(&["high"]);
             let mut state = scenario.gh_state();

@@ -13,11 +13,22 @@ use crate::trust::trusted_association;
 const UNTRUSTED_COMMENT: &str =
     "_A comment from an account that is not a Trusted account was left out._";
 
+/// Session text and its trusted body/comment sources, kept separate so
+/// image extraction cannot treat titles or omitted comments as attachments.
+pub(crate) struct SessionIssue {
+    pub markdown: String,
+    pub trusted_bodies: Vec<String>,
+}
+
 impl GitHub {
     /// `issue`'s title, body and every comment, as Markdown for a session to
     /// work from, each comment whose author is not a Trusted account
     /// replaced by [`UNTRUSTED_COMMENT`].
     pub fn issue_for_session(&self, issue: &IssueUrl) -> Result<String> {
+        Ok(self.session_issue(issue)?.markdown)
+    }
+
+    pub(crate) fn session_issue(&self, issue: &IssueUrl) -> Result<SessionIssue> {
         let (json, comments) =
             self.paged_nodes(issue, COMMENTS_QUERY, "comments", "issue comments")?;
         issue_markdown(issue, &json["data"]["repository"]["issue"], &comments)
@@ -26,7 +37,8 @@ impl GitHub {
 
 /// The Markdown [`GitHub::issue_for_session`] gives: `node`'s title and body,
 /// then each of `comments`, oldest first.
-fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<String> {
+fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<SessionIssue> {
+    let mut trusted_bodies = vec![text(node, "body")?.to_string()];
     let mut markdown = format!(
         "# {title}\n\n{url}\n\n{body}\n",
         title = text(node, "title")?,
@@ -39,6 +51,7 @@ fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<
         // A deleted account has no author; its association is not trusted.
         match comment["author"]["login"].as_str() {
             Some(login) if trusted_association(association) => {
+                trusted_bodies.push(text(comment, "body")?.to_string());
                 markdown.push_str(&format!(
                     "Comment by @{login}, {at}:\n\n{body}\n",
                     at = text(comment, "createdAt")?,
@@ -48,7 +61,10 @@ fn issue_markdown(issue: &IssueUrl, node: &Value, comments: &[Value]) -> Result<
             _ => markdown.push_str(&format!("{UNTRUSTED_COMMENT}\n")),
         }
     }
-    Ok(markdown)
+    Ok(SessionIssue {
+        markdown,
+        trusted_bodies,
+    })
 }
 
 /// The text in `node`'s `field`.
@@ -106,7 +122,12 @@ mod tests {
             comment(None, "OWNER", "From a deleted account."),
         ];
 
-        let text = issue_markdown(&seven(), &node, &comments).unwrap();
+        let input = issue_markdown(&seven(), &node, &comments).unwrap();
+        assert_eq!(
+            input.trusted_bodies,
+            ["Make widgets.\n", "Use blue.", "And green.", "Not red.",]
+        );
+        let text = input.markdown;
 
         assert_eq!(
             text,
@@ -129,7 +150,7 @@ mod tests {
     fn an_issue_with_no_comments_is_its_title_and_body() {
         let node = json!({"title": "Add widgets", "body": ""});
 
-        let text = issue_markdown(&seven(), &node, &[]).unwrap();
+        let text = issue_markdown(&seven(), &node, &[]).unwrap().markdown;
 
         assert_eq!(
             text,

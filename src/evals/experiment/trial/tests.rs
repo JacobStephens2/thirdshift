@@ -10,6 +10,7 @@ struct Fixture {
     root: tempfile::TempDir,
     task: Task,
     bar: Bar,
+    leak_decisions: super::super::leaks::History,
     trace: logs::trace::Context,
     signal: PathBuf,
 }
@@ -41,6 +42,7 @@ impl Fixture {
                 },
                 ..Bar::default()
             },
+            leak_decisions: Default::default(),
             trace: logs::trace::Context {
                 trace: logs::trace::id(&[b"trial"]),
                 command: logs::trace::id(&[b"command"]),
@@ -74,6 +76,7 @@ impl Fixture {
         Runner {
             directory: self.root.path(),
             bar: &self.bar,
+            leak_decisions: &self.leak_decisions,
             signal: &self.signal,
             trace: &self.trace,
             execution: Box::new(script),

@@ -1087,10 +1087,17 @@ fn a_piped_report_is_kept_as_data_and_leaves_the_launch_checkout_unchanged() {
 }
 
 #[test]
-fn absent_or_empty_reports_explain_how_to_supply_one_without_starting_a_session() {
+fn empty_report_files_explain_how_to_supply_one_without_starting_a_session() {
     for report in ["", " \n\t"] {
         let scenario = Scenario::new();
-        let result = scenario.run_with_input(&["triage", "--recommend-only"], report);
+        let path = scenario.path("empty-report.txt");
+        std::fs::write(&path, report).unwrap();
+        let result = scenario.run(&[
+            "triage",
+            "--recommend-only",
+            "--file",
+            path.to_str().unwrap(),
+        ]);
         assert_ne!(result.code, Some(0));
         assert!(
             result

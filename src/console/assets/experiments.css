@@ -66,3 +66,8 @@
   .experiment-row > :not(.row-head, .now, .experiment-list-interval) { display: none; }
   .experiment-row .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+.pair-changes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: 16px; }
+.pair-changes > article { min-width: 0; }
+.pair-diff, .pair-ticket { overflow: auto; max-height: 70vh; font-size: 12px; white-space: pre; background: var(--panel); padding: 8px; border-radius: var(--radius); }
+.pair-ticket { white-space: pre-wrap; }
+.pair-calls fieldset { margin: 8px 0; }

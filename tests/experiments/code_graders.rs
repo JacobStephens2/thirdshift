@@ -178,12 +178,32 @@ fn interrupted_check_cleans_up_without_a_score_and_experiment_resumes() {
     let after = fixture.experiment();
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["state"], "completed");
+    assert_eq!(
+        after["accounting"]["baseline"]["sessions"]
+            .as_u64()
+            .unwrap()
+            + after["accounting"]["candidate"]["sessions"]
+                .as_u64()
+                .unwrap(),
+        after["sessions"].as_array().unwrap().len() as u64,
+        "A stop during grading must retain every Session already priced"
+    );
     let results = after["results"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     for result in results {
         assert_eq!(result["outcome"], "succeeded", "{result}");
         assert_eq!(result["score"]["passed"], true, "{result}");
-        assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+        let prior_attempts = before["unfinished_trials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|prior| prior["arm"] == result["arm"])
+            .map_or(0, |prior| prior["attempts"].as_array().unwrap().len());
+        assert_eq!(
+            result["attempts"].as_array().unwrap().len(),
+            prior_attempts + 1,
+            "{result}"
+        );
     }
 }
 

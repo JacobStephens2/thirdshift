@@ -31,18 +31,20 @@
 //! Experiment's storage.
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::harness::Harness;
 use crate::proxy;
-use crate::resend_key::Credentials;
+use crate::resend_key::{Credentials, OpenCodeKeys};
 use crate::{config, interrupt};
 
 pub(crate) mod code_grader;
@@ -96,14 +98,14 @@ impl std::error::Error for NoLogin {}
 #[derive(Default)]
 pub(crate) struct Secrets {
     pub claude_setup_token: Option<String>,
-    pub opencode_api_key: Option<String>,
+    pub opencode_keys: OpenCodeKeys,
 }
 
 impl From<&Credentials> for Secrets {
     fn from(credentials: &Credentials) -> Self {
         Secrets {
             claude_setup_token: credentials.claude_setup_token(),
-            opencode_api_key: credentials.opencode_api_key(),
+            opencode_keys: credentials.opencode_keys(),
         }
     }
 }
@@ -189,7 +191,7 @@ pub(crate) fn for_session(
         skills_dir: &crate::skills::written_out()?,
         harness_binary: binary,
         home: &home,
-        fresh_home: &output_dir.join("home"),
+        fresh_home: &crate::skills::trial_home().unwrap_or_else(|| output_dir.join("home")),
         secrets,
         adapter_env: choice.harness.adapter().environment().to_vec(),
     })
@@ -246,14 +248,31 @@ pub(crate) struct Launch {
 }
 
 impl Launch {
+    /// Bind private output needed by a local Process Step, without exposing
+    /// the Trial's other session artifacts or the factory logs.
+    pub(crate) fn with_writable_directory(mut self, directory: &Path) -> Self {
+        self.argv.extend([
+            "--bind".into(),
+            directory.as_os_str().to_owned(),
+            directory.as_os_str().to_owned(),
+        ]);
+        self
+    }
+
     /// Publish a session path to both bwrap and the retained-session reader.
-    pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
+    pub(crate) fn set_env(&mut self, name: &str, value: impl AsRef<std::ffi::OsStr>) {
         self.argv.extend([
             OsString::from("--setenv"),
             name.into(),
-            value.as_os_str().to_owned(),
+            value.as_ref().to_owned(),
         ]);
-        self.env.push((name.into(), value.as_os_str().to_owned()));
+        self.env.push((name.into(), value.as_ref().to_owned()));
+    }
+
+    /// A Process command Step uses the same confinement with a shell program.
+    pub(crate) fn shell(mut self) -> Self {
+        self.program = SHELL.into();
+        self
     }
 
     /// The bwrap command running the Harness's `args` inside the sandbox.
@@ -436,12 +455,29 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             request.harness_binary.display()
         )
     })?;
-    fs::create_dir_all(request.fresh_home).with_context(|| {
-        format!(
-            "sandbox failed to start: could not create {}",
+    match fs::symlink_metadata(request.fresh_home) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => bail!(
+            "sandbox failed to start: {} must be a real directory",
             request.fresh_home.display()
-        )
-    })?;
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(request.fresh_home).with_context(|| {
+                format!(
+                    "sandbox failed to start: could not create {}",
+                    request.fresh_home.display()
+                )
+            })?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "sandbox failed to start: could not inspect {}",
+                    request.fresh_home.display()
+                )
+            });
+        }
+    }
     if !Path::new(SHELL).exists() {
         return Err(anyhow::Error::new(Unavailable {
             diagnostic: format!("{SHELL} is missing"),
@@ -751,7 +787,8 @@ fn conceal_toolchain_credentials(request: &Request<'_>, binds: &mut Binds) -> Re
         return Ok(());
     }
     let blank = request.fresh_home.join(".toolchain-credential");
-    fs::write(&blank, "").with_context(|| {
+    reject_fresh_symlink(request.fresh_home, &blank)?;
+    write_without_following(&blank, b"").with_context(|| {
         format!(
             "sandbox failed to start: could not create {}",
             blank.display()
@@ -811,11 +848,11 @@ fn home_into(
 ) -> Result<Option<GrokGuard>> {
     binds.read_write(request.fresh_home, request.fresh_home);
     environment.set("HOME", request.fresh_home);
-    fn user_file(request: &Request<'_>, binds: &mut Binds, relative: &str) {
-        binds.read_only(
-            &request.home.join(relative),
-            &request.fresh_home.join(relative),
-        );
+    fn user_file(request: &Request<'_>, binds: &mut Binds, relative: &str) -> Result<()> {
+        let dest = request.fresh_home.join(relative);
+        reject_fresh_symlink(request.fresh_home, &dest)?;
+        binds.read_only(&request.home.join(relative), &dest);
+        Ok(())
     }
 
     // These Harnesses read the same production user instructions. Bind only
@@ -825,7 +862,7 @@ fn home_into(
         Harness::Claude | Harness::Grok | Harness::Muse
     ) {
         for path in [".claude/CLAUDE.md", ".claude/rules", ".claude/hooks"] {
-            user_file(request, binds, path);
+            user_file(request, binds, path)?;
         }
     }
     let mut guard = None;
@@ -836,8 +873,8 @@ fn home_into(
             if let Some(token) = &request.secrets.claude_setup_token {
                 environment.set_str(CLAUDE_TOKEN_ENV, token);
             }
-            user_file(request, binds, ".claude.json");
-            user_file(request, binds, ".claude/settings.json");
+            user_file(request, binds, ".claude.json")?;
+            user_file(request, binds, ".claude/settings.json")?;
         }
         Harness::Codex => {
             // Copy the login into the fresh home. A refresh stays in that
@@ -849,8 +886,8 @@ fn home_into(
                 ".codex",
                 "auth.json",
             )?;
-            user_file(request, binds, ".codex/config.toml");
-            user_file(request, binds, ".codex/AGENTS.md");
+            user_file(request, binds, ".codex/config.toml")?;
+            user_file(request, binds, ".codex/AGENTS.md")?;
         }
         Harness::Muse => {
             // Copy each login file. Muse writes its login in place (#1009);
@@ -864,7 +901,7 @@ fn home_into(
                     login,
                 )?;
             }
-            user_file(request, binds, ".config/muse/settings.json");
+            user_file(request, binds, ".config/muse/settings.json")?;
         }
         Harness::Agy => {
             // Copy the token file, never the D-Bus session bus, which would
@@ -876,20 +913,21 @@ fn home_into(
                 ".gemini/antigravity-cli",
                 "antigravity-oauth-token",
             )?;
-            user_file(request, binds, ".gemini/GEMINI.md");
-            user_file(request, binds, ".gemini/settings.json");
+            user_file(request, binds, ".gemini/GEMINI.md")?;
+            user_file(request, binds, ".gemini/settings.json")?;
         }
         Harness::Grok => {
             guard = Some(grok_into(request)?);
             for path in [".grok/settings.json", ".grok/rules", ".grok/hooks"] {
-                user_file(request, binds, path);
+                user_file(request, binds, path)?;
             }
         }
         Harness::OpenCode => {
             opencode_into(request, environment)?;
-            user_file(request, binds, ".config/opencode/opencode.json");
-            user_file(request, binds, ".config/opencode/AGENTS.md");
+            user_file(request, binds, ".config/opencode/opencode.json")?;
+            user_file(request, binds, ".config/opencode/AGENTS.md")?;
         }
+        Harness::Kimi => kimi_into(request, environment)?,
     }
     Ok(guard)
 }
@@ -923,6 +961,7 @@ fn login_into(
     } else {
         fresh_mirror(request, &source)
     };
+    reject_fresh_symlink(request.fresh_home, &dest)?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -932,12 +971,10 @@ fn login_into(
         })?;
     }
     if source.is_file() {
-        fs::copy(&source, &dest).with_context(|| {
-            format!(
-                "sandbox failed to start: could not copy the login {}",
-                source.display()
-            )
-        })?;
+        // Check again after creating parents. The destination can be a symlink
+        // left by an earlier sandboxed Step in this same Trial home.
+        reject_fresh_symlink(request.fresh_home, &dest)?;
+        copy_without_following(&source, &dest)?;
     }
     if let Some(env) = override_env {
         // The override names the directory the file sits `depth` levels
@@ -948,6 +985,115 @@ fn login_into(
         environment.set(env, dir);
     }
     Ok(())
+}
+
+/// Refuse a symlink anywhere along `dest` inside `fresh_home`. A later Step
+/// prepares the same Trial home the previous sandbox could write, and a
+/// symlink there would turn a host copy or mount into a path outside it.
+fn reject_fresh_symlink(fresh_home: &Path, dest: &Path) -> Result<()> {
+    let relative = dest.strip_prefix(fresh_home).with_context(|| {
+        format!(
+            "sandbox failed to start: {} is outside {}",
+            dest.display(),
+            fresh_home.display()
+        )
+    })?;
+    let mut cursor = fresh_home.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!(
+                "sandbox failed to start: {} is not confined to the fresh home",
+                dest.display()
+            );
+        };
+        cursor.push(name);
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "sandbox failed to start: fresh home contains a symlink at {}",
+                    cursor.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "sandbox failed to start: could not inspect {}",
+                        cursor.display()
+                    )
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Write `bytes` to `dest` without following a symlink at that path.
+fn write_without_following(dest: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(dest)
+        .map_err(|error| fresh_write_error(&error, dest))?;
+    file.write_all(bytes).with_context(|| {
+        format!(
+            "sandbox failed to start: could not write {}",
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Copy `source` onto `dest` without following a symlink at `dest`.
+fn copy_without_following(source: &Path, dest: &Path) -> Result<()> {
+    let metadata = fs::metadata(source).with_context(|| {
+        format!(
+            "sandbox failed to start: could not read {}",
+            source.display()
+        )
+    })?;
+    let bytes = fs::read(source).with_context(|| {
+        format!(
+            "sandbox failed to start: could not read {}",
+            source.display()
+        )
+    })?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(dest)
+        .map_err(|error| fresh_write_error(&error, dest))?;
+    file.write_all(&bytes).with_context(|| {
+        format!(
+            "sandbox failed to start: could not copy the login {}",
+            source.display()
+        )
+    })?;
+    file.set_permissions(metadata.permissions())
+        .with_context(|| {
+            format!(
+                "sandbox failed to start: could not copy the login {}",
+                source.display()
+            )
+        })?;
+    Ok(())
+}
+
+fn fresh_write_error(error: &std::io::Error, dest: &Path) -> anyhow::Error {
+    let message = if error.raw_os_error() == Some(libc::ELOOP) {
+        format!("sandbox failed to start: {} is a symlink", dest.display())
+    } else {
+        format!(
+            "sandbox failed to start: could not write {}",
+            dest.display()
+        )
+    };
+    anyhow::Error::new(std::io::Error::new(error.kind(), error.to_string())).context(message)
 }
 
 /// Mirror a home-relative `source` under the fresh home.
@@ -984,6 +1130,7 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
         }));
     }
     let dest = request.fresh_home.join(GROK_HOME_NAME);
+    reject_fresh_symlink(request.fresh_home, &dest)?;
     fs::create_dir_all(&dest).with_context(|| {
         format!(
             "sandbox failed to start: could not create {}",
@@ -993,12 +1140,9 @@ fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
     for name in GROK_KEPT {
         let source = home.join(name);
         if source.is_file() {
-            fs::copy(&source, dest.join(name)).with_context(|| {
-                format!(
-                    "sandbox failed to start: could not copy the login {}",
-                    source.display()
-                )
-            })?;
+            let copied = dest.join(name);
+            reject_fresh_symlink(request.fresh_home, &copied)?;
+            copy_without_following(&source, &copied)?;
         }
     }
     Ok(guard)
@@ -1063,39 +1207,82 @@ impl Drop for GrokGuard {
 
 /// An OpenCode Trial's provider key: through its environment, never
 /// production's `opencode.db`, which holds its credentials beside its
-/// sessions. The key comes from `opencode.api_key` in the Credentials, and
-/// the Trial's config sets the provider's `apiKey` to `{env:…}` naming the
-/// variable that carries it. Without a key, the Trial fails before its
-/// session starts.
+/// sessions. The key is the one the Credentials hold for the provider the
+/// Model names, under `[opencode.keys]`, else their single `opencode.api_key`,
+/// so OpenCode sessions on different providers each get their own. The
+/// Trial's config sets that provider's `apiKey` to `{env:…}` naming the
+/// variable that carries it. Without a key, the Trial fails before its session starts.
 fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
-    let Some(key) = request.secrets.opencode_api_key.as_deref() else {
+    let provider = trial_provider(request.model)?;
+    let Some(key) = request.secrets.opencode_keys.for_provider(provider) else {
         let path = config::home()
             .map(|home| home.join(".thirdshift/credentials.toml"))
             .unwrap_or_else(|_| PathBuf::from("~/.thirdshift/credentials.toml"));
         return Err(anyhow::Error::new(NoLogin {
             diagnostic: format!(
-                "OpenCode Trial login failed: no opencode.api_key in {}; \
-                 add the provider key as api_key under [opencode] (mode 600)",
+                "OpenCode Trial login failed: no key for provider {provider} in {}; \
+                 add it as {provider} = \"…\" under [opencode.keys], or as api_key \
+                 under [opencode] for every provider (mode 600)",
                 path.display()
             ),
         }));
     };
     environment.set_str(OPENCODE_API_KEY_ENV, key);
-    environment.set_str(OPENCODE_CONFIG_ENV, &provider_config(request.model)?);
+    environment.set_str(OPENCODE_CONFIG_ENV, &provider_config(provider));
     Ok(())
 }
 
-/// The Trial's OpenCode config for `model`: the provider's `apiKey` set to
-/// `{env:…}` naming the variable that carries the key, with web search and
-/// web fetch denied, since a Trial runs behind the allowlisting proxy.
-fn provider_config(model: Option<&str>) -> Result<String> {
-    let Some(provider) = proxy::opencode_provider(model) else {
-        bail!(
+/// A Kimi Trial's config, sign-in and provider key. The config holds the
+/// Model aliases and their providers, and the managed provider's sign-in its
+/// token, each copied into the fresh home, under `KIMI_CODE_HOME` when that
+/// is set, as [`login_into`] copies other logins. A provider whose key comes
+/// from an environment variable gets that variable from this process, never
+/// from a file; one that is unset fails before the session starts.
+fn kimi_into(request: &Request<'_>, environment: &mut Environment) -> Result<()> {
+    use crate::harness::kimi::{Catalog, HOME_ENV, HOME_FILES, HOME_NAME};
+    for file in HOME_FILES {
+        login_into(request, environment, Some(HOME_ENV), HOME_NAME, file)?;
+    }
+    let Some(model) = request.model else {
+        return Ok(()); // The proxy refuses a Trial without its Model.
+    };
+    let provider = Catalog::read()
+        .and_then(|catalog| catalog.provider(model))
+        .map_err(|error| {
+            anyhow::Error::new(NoLogin {
+                diagnostic: format!("Kimi Trial login failed: {error:#}"),
+            })
+        })?;
+    if let Some(name) = provider.api_key_env {
+        let Some(key) = std::env::var_os(&name).filter(|key| !key.is_empty()) else {
+            return Err(anyhow::Error::new(NoLogin {
+                diagnostic: format!(
+                    "Kimi Trial login failed: {name} is not set; the Model {model}'s \
+                     provider takes its key from it"
+                ),
+            }));
+        };
+        environment.set(&name, Path::new(&key));
+    }
+    Ok(())
+}
+
+/// The provider an OpenCode Trial's `model` names, which its key and config
+/// are for. A Model without one fails before the session starts.
+fn trial_provider(model: Option<&str>) -> Result<&str> {
+    proxy::opencode_provider(model).ok_or_else(|| {
+        anyhow!(
             "OpenCode Trial login failed: the Model must name its provider as \
              <provider>/<model>, so the Trial's config can set that provider's apiKey"
-        );
-    };
-    Ok(serde_json::json!({
+        )
+    })
+}
+
+/// The Trial's OpenCode config for `provider`: its `apiKey` set to `{env:…}`
+/// naming the variable that carries the key, with web search and web fetch
+/// denied, since a Trial runs behind the allowlisting proxy.
+fn provider_config(provider: &str) -> String {
+    serde_json::json!({
         "provider": {
             provider: { "apiKey": format!("{{env:{OPENCODE_API_KEY_ENV}}}") }
         },
@@ -1104,7 +1291,7 @@ fn provider_config(model: Option<&str>) -> Result<String> {
             "websearch": "deny",
         }
     })
-    .to_string())
+    .to_string()
 }
 
 /// The Harness binaries' directory inside the sandbox, outside every home.
@@ -1145,6 +1332,25 @@ fn harness_into(
             binds.read_only(binary, &dest);
             dest
         }
+        // npm installs Kimi Code as `dist/main.mjs` in its package, which
+        // also holds the native helpers it loads beside it.
+        Harness::Kimi => match binary
+            .parent()
+            .filter(|dist| dist.ends_with("dist"))
+            .and_then(Path::parent)
+            .filter(|package| package.join("package.json").is_file())
+        {
+            Some(package) => {
+                binds.read_only(package, &dest_dir);
+                dest_dir
+                    .join("dist")
+                    .join(binary.file_name().unwrap_or_default())
+            }
+            None => {
+                binds.read_only(binary, &dest_dir);
+                dest_dir
+            }
+        },
         Harness::Claude | Harness::Agy | Harness::Grok | Harness::Muse | Harness::OpenCode => {
             binds.read_only(binary, &dest_dir);
             dest_dir
@@ -1156,6 +1362,36 @@ fn harness_into(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Restores process environment variables when dropped, including ones
+    /// the test removed.
+    struct SavedEnv {
+        values: Vec<(String, Option<std::ffi::OsString>)>,
+    }
+
+    impl SavedEnv {
+        fn capture(names: &[&str]) -> Self {
+            Self {
+                values: names
+                    .iter()
+                    .map(|name| ((*name).to_owned(), std::env::var_os(name)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for SavedEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.values {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
 
     /// The sandbox tests run where bwrap works; anywhere else they report
     /// themselves skipped rather than passing silently.
@@ -1276,7 +1512,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" && ");
             let secrets = Secrets {
-                opencode_api_key: Some("fixture-key".into()),
+                opencode_keys: opencode_keys("[opencode]\napi_key = \"fixture-key\"\n"),
                 ..Secrets::default()
             };
             let model = (harness == Harness::OpenCode).then_some("anthropic/claude");
@@ -1545,6 +1781,54 @@ mod tests {
         );
     }
 
+    /// A later Step prepares another sandbox in the same Trial home. That home
+    /// is writable by the earlier sandboxed Step, so a symlink there must not
+    /// become a host write when the login is copied again.
+    #[test]
+    fn trial_home_login_copy_does_not_follow_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let operator_home = root.path().join("operator-home");
+        let trial_home = root.path().join("trial-home");
+        let output = root.path().join("output");
+        let outside = root.path().join("outside");
+        let repository = root.path().join("repository");
+        fs::create_dir_all(operator_home.join(".codex")).unwrap();
+        fs::write(operator_home.join(".codex/auth.json"), "dummy-login\n").unwrap();
+        fs::create_dir_all(trial_home.join(".codex")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&repository).unwrap();
+        fs::write(outside.join("target"), "untouched\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("target"), trial_home.join(".codex/auth.json"))
+            .unwrap();
+        let saved = SavedEnv::capture(&[
+            "HOME",
+            "CODEX_HOME",
+            "THIRDSHIFT_TRIAL_HOME",
+            "THIRDSHIFT_TRIAL_NO_SANDBOX",
+        ]);
+        unsafe {
+            std::env::set_var("HOME", &operator_home);
+            std::env::set_var("THIRDSHIFT_TRIAL_HOME", &trial_home);
+            std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("THIRDSHIFT_TRIAL_NO_SANDBOX");
+        }
+        let binary = root.path().join("thirdshift");
+        fs::write(&binary, "").unwrap();
+        let choice = crate::harness::Choice {
+            harness: Harness::Codex,
+            model: None,
+            effort: None,
+            chosen_by: crate::harness::ChosenBy::Command,
+        };
+        let _prepared = for_session(&choice, &binary, &repository, &output);
+        drop(saved);
+        assert_eq!(
+            fs::read_to_string(outside.join("target")).unwrap(),
+            "untouched\n",
+            "login copy followed a symlink out of the Trial home"
+        );
+    }
+
     #[test]
     fn a_grok_login_renewed_by_rename_stays_in_the_fresh_home() {
         if !bwrap_or_skip("grok rename") {
@@ -1675,7 +1959,7 @@ mod tests {
         .unwrap();
         let secrets = Secrets {
             claude_setup_token: None,
-            opencode_api_key: Some("opencode-provider-key".into()),
+            opencode_keys: opencode_keys("[opencode]\napi_key = \"opencode-provider-key\"\n"),
         };
         let script = "test -n \"$THIRDSHIFT_OPENCODE_API_KEY\" || exit 21; \
             test ! -e \"$HOME/.local/share/opencode/opencode.db\" || exit 22; \
@@ -1705,6 +1989,84 @@ mod tests {
         assert_eq!(config["permission"]["websearch"], "deny");
     }
 
+    /// The OpenCode keys a Credentials file holding `text` gives a Trial.
+    fn opencode_keys(text: &str) -> OpenCodeKeys {
+        let home = tempfile::TempDir::new().unwrap();
+        let path = home.path().join("credentials.toml");
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        Credentials::read_from(path).unwrap().opencode_keys()
+    }
+
+    #[test]
+    fn opencode_seats_with_different_providers_each_get_their_own_key() {
+        if !bwrap_or_skip("opencode keys") {
+            return;
+        }
+        let keys = opencode_keys(
+            "[opencode]\napi_key = \"single-key\"\n\
+             [opencode.keys]\nfireworks-ai = \"fireworks-key\"\nbaseten = \"baseten-key\"\n",
+        );
+        for (model, key) in [
+            (
+                "fireworks-ai/accounts/fireworks/models/kimi-k3p1-pro",
+                "fireworks-key",
+            ),
+            (
+                "baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                "baseten-key",
+            ),
+            ("anthropic/claude", "single-key"),
+        ] {
+            let layout = Layout::new();
+            let secrets = Secrets {
+                claude_setup_token: None,
+                opencode_keys: keys.clone(),
+            };
+            let script = "echo \"$THIRDSHIFT_OPENCODE_API_KEY\"";
+            let request = layout.request(Harness::OpenCode, script, secrets, Some(model), &[]);
+            let prepared = prepare(&request).unwrap();
+
+            let output = run_script(&prepared, &layout.repo);
+
+            assert!(
+                output.status.success(),
+                "{model}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                key,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opencode_trial_without_its_providers_key_fails_before_its_session_starts() {
+        if !bwrap_or_skip("opencode key") {
+            return;
+        }
+        let layout = Layout::new();
+        let secrets = Secrets {
+            claude_setup_token: None,
+            opencode_keys: opencode_keys("[opencode.keys]\nfireworks-ai = \"fireworks-key\"\n"),
+        };
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            secrets,
+            Some("baseten/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
+            &[],
+        );
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("login failed"), "{error}");
+        assert!(error.contains("baseten"), "{error}");
+        assert!(error.contains("[opencode.keys]"), "{error}");
+    }
+
     #[test]
     fn an_opencode_trial_naming_an_unknown_provider_fails_before_its_session_starts() {
         if !bwrap_or_skip("opencode provider") {
@@ -1713,7 +2075,7 @@ mod tests {
         let layout = Layout::new();
         let secrets = Secrets {
             claude_setup_token: None,
-            opencode_api_key: Some("opencode-provider-key".into()),
+            opencode_keys: opencode_keys("[opencode]\napi_key = \"opencode-provider-key\"\n"),
         };
         let request = layout.request(
             Harness::OpenCode,
@@ -1746,7 +2108,8 @@ mod tests {
         let error = format!("{:#}", prepare(&request).err().unwrap());
 
         assert!(error.contains("login failed"), "{error}");
-        assert!(error.contains("opencode.api_key"), "{error}");
+        assert!(error.contains("no key for provider acme"), "{error}");
+        assert!(error.contains("api_key under [opencode]"), "{error}");
     }
 
     #[test]
@@ -1758,7 +2121,7 @@ mod tests {
             (Some("model-without-provider"), None),
             (Some("/model"), None),
         ] {
-            match (provider_config(model), provider) {
+            match (trial_provider(model).map(provider_config), provider) {
                 (Ok(config), Some(provider)) => {
                     let config: serde_json::Value = serde_json::from_str(&config).unwrap();
                     assert_eq!(
@@ -1780,7 +2143,7 @@ mod tests {
         let layout = Layout::new();
         let secrets = Secrets {
             claude_setup_token: Some("trial-token".into()),
-            opencode_api_key: None,
+            opencode_keys: OpenCodeKeys::default(),
         };
         let request = layout.request(
             Harness::Claude,

@@ -1,15 +1,22 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod accounting;
 mod cost;
+pub(crate) mod deciders;
 mod difficulty;
+mod efficiency;
 mod evidence;
 mod execution;
 mod grading;
 mod integrity;
+mod leaks;
 mod model_grader;
 mod names;
 mod options;
+pub(crate) mod pairs;
+pub(crate) mod pairwise;
+mod panel;
 mod reading;
 mod rechecks;
 mod release;
@@ -41,6 +48,7 @@ use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
+pub(crate) use leaks::decide as decide_leak;
 pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
@@ -66,7 +74,25 @@ pub(crate) struct Bar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_discriminating_tasks: Option<usize>,
     pub timeout_seconds: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "efficiency::optional_decimal"
+    )]
+    pub cost_ceiling: Option<f64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "efficiency::optional_decimal"
+    )]
+    pub time_ceiling: Option<f64>,
     pub void_rules: VoidRules,
+    /// Absent when no Grader panel grades the pairs of Trials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<panel::Panel>,
+    /// Absent when anyone may read any pair, beside the Verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people: Option<deciders::PeopleSetting>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,6 +114,8 @@ impl Default for Bar {
             discriminating_tasks: None,
             min_discriminating_tasks: None,
             timeout_seconds: 1800,
+            cost_ceiling: None,
+            time_ceiling: None,
             void_rules: VoidRules {
                 retries: 2,
                 causes: [
@@ -102,6 +130,8 @@ impl Default for Bar {
                 ]
                 .into(),
             },
+            panel: None,
+            people: None,
         }
     }
 }
@@ -132,9 +162,23 @@ pub(crate) struct Setup {
     pub harness: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_digest: Option<String>,
 }
 
 impl Setup {
+    fn requested(&self) -> Result<arms::Requested> {
+        Ok(
+            arms::Requested::new(&self.commit, &self.harness)?.with_process(
+                self.process.as_deref(),
+                self.model.as_deref(),
+                self.effort.as_deref(),
+            ),
+        )
+    }
+
     fn choice(&self) -> Choice {
         Choice {
             harness: Harness::named(&self.harness).expect("validated Arm Harness"),
@@ -226,8 +270,8 @@ pub fn run(options: Options) -> Result<()> {
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
     let config = UserConfig::load()?;
-    let baseline = options.baseline_setup.resolve(baseline, &config);
-    let candidate = options.candidate_setup.resolve(candidate, &config);
+    let mut baseline = options.baseline_setup.resolve(baseline, &config);
+    let mut candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
     // Keep the judged list and the retained manifest snapshots on one reading
     // of Difficulty, fenced against approval and Difficulty publication.
@@ -247,6 +291,11 @@ pub fn run(options: Options) -> Result<()> {
         let mut listed = Vec::new();
         for (name, directory) in suite::directories(&suites_root.join(name).join("tasks"))? {
             let task = format::Task::load(&directory)?;
+            if task.state == format::State::Approved && task.session == format::Session::Process {
+                for setup in [&mut baseline, &mut candidate] {
+                    setup.process.get_or_insert_with(|| "ticket-run".into());
+                }
+            }
             if task.state == format::State::Approved
                 && task
                     .difficulty
@@ -263,6 +312,9 @@ pub fn run(options: Options) -> Result<()> {
         bar.trials_per_task.values().all(|n| matches!(n, 1 | 3)),
         "Trials per Eval task must be one or three"
     );
+    for setup in [&mut baseline, &mut candidate] {
+        setup.process_digest = arms::Process::source_digest(&setup.requested()?)?;
+    }
     let identity = serde_json::to_vec(&(&baseline, &candidate, &suites))?;
     let id = format!("{:x}", Sha256::digest(identity));
     let description = Description {
@@ -273,6 +325,7 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
+    panel::check_stand_in(&description)?;
     let fresh = !root
         .join("experiments")
         .join(&description.id)
@@ -283,6 +336,7 @@ pub fn run(options: Options) -> Result<()> {
             // The release Baseline probe can build an Arm too. Check new
             // Experiments first; resumes keep the tasks already recorded.
             let tasks = tasks(&suites_root, &description.suites)?;
+            deciders::check(&description.bar, &tasks)?;
             if options.release
                 && !release::supports_trials(&repository, &root, &description.baseline.commit)?
             {
@@ -299,6 +353,16 @@ pub fn run(options: Options) -> Result<()> {
         );
     };
     drop(suite_locks);
+    if let Some(path) = &options.prices {
+        let prices = crate::trial::accounting::Prices::load(path)?;
+        ensure!(
+            !experiment.directory.join("started").exists()
+                || experiment.pricing.as_ref() == Some(&prices),
+            "price table cannot change after the first Trial"
+        );
+        experiment.pricing = Some(prices);
+        experiment.save()?;
+    }
     if let Some(name) = options.name {
         experiment.rename(Some(name))?;
     }
@@ -362,11 +426,8 @@ pub fn run(options: Options) -> Result<()> {
         if experiment.description.prepared.is_none() {
             let description = &experiment.description;
             let requested = [
-                arms::Requested::new(&description.baseline.commit, &description.baseline.harness)?,
-                arms::Requested::new(
-                    &description.candidate.commit,
-                    &description.candidate.harness,
-                )?,
+                description.baseline.requested()?,
+                description.candidate.requested()?,
             ];
             let record = experiment.directory.join("arms.json");
             if record.exists() {
@@ -376,13 +437,37 @@ pub fn run(options: Options) -> Result<()> {
                 experiment.description.prepared =
                     Some(arms::prepare(&repository, requested, &record)?);
             }
+            let prepared = experiment
+                .description
+                .prepared
+                .as_ref()
+                .context("missing prepared Arms")?;
+            for (setup, arm) in [
+                (&experiment.description.baseline, &prepared.baseline),
+                (&experiment.description.candidate, &prepared.candidate),
+            ] {
+                if let Some(expected) = &setup.process_digest {
+                    ensure!(
+                        arm.process
+                            .as_ref()
+                            .context("missing frozen Arm Process")?
+                            .digest()?
+                            == *expected,
+                        "Custom process inputs changed during Arm preparation; start the Experiment again"
+                    );
+                }
+            }
             experiment.save()?;
             logs::experiment(&experiment.description);
         }
         logs::stage(logs::Stage::EvalTasks);
         model_grader::prepare(&experiment, &config.harness)?;
+        panel::prepare(&experiment)?;
         workers::run(&experiment)?;
+        pairs::run(&experiment)?;
+        // The panel grades last, so a pause in it holds back no model Score.
         model_grader::run(&experiment)?;
+        panel::run(&experiment)?;
         experiment.refresh_verdict()?;
         experiment.state = State::Completed;
         Ok(())
@@ -445,6 +530,55 @@ pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
     let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag, hit, decision, reason_flag, reason] = positional.as_slice()
+        && flag.as_str() == "--leak"
+        && reason_flag.as_str() == "--reason"
+    {
+        return decide_leak(
+            id,
+            hit,
+            decision,
+            reason,
+            logs::Actor::cli("a leak decision")?,
+            json,
+        );
+    }
+    if let [id, flag, pair, rest @ ..] = positional.as_slice()
+        && flag.as_str() == "--pair"
+    {
+        let page = match rest {
+            [] => pairwise::page(id, pair, &logs::Actor::cli("a blind pair")?)?,
+            [flag, a, b] if flag.as_str() == "--merge" => {
+                pairwise::merge(id, pair, a, b, logs::Actor::cli("merge calls")?)?
+            }
+            [flag, preference, rubric @ ..] if flag.as_str() == "--prefer" => {
+                let mut graded = Vec::new();
+                for chunk in rubric.chunks(2) {
+                    let [flag, value] = chunk else {
+                        anyhow::bail!("--rubric needs <criterion>=<a|b|tie|both-bad>");
+                    };
+                    let (criterion, value) = value
+                        .split_once('=')
+                        .filter(|_| flag.as_str() == "--rubric")
+                        .context("--rubric needs <criterion>=<a|b|tie|both-bad>")?;
+                    graded.push((criterion.to_owned(), value.to_owned()));
+                }
+                pairwise::prefer(
+                    id,
+                    pair,
+                    preference,
+                    &graded,
+                    logs::Actor::cli("a preference")?,
+                )?
+            }
+            _ => anyhow::bail!("{PAIR_USAGE}"),
+        };
+        return if json {
+            Ok(serde_json::to_string_pretty(&page)?)
+        } else {
+            Ok(pairwise::text(&page))
+        };
+    }
     if let [id, flag] = positional.as_slice()
         && flag.as_str() == "--record-difficulty"
     {
@@ -467,10 +601,12 @@ pub fn show(args: &[String]) -> Result<String> {
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --record-difficulty [--json], experiments <id> --name <text> [--json], experiments <id> --session <session-id> [--json], experiments <id> --leak <hit-id> <confirm|dismiss> --reason <text> [--json] or {PAIR_USAGE}"
     );
     store::show(&root, positional.first().map(|id| id.as_str()), json)
 }
+
+const PAIR_USAGE: &str = "experiments <id> --pair <pair-id> [--merge <ready|not-ready> <ready|not-ready> | --prefer <a|b|tie|both-bad> [--rubric <criterion>=<a|b|tie|both-bad>]...] [--json]";
 
 /// The shown resume command leaves out `--name`, so following it keeps a
 /// later rename. Flags pair with values as `options::parse` reads them.
