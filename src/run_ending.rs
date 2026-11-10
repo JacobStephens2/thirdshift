@@ -304,6 +304,8 @@ pub struct Cause {
     safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
     /// Completed Triage writes, retained separately from verbose failure diagnostics.
     triage_publication: Vec<crate::issue::IssueUrl>,
+    /// Only title and link may leave the machine for a private Triage failure.
+    private_triage_notification: Option<String>,
 }
 
 impl Cause {
@@ -316,12 +318,19 @@ impl Cause {
                 .downcast_ref::<crate::triage::IncompletePublication>()
                 .map(|publication| publication.published.clone())
                 .unwrap_or_default(),
+            private_triage_notification: error
+                .downcast_ref::<crate::triage::PrivateFindingTriage>()
+                .map(|triage| triage.notification.clone()),
         }
     }
 
     /// The whole cause, of as many lines as it has.
     pub fn full(&self) -> &str {
         &self.full
+    }
+
+    pub fn private_triage_notification(&self) -> Option<&str> {
+        self.private_triage_notification.as_deref()
     }
 
     /// Its first line, all of it that a short account gives.

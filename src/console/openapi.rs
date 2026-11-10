@@ -432,7 +432,7 @@ fn start_schema() -> Value {
         "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
         "security_review": boolean, "security_fix": boolean, "security_close": boolean,
         "parallel": {"type":"integer","minimum":1},
-        "harness": {"enum":["claude","codex","agy","grok","muse","opencode"]},
+        "harness": {"enum":["claude","codex","agy","grok","muse","opencode","kimi"]},
         "model": text, "effort": text,
         "email": {"oneOf":[
             {"type":"object","required":["mode"],"additionalProperties":false,

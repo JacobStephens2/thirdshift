@@ -49,6 +49,9 @@ pub(crate) fn freeze_home_skill(name: &str, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
 pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");

@@ -9,6 +9,7 @@ use std::process::Command;
 fn isolated(name: &str, sandboxed: bool, exercise: impl FnOnce(&Path)) {
     const ROOT: &str = "THIRDSHIFT_PRIVATE_SESSION_TEST";
     if let Some(root) = std::env::var_os(ROOT) {
+        let _skills = crate::skills::testing::FactorySkills::hold();
         exercise(Path::new(&root));
         return;
     }
