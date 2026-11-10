@@ -364,6 +364,23 @@ class AffectedTests(unittest.TestCase):
                 _, calls = self.select_for_only(path)
                 self.assertEqual(calls, [["cargo", "nextest", "run"]])
 
+    def test_console_split_report_runs_its_consumers_checks(self):
+        _, calls = self.select_for_only("docs/research/console-core-split.md")
+        self.assertEqual(calls, [
+            ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+        ])
+
+    def test_console_split_sources_add_checks_and_keep_the_full_rust_suite(self):
+        for path in ["prototypes/console-split/prepare.py",
+                     "prototypes/console-split/test_report.py",
+                     "prototypes/console-split/results.json"]:
+            with self.subTest(path=path):
+                _, calls = self.select_for_only(path)
+                self.assertEqual(calls, [
+                    ["python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py"],
+                    ["cargo", "nextest", "run"],
+                ])
+
     def test_glossary_gets_its_site_consumers_checks(self):
         _, calls = self.select_for_only("GLOSSARY.md")
         self.assertEqual(calls, [
