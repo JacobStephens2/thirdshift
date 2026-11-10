@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Blind pair · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><link rel="stylesheet" href="/assets/experiments.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+{# html is produced only by the escaping pair renderer. No live refresh: it would disturb calls being entered. #}
+<main id="experiments">{{ html|safe }}</main>
+{% include "console/chrome.html" %}</body></html>

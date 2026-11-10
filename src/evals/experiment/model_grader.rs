@@ -12,7 +12,7 @@ use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{Task, arms, store, trial_results};
+use super::{Task, arms, panel, store, trial_results};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
 use crate::session::private;
 use crate::{interrupt, progress, prompt};
@@ -60,19 +60,16 @@ pub(super) fn prepare(experiment: &store::Stored, settings: &Settings) -> Result
     }
     let description = &experiment.description;
     let default = Choice::of(&Asked::default(), settings);
+    // The Grader panel's family rule: a Model from either Arm's family
+    // grades only when no other family is configured.
+    let arm_families = panel::arm_families(description);
     let choice = std::iter::once(default.harness)
         .chain(Harness::ALL)
         .find_map(|harness| {
             let configured = settings.of(harness);
             let model = configured.model.as_ref()?;
-            let different = [&description.baseline, &description.candidate]
-                .iter()
-                .all(|arm| {
-                    arm.model
-                        .as_ref()
-                        .is_none_or(|arm| !arm.eq_ignore_ascii_case(model))
-                });
-            (different && harness.installed()).then(|| Choice {
+            let other_family = !arm_families.contains(&panel::family(harness, Some(model)));
+            (other_family && harness.installed()).then(|| Choice {
                 harness,
                 model: Some(model.clone()),
                 effort: configured.effort.clone(),
@@ -123,6 +120,9 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             .push(entry);
     }
     for task in &experiment.tasks {
+        if task.manifest.session == crate::evals::format::Session::Process {
+            continue;
+        }
         interrupt::check()?;
         let key = Sha256::new()
             .chain_update(task.suite.as_bytes())
@@ -215,38 +215,77 @@ fn grade(
     timeout: u64,
     caps: &crate::scope::Caps,
 ) -> Result<Response> {
+    session(
+        Session {
+            kind: "model Grader",
+            choice: &grader.choice(),
+            binary: &grader.harness.path,
+            directory,
+            prompt: prompt::grader(),
+            output: ("THIRDSHIFT_GRADER_SCORES", "scores.json", "Scores"),
+            timeout: Duration::from_secs(timeout),
+            caps,
+        },
+        packet,
+    )
+}
+
+/// One fresh private Grader session over a blind packet.
+pub(super) struct Session<'a> {
+    pub kind: &'a str,
+    pub choice: &'a Choice,
+    pub binary: &'a Path,
+    /// Each session gets a new `session-*` workspace here.
+    pub directory: &'a Path,
+    pub prompt: String,
+    /// The variable naming the response file, its name, and what it holds.
+    pub output: (&'a str, &'a str, &'a str),
+    pub timeout: Duration,
+    pub caps: &'a crate::scope::Caps,
+}
+
+/// Run the session on `packet` and decode the response it writes.
+pub(super) fn session<T: serde::de::DeserializeOwned>(
+    session: Session<'_>,
+    packet: &impl Serialize,
+) -> Result<T> {
+    let Session {
+        kind,
+        choice,
+        binary,
+        directory,
+        prompt,
+        output: (variable, file, holds),
+        timeout,
+        caps,
+    } = session;
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
         .keep();
     let input = workspace.join("packet.json");
-    let scores = workspace.join("scores.json");
+    let response = workspace.join(file);
     store::write(&input, packet)?;
-    let prompt = prompt::grader();
     fs::write(workspace.join("prompt.md"), &prompt)?;
-    let choice = grader.choice();
     private::run(private::Request {
-        kind: "model Grader",
-        choice: &choice,
-        binary: &grader.harness.path,
+        kind,
+        choice,
+        binary,
         workspace: &workspace,
         artifacts: &workspace,
         prompt: &prompt,
-        timeout: Duration::from_secs(timeout),
+        timeout,
         caps,
-        environment: &[
-            ("THIRDSHIFT_GRADER_PACKET", &input),
-            ("THIRDSHIFT_GRADER_SCORES", &scores),
-        ],
+        environment: &[("THIRDSHIFT_GRADER_PACKET", &input), (variable, &response)],
     })?;
     let bytes =
-        private::read_session_file(&scores, private::SESSION_OUTPUT_MAX).map_err(|error| {
+        private::read_session_file(&response, private::SESSION_OUTPUT_MAX).map_err(|error| {
             if private::is_missing_file(&error) {
-                anyhow::anyhow!("model Grader left no Scores")
+                anyhow::anyhow!("{kind} left no {holds}")
             } else {
                 error
             }
         })?;
     serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
+        .map_err(|_| anyhow::anyhow!("invalid {kind} response; see private Grader artifacts"))
 }

@@ -1,0 +1,7 @@
+{"role":"meta","type":"system.version","version":"2.5.2"}
+{"role":"assistant","tool_calls":[{"type":"function","id":"call_skill","function":{"name":"Skill","arguments":"{\"skill\":\"thirdshift-implement\",\"args\":\"issue-url\"}"}}]}
+{"role":"tool","tool_call_id":"call_skill","content":"Skill \"thirdshift-implement\" loaded inline. Follow its instructions."}
+{"role":"assistant","content":"Running the tests.","tool_calls":[{"type":"function","id":"call_bash","function":{"name":"Bash","arguments":"{\"command\":\"cargo test\"}"}}]}
+{"role":"tool","tool_call_id":"call_bash","content":"test result: ok"}
+{"role":"assistant","content":"Opened the pull request."}
+{"role":"meta","type":"session.resume_hint","session_id":"ses_7f3c2a","command":"kimi -r ses_7f3c2a","content":"To resume this session: kimi -r ses_7f3c2a"}

@@ -80,6 +80,9 @@ mod cronjobs;
 #[path = "console/experiments.rs"]
 mod experiments;
 
+#[path = "console/pairwise.rs"]
+mod pairwise;
+
 #[path = "console/scoring.rs"]
 mod scoring;
 
@@ -114,6 +117,18 @@ impl Console {
     }
 
     fn start_mode(binary: &Path, home: &Path, no_sign_in: bool) -> Self {
+        // Page controls inspect Cron jobs; keep host crontabs and their tool's
+        // startup IO outside these fixtures, including the idle-store checks.
+        let bin = home.join("console-fixture-bin");
+        fs::create_dir_all(&bin).unwrap();
+        support::write_executable(
+            &bin.join("crontab"),
+            "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = -l ] || exit 99\n",
+        );
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
         let args: &[&str] = if no_sign_in {
             &["console", "--no-sign-in"]
         } else {
@@ -123,6 +138,7 @@ impl Console {
         command
             .args(args)
             .env("HOME", home)
+            .env("PATH", std::env::join_paths(paths).unwrap())
             .env_remove("RESEND_API_KEY");
         Self::start_command(command)
     }

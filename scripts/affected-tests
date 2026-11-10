@@ -24,6 +24,7 @@ DOC_CHECKS = {
     b"docs/experiment-results.md": "full",
     b"docs/adr/0026-each-console-serves-an-api-that-can-do-what-the-cli-can.md": "full",
     b"docs/research/go-vs-rust-prototype.md": "full",
+    b"docs/research/console-core-split.md": "console-split",
 }
 
 
@@ -125,6 +126,8 @@ def main():
             areas.add("go")
         elif path.startswith(b"prototypes/typescript/"):
             typescript = True
+        elif path.startswith(b"prototypes/console-split/"):
+            areas.update({"console-split", "full"})
         elif path.startswith((b"src/console/", b"src/config/console/")) or path in {
             b"src/console.rs", b"src/config/console.rs", b"tests/console/scoring_fixture.py",
             b"tests/fixtures/waterfall-logs.jsonl", b"tests/fixtures/waterfall-spans.jsonl",
@@ -149,10 +152,12 @@ def main():
         else:
             areas.add("full")
             print(f"Conservative full-suite selection for {os.fsdecode(path)!r}.", flush=True)
-    rust_areas = areas - {"go"}
+    rust_areas = areas - {"go", "console-split"}
     full = "full" in rust_areas or len(rust_areas) > 1
     if "go" in areas:
         run("go", "test", "./...", cwd="prototype/go")
+    if "console-split" in areas:
+        run("python3", "-m", "unittest", "discover", "-s", "prototypes/console-split", "-p", "test_*.py")
     if typescript:
         run("bun", "run", "--cwd", "prototypes/typescript", "typecheck")
         run("bun", "test", "--cwd", "prototypes/typescript")

@@ -88,6 +88,8 @@ pub(crate) fn propose(
         format: 1,
         state: State::Proposed,
         session: Session::CodeReview,
+        provenance: None,
+        environment: None,
         repository: "repository".into(),
         base,
         change: review.head,
@@ -96,6 +98,7 @@ pub(crate) fn propose(
             bug.url, reason
         ),
         checks: Vec::new(),
+        process_grading: None,
         inputs: BTreeMap::from([(".thirdshift-issue.md".into(), "issue.md".into())]),
         trial: Some(review.trial),
     };

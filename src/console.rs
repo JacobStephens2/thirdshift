@@ -179,9 +179,11 @@ enum View {
     RecordDifficulty,
     PendingRechecks,
     Recheck,
+    DecideLeak,
     Update,
     RunUpdate,
     ImportReplays,
+    ProposeProcess,
     Config,
     ConfigSetting,
     SetConfig,
@@ -194,6 +196,9 @@ enum View {
     Experiments,
     Experiment,
     ExperimentSession,
+    ExperimentPair,
+    MergeCalls,
+    PairPreference,
     ApproveEvalTask,
     CronJobs,
     LaunchDirectories,
@@ -252,10 +257,12 @@ impl PageRoute {
                 | View::RecordDifficulty
                 | View::PendingRechecks
                 | View::Recheck
+                | View::DecideLeak
                 | View::Whoami
                 | View::Update
                 | View::RunUpdate
                 | View::ImportReplays
+                | View::ProposeProcess
                 | View::Config
                 | View::ConfigSetting
                 | View::SetConfig
@@ -265,6 +272,9 @@ impl PageRoute {
                 | View::Experiments
                 | View::Experiment
                 | View::ExperimentSession
+                | View::ExperimentPair
+                | View::MergeCalls
+                | View::PairPreference
                 | View::CronJobs
                 | View::LaunchDirectories
                 | View::StartRun
@@ -441,6 +451,14 @@ const PAGES: &[PageRoute] = &[
         view: View::StartRun,
     },
     PageRoute {
+        path: "/experiments/{id}/leaks/{hit}",
+        api: "/api/v1/experiments/{id}/leaks/{hit}",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --leak hit confirm --reason reviewed --json"],
+        method: Method::POST,
+        view: View::DecideLeak,
+    },
+    PageRoute {
         path: "/api/v1/launch-directories",
         api: "/api/v1/launch-directories",
         scope: Some(Scope::Read),
@@ -487,6 +505,14 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift evals import-replays"],
         method: Method::POST,
         view: View::ImportReplays,
+    },
+    PageRoute {
+        path: "/evals/propose-process",
+        api: "/api/v1/evals/propose-process",
+        scope: Some(Scope::Admin),
+        cli: &["thirdshift evals propose-process repository"],
+        method: Method::POST,
+        view: View::ProposeProcess,
     },
     PageRoute {
         path: "/config",
@@ -587,6 +613,30 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift experiments id --session session --json"],
         method: Method::GET,
         view: View::ExperimentSession,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}",
+        api: "/api/v1/experiments/{id}/pairs/{pair}",
+        scope: Some(Scope::Read),
+        cli: &["thirdshift experiments id --pair pair --json"],
+        method: Method::GET,
+        view: View::ExperimentPair,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}/merge",
+        api: "/api/v1/experiments/{id}/pairs/{pair}/merge",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --pair pair --merge ready not-ready --json"],
+        method: Method::POST,
+        view: View::MergeCalls,
+    },
+    PageRoute {
+        path: "/experiments/{id}/pairs/{pair}/preference",
+        api: "/api/v1/experiments/{id}/pairs/{pair}/preference",
+        scope: Some(Scope::Act),
+        cli: &["thirdshift experiments id --pair pair --prefer a --rubric scope=tie --json"],
+        method: Method::POST,
+        view: View::PairPreference,
     },
     PageRoute {
         path: "/experiments",
@@ -1014,9 +1064,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::RecordDifficulty, Method::POST) => post(commands::difficulty),
             (View::PendingRechecks, Method::GET) => get(commands::pending),
             (View::Recheck, Method::POST) => post(commands::recheck),
+            (View::DecideLeak, Method::POST) => post(experiments::decide_leak),
             (View::Update, Method::GET) => get(update::show),
             (View::RunUpdate, Method::POST) => post(update::run),
             (View::ImportReplays, Method::POST) => post(evals::import_replays),
+            (View::ProposeProcess, Method::POST) => post(evals::propose_process),
             (View::Config, Method::GET) => get(user_config::show),
             (View::ConfigSetting, Method::GET) => get(user_config::one),
             (View::SetConfig, Method::POST) => post(user_config::set),
@@ -1025,6 +1077,9 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
+            (View::ExperimentPair, Method::GET) => get(experiments::pair),
+            (View::MergeCalls, Method::POST) => post(experiments::merge_calls),
+            (View::PairPreference, Method::POST) => post(experiments::preference),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::LaunchDirectories, Method::GET) => get(known_launch_directories),

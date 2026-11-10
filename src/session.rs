@@ -92,6 +92,13 @@ impl Logs {
         }
     }
 
+    pub(crate) fn of_trial_step(dir: &Path, role: &str) -> Self {
+        Self {
+            recording: recording::Recording::for_trial_step(role).into(),
+            ..Self::of_trial(dir)
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
@@ -206,6 +213,19 @@ impl<'a> Sessions<'a> {
         sandbox: &crate::sandbox::Launch,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
+        Self::checked_within_sandboxed(logs, worktree, harness, sandbox, &|| Ok(()), steps)
+    }
+
+    /// A local Process restores its Ticket before every sandboxed session,
+    /// including a Resume, using the same admission lifecycle as the factory.
+    pub(crate) fn checked_within_sandboxed<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        sandbox: &crate::sandbox::Launch,
+        before_each: &'a dyn Fn() -> Result<()>,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
         if let Err(error) = skills::link_into(worktree, adapter)
             .and_then(|()| adapter.link_instruction_fallback(worktree))
@@ -225,7 +245,10 @@ impl<'a> Sessions<'a> {
             logs,
             worktree,
             Box::new(on_machine),
-            crate::resources::wait,
+            move || {
+                crate::resources::wait()?;
+                before_each()
+            },
             steps,
         );
         (taken, log.filter(|log| log.exists()))

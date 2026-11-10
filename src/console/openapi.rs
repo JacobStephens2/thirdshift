@@ -127,10 +127,19 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             json!({"oneOf":[{"type":"string","enum":["none","readable"]},array(text)]})
         }
         View::RecordDifficulty => array(record),
-        View::RenameExperiment | View::PendingRechecks | View::Recheck => record,
+        View::RenameExperiment
+        | View::PendingRechecks
+        | View::Recheck
+        | View::DecideLeak
+        | View::ExperimentPair
+        | View::MergeCalls
+        | View::PairPreference => record,
         View::Update => object(json!({"current": text, "latest": text})),
         View::RunUpdate => text,
         View::ImportReplays => object(json!({"imported": integer, "skipped": integer})),
+        View::ProposeProcess => {
+            object(json!({"proposals":array(record.clone()),"skipped":array(record)}))
+        }
         View::Config => object(json!({"version": version, "settings": array(setting())})),
         View::ConfigSetting | View::SetConfig => setting(),
         View::Whoami => object(json!({
@@ -296,6 +305,12 @@ fn action_body(view: View) -> Value {
             return json!({"required":true,"content":{"application/json":{"schema":schema}}});
         }
         View::TouchedEvals => return json_request(json!({"paths":array(text)}), vec!["paths"]),
+        View::ProposeProcess => {
+            return json_request(
+                json!({"repository":{"type":"string","description":"A known Launch directory's owner/repo, not a filesystem path."},"limit":{"type":"integer","minimum":1,"maximum":100,"default":100}}),
+                vec!["repository"],
+            );
+        }
         View::VerifyEval => {
             return json_request(
                 json!({"repository":text,"base":text}),
@@ -316,6 +331,29 @@ fn action_body(view: View) -> Value {
                 {"required":["fingerprint"],"not":{"required":["trial"]}}
             ]);
             return body;
+        }
+        View::DecideLeak => {
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"decision":{"enum":["confirm","dismiss"]},"reason":text},"required":["decision","reason"]
+            }}}});
+        }
+        View::MergeCalls => {
+            let call = json!({"enum": ["ready", "not-ready"]});
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":{"a":call,"b":call},"required":["a","b"]
+            }}}});
+        }
+        View::PairPreference => {
+            use crate::evals::experiment::pairwise::Preference;
+            let values: Vec<_> = Preference::ALL.iter().map(|(_, value, _)| *value).collect();
+            let preference = json!({"enum": values});
+            let mut properties = json!({"preference": preference});
+            for (name, _) in crate::evals::experiment::pairwise::RUBRIC {
+                properties[format!("rubric_{name}")] = preference.clone();
+            }
+            return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
+                "type":"object", "properties":properties,"required":["preference"]
+            }}}});
         }
         View::StartRun => {
             return json!({"required": true, "content": {"application/json": {"schema": start_schema()}}});
@@ -372,6 +410,7 @@ fn action_body(view: View) -> Value {
         | View::Experiments
         | View::Experiment
         | View::ExperimentSession
+        | View::ExperimentPair
         | View::CronJobs
         | View::LaunchDirectories
         | View::StartOptions
@@ -418,7 +457,7 @@ fn start_schema() -> Value {
         "allow_ready_for_agent": boolean, "merge": boolean, "base_fix": boolean,
         "security_review": boolean, "security_fix": boolean, "security_close": boolean,
         "parallel": {"type":"integer","minimum":1},
-        "harness": {"enum":["claude","codex","agy","grok","muse","opencode"]},
+        "harness": {"enum":["claude","codex","agy","grok","muse","opencode","kimi"]},
         "model": text, "effort": text,
         "email": {"oneOf":[
             {"type":"object","required":["mode"],"additionalProperties":false,
@@ -493,7 +532,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 4}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 10}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))

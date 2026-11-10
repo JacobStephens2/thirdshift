@@ -183,7 +183,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift review <PR URL> | --author <login>  Review and fix one PR; --recommend-only posts findings
        thirdshift fix [<PR URL or number>]           Repair conflicts and CI; no target selects a PR Pass
-       thirdshift triage [--recommend-only] [--file <path>] [--read-machine]  Investigate a Report and file triaged issues
+       thirdshift triage [<Issue URL or number>] [base <branch>] [--file <path>]  Triage an issue, Report or backlog Pass; --recommend-only writes nothing
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process [list] | processes       List Processes, marking Built-in processes (experimental)
        thirdshift process show <name>              Print a Process file exactly (experimental)
@@ -196,7 +196,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
-       thirdshift experiments [<id>] [--json]        List Experiments or show one; <id> --name <text> renames it; <id> --record-difficulty records A/A Difficulty
+       thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
        thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
@@ -230,10 +230,10 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
-  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode), Model and Effort
+  harness <name>, model <name>, effort <level>  Choose Harness (claude, codex, agy, grok, muse, opencode, kimi), Model and Effort
   security-review / no-security-review  Enable / disable a Ticket or Review run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings (security-close / no-security-close: closing after merge defaults on)
-Pass commands: architect, pickup, secure, review --author <login>, fix. For architect, pickup, secure and fix, base <branch> selects an origin branch; fix also accepts author <login>.
+Pass commands: architect, pickup, secure, review --author <login>, fix, triage (no supplied work). For architect, pickup, secure, fix and triage, base <branch> selects an origin branch; fix also accepts author <login>.
   --plan-only                        architect or a Custom process's architecture-review; publish and stop (architect: only base and email flags apply)
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting; commands override User config defaults. Full manual:
   https://thirdshift.app/docs/
@@ -279,7 +279,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::Experiment(options)) => {
-            return match evals::experiment::run(options) {
+            return match evals::experiment::run(*options) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -595,8 +595,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 
 #[cfg(target_os = "linux")]
 fn triage(args: args::TriageArgs) -> ExitCode {
-    let report = match triage::Report::read(args.file.as_deref()) {
-        Ok(report) => report,
+    let input = match triage::Input::read(args.issue, args.file.as_deref()) {
+        Ok(input) => input,
         Err(error) => return failure(&error),
     };
     let flags = asks::Flags {
@@ -605,7 +605,9 @@ fn triage(args: args::TriageArgs) -> ExitCode {
         ..Default::default()
     };
     let (config, mut started) = match command::start(
-        Begin::TriageRun,
+        Begin::TriageRun {
+            pass: input.is_none(),
+        },
         |config| flags.notification(config),
         About::TriageRun,
     ) {
@@ -621,7 +623,22 @@ fn triage(args: args::TriageArgs) -> ExitCode {
         read_machine: args.read_machine
             || launch::repo().is_ok_and(|repo| config.triage_reads_machine(&repo)),
     };
-    started.finish(Ending::Triage(triage::run(&report, options, &mut harness)))
+    let ending = match input {
+        Some(input) => Ending::Triage(triage::run(
+            &input,
+            args.base.as_deref(),
+            options,
+            &mut harness,
+        )),
+        None => {
+            match triage::run_pass(args.base.as_deref(), options, &flags, &config, &mut harness) {
+                Ok(triage::Outcome::Ran(ended)) => Ending::Triage(Ok(ended)),
+                Ok(triage::Outcome::Skipped(skip)) => Ending::Skipped(skip),
+                Err(failed) => Ending::Triage(Err(failed)),
+            }
+        }
+    };
+    started.finish(ending)
 }
 
 /// A Pickup run: the search for the Ready issue at its order's end of the

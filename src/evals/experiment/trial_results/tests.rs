@@ -39,6 +39,7 @@ fn retained(root: &Path, attempts: Vec<Output>) -> TrialResult {
         outcome: attempts.last().unwrap().outcome,
         score: Some(score()),
         attempts,
+        leaks: Vec::new(),
     };
     let pending = root.join("trials").join(result.key());
     fs::create_dir_all(&pending).unwrap();

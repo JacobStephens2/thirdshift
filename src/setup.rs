@@ -1336,6 +1336,10 @@ effort = \"\"
 model = \"\"
 effort = \"\"
 
+[harness.kimi]
+model = \"\"
+effort = \"\"
+
 [scoring]
 owners = []
 sample_size = 10
