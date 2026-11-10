@@ -188,7 +188,7 @@ fn spec_reviews_and_their_resumes_request_fresh_reviewers() {
         calls[0]["prompt"]
             .as_str()
             .unwrap()
-            .starts_with("$thirdshift-code-review origin/main, with the Spec ")
+            .starts_with("$thirdshift-code-review refs/remotes/origin/main, with the Spec ")
     );
     for call in &calls {
         assert_fresh_reviewers(call);
@@ -749,7 +749,8 @@ printf 'Architecture review plan: %s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
         "$thirdshift-improve-codebase-architecture"
     );
     assert!(
-        first_lines[2].starts_with("$thirdshift-code-review origin/main, with the Spec "),
+        first_lines[2]
+            .starts_with("$thirdshift-code-review refs/remotes/origin/main, with the Spec "),
         "{first_lines:?}"
     );
     first_lines.pop();

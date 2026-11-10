@@ -1276,7 +1276,7 @@ esac
             call["prompt"]
                 .as_str()
                 .unwrap()
-                .starts_with("/thirdshift-code-review origin/main\n")
+                .starts_with("/thirdshift-code-review refs/remotes/origin/main\n")
         );
     }
     assert!(fixture.scenario.gh_calls().is_empty());

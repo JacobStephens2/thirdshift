@@ -196,10 +196,10 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
     let calls = trial_calls(&scenario, "codex-calls.json");
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
-        prompt.starts_with("$thirdshift-code-review origin/main"),
+        prompt.starts_with("$thirdshift-code-review refs/remotes/origin/main"),
         "{prompt}"
     );
-    assert!(prompt.contains("using origin/main as the fixed point"));
+    assert!(prompt.contains("using refs/remotes/origin/main as the fixed point"));
     assert!(prompt.contains(".thirdshift-issue.md"));
     assert!(prompt.contains("review-only"));
     assert!(prompt.contains("Do not fix"));
@@ -270,7 +270,7 @@ fi
     assert_eq!(calls[0]["cwd"], scenario.launch_dir().to_str().unwrap());
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(prompt.contains("Every Ticket of the Spec"));
-    assert!(prompt.contains("using origin/main as the fixed point"));
+    assert!(prompt.contains("using refs/remotes/origin/main as the fixed point"));
     assert!(prompt.contains(".thirdshift-issue.md"));
     assert!(prompt.contains("Update PR https://github.com/acme/widgets/pull/1"));
     assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "claude-calls.json"));
