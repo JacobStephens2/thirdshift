@@ -6,6 +6,7 @@ const { join, resolve } = require('node:path');
 const { tmpdir } = require('node:os');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 const { test } = require('node:test');
 async function reproduce(mode) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift824-spec-'));
@@ -20,7 +21,7 @@ async function reproduce(mode) {
     const began = new Date(Date.now() - 60_000).toISOString();
     const record = {version: 1, kind: 'Run', name: '1-fixture', repository: 'acme/widgets', hostname: 'fixture', issue: { number: 1, url: 'https://github.com/acme/widgets/issues/1', title: 'Fixture'}, process_id: process.pid, process_start: start, harness: 'codex', started_at: began, ended_at: mode === 'tags' ? new Date().toISOString() : null, outcome: mode === 'tags' ? 'failed' : null, session_log: null, stages: [{name: 'implement', began_at: began, session_log: null}]};
     const recordPath = join(records, '1-fixture.command.json');
-    await writeFile(recordPath, JSON.stringify(record));
+    await replaceRecord(recordPath, JSON.stringify(record));
     await writeFile(join(records, '1-fixture.log'), 'Command output\n');
     server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', '--no-sign-in'], {env: {...process.env, HOME: home}, stdio: ['ignore', 'pipe', 'inherit']});
     exited = once(server, 'exit');
@@ -47,7 +48,7 @@ async function reproduce(mode) {
         pages.push([name, page]);
       }
       record.ended_at = new Date().toISOString(); record.outcome = 'merged';
-      await writeFile(recordPath, JSON.stringify(record));
+      await replaceRecord(recordPath, JSON.stringify(record));
       const fresh = await (await fetch(`${origin}/?page=lanes`)).text();
       assert.ok(!fresh.includes('data-live="true"'), 'server now observes no live Command');
       await pages[0][1].waitForTimeout(6500);
