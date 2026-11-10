@@ -60,9 +60,12 @@ use recording::Record;
 
 /// Live Commands of this OS account, across repositories, excluding this process.
 pub(crate) fn live_commands() -> anyhow::Result<Vec<LiveCommand>> {
-    let root = record()
-        .logs_directory()
-        .ok_or_else(|| anyhow::anyhow!("logs not configured"))?;
+    // An issue-targeted Custom process takes its slot before recording begins.
+    let configured = record().logs_directory();
+    let root = match configured {
+        Some(root) => root,
+        None => UserConfig::load()?.logs_dir,
+    };
     live::read(&root)
 }
 

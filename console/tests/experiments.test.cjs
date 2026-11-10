@@ -2,12 +2,42 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
-const { tmpdir } = require('node:os');
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
+const { tmpdir, hostname } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+const { replaceRecord } = require('./records.cjs');
+
+test('the Inbox names the Commands blocking a waiting Experiment', async t => {
+  const folder = join(home, '.thirdshift/logs/acme/widgets/commands/experiment');
+  await mkdir(folder, { recursive: true });
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19]}`;
+  const now = new Date().toISOString();
+  const path = join(folder, 'host-wait.command.json');
+  await replaceRecord(path, JSON.stringify({
+    version: 1, kind: 'Experiment', repository: 'acme/widgets', name: 'host-wait', issue: null,
+    hostname: hostname(), process_id: process.pid, process_start: start, harness: 'claude',
+    model: null, effort: null, started_at: now, ended_at: null, outcome: null, cause: null,
+    session_log: null, issue_branch: null, pull_request: null,
+    stages: [{ name: 'Waiting for Commands', began_at: now, session_log: null }],
+    waiting_for: ['Ticket run unique/blocker#7 <script>']
+  }));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport });
+    try {
+      const page = await context.newPage();
+      await page.goto(origin);
+      const row = page.locator('.command').filter({ hasText: 'host-wait' }).first();
+      assert.match(await row.locator('.now').textContent(), /Waiting for Commands.*Ticket run unique\/blocker#7 <script>/);
+      assert.equal(await row.locator('script').count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    } finally { await context.close(); }
+  }
+});
 
 test('host waits and bypassed Command counts appear on Experiment pages and lists', async t => {
   t.after(() => fixture.save(home, fixture.record()));

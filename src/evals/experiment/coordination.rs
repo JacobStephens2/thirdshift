@@ -23,11 +23,22 @@ pub(super) fn start(experiment: &mut Stored, no_wait: bool) -> Result<()> {
     let mut last_line = Instant::now();
     loop {
         interrupt::check()?;
-        let mut waiting: Vec<_> = logs::live_commands()?
-            .into_iter()
-            .map(|command| command.name)
-            .collect();
-        if waiting.is_empty() && crate::host_work::busy()? {
+        let mut commands = logs::live_commands()?;
+        let busy = crate::host_work::busy()?;
+        // Waiting Experiments must not wait on one another forever. Once
+        // ordinary work has drained, a stable order admits exactly one; the
+        // others keep waiting until its Trials and Graders have finished.
+        if !busy
+            && commands.iter().all(|command| {
+                command.experiment.is_some()
+                    && command.waiting
+                    && std::process::id() < command.process_id
+            })
+        {
+            commands.clear();
+        }
+        let mut waiting: Vec<_> = commands.into_iter().map(|command| command.name).collect();
+        if waiting.is_empty() && busy {
             waiting.push("Commands starting or ending on this machine".into());
         }
         waiting.sort();

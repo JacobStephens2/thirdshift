@@ -7,6 +7,8 @@ use super::reading::{Entry, Snapshot};
 pub(crate) struct Command {
     pub name: String,
     pub experiment: Option<String>,
+    pub process_id: u32,
+    pub waiting: bool,
 }
 
 pub(super) fn read(root: &std::path::Path) -> Result<Vec<Command>> {
@@ -28,6 +30,8 @@ pub(super) fn read(root: &std::path::Path) -> Result<Vec<Command>> {
             }
             Some(Command {
                 name: format!("{} {}", super::display_name(&record.kind), record.name),
+                process_id: record.process_id,
+                waiting: !record.waiting_for.is_empty(),
                 experiment: (record.kind == "Experiment").then(|| {
                     record
                         .experiment

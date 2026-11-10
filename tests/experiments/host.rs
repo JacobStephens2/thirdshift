@@ -136,35 +136,12 @@ fn an_experiment_waits_visibly_for_a_live_ticket_and_skips_passes_until_it_ends(
     let mut experiment = fixture
         .scenario
         .start(&Fixture::experiment_args(&[]), &NO_SANDBOX);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let waiting = loop {
-        let status = fixture.scenario.run(&["status", "--json"]);
-        assert_eq!(status.code, Some(0), "{}", status.stderr);
-        let status: Value = serde_json::from_str(&status.stdout).unwrap();
-        if let Some(command) = status["commands"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["kind"] == "Experiment")
-        {
-            if command["waiting_for"]
-                .as_array()
-                .is_some_and(|v| v.len() == 2)
-            {
-                break command.clone();
-            }
-        }
-        assert_eq!(
-            fixture.scenario.claude_calls().len(),
-            2,
-            "a Trial started before the live Commands ended"
-        );
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Experiment never showed its wait"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
+    let waiting = waiting_command(&fixture, 2);
+    assert_eq!(
+        fixture.scenario.claude_calls().len(),
+        2,
+        "a Trial started before the live Commands ended"
+    );
     assert_eq!(waiting["stage"]["name"], "Waiting for Commands");
     assert!(
         waiting["waiting_for"][0]
@@ -173,8 +150,15 @@ fn an_experiment_waits_visibly_for_a_live_ticket_and_skips_passes_until_it_ends(
             .contains("acme/widgets#7")
     );
     let text = fixture.scenario.run(&["status"]);
+    let experiment_row = text
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Experiment "))
+        .unwrap();
     assert!(
-        text.stdout.contains("Waiting for Commands") && text.stdout.contains("acme/widgets#7"),
+        experiment_row.contains("Waiting for Commands")
+            && experiment_row.contains("acme/widgets#7")
+            && experiment_row.contains("acme/widgets#9"),
         "{}",
         text.stdout
     );
@@ -216,6 +200,82 @@ fn an_experiment_waits_visibly_for_a_live_ticket_and_skips_passes_until_it_ends(
     }
     experiment.signal("TERM");
     experiment.finish();
+}
+
+#[test]
+fn waiting_experiments_take_turns_after_the_live_ticket_ends() {
+    let fixture = Fixture::new();
+    fixture.scenario.launch_git(&["checkout", "main"]);
+    fixture.scenario.agent_does_for(
+        7,
+        &format!(
+            "case \"$PWD\" in */trials/*) {} ;; *) {} ;; esac",
+            support::concurrency::waits_on("trial"),
+            support::concurrency::waits_on("ticket")
+        ),
+    );
+    let mut ticket = fixture.scenario.run_until(&["7"], &[], "started-ticket");
+    let mut first = fixture
+        .scenario
+        .start(&Fixture::experiment_args(&[]), &NO_SANDBOX);
+    waiting_command(&fixture, 1);
+    let mut second = fixture.scenario.start(
+        &Fixture::experiment_args(&["--candidate-model", "fixture-model"]),
+        &NO_SANDBOX,
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let result = fixture.scenario.run(&["status", "--json"]);
+        let view: Value = serde_json::from_str(&result.stdout).unwrap();
+        let waiting = view["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| {
+                c["kind"] == "Experiment"
+                    && c["state"] == "live"
+                    && c["waiting_for"].as_array().is_some_and(|v| v.len() >= 2)
+            })
+            .count();
+        if waiting == 2 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "{}", result.stdout);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    ticket.signal("TERM");
+    ticket.finish();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !fixture.scenario.path("started-trial").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let progressed = fixture.scenario.path("started-trial").exists();
+    let result = fixture.scenario.run(&["status", "--json"]);
+    let view: Value = serde_json::from_str(&result.stdout).unwrap();
+    let waiting = view["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| {
+            c["kind"] == "Experiment"
+                && c["state"] == "live"
+                && c["stage"]["name"] == "Waiting for Commands"
+        })
+        .count();
+    first.signal("TERM");
+    second.signal("TERM");
+    first.finish();
+    second.finish();
+    assert!(
+        progressed,
+        "neither Experiment started a Trial: {}",
+        result.stdout
+    );
+    assert_eq!(
+        waiting, 1,
+        "waiting Experiments started competing Trials: {}",
+        result.stdout
+    );
 }
 
 #[test]
@@ -287,6 +347,22 @@ fn every_pass_skips_a_live_experiment_on_another_repository_before_github_or_ses
             .count(),
         7,
         "{activity}"
+    );
+    let marker = fixture.scenario.launch_dir().join("should-not-run");
+    assert!(!marker.exists(), "the Custom Pass started work");
+    let manual = fixture
+        .scenario
+        .run(&["process", "host-check", "issue", "7"]);
+    assert_eq!(manual.code, Some(0), "{}", manual.stderr);
+    assert!(
+        manual.stderr.contains("warning: Experiment")
+            && manual.stderr.contains("will compete with its Trials"),
+        "{}",
+        manual.stderr
+    );
+    assert!(
+        marker.exists(),
+        "the issue-targeted Custom process did not run"
     );
     experiment.signal("TERM");
     experiment.finish();

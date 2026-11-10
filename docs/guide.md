@@ -1214,7 +1214,8 @@ OS account on this machine skips. Before starting Trials, it waits for that
 account's other live Commands across repositories to end. Its Command log,
 `status` and the Console name the Commands it waits on and refresh the list as
 they end. Stop or interrupt during the wait ends the Experiment cleanly as
-interrupted; resuming waits again.
+interrupted; resuming waits again. Multiple waiting Experiments take turns once
+the other Commands have ended.
 
 Use `thirdshift experiment <candidate> --no-wait` to start immediately. Results
 record `no_wait: true` and `commands_at_start`, the number of other live Commands
