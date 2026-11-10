@@ -222,25 +222,9 @@ fn diff(
     new_tests: &format::NewTests,
     deadline: Instant,
 ) -> Result<Vec<FileDiff>> {
-    let names = repository::bytes_until(
-        &own.repository,
-        &[
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            base,
-            &own.commit,
-            "--",
-        ],
-        deadline,
-    )?;
     let mut files = Vec::new();
-    for name in names
-        .split(|byte| *byte == 0)
-        .filter(|name| !name.is_empty())
-    {
-        let path = std::str::from_utf8(name).context("changed paths must be UTF-8")?;
+    for path in process::touched(&own.repository, base, &own.commit, deadline)? {
+        let path = path.as_str();
         let patch = repository::bytes_until(
             &own.repository,
             &[

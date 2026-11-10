@@ -353,10 +353,10 @@ fn people(view: &View) -> String {
         html.push_str("<p>No calls yet.</p></section>");
         return html;
     }
-    html.push_str("<table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Reader</th><th scope=\"col\">Recorded</th><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th><th scope=\"col\">Preference</th></tr></thead><tbody>");
+    html.push_str("<table><thead><tr><th scope=\"col\">Pair</th><th scope=\"col\">Reader</th><th scope=\"col\">Recorded</th><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th><th scope=\"col\">Preference</th><th scope=\"col\">Blind</th></tr></thead><tbody>");
     for review in &people.reviews {
         html.push_str(&format!(
-            "<tr><td>{}/{} #{}</td><td>{}</td><td><time>{}</time></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            "<tr><td>{}/{} #{}</td><td>{}</td><td><time>{}</time></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             esc(&review.suite),
             esc(&review.task),
             review.trial + 1,
@@ -366,7 +366,12 @@ fn people(view: &View) -> String {
             pairwise::ready(review.candidate_ready),
             review
                 .preference
-                .map_or("—", pairwise::arm_preference)
+                .map_or("—", pairwise::arm_preference),
+            if review.blind {
+                "yes"
+            } else {
+                "no, after the reveal"
+            }
         ));
     }
     html.push_str(&format!(

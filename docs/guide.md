@@ -1369,8 +1369,11 @@ each side, ready or not ready; then give a preference (A, B, tie or both bad)
 and, optionally, the rubric: which change better does what the Ticket asks
 (`correctness`), has proportionate tests that check the change (`tests`) and
 keeps to what was asked (`scope`). The preference and rubric are refused until
-both merge calls are sealed. Every call is a new record, attributed to you and
-never changed, so reading a pair again adds a second review. Once you have given
+both merge calls are sealed, and sealed calls can't be made again until you
+have given that preference. Every call is a new record, attributed to you and
+never changed, so reading a pair again adds a second review; one begun after
+your reveal is marked as not blind and left out of people–panel agreement.
+Once you have given
 a preference, the page shows which Arm made each side, the Grader panel's calls
 when it has read the pair, and every reader's calls. In the shell:
 

@@ -303,13 +303,13 @@ fn after_the_preference_the_reader_sees_the_arms_and_the_panels_calls() {
     assert_eq!(view["revealed"][side], "baseline", "{view}");
     assert!(
         revealed.contains(&format!(
-            "<dt>Change {baseline}</dt><dd>The Baseline arm: claude · {BASELINE_MODEL}"
+            "<dt>Change {baseline}</dt><dd>Baseline arm · claude · {BASELINE_MODEL}"
         )),
         "{revealed}"
     );
     assert!(
         revealed.contains(&format!(
-            "<dt>Change {candidate}</dt><dd>The Candidate arm: codex · {CANDIDATE_MODEL}"
+            "<dt>Change {candidate}</dt><dd>Candidate arm · codex · {CANDIDATE_MODEL}"
         )),
         "{revealed}"
     );
@@ -437,5 +437,61 @@ fn the_cli_records_the_same_calls_and_they_show_beside_the_verdict() {
     assert!(
         text.contains(&format!("People–panel agreement: {agreed}/2 merge calls")),
         "{text}"
+    );
+}
+
+#[test]
+fn sealed_merge_calls_cannot_be_replaced_or_remade_after_the_reveal() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let (id, pair) = fixture(home.path());
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let token = tokens::create(home.path(), "grader", &["--scopes", "act"]);
+    let base = format!("/api/v1/experiments/{id}/pairs/{pair}");
+    post(
+        &console,
+        &token,
+        &format!("{base}/merge"),
+        &[("a", "ready"), ("b", "ready")],
+    );
+    let replaced = post(
+        &console,
+        &token,
+        &format!("{base}/merge"),
+        &[("a", "not-ready"), ("b", "not-ready")],
+    );
+    assert_eq!(replaced.status(), 422);
+    assert!(replaced.text().unwrap().contains("sealed"));
+    post(
+        &console,
+        &token,
+        &format!("{base}/preference"),
+        &[("preference", "tie")],
+    );
+    // A second review after the reveal is kept, but it is not blind.
+    post(
+        &console,
+        &token,
+        &format!("{base}/merge"),
+        &[("a", "not-ready"), ("b", "not-ready")],
+    );
+    let view = api::json(console.get(&format!("/api/v1/experiments/{id}")));
+    let reviews = view["people"]["reviews"].as_array().unwrap();
+    assert_eq!(reviews.len(), 2, "{view}");
+    assert_eq!(
+        (reviews[0]["blind"].clone(), reviews[1]["blind"].clone()),
+        (json!(true), json!(false))
+    );
+    // The panel called only the Baseline ready; the blind calls were both ready.
+    assert_eq!(
+        view["people"]["agreement"],
+        json!({"compared": 2, "agreed": 1}),
+        "{view}"
+    );
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(html.contains("tie</td><td>yes</td>"), "{html}");
+    assert!(
+        html.contains("—</td><td>no, after the reveal</td>"),
+        "{html}"
     );
 }

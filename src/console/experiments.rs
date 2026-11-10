@@ -100,7 +100,7 @@ pub(super) async fn pair(
 ) -> Response {
     let response = super::api::read(format, move || {
         let config = UserConfig::load()?;
-        let shown = experiment::pair_page(&id, &pair, &viewer.activity_actor())?;
+        let shown = experiment::pairwise::page(&id, &pair, &viewer.activity_actor())?;
         format.render(&shown, |shown| {
             Ok(PairPage {
                 page: super::PageContext::new(&config, &viewer.scopes),
@@ -129,7 +129,7 @@ pub(super) async fn merge_calls(
     let redirect = format!("/experiments/{id}/pairs/{pair}");
     super::api::action(format, &redirect, move || {
         let side = |name: &str| form.get(name).map_or("", String::as_str);
-        experiment::merge_pair(&id, &pair, side("a"), side("b"), viewer.activity_actor())
+        experiment::pairwise::merge(&id, &pair, side("a"), side("b"), viewer.activity_actor())
     })
     .await
 }
@@ -150,7 +150,7 @@ pub(super) async fn preference(
             })
             .filter(|(_, value)| !value.is_empty())
             .collect();
-        experiment::prefer_pair(
+        experiment::pairwise::prefer(
             &id,
             &pair,
             form.get("preference").map_or("", String::as_str),

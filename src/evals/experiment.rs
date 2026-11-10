@@ -49,9 +49,6 @@ pub(crate) use grading::{Conclusion, Flip, Pending};
 pub(crate) use leaks::decide as decide_leak;
 pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
-pub(crate) use pairwise::{
-    Page as PairPage, merge as merge_pair, page as pair_page, prefer as prefer_pair,
-};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use session_evidence::{SessionLog, read as read_session};
 pub(crate) use store::{State, View, read};
@@ -535,9 +532,9 @@ pub fn show(args: &[String]) -> Result<String> {
         && flag.as_str() == "--pair"
     {
         let page = match rest {
-            [] => pair_page(id, pair, &logs::Actor::cli("a blind pair")?)?,
+            [] => pairwise::page(id, pair, &logs::Actor::cli("a blind pair")?)?,
             [flag, a, b] if flag.as_str() == "--merge" => {
-                merge_pair(id, pair, a, b, logs::Actor::cli("merge calls")?)?
+                pairwise::merge(id, pair, a, b, logs::Actor::cli("merge calls")?)?
             }
             [flag, preference, rubric @ ..] if flag.as_str() == "--prefer" => {
                 let mut graded = Vec::new();
@@ -551,7 +548,7 @@ pub fn show(args: &[String]) -> Result<String> {
                         .context("--rubric needs <criterion>=<a|b|tie|both-bad>")?;
                     graded.push((criterion.to_owned(), value.to_owned()));
                 }
-                prefer_pair(
+                pairwise::prefer(
                     id,
                     pair,
                     preference,

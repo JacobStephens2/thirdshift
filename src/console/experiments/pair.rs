@@ -1,9 +1,8 @@
 //! The blind pairwise page. Before the reader's preference it names no Arm,
 //! build, Harness or Model and shows no model call.
 use crate::console::filters::escaped as esc;
-use crate::evals::experiment::PairPage;
 use crate::evals::experiment::pairs::Side;
-use crate::evals::experiment::pairwise::{self, Next};
+use crate::evals::experiment::pairwise::{self, Next, Page as PairPage, Preference};
 
 pub(super) fn page(page: &PairPage, csrf: &str, can_act: bool) -> String {
     let id = esc(&page.experiment);
@@ -101,17 +100,10 @@ fn calls(page: &PairPage, csrf: &str, can_act: bool) -> String {
         }
         html.push_str("</ul>");
     }
-    let command = format!(
-        "thirdshift experiments {} --pair {} {}",
-        page.experiment,
-        page.pair,
-        match page.next {
-            Next::Merge => "--merge <ready|not-ready> <ready|not-ready>",
-            Next::Preference =>
-                "--prefer <a|b|tie|both-bad> [--rubric <criterion>=<a|b|tie|both-bad>]...",
-        }
-    );
-    html.push_str(&format!("<p><code>{}</code></p>", esc(&command)));
+    html.push_str(&format!(
+        "<p><code>{}</code></p>",
+        esc(&pairwise::next_command(page))
+    ));
     if !can_act {
         html.push_str("<p>Recording calls needs the act scope.</p></section>");
         return html;
@@ -135,12 +127,7 @@ fn calls(page: &PairPage, csrf: &str, can_act: bool) -> String {
                 "<p>Now your preference, and optionally the rubric.</p><form class=\"judgment-form\" method=\"post\" action=\"{base}/preference\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><fieldset><legend>Which change is better?</legend>",
                 esc(csrf)
             ));
-            for (value, label) in [
-                ("a", "A"),
-                ("b", "B"),
-                ("tie", "Tie"),
-                ("both-bad", "Both bad"),
-            ] {
+            for (_, value, label) in Preference::ALL {
                 html.push_str(&format!(
                     "<label><input type=\"radio\" name=\"preference\" value=\"{value}\" required> {label}</label> "
                 ));
@@ -148,10 +135,14 @@ fn calls(page: &PairPage, csrf: &str, can_act: bool) -> String {
             html.push_str("</fieldset><fieldset><legend>Rubric (optional)</legend>");
             for criterion in &page.rubric {
                 html.push_str(&format!(
-                    "<label>{} <select name=\"rubric_{}\"><option value=\"\">Skip</option><option value=\"a\">A</option><option value=\"b\">B</option><option value=\"tie\">Tie</option><option value=\"both-bad\">Both bad</option></select></label><br>",
+                    "<label>{} <select name=\"rubric_{}\"><option value=\"\">Skip</option>",
                     esc(criterion.question),
                     criterion.name
                 ));
+                for (_, value, label) in Preference::ALL {
+                    html.push_str(&format!("<option value=\"{value}\">{label}</option>"));
+                }
+                html.push_str("</select></label><br>");
             }
             html.push_str("</fieldset><button>Save preference</button></form>");
         }
@@ -170,12 +161,8 @@ fn revealed(page: &PairPage) -> String {
         ("B", reveal.b, &reveal.b_setup),
     ] {
         html.push_str(&format!(
-            "<dt>Change {label}</dt><dd>The {} arm: {} · {} · {} · <code>{}</code></dd>",
-            pairwise::capitalized(arm),
-            esc(&setup.harness),
-            esc(setup.model.as_deref().unwrap_or("default Model")),
-            esc(setup.effort.as_deref().unwrap_or("default Effort")),
-            esc(&setup.commit)
+            "<dt>Change {label}</dt><dd>{}</dd>",
+            esc(&pairwise::revealed_side(arm, setup))
         ));
     }
     html.push_str(&format!(

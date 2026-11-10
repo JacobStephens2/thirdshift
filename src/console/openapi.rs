@@ -344,7 +344,9 @@ fn action_body(view: View) -> Value {
             }}}});
         }
         View::PairPreference => {
-            let preference = json!({"enum": ["a", "b", "tie", "both-bad"]});
+            use crate::evals::experiment::pairwise::Preference;
+            let values: Vec<_> = Preference::ALL.iter().map(|(_, value, _)| *value).collect();
+            let preference = json!({"enum": values});
             let mut properties = json!({"preference": preference});
             for (name, _) in crate::evals::experiment::pairwise::RUBRIC {
                 properties[format!("rubric_{name}")] = preference.clone();

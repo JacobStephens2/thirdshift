@@ -44,23 +44,27 @@ pub(crate) enum Preference {
 }
 
 impl Preference {
+    /// Each preference's argument and form value, and its label.
+    pub(crate) const ALL: [(Self, &'static str, &'static str); 4] = [
+        (Self::A, "a", "A"),
+        (Self::B, "b", "B"),
+        (Self::Tie, "tie", "tie"),
+        (Self::BothBad, "both-bad", "both bad"),
+    ];
+
     pub fn parse(text: &str) -> Result<Self> {
-        Ok(match text {
-            "a" | "A" => Self::A,
-            "b" | "B" => Self::B,
-            "tie" => Self::Tie,
-            "both-bad" | "both_bad" => Self::BothBad,
-            _ => bail!("a preference must be a, b, tie or both-bad"),
-        })
+        Self::ALL
+            .iter()
+            .find(|(_, value, _)| *value == text)
+            .map(|(preference, _, _)| *preference)
+            .context("a preference must be a, b, tie or both-bad")
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::A => "A",
-            Self::B => "B",
-            Self::Tie => "tie",
-            Self::BothBad => "both bad",
-        }
+        Self::ALL
+            .iter()
+            .find(|(preference, _, _)| *preference == self)
+            .map_or("", |(_, _, label)| label)
     }
 
     fn for_arms(self, sides: [Arm; 2]) -> ArmPreference {
@@ -173,6 +177,7 @@ pub(crate) struct People {
 }
 
 /// One sealed merge call with the preference the reader then gave, if any.
+/// A reader's later reviews of a pair are kept but are no longer blind.
 #[derive(Serialize)]
 pub(crate) struct Review {
     pub pair: String,
@@ -181,14 +186,16 @@ pub(crate) struct Review {
     pub trial: usize,
     pub reader: Actor,
     pub recorded_at: String,
+    /// False for a review begun after the reader's own reveal.
+    pub blind: bool,
     pub baseline_ready: bool,
     pub candidate_ready: bool,
     pub preference: Option<ArmPreference>,
     pub rubric: BTreeMap<String, ArmPreference>,
 }
 
-/// People–panel agreement on merge calls: each reader's latest call per side
-/// on pairs the panel has read.
+/// People–panel agreement on merge calls: each reader's latest blind call per
+/// side on pairs the panel has read.
 #[derive(Default, Serialize)]
 pub(crate) struct Agreement {
     pub compared: usize,
@@ -225,7 +232,13 @@ pub(crate) fn merge(id: &str, pair: &str, a: &str, b: &str, reader: Actor) -> Re
         a_ready: ready("A", a)?,
         b_ready: ready("B", b)?,
     };
-    append(id, pair, reader, |_| Ok(call))
+    append(id, pair, reader, |records| {
+        ensure!(
+            next(records) == Next::Merge,
+            "your merge calls for this pair are sealed; give your preference next"
+        );
+        Ok(call)
+    })
 }
 
 /// The preference and optional rubric, after this reader's sealed merge calls.
@@ -269,12 +282,24 @@ pub(super) fn people(files: &impl Files, root: &Path, pairs: &[Pair], seed: u64)
     for pair in pairs {
         let key = pair.key();
         let sides = sides(seed, &key);
-        let mut latest: BTreeMap<String, usize> = BTreeMap::new();
+        // Each reader's open review, and their latest blind one.
+        let mut open: BTreeMap<String, usize> = BTreeMap::new();
+        let mut blind: BTreeMap<String, usize> = BTreeMap::new();
         for record in records(files, root, &key)? {
+            let who = record.reader.who().to_owned();
             match record.call {
                 Call::Merge { a_ready, b_ready } => {
                     let ready = |arm| if sides[0] == arm { a_ready } else { b_ready };
-                    latest.insert(record.reader.who().to_owned(), people.reviews.len());
+                    // A reader who has given a preference has seen the Arms.
+                    let unseen = !people.reviews.iter().any(|review: &Review| {
+                        review.pair == key
+                            && review.reader.who() == who
+                            && review.preference.is_some()
+                    });
+                    if unseen {
+                        blind.insert(who.clone(), people.reviews.len());
+                    }
+                    open.insert(who, people.reviews.len());
                     people.reviews.push(Review {
                         pair: key.clone(),
                         suite: pair.suite.clone(),
@@ -282,6 +307,7 @@ pub(super) fn people(files: &impl Files, root: &Path, pairs: &[Pair], seed: u64)
                         trial: pair.trial,
                         reader: record.reader,
                         recorded_at: record.recorded_at,
+                        blind: unseen,
                         baseline_ready: ready(Arm::Baseline),
                         candidate_ready: ready(Arm::Candidate),
                         preference: None,
@@ -289,8 +315,8 @@ pub(super) fn people(files: &impl Files, root: &Path, pairs: &[Pair], seed: u64)
                     });
                 }
                 Call::Preference { preference, rubric } => {
-                    let review = latest
-                        .get(record.reader.who())
+                    let review = open
+                        .get(&who)
                         .map(|index| &mut people.reviews[*index])
                         .filter(|review| review.preference.is_none())
                         .context("pairwise record has a preference without merge calls")?;
@@ -303,7 +329,7 @@ pub(super) fn people(files: &impl Files, root: &Path, pairs: &[Pair], seed: u64)
             }
         }
         if let Some(panel) = &pair.panel {
-            for index in latest.values() {
+            for index in blind.values() {
                 let review = &people.reviews[*index];
                 for (person, model) in [
                     (review.baseline_ready, panel.baseline_ready),
@@ -354,30 +380,42 @@ pub(super) fn text(page: &Page) -> String {
                 ("A", reveal.a, &reveal.a_setup),
                 ("B", reveal.b, &reveal.b_setup),
             ] {
-                text.push_str(&format!(
-                    "Change {label} was the {} arm: {} · {}\n",
-                    capitalized(arm),
-                    setup.harness,
-                    setup.model.as_deref().unwrap_or("default Model")
-                ));
+                text.push_str(&format!("Change {label}: {}\n", revealed_side(arm, setup)));
             }
             text.push_str(&match &reveal.panel {
                 Some(panel) => format!("Panel: {}\n", panel_line(panel)),
                 None => "No Grader panel calls are recorded for this pair.\n".into(),
             });
         }
-        None => text.push_str(&format!(
-            "thirdshift experiments {} --pair {} {}\n",
-            page.experiment,
-            page.pair,
-            match page.next {
-                Next::Merge => "--merge <ready|not-ready> <ready|not-ready>",
-                Next::Preference =>
-                    "--prefer <a|b|tie|both-bad> [--rubric <criterion>=<a|b|tie|both-bad>]...",
-            }
-        )),
+        None => text.push_str(&format!("{}\n", next_command(page))),
     }
     text
+}
+
+/// The command that records the reader's next calls.
+pub(crate) fn next_command(page: &Page) -> String {
+    format!(
+        "thirdshift experiments {} --pair {} {}",
+        page.experiment,
+        page.pair,
+        match page.next {
+            Next::Merge => "--merge <ready|not-ready> <ready|not-ready>",
+            Next::Preference =>
+                "--prefer <a|b|tie|both-bad> [--rubric <criterion>=<a|b|tie|both-bad>]...",
+        }
+    )
+}
+
+/// Which Arm made one side, with its setup, for the CLI and the page alike.
+pub(crate) fn revealed_side(arm: Arm, setup: &Setup) -> String {
+    format!(
+        "{} arm · {} · {} · {} · {}",
+        capitalized(arm),
+        setup.harness,
+        setup.model.as_deref().unwrap_or("default Model"),
+        setup.effort.as_deref().unwrap_or("default Effort"),
+        setup.commit
+    )
 }
 
 /// People's calls for the Experiment's text view, numbering pairs from 1.
@@ -399,6 +437,9 @@ pub(super) fn lines(people: &People) -> String {
                     arm_preference(preference)
                 ))
         ));
+        if !review.blind {
+            text.push_str(" · after the reveal");
+        }
     }
     if !people.reviews.is_empty() {
         text.push_str(&format!("\n{}", agreement(&people.agreement)));
@@ -627,13 +668,13 @@ fn ticket(task: &super::Task) -> Result<String> {
     let source = task
         .manifest
         .inputs
-        .get(".thirdshift-issue.md")
+        .get(crate::prompt::ISSUE_FILE)
         .context("the Eval task has no Ticket input")?;
     let folder = task.directory.canonicalize()?;
     let path = folder.join(source).canonicalize()?;
     ensure!(
-        path.starts_with(&folder),
-        "Eval input must be inside its task folder"
+        path.starts_with(&folder) && path.is_file(),
+        "Eval input must be a file inside its task folder"
     );
     Ok(fs::read_to_string(path)?)
 }

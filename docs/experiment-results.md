@@ -89,8 +89,22 @@ not ready) and its preference. `people` holds the Day shift's blind pairwise
 calls ([guide](guide.md#experiments)): one `PairReview` per sealed pair of
 merge calls, in Arm terms, with the preference and optional rubric the reader
 then gave (`preference` is null until given), in record order per pair.
-`agreement` compares each reader's latest merge calls with the panel's, per
-side, on pairs the panel has read; `compared` is zero when there are none.
+A reader's merge calls are sealed until their preference; a review begun after
+that reader's own preference, once the Arms were revealed, has `blind` false.
+`agreement` compares each reader's latest blind merge calls with the panel's,
+per side, on pairs the panel has read; `compared` is zero when there are none.
+
+`thirdshift experiments <id> --pair <pair-id> --json`, and its `--merge` and
+`--prefer` forms, emit `PairPage`: what the calling reader may see of one pair.
+`a` and `b` are the two `PairSide`s on the sides drawn for the pair from the
+Bar's seed, with no Arm named. `ticket` is null when the Eval task's Ticket
+input can't be read; `checklist` holds the items under its "Acceptance
+criteria" heading. `next` is the reader's next call. `mine` lists the reader's
+records and `revealed` stays null until the reader has given a preference;
+it then names the Arm on each side with its `Setup`, the panel's calls, and
+every reader's records. Each record is kept as
+`reviews/<pair-id>/<n>.json` with the `PairRecord` shape; records are only
+ever added, numbered from `000000`, beside a `lock` file.
 People's calls are reported beside the Verdict and change no Score.
 
 Process Trials add `delivered` and `stopped_to_ask` outcomes. Stopped-to-ask is
@@ -445,9 +459,26 @@ Trial files, rejecting undocumented, missing and retyped fields recursively.
   "PairReview": {
     "pair": "string", "suite": "string", "task": "string", "trial": "integer",
     "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
-    "recorded_at": "string", "baseline_ready": "boolean", "candidate_ready": "boolean",
+    "recorded_at": "string", "blind": "boolean", "baseline_ready": "boolean", "candidate_ready": "boolean",
     "preference": "ArmPreference?", "rubric": {"*": "ArmPreference"}
   },
+  "PairPage": {
+    "experiment": "string", "pair": "string", "suite": "string", "task": "string", "number": "integer",
+    "ticket": "string?", "checklist": ["string"], "a": "PairSide", "b": "PairSide",
+    "rubric": [{"name": "string", "question": "string"}], "reader": "string",
+    "next": "merge|preference", "mine": ["PairRecord"], "revealed": "PairReveal?"
+  },
+  "PairReveal": {
+    "a": "baseline|candidate", "b": "baseline|candidate", "a_setup": "Setup", "b_setup": "Setup",
+    "panel": "PanelCalls?", "records": ["PairRecord"]
+  },
+  "PairRecord": {
+    "reader": {"who": "string", "from_console": "boolean", "console_holder?": "string"},
+    "recorded_at": "string", "call": "merge|preference",
+    "a_ready?": "boolean", "b_ready?": "boolean",
+    "preference?": "Preference", "rubric?": {"*": "Preference"}
+  },
+  "Preference": "a|b|tie|both_bad",
   "PairSide": {
     "diff": [{"path": "string", "test": "boolean", "patch": "string"}],
     "test_files": ["string"], "fails_on_base": "boolean?", "passes_on_other": "boolean?",
