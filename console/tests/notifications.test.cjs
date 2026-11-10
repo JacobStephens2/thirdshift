@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 let home, records, server, exited, browser, origin;
 before(async () => {
@@ -33,7 +34,7 @@ after(async () => {
 
 async function item(number, outcome = 'failed') {
   const now = new Date().toISOString();
-  await writeFile(join(records, `${number}.command.json`), JSON.stringify({
+  await replaceRecord(join(records, `${number}.command.json`), JSON.stringify({
     version: 1, kind: 'Run', name: `${number}`, repository: 'acme/widgets', hostname: 'fixture',
     issue: { number, url: `https://github.com/acme/widgets/issues/${number}`, title: `Problem ${number}` },
     process_id: 0, process_start: 'gone', harness: 'codex', started_at: now, ended_at: now,
@@ -127,7 +128,20 @@ test('several tabs notify once per rise, including a rise after a fall; off stay
     const path = join(records, '3.command.json');
     const record = JSON.parse(await readFile(path, 'utf8'));
     record.issue.title = 'Changed without a count rise';
-    await writeFile(path, JSON.stringify(record));
+    await replaceRecord(path, JSON.stringify(record), {
+      async midway() {
+        // Refresh every tab before rename, while the earlier record is still
+        // published. A title-only replacement must never look like a fall/rise.
+        for (const page of pages) {
+          const refreshed = page.waitForResponse(response => response.url() === `${origin}/` && response.ok());
+          await page.evaluate(() => notificationStream.dispatchEvent(new Event('commands')));
+          await refreshed;
+          await count(page, 2);
+          assert.equal(await page.locator('#inbox .issue-title').getByText('Problem 3', { exact: true }).count(), 1);
+        }
+        assert.equal(await total(), 1);
+      }
+    });
     for (const page of pages) await page.locator('#inbox .issue-title').getByText(record.issue.title, { exact: true }).waitFor();
     await settle(2);
     assert.equal(await total(), 1);
@@ -193,7 +207,7 @@ test('a non-Inbox tab notifies for the newest arriving item, even if its Command
     const record = JSON.parse(await readFile(path, 'utf8'));
     record.started_at = new Date(Date.now() - 3600000).toISOString();
     record.ended_at = new Date(Date.now() + 1000).toISOString();
-    await writeFile(path, JSON.stringify(record));
+    await replaceRecord(path, JSON.stringify(record));
     release();
     await page.waitForFunction(() => notices.length > 0);
     assert.match(await page.evaluate(() => notices.at(-1).options.body), /acme\/widgets#6.*Problem 6/);
