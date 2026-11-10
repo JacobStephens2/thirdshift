@@ -1,6 +1,98 @@
 use super::*;
 
 #[test]
+fn fleet_schedules_forward_the_person_and_require_read_on_each_owner() {
+    let owner_home = configured();
+    let caller_home = configured();
+    let bin = owner_home.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    support::write_executable(
+        &bin.join("crontab"),
+        "#!/bin/sh\nprintf '%s\\n' '@daily thirdshift secure base main # owner-schedule-marker'\n",
+    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+    command
+        .args(["console", "--no-sign-in"])
+        .env("HOME", owner_home.path())
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        );
+    let owner = Console::start_command(command);
+    let token = tokens::create(owner_home.path(), "schedule-reader", &["--scopes", "read"]);
+    assert!(
+        crate::fleet::add(caller_home.path(), "owner", &owner.address, &token)
+            .status
+            .success()
+    );
+    assert!(
+        password(caller_home.path(), None, PASSWORD, PASSWORD)
+            .0
+            .success()
+    );
+    api::cli(
+        caller_home.path(),
+        &["console", "scopes", "--scopes", "read", "--json"],
+    );
+    let caller = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        caller_home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&caller, EMAIL, PASSWORD));
+    let page = || {
+        get(&caller, "/cronjobs?fleet=true", &session)
+            .text()
+            .unwrap()
+    };
+    let allowed = page();
+    assert!(allowed.contains("owner-schedule-marker"), "{allowed}");
+    assert!(!allowed.contains("Run Passes now"));
+    api::cli(
+        owner_home.path(),
+        &[
+            "console", "scopes", "--email", EMAIL, "--scopes", "run", "--json",
+        ],
+    );
+    let refused = page();
+    assert!(refused.contains("refused"), "{refused}");
+    assert!(!refused.contains("owner-schedule-marker"));
+    // A CLI Fleet read acts as its token holder, independently of this person's scopes.
+    let output = cli(caller_home.path(), &["cronjobs", "--fleet", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("owner-schedule-marker")
+    );
+    allow(owner_home.path(), false);
+    let refused = page();
+    assert!(refused.contains("refused"), "{refused}");
+    assert!(!refused.contains("owner-schedule-marker"));
+    // A run-only token also cannot read inventory, even with no forwarded person.
+    api::cli(
+        owner_home.path(),
+        &["console", "token", "revoke", "schedule-reader"],
+    );
+    let runner = tokens::create(owner_home.path(), "schedule-runner", &["--scopes", "run"]);
+    assert!(
+        crate::fleet::add(caller_home.path(), "owner", &owner.address, &runner)
+            .status
+            .success()
+    );
+    let output = cli(caller_home.path(), &["cronjobs", "--fleet", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["machines"][1]["status"], "refused");
+    assert!(!value.to_string().contains("owner-schedule-marker"));
+    api::cli(
+        caller_home.path(),
+        &["console", "scopes", "--scopes", "run", "--json"],
+    );
+    assert_eq!(get(&caller, "/cronjobs?fleet=true", &session).status(), 403);
+}
+
+#[test]
 fn remote_details_name_the_signed_in_person_and_honor_the_owning_allowlist_and_scopes() {
     let caller_home = configured();
     let owner_home = configured();

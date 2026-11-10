@@ -1,5 +1,6 @@
 //! Cron job inventory with confirmed starts through the Console API.
 use askama::Template;
+use axum::http::StatusCode;
 use axum::response::Response;
 
 use super::filters;
@@ -21,14 +22,41 @@ struct CronJobsPage {
     targets: Vec<super::fleet_control::Target>,
 }
 
+#[derive(Template)]
+#[template(path = "console/cronjobs_fleet.html")]
+struct FleetPage {
+    page: super::PageContext,
+    inventory: cronjobs::fleet::Inventory,
+}
+
 pub(super) async fn show(
     axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
     axum::Extension(format): axum::Extension<super::api::Format>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Response {
+    let fleet = super::query_value(&query, "fleet");
+    if format == super::api::Format::Json && !fleet.is_empty() {
+        return super::api::error(
+            StatusCode::BAD_REQUEST,
+            "Fleet schedules are an explicit client view; call each owning machine's API directly",
+        );
+    }
+    if fleet == "true" && !viewer.scopes.contains(&super::Scope::Read) {
+        return super::api::error(StatusCode::FORBIDDEN, "Fleet schedules need read scope");
+    }
     super::api::read(format, move || {
         let selection = super::fleet_control::Selection::query(&query);
         let config = UserConfig::load()?;
+        if fleet == "true" {
+            let inventory = cronjobs::fleet::load(&config, viewer.fleet_person());
+            return format.render(inventory, |inventory| {
+                Ok(FleetPage {
+                    page: super::PageContext::new(&config, &viewer.scopes),
+                    inventory,
+                }
+                .render()?)
+            });
+        }
         let remote = selection.remote(&config, &viewer, format)?;
         let mut remote_passes = None;
         // Run lists startable Passes. The crontab and last-fired times stay behind read.

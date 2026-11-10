@@ -41,6 +41,35 @@ after(async () => {
   if (home) await rm(home, { recursive: true, force: true });
 });
 
+test('Fleet schedules show repository, machine and Command kind on desktop and phone', async t => {
+  for (const javaScriptEnabled of [true, false]) {
+    for (const width of [1440, 390]) {
+      await t.test(`${width}px, JavaScript ${javaScriptEnabled}`, async t => {
+        const context = await browser.newContext({ javaScriptEnabled, viewport: { width, height: width === 390 ? 844 : 900 } });
+        t.after(() => context.close());
+        const page = await context.newPage();
+        await page.goto(`${origin}/cronjobs`);
+        await page.getByRole('link', { name: 'Fleet schedules', exact: true }).click();
+        await page.getByRole('heading', { name: 'Fleet schedules', exact: true }).waitFor();
+        assert.deepEqual(await page.locator('main h2').allTextContents(), ['Machines', 'acme/tools', 'acme/widgets', 'Other']);
+        const widgets = page.getByRole('region', { name: 'acme/widgets Fleet schedules', exact: true });
+        assert.equal(await widgets.locator('h3').count(), 1);
+        assert.match(await widgets.textContent(), /Pickup run/);
+        assert.equal(await widgets.locator('.cron-command').first().textContent(), widgetsCommand);
+        const other = page.getByRole('region', { name: 'Other Fleet schedules', exact: true });
+        assert.match(await other.textContent(), /Security run/);
+        assert.match(await other.textContent(), /<script>unsafe\(\)<\/script>/);
+        assert.equal(await page.locator('main script').count(), 0);
+        assert.equal(await page.getByRole('heading', { name: 'Last fired by repository' }).count(), 0);
+        assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 0);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await page.getByRole('link', { name: "This machine's Cron jobs", exact: true }).click();
+        await page.getByRole('heading', { name: 'Cron jobs', exact: true }).waitFor();
+      });
+    }
+  }
+});
+
 test('Cron jobs reads like terminal crontab lines on desktop and phone, with or without JavaScript', async t => {
   for (const javaScriptEnabled of [true, false]) {
     for (const width of [1440, 390]) {

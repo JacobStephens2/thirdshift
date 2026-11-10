@@ -160,7 +160,7 @@ pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
 
 // shlex splits shell words, but leaves operators attached to those words.
 // Separate unquoted operators first, preserving quotes and escaped characters.
-fn shell_words(command: &str) -> Option<Vec<String>> {
+pub(crate) fn shell_words(command: &str) -> Option<Vec<String>> {
     let mut spaced = String::new();
     let mut quote = None;
     let mut escaped = false;

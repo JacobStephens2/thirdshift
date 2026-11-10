@@ -59,7 +59,7 @@ fn local_machine(config: &UserConfig, name: &str) -> bool {
             && !config.console.fleet.iter().any(|entry| entry.name == name))
 }
 
-pub(super) fn local_name(config: &UserConfig) -> String {
+pub(crate) fn local_name(config: &UserConfig) -> String {
     let hostname = super::hostname();
     if config
         .console

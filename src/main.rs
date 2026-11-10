@@ -199,7 +199,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift experiments [<id>] [--json]        List Experiments or show one; --name renames, --record-difficulty records A/A Difficulty, --leak decides Session evidence hits, --pair reads a pair blind and records your calls
        thirdshift recheck <id> <trial>|--pending|--batch ...  Review or record Score rechecks; see the manual
        thirdshift status [--all] [--json] [--machine <name> | --local]  List Fleet or local Commands
-       thirdshift cronjobs | launch-directories [--json]  List cron jobs or known Launch directories
+       thirdshift cronjobs [--fleet] [--json]          List local or Fleet cron jobs
+       thirdshift launch-directories [--json]         List known Launch directories
        thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift start <owner/repo> <issue> [options] [--machine <name>]  Start detached work on a known repository
        thirdshift config [<key> [<value>]] [--json] [--machine <name>]  Read or change User config
@@ -286,7 +287,13 @@ fn main() -> ExitCode {
         }
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
-        Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::CronJobs { json, fleet }) => {
+            return printed(if fleet {
+                cronjobs::fleet::show(json)
+            } else {
+                cronjobs::show(json)
+            });
+        }
         Ok(Command::LaunchDirectories { json }) => return printed(launch_directories::show(json)),
         Ok(Command::Resources { json }) => return printed(resources::show(json)),
         Ok(Command::Config { key, value, json }) => {
