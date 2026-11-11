@@ -32,6 +32,12 @@ if args == ['--release-summary'] or args[0] == 'fix':
 branch = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/release-0.2.0'], text=True).strip()
 with (root / 'experiment-calls.jsonl').open('a') as calls:
     calls.write(json.dumps(dict(args=args, branch=branch)) + '\n')
+# A concrete release-race fixture mutates the PR during the first Experiment.
+action = root / 'during-experiment.sh'
+if action.exists():
+    consumed = action.with_suffix('.ran')
+    action.rename(consumed)
+    subprocess.check_call(['bash', str(consumed)])
 views = root / 'experiment-views.json'
 remaining = json.loads(views.read_text())
 assert remaining, 'unexpected Experiment call'

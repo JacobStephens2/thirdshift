@@ -4263,6 +4263,10 @@ Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
 records the content base its notes describe; a resumed PR from before that marker
 has its summary and version diff regenerated once, honoring `--review`.
 
+After publication, a failed merge leaves the release standing and names the PR
+for the Day shift. If the PR is draft, mark it ready with `gh pr ready <PR URL>`
+before merging it. Rerunning the release command keeps the published tag in place.
+
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
 If it's interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With `--review`, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits `0`.

@@ -700,9 +700,12 @@ fix_release_pr() {
 	[ -z "$fix_attempted" ] || release_blocked "$1 after the automatic Fix run"
 	fix_attempted=1
 	progress "$1 on $url; starting one targeted Fix run"
+	# Cargo itself can be interrupted before thirdshift installs its handler.
+	trap 'release_blocked "the targeted Fix run was interrupted"' INT TERM HUP
 	if ! cargo run --quiet --manifest-path "$summary_manifest" -- fix "$url" --no-merge --no-base-fix; then
 		release_blocked "$1; the targeted Fix run failed or was interrupted"
 	fi
+	trap - INT TERM HUP
 }
 
 release_blocked() {
@@ -722,6 +725,7 @@ merge_bump_pr() {
 		progress "merged $url"
 	else
 		progress "warning: $tag is left in place and the release still stands; the Day shift must merge $url"
+		progress "if the PR is draft, mark it ready with gh pr ready $url before merging"
 	fi
 }
 
