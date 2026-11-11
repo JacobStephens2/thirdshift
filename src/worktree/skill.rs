@@ -45,7 +45,7 @@ impl SkillWorktree {
         let recovered = retained.is_some();
         let checkout = match retained {
             Some(checkout) => checkout,
-            None => allocate("thirdshift-review-", |path| {
+            None => acquire_in_temp("thirdshift-review-", |path| {
                 acquisition::add_review(launch, branch, path, commit)
             })?,
         };
@@ -59,7 +59,7 @@ impl SkillWorktree {
 
     fn checkout(launch: &Git, commit: &str) -> Result<Self> {
         let root = launch.run(&["rev-parse", "--show-toplevel"])?;
-        let checkout = allocate("thirdshift-skill-", |path| {
+        let checkout = acquire_in_temp("thirdshift-skill-", |path| {
             progress::step(format_args!(
                 "creating skill worktree {} at {commit}",
                 path.display()
@@ -127,7 +127,7 @@ impl SkillWorktree {
 /// Cleanup belongs to the captured checkout, never TempDir's recursive Drop:
 /// a failed acquisition can retain work there. Failure removes only the
 /// allocated directory itself, still empty, and keeps acquisition's error.
-fn allocate(
+fn acquire_in_temp(
     prefix: &str,
     acquire: impl FnOnce(&Path) -> Result<ownership::Checkout>,
 ) -> Result<ownership::Checkout> {

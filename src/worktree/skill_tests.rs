@@ -6,11 +6,11 @@ use std::path::Path;
 use super::*;
 
 const CHILD: &str = "THIRDSHIFT_SKILL_ALLOCATION_TEST";
-const MISSING: &str = "1234567890123456789012345678901234567890";
+const MISSING_COMMIT: &str = "1234567890123456789012345678901234567890";
 
 /// Run the calling test again in a child whose temp root holds only its
 /// fixtures, so allocation leftovers can be counted.
-fn isolated(configure: impl FnOnce(&Path, &mut std::process::Command)) -> bool {
+fn ran_in_isolated_child(configure: impl FnOnce(&Path, &mut std::process::Command)) -> bool {
     if std::env::var_os(CHILD).is_some() {
         return false;
     }
@@ -45,24 +45,24 @@ fn allocations() -> Vec<String> {
 
 #[test]
 fn a_failed_skill_checkout_leaves_no_allocation_behind() {
-    if isolated(|_, _| {}) {
+    if ran_in_isolated_child(|_, _| {}) {
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
 
-    assert!(SkillWorktree::at(&launch, MISSING).is_err());
+    assert!(SkillWorktree::at(&launch, MISSING_COMMIT).is_err());
 
     assert_eq!(allocations(), Vec::<String>::new());
 }
 
 #[test]
 fn a_failed_review_checkout_leaves_no_allocation_behind() {
-    if isolated(|_, _| {}) {
+    if ran_in_isolated_child(|_, _| {}) {
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
 
-    assert!(SkillWorktree::on_pull_request(&launch, "feature", MISSING).is_err());
+    assert!(SkillWorktree::on_pull_request(&launch, "feature", MISSING_COMMIT).is_err());
 
     assert_eq!(allocations(), Vec::<String>::new());
     assert_eq!(local_head(&launch, "feature").unwrap(), None);
@@ -70,7 +70,7 @@ fn a_failed_review_checkout_leaves_no_allocation_behind() {
 
 #[test]
 fn a_branch_occupied_after_review_preflight_keeps_the_occupier_and_no_allocation() {
-    if isolated(|root, command| {
+    if ran_in_isolated_child(|root, command| {
         // Occupy the branch once, between preflight and Git's add.
         let real = String::from_utf8(
             std::process::Command::new("sh")
@@ -101,8 +101,11 @@ fn a_branch_occupied_after_review_preflight_keeps_the_occupier_and_no_allocation
     let (_temp, launch) = super::tests::launch_directory();
     let start = launch.run(&["rev-parse", "HEAD"]).unwrap();
 
-    assert!(SkillWorktree::on_pull_request(&launch, "feature", &start).is_err());
+    let Err(error) = SkillWorktree::on_pull_request(&launch, "feature", &start) else {
+        panic!("a branch occupied after preflight was acquired");
+    };
 
+    assert!(format!("{error:#}").contains("feature"), "{error:#}");
     assert_eq!(allocations(), Vec::<String>::new());
     let occupier = std::env::temp_dir().join("occupier");
     assert_eq!(
@@ -114,7 +117,7 @@ fn a_branch_occupied_after_review_preflight_keeps_the_occupier_and_no_allocation
 
 #[test]
 fn a_branch_occupied_before_review_is_refused_before_allocation() {
-    if isolated(|_, _| {}) {
+    if ran_in_isolated_child(|_, _| {}) {
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
@@ -144,8 +147,8 @@ fn a_branch_occupied_before_review_is_refused_before_allocation() {
 }
 
 #[test]
-fn hook_work_from_a_failed_skill_checkout_survives() {
-    if isolated(|_, _| {}) {
+fn hook_work_from_a_failed_skill_or_review_checkout_survives() {
+    if ran_in_isolated_child(|_, _| {}) {
         return;
     }
     let (temp, launch) = super::tests::launch_directory();
@@ -156,19 +159,29 @@ fn hook_work_from_a_failed_skill_checkout_survives() {
     );
 
     assert!(SkillWorktree::at(&launch, &start).is_err());
+    assert!(SkillWorktree::on_pull_request(&launch, "feature", &start).is_err());
 
-    let retained = allocations();
-    assert_eq!(retained.len(), 1, "{retained:?}");
-    let path = std::env::temp_dir().join(&retained[0]);
-    assert_eq!(
-        fs::read_to_string(path.join("hook.txt")).unwrap(),
-        "hook work\n"
+    let mut retained = allocations();
+    retained.sort_by_key(|name| name.starts_with("thirdshift-review-"));
+    assert!(
+        retained.len() == 2
+            && retained[0].starts_with("thirdshift-skill-")
+            && retained[1].starts_with("thirdshift-review-"),
+        "{retained:?}"
     );
+    for name in retained {
+        let path = std::env::temp_dir().join(name);
+        assert_eq!(
+            fs::read_to_string(path.join("hook.txt")).unwrap(),
+            "hook work\n"
+        );
+    }
+    assert_eq!(local_head(&launch, "feature").unwrap(), Some(start));
 }
 
 #[test]
 fn successful_skill_and_review_checkouts_are_cleaned_up() {
-    if isolated(|_, _| {}) {
+    if ran_in_isolated_child(|_, _| {}) {
         return;
     }
     let (_temp, launch) = super::tests::launch_directory();
