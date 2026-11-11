@@ -56,6 +56,7 @@ pub(super) fn run(
     }
     harness.check()?;
     logs::started(Work::FixRun(repo), harness);
+    logs::base_branch(base);
     logs::issue_branch(Some(&branch));
     let title = format!("Fix CI on {base}: {}", ci::title_check_names(&failed));
     logs::issue_title(Some(title.clone()));

@@ -407,6 +407,11 @@ pub(crate) fn pull_request(url: &str) {
     record().pull_request(url);
 }
 
+/// The selected Base branch of a Fix Pass's CI repair, before a PR exists.
+pub(crate) fn base_branch(branch: &str) {
+    record().base_branch(branch);
+}
+
 /// Retain Delivery's final counts for the active Run's completion metrics.
 pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
     record().unaddressed_findings(counts);

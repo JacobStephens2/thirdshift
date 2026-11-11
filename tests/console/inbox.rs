@@ -98,7 +98,8 @@ fn a_live_review_run_links_its_pull_request_in_working() {
     let working = section(&html, "working");
 
     assert!(working.contains("data-live=\"true\""), "{working}");
-    assert!(working.contains("<p class=\"pr\">"), "{working}");
+    assert!(working.contains("class=\"working-target\""), "{working}");
+    assert!(working.contains("PR #1</a>"), "{working}");
     assert!(working.contains(&format!("href=\"{url}\"")), "{working}");
 }
 

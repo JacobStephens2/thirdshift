@@ -47,6 +47,8 @@ pub(crate) struct Row {
     pub subject: String,
     /// The pull request or issue's `https://` address, which the subject links to.
     pub subject_url: Option<String>,
+    pub target_pr: Option<crate::review::PullRequestUrl>,
+    pub base_branch: Option<String>,
     pub title: String,
     pub state: String,
     pub now_line: String,
@@ -321,6 +323,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         command_log: Option<std::path::PathBuf>,
         cause: Option<String>,
         pull_request: Option<String>,
+        base_branch: Option<String>,
         harness: Option<String>,
         model: Option<String>,
         effort: Option<String>,
@@ -372,7 +375,10 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         .unwrap_or_default();
     let process =
         (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
-    let name = if value["source"] == "command_record" {
+    let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
+    let name = if live_target {
+        &facts.kind
+    } else if value["source"] == "command_record" {
         &facts.name
     } else {
         &facts.kind
@@ -434,6 +440,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         logs_url: String::new(),
         subject,
         subject_url,
+        target_pr: facts
+            .pull_request
+            .as_deref()
+            .filter(|_| live_target)
+            .and_then(|url| crate::review::PullRequestUrl::parse(url).ok())
+            .filter(|pr| pr.issue.repo_slug().eq_ignore_ascii_case(&facts.repository)),
+        base_branch: facts.base_branch.filter(|_| live_target),
         title,
         state,
         now_line: super::stage_details(
@@ -620,6 +633,8 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 subject_url: issue_url(command.issue.as_ref()),
+                target_pr: None,
+                base_branch: None,
                 title,
                 state: command.state.into(),
                 now_line: command

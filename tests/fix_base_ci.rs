@@ -251,8 +251,20 @@ fn named_base_with_no_rerunnable_jobs_repairs_its_origin_tip() {
     state["runs"][0]["head_sha"] = tip.trim().into();
     state["runs"][0]["jobs"] = json!([]);
     scenario.write_gh_state(&state);
-    scenario.agent_does(FIX);
-    let result = scenario.run(&["fix", "base", "release", "no-email"]);
+    scenario.agent_waits_for_release(FIX);
+    let held = scenario.run_until(&["fix", "base", "release", "no-email"], &[], "started");
+    let status = scenario.run(&["status", "--local", "--json"]);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let working = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["kind"] == "Fix run")
+        .unwrap();
+    assert_eq!(working["base_branch"], "release");
+    assert!(working["pull_request"].is_null());
+    std::fs::write(scenario.path("release"), "go").unwrap();
+    let result = held.finish();
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
     assert_eq!(state["prs"][0]["base"], "release");
@@ -262,6 +274,16 @@ fn named_base_with_no_rerunnable_jobs_repairs_its_origin_tip() {
         format!("fix-release-{}", &tip[..7])
     );
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    let status = scenario.run(&["status", "--local", "--json"]);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let repaired = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["kind"] == "Fix run")
+        .unwrap();
+    assert_eq!(repaired["base_branch"], "release");
+    assert_eq!(repaired["pull_request"], state["prs"][0]["url"]);
 }
 
 /// A commit status or external check can be posted by a principal who cannot
