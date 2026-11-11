@@ -478,7 +478,7 @@ pub fn run(options: Options) -> Result<()> {
         .as_ref()
         .err()
         .map(|error: &anyhow::Error| format!("{error:#}"));
-    coordination::waiting_for(&mut experiment, &[]);
+    coordination::publish_waiting_for(&mut experiment, &[]);
     if result.is_err() {
         experiment.state = if interrupt::requested() {
             State::Interrupted

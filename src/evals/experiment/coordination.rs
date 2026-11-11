@@ -6,7 +6,8 @@ use anyhow::Result;
 use super::store::Stored;
 use crate::{interrupt, logs, poll, progress};
 
-pub(super) fn waiting_for(experiment: &mut Stored, commands: &[String]) {
+/// Publishes the Commands this Experiment waits for to its Command record and its stored details.
+pub(super) fn publish_waiting_for(experiment: &mut Stored, commands: &[String]) {
     logs::waiting_for(commands);
     experiment.details.waiting_for = commands.to_vec();
 }
@@ -18,7 +19,7 @@ pub(super) fn start(experiment: &mut Stored, no_wait: bool) -> Result<()> {
     } else {
         0
     };
-    waiting_for(experiment, &[]);
+    publish_waiting_for(experiment, &[]);
     experiment.save()?;
     if no_wait {
         progress::step(experiment.details.contention().unwrap());
@@ -48,14 +49,14 @@ pub(super) fn start(experiment: &mut Stored, no_wait: bool) -> Result<()> {
         }
         waiting.sort();
         if waiting.is_empty() {
-            waiting_for(experiment, &[]);
+            publish_waiting_for(experiment, &[]);
             experiment.save()?;
             return Ok(());
         }
         if waiting != previous || last_line.elapsed() >= Duration::from_secs(30) {
             logs::stage(logs::Stage::WaitingForCommands);
             progress::step(format!("Waiting for Commands: {}", waiting.join(", ")));
-            waiting_for(experiment, &waiting);
+            publish_waiting_for(experiment, &waiting);
             experiment.save()?;
             previous = waiting;
             last_line = Instant::now();
