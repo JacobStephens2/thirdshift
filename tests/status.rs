@@ -2075,6 +2075,19 @@ fn graphql_calls(scenario: &Scenario) -> Vec<Vec<String>> {
     scenario.gh_calls_of("api", "graphql")
 }
 
+fn expire_quota_wait(scenario: &Scenario, resource: &str) {
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let wait = record["waits"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|wait| wait["resource"] == resource)
+        .unwrap();
+    wait["reset_at"] = hours_ago(1).into();
+    fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+}
+
 fn age_cache_file(scenario: &Scenario, seconds: u64) {
     let file = fs::File::options()
         .write(true)
@@ -3434,6 +3447,15 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
         assert!(text.stdout.contains(diagnostic), "{}", text.stdout);
         gh["failing"] = serde_json::json!([]);
         scenario.write_gh_state(&gh);
+        if diagnostic.contains("API rate limit exceeded") {
+            let before = scenario.gh_calls();
+            let paused = scenario.run(&["status"]);
+            assert!(paused.stdout.contains("Inbox reads paused until"));
+            assert_eq!(scenario.gh_calls(), before, "read before quota reset");
+            // Removing the diagnostic does not replenish GitHub's quota.
+            // Advance the recorded reset at the fixture's time seam first.
+            expire_quota_wait(&scenario, "graphql");
+        }
         let output = scenario.run(&["status", "--json"]);
         let status: Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(status["github_failure"], Value::Null, "{status}");
@@ -3508,16 +3530,7 @@ fn status_reserves_both_quotas_until_their_resets() {
             "read while {description} quota was low"
         );
         // Move the recorded reset into the past at the fixture's time seam.
-        let path = scenario.path("home/.thirdshift/github-quota.json");
-        let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let wait = kept["waits"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|wait| wait["resource"] == resource)
-            .unwrap();
-        wait["reset_at"] = hours_ago(1).into();
-        fs::write(path, serde_json::to_vec(&kept).unwrap()).unwrap();
+        expire_quota_wait(&scenario, resource);
         gh["rate_limits"][resource]["remaining"] = 5000.into();
         scenario.write_gh_state(&gh);
         let output = scenario.run(&["status", "--json"]);
