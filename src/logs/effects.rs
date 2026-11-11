@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local};
@@ -30,6 +32,8 @@ pub(super) trait Outside: owner::Files {
         root: &Path,
     ) -> Result<BTreeMap<PathBuf, super::command_record::CommandTree>>;
     fn now(&mut self) -> DateTime<FixedOffset>;
+    /// Elapsed host uptime, excluding suspension, from an arbitrary origin.
+    fn monotonic(&mut self) -> Duration;
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()>;
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail>;
     fn append_activity(&mut self, path: &Path, line: &str) -> Result<()>;
@@ -90,6 +94,11 @@ impl Outside for OnMachine {
 
     fn now(&mut self) -> DateTime<FixedOffset> {
         Local::now().fixed_offset()
+    }
+
+    fn monotonic(&mut self) -> Duration {
+        static ORIGIN: LazyLock<Instant> = LazyLock::new(Instant::now);
+        ORIGIN.elapsed()
     }
 
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()> {

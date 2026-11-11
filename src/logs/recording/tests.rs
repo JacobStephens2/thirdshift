@@ -16,6 +16,7 @@ const ACTIVITY: &str = "/logs/acme/widgets/activity.log";
 #[derive(Default)]
 struct Memory {
     now: Option<DateTime<FixedOffset>>,
+    monotonic: Option<std::time::Duration>,
     terminal: Vec<(Stream, String)>,
     files: BTreeMap<PathBuf, String>,
     command_open_fails: bool,
@@ -191,6 +192,16 @@ impl Outside for Scripted {
             .unwrap()
             .now
             .unwrap_or_else(|| DateTime::parse_from_rfc3339("2026-10-03T12:00:00-04:00").unwrap())
+    }
+
+    fn monotonic(&mut self) -> std::time::Duration {
+        let scripted = self.0.lock().unwrap().monotonic;
+        scripted.unwrap_or_else(|| {
+            self.now()
+                .signed_duration_since(DateTime::parse_from_rfc3339("2026-10-03T12:00:00-04:00").unwrap())
+                .to_std()
+                .unwrap_or_default()
+        })
     }
 
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()> {
