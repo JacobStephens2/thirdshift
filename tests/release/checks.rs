@@ -4,7 +4,7 @@ fn set_pr(release: &Release, field: &str, value: Value) {
     release.gh(&["fake", "pr", "release-0.2.0", field, &value.to_string()]);
 }
 
-fn fix_runs(release: &Release, script: &str) {
+fn simulate_fix(release: &Release, script: &str) {
     fs::write(release.root().join("gh-state.json.fix"), script).unwrap();
 }
 
@@ -17,10 +17,10 @@ fn fix_calls(release: &Release) -> Vec<String> {
 }
 
 fn run(release: &Release, args: &[&str], env: &[(&str, &str)]) -> Output {
-    // Ten seconds covers script startup, Git/GitHub reads, fake Fix/summary/
-    // Experiment work, publication/merge and output collection. Fixture setup
-    // happens before this bound; the guardian owns all fake Fix children too.
-    release.run_script_with_bound(args, "", env, std::time::Duration::from_secs(10))
+    // The shared release bound covers script startup, Git/GitHub reads, fake
+    // Fix/summary/Experiment work, publication/merge and output collection on
+    // a loaded runner; the guardian owns all fake Fix children too.
+    release.run_script_with(args, "", env)
 }
 
 /// Prepare the exact reported pattern: a bump based on older main, followed
@@ -83,7 +83,7 @@ fn a_conflict_without_workflows_runs_one_targeted_fix_and_releases_the_repaired_
     )
     .unwrap();
     let (old, repaired) = conflicted_bump(&release);
-    fix_runs(&release, &adopt_script(&repaired));
+    simulate_fix(&release, &adopt_script(&repaired));
 
     let output = run(&release, &["0.2.0"], &[]);
 
@@ -155,7 +155,7 @@ fn pending_and_healthy_ci_never_start_a_fix_even_after_startup_grace() {
 fn completed_failing_ci_uses_the_same_fix_path() {
     let release = Release::new();
     release.ci_reports(RED);
-    fix_runs(
+    simulate_fix(
         &release,
         &format!(
             "gh fake checks \"$(git ls-remote origin refs/heads/release-0.2.0 | cut -f1)\" '{GREEN}'"
@@ -174,7 +174,7 @@ fn failed_interrupted_or_ineffective_fixes_leave_no_tag_and_are_not_retried() {
     for script in ["exit 1", "exit 130", "exit 0"] {
         let release = Release::new();
         conflicted_bump(&release);
-        fix_runs(&release, script);
+        simulate_fix(&release, script);
 
         let output = run(&release, &["0.2.0"], &[]);
 
@@ -190,7 +190,7 @@ fn failed_interrupted_or_ineffective_fixes_leave_no_tag_and_are_not_retried() {
 fn a_second_ci_failure_after_a_successful_fix_stops_without_another_fix() {
     let release = Release::new();
     let (_, repaired) = conflicted_bump(&release);
-    fix_runs(&release, &adopt_script(&repaired).replace(GREEN, RED));
+    simulate_fix(&release, &adopt_script(&repaired).replace(GREEN, RED));
 
     let output = run(&release, &["0.2.0"], &[]);
 
@@ -242,7 +242,7 @@ fn identity_mutations_after_fix_or_external_updates_refuse_publication() {
                 release.gh(&["fake", "on-ci-read", "1", &mutation]);
             } else {
                 set_pr(&release, "mergeable", json!("CONFLICTING"));
-                fix_runs(&release, &mutation);
+                simulate_fix(&release, &mutation);
             }
 
             let output = run(&release, &["0.2.0"], &[]);
@@ -282,7 +282,7 @@ fn non_bump_changes_after_fix_or_external_updates_refuse_publication() {
                 release.gh(&["fake", "on-ci-read", "1", &adopt_script(&changed)]);
             } else {
                 set_pr(&release, "mergeable", json!("CONFLICTING"));
-                fix_runs(&release, &adopt_script(&changed));
+                simulate_fix(&release, &adopt_script(&changed));
             }
 
             let output = run(&release, &["0.2.0"], &[]);
@@ -329,7 +329,7 @@ fn a_repair_refreshes_the_experiment_summary_and_diff_for_its_new_content_base()
         &release,
         &[experiments::verdict("pass"), experiments::verdict("pass")],
     );
-    fix_runs(&release, &adopt_script(&repaired));
+    simulate_fix(&release, &adopt_script(&repaired));
 
     let output = run(&release, &["--with-experiment", "0.2.0"], &[]);
 
@@ -354,7 +354,7 @@ fn a_new_content_base_cannot_publish_under_an_obsolete_experiment() {
         &release,
         &[experiments::verdict("pass"), experiments::verdict("fail")],
     );
-    fix_runs(&release, &adopt_script(&repaired));
+    simulate_fix(&release, &adopt_script(&repaired));
 
     let output = run(&release, &["--with-experiment", "0.2.0"], &[]);
 
@@ -410,7 +410,7 @@ fn spec_resume_after_interrupted_fix_refreshes_release_notes() {
         "body",
         json!("Old release notes: version diff starts at 0.1.0"),
     );
-    fix_runs(&release, &(adopt_script(&repaired) + "\nexit 130\n"));
+    simulate_fix(&release, &(adopt_script(&repaired) + "\nexit 130\n"));
     let interrupted = run(&release, &["0.2.0"], &[]);
     assert_eq!(
         interrupted.status.code(),
@@ -468,14 +468,14 @@ fn a_notes_marker_detects_an_external_repair_from_another_checkout() {
 fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
     let release = Release::new();
     let (_, repaired) = conflicted_bump(&release);
-    fix_runs(&release, &adopt_script(&repaired));
+    simulate_fix(&release, &adopt_script(&repaired));
     release.release_workflow(failed_release());
     let failed = run(&release, &["0.2.0"], &[]);
     assert_release_failed(&release, &failed, &repaired);
     release.merge_pr("newer-content", "Recovery content", "");
     release.main_ci("completed", "success");
     release.ci_reports(RED);
-    fix_runs(&release, "exit 1");
+    simulate_fix(&release, "exit 1");
     let stopped = run(&release, &["0.2.0"], &[]);
     assert_eq!(stopped.status.code(), Some(1), "{}", stderr(&stopped));
     assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
@@ -584,21 +584,20 @@ fn a_base_change_during_the_experiment_is_measured_before_tagging() {
         release.pr_body("release-0.2.0"),
         stderr(&output)
     );
-    if tag.as_deref() == Some(repaired.as_str()) {
-        assert!(output.status.success(), "{}", stderr(&output));
-        assert!(
-            measured.contains(&new_base.as_str()),
-            "tagged {repaired} under an experiment for {old_base}, not {new_base}: {measured:?}\n{}",
-            stderr(&output)
-        );
-        assert!(
-            release
-                .pr_body("release-0.2.0")
-                .contains("-version = \"0.1.1\""),
-            "published repaired content with the pre-change notes: {}",
-            release.pr_body("release-0.2.0")
-        );
-    }
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(tag.as_deref(), Some(repaired.as_str()));
+    assert!(
+        measured.contains(&new_base.as_str()),
+        "tagged {repaired} under an experiment for {old_base}, not {new_base}: {measured:?}\n{}",
+        stderr(&output)
+    );
+    assert!(
+        release
+            .pr_body("release-0.2.0")
+            .contains("-version = \"0.1.1\""),
+        "published repaired content with the pre-change notes: {}",
+        release.pr_body("release-0.2.0")
+    );
 }
 
 #[test]
@@ -623,4 +622,57 @@ fn an_unmarked_legacy_pr_repaired_before_resume_refreshes_its_notes() {
         "Published repaired legacy content with stale release notes: {}",
         release.pr_body("release-0.2.0")
     );
+}
+
+#[test]
+fn green_ci_with_mergeability_stuck_unknown_stops_instead_of_waiting_forever() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    set_pr(&release, "mergeable", json!("UNKNOWN"));
+    release.ci_reports(GREEN);
+    let output = run(
+        &release,
+        &["0.2.0"],
+        &[("RELEASE_WORKFLOW_STARTUP_SECONDS", "0")],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("did not report the PR mergeable"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(fix_calls(&release).is_empty());
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+fn a_pr_closed_during_ci_does_not_recommend_a_fix_run() {
+    let release = Release::new();
+    release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.gh(&[
+        "fake",
+        "on-ci-read",
+        "1",
+        "gh fake pr release-0.2.0 state '\"CLOSED\"'",
+    ]);
+    let output = run(&release, &["0.2.0"], &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        !stderr(&output).contains("left open"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("thirdshift fix"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("rerun scripts/release.sh 0.2.0"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(release.origin_tag("v0.2.0"), None);
 }

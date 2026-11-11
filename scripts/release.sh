@@ -552,19 +552,27 @@ edit_pr_file() (
 	gh pr edit "$url" --body-file "$body_file" >/dev/null
 )
 
-# Snapshot the PR's notes claim before a yield. Reading the marker again
-# after the Experiment returns would let a body edit name an unmeasured base.
-remember_notes_claim() {
+# Read the content base the PR's notes describe, and whether they need a refresh.
+read_notes_claim() {
 	local notes_ref=refs/thirdshift/release-notes/$version
 	observe_release_pr
 	if [ "$observed_notes_base" = - ]; then
+		# Older PR bodies lack the marker. Remember their starting content
+		# before Fix can push and then fail, so rerunning still detects it.
 		release_notes_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
-		# Without a marker the notes may predate this script/checkout.
+		# Without a marker the notes may predate this script/checkout. The
+		# current head alone cannot establish what their summary describes.
 		release_notes_refresh=1
 	else
 		release_notes_base=$observed_notes_base
 		release_notes_refresh=
 	fi
+}
+
+# Snapshot the PR's notes claim before a yield. Reading the marker again
+# after the Experiment returns would let a body edit name an unmeasured base.
+remember_notes_claim() {
+	read_notes_claim
 	release_notes_known=1
 }
 
@@ -579,24 +587,12 @@ remember_written_notes() {
 # Observe this PR throughout CI. One targeted Fix run shares Delivery's Repair
 # budget; a second blockage or continued head churn returns to the operator.
 wait_for_pr_checks() {
-	local runs failed content_base next_base refresh_notes= startup=$SECONDS
+	local runs failed content_base next_base refresh_notes= startup=$SECONDS settling=
 	local notes_ref=refs/thirdshift/release-notes/$version
 	[[ "$workflow_startup_seconds" =~ ^[0-9]+$ ]] || refuse "RELEASE_WORKFLOW_STARTUP_SECONDS must be a nonnegative integer"
-	if [ -n "$release_notes_known" ]; then
-		content_base=$release_notes_base
-		refresh_notes=$release_notes_refresh
-	else
-		observe_release_pr
-		content_base=$observed_notes_base
-		if [ "$content_base" = - ]; then
-			# Older PR bodies lack the marker. Remember their starting content
-			# before Fix can push and then fail, so rerunning still detects it.
-			content_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
-			# Without a marker the notes may predate this script/checkout. The
-			# current head alone cannot establish what their summary describes.
-			refresh_notes=1
-		fi
-	fi
+	[ -n "$release_notes_known" ] || read_notes_claim
+	content_base=$release_notes_base
+	refresh_notes=$release_notes_refresh
 	# A path that has not called wait_for_experiment has not measured another base.
 	if [ -z "$experimented_base" ]; then experimented_base=$content_base; fi
 	git update-ref "$notes_ref" "$content_base"
@@ -623,6 +619,7 @@ wait_for_pr_checks() {
 			fi
 			content_base=$next_base
 			startup=$SECONDS
+			settling=
 			progress "adopted $url at ${head:0:7}"
 		fi
 		if [ "$observed_mergeable" = CONFLICTING ]; then
@@ -646,7 +643,7 @@ wait_for_pr_checks() {
 				local previous
 				previous=$(last_release_tag)
 				if [ -n "$previous" ] && ! git merge-base --is-ancestor "$previous" "$content_base"; then
-					release_blocked "the content base predates the latest release $previous"
+					release_stopped "the content base predates the latest release $previous"
 				fi
 				if [ -n "$refresh_notes" ]; then
 					write_summary "no new tag was pushed"
@@ -663,6 +660,12 @@ wait_for_pr_checks() {
 				if [ "$observed_head" = "$head" ] && [ "$observed_mergeable" = MERGEABLE ]; then return; fi
 				continue
 			fi
+			# Green CI on a head GitHub has not reported mergeable gets the
+			# same grace as workflow startup, never an unbounded wait.
+			settling=${settling:-$SECONDS}
+			if [ "$((SECONDS - settling))" -ge "$workflow_startup_seconds" ]; then
+				release_stopped "GitHub did not report the PR mergeable within ${workflow_startup_seconds}s of its checks passing"
+			fi
 		elif [ -z "$runs" ] && [ "$((SECONDS - startup))" -ge "$workflow_startup_seconds" ]; then
 			release_blocked "no workflows appeared within ${workflow_startup_seconds}s; inspect GitHub Actions"
 		fi
@@ -674,7 +677,7 @@ wait_for_pr_checks() {
 # state, origin or branch changes before adopting a head or publishing a tag.
 observe_release_pr() {
 	local observation origin_head
-	[ "$(git remote get-url origin)" = "$release_origin" ] || release_blocked "origin changed"
+	[ "$(git remote get-url origin)" = "$release_origin" ] || release_stopped "origin changed"
 	if ! observation=$(gh pr view "$url" --json url,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,body |
 		python3 -c '
 import json, re, sys
@@ -686,11 +689,11 @@ if (pr["url"] != url or pr["state"] != "OPEN" or pr["headRefName"] != branch
 notes = re.search(r"^<!-- release-content-base: ([0-9a-f]{40}) -->$", pr["body"], re.M)
 print(pr["headRefOid"], pr["mergeable"], notes[1] if notes else "-")
 ' "$url" "$branch"); then
-		release_blocked "could not validate the release PR identity/state/branch"
+		release_stopped "could not validate the release PR identity/state/branch"
 	fi
 	read -r observed_head observed_mergeable observed_notes_base <<<"$observation"
 	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
-	[ -n "$origin_head" ] && [ "$observed_head" = "$origin_head" ] || release_blocked "PR head does not match refs/heads/$branch on origin"
+	[ -n "$origin_head" ] && [ "$observed_head" = "$origin_head" ] || release_stopped "PR head does not match refs/heads/$branch on origin"
 }
 
 fix_release_pr() {
@@ -704,6 +707,11 @@ fix_release_pr() {
 
 release_blocked() {
 	refuse "$url at $head: $1; the PR is left open for human review and no new tag was pushed. Recover with thirdshift fix $url --no-merge --no-base-fix, then scripts/release.sh${with_experiment:+ --with-experiment} $version"
+}
+
+# A changed PR, origin or release boundary is not something a Fix run repairs.
+release_stopped() {
+	refuse "$url at $head: $1; no new tag was pushed. Inspect the PR, then rerun scripts/release.sh${with_experiment:+ --with-experiment} $version"
 }
 
 # merge_bump_pr

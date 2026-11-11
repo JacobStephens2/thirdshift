@@ -4247,7 +4247,8 @@ Self-merge and Base fix defaults: the release script still tags, waits for
 publication, then merges. Healthy, queued and running CI start no Fix run.
 Missing workflows without a conflict have a five-minute startup grace period
 (`RELEASE_WORKFLOW_STARTUP_SECONDS=300`, adjustable for testing), then stop with
-the PR, head and recovery command. This is not a deadline on CI runtime.
+the PR, head and recovery command. After CI passes, GitHub gets the same grace
+to report the PR mergeable. Neither is a deadline on CI runtime.
 
 After a Fix run or external push, the script fetches and validates the current
 PR identity, open state, readiness, origin, branches, head and exact version-bump
@@ -4256,7 +4257,11 @@ before tagging. A changed content base reruns the Experiment when requested and
 regenerates the summary and version diff, honoring `--review`. More than five
 head updates, a failed or interrupted Fix, or another conflict or CI failure
 after the automatic Fix stops with recovery instructions and no new tag pushed.
-Ctrl-C and rerunning the same version use the usual resume behavior.
+A closed, retargeted or draft PR, a changed origin, or a content base older than
+the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
+Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
+records the content base its notes describe; a resumed PR from before that marker
+has its summary and version diff regenerated once, honoring `--review`.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 

@@ -3932,7 +3932,8 @@ Self-merge and Base fix defaults: the release script still tags, waits for
 publication, then merges. Healthy, queued and running CI start no Fix run.
 Missing workflows without a conflict have a five-minute startup grace period
 (<code>RELEASE_WORKFLOW_STARTUP_SECONDS=300</code>, adjustable for testing), then stop with
-the PR, head and recovery command. This is not a deadline on CI runtime.</p>
+the PR, head and recovery command. After CI passes, GitHub gets the same grace
+to report the PR mergeable. Neither is a deadline on CI runtime.</p>
 <p>After a Fix run or external push, the script fetches and validates the current
 PR identity, open state, readiness, origin, branches, head and exact version-bump
 tree against main. Extra source changes or a wrong version require human review
@@ -3940,7 +3941,11 @@ before tagging. A changed content base reruns the Experiment when requested and
 regenerates the summary and version diff, honoring <code>--review</code>. More than five
 head updates, a failed or interrupted Fix, or another conflict or CI failure
 after the automatic Fix stops with recovery instructions and no new tag pushed.
-Ctrl-C and rerunning the same version use the usual resume behavior.</p>
+A closed, retargeted or draft PR, a changed origin, or a content base older than
+the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
+Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
+records the content base its notes describe; a resumed PR from before that marker
+has its summary and version diff regenerated once, honoring <code>--review</code>.</p>
 <p>Before it pushes anything, it refuses a release that can&#39;t be cut and says why: a version that isn&#39;t plain <code>X.Y.Z</code> (no leading <code>v</code>), a version that isn&#39;t higher than the one in <code>Cargo.toml</code> on <code>origin/main</code>, or a <code>v&lt;version&gt;</code> tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in <code>Cargo.toml</code> and <code>Cargo.lock</code> from its merge base; extra content is refused even when already tagged.</p>
 <p>If it&#39;s interrupted, run it again with the same version: it picks up the existing branch or pull request and carries on from the first step not yet done. With <code>--review</code>, it asks about a new summary before opening a pull request for a branch already pushed. It opens a PR for a pushed branch, waits for its checks, tags the bump head, waits for publication, then merges the PR. A PR already merged is still tagged at its bump head. Once the tag is on that head, it says the release is already tagged and resumes the release workflow: it waits for a run still going, or merges the open bump PR immediately when the workflow succeeded or the GitHub Release already exists, then prints the Release URL and exits <code>0</code>.</p>
 <p>An untagged pushed branch or open bump PR is re-cut if its content base does
