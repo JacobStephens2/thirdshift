@@ -140,6 +140,9 @@ impl Paths {
             if path == self.root.join("console-accounts.json") {
                 revision.accounts += 1;
             }
+            if path == self.root.join("github-quota.json") {
+                revision.commands += 1;
+            }
             if path.starts_with(&self.logs)
                 || self.logs.starts_with(&path)
                 || self

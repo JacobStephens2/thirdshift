@@ -13,6 +13,9 @@
 //! one repository at once. A Pickup run or an issue-less Custom process
 //! takes no lock of a kind.
 //!
+//! Quota admission comes before remote preparation and slot acquisition.
+//! A Quota wait skips every Pass without holding any of these locks.
+//!
 //! A Pass also tries a shared lock on the file a thirdshift from before the
 //! Command limit locks exclusively. Every overlapping newer Pass keeps its
 //! shared lock until it ends, so an older Pass cannot start until they all
@@ -65,10 +68,10 @@ impl PassKind {
     }
 }
 
-/// Why a Pass is skipped at its start, on `repo`, at the Command `limit`.
+/// Why a Pass is skipped at admission, on `repo`.
 /// Its `Display` is the reason, as the skipped run gives it.
 #[derive(Debug)]
-pub struct AlreadyRunning {
+pub struct NotAdmitted {
     pub repo: Repo,
     limit: NonZeroUsize,
     why: Why,
@@ -76,8 +79,11 @@ pub struct AlreadyRunning {
 
 #[derive(Debug)]
 enum Why {
+    QuotaWait(String),
     /// `running` Commands are running, at or over the limit.
-    AtLimit { running: usize },
+    AtLimit {
+        running: usize,
+    },
     /// Another Pass of this one's kind is running.
     SameKind(PassKind),
     /// A thirdshift from before the Command limit is running an exclusive
@@ -85,10 +91,11 @@ enum Why {
     Older,
 }
 
-impl fmt::Display for AlreadyRunning {
+impl fmt::Display for NotAdmitted {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (repo, limit) = (self.repo.slug(), self.limit);
         match self.why {
+            Why::QuotaWait(ref reason) => f.write_str(reason),
             Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
@@ -98,6 +105,16 @@ impl fmt::Display for AlreadyRunning {
             Why::Older => write!(f, "an older thirdshift's Pass is running on {repo}"),
         }
     }
+}
+
+/// Check quota before any remote preparation or Command-limit slot. Probe
+/// failures other than exhaustion preserve the existing admission behavior.
+pub fn quota_wait(repo: &Repo, limit: NonZeroUsize) -> Option<NotAdmitted> {
+    Some(NotAdmitted {
+        repo: repo.clone(),
+        limit,
+        why: Why::QuotaWait(crate::github::GitHub::new().pass_quota_wait()?),
+    })
 }
 
 /// "1 Command is running", or "`n` Commands are running".
@@ -136,11 +153,11 @@ pub fn hold_pass(
     repo: &Repo,
     limit: NonZeroUsize,
     sharing: Sharing,
-) -> Result<Option<AlreadyRunning>> {
+) -> Result<Option<NotAdmitted>> {
     let slots = Slots::of(repo)?;
     let _counting = slots.counting()?;
     let skipped = |why| {
-        Ok(Some(AlreadyRunning {
+        Ok(Some(NotAdmitted {
             repo: repo.clone(),
             limit,
             why,

@@ -648,12 +648,19 @@ fn run(command: &ProcessRun) -> Result<String> {
     if issue.is_none() {
         logs::begin(Begin::Process { name, pass: true });
         logs::configured(&config);
-        let base = match launch::checked_out_base() {
-            Ok(base) => base,
-            Err(error) => return Err(failed_before_steps(notification, error)),
-        };
         let repo = match launch::repo() {
             Ok(repo) => repo,
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        };
+        if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+            let reason = skipped.to_string();
+            let choice = Choice::of(&command.asked, &config.harness);
+            progress::step(&reason);
+            logs::skipped_process(&repo, name, &choice, &reason);
+            return Ok(String::new());
+        }
+        let base = match launch::checked_out_base() {
+            Ok(base) => base,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
         match command_limit::hold_pass(

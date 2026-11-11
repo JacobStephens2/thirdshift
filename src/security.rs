@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::base_fix::Advice;
-use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
+use crate::command_limit::{NotAdmitted, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::ListedIssue;
@@ -95,7 +95,7 @@ impl From<anyhow::Error> for Ended {
 pub use crate::github::RecordedFinding;
 
 pub enum Skipped {
-    AlreadyRunning(AlreadyRunning),
+    NotAdmitted(NotAdmitted),
     ReadyIssue(ListedIssue),
     FailedFix(crate::issue::IssueUrl),
     UnchangedBase(String),
@@ -104,7 +104,7 @@ pub enum Skipped {
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AlreadyRunning(running) => running.fmt(f),
+            Self::NotAdmitted(running) => running.fmt(f),
             Self::ReadyIssue(listed) => write!(
                 f,
                 "Ready issue #{} \"{}\" goes first: {}",
@@ -157,9 +157,9 @@ pub fn run(
         Sharing::OneOfAKind(PassKind::Security),
     ) {
         Ok(Start::Clear(launch)) => launch,
-        Ok(Start::AlreadyRunning(running)) => {
+        Ok(Start::NotAdmitted(running)) => {
             logs::skipped(Pass::Security, &running.repo, &running);
-            return Outcome::Skipped(Skipped::AlreadyRunning(running));
+            return Outcome::Skipped(Skipped::NotAdmitted(running));
         }
         Err(error) => return Outcome::Audited(error.into()),
     };

@@ -27,7 +27,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::asks::Flags;
-use crate::command_limit::{AlreadyRunning, PassKind, Sharing};
+use crate::command_limit::{NotAdmitted, PassKind, Sharing};
 use crate::config::UserConfig;
 use crate::failed_run::FailedRun;
 use crate::github::{Issue, ListedIssue};
@@ -83,10 +83,11 @@ pub enum Outcome {
 /// skipped run's progress line gives it.
 #[derive(Debug)]
 pub enum Skipped {
-    /// Its repository is at its Command limit on this machine, the Spec run
+    /// GitHub is in a Quota wait, or its repository is at its Command limit
+    /// on this machine, the Spec run
     /// or Run each Pass dispatched counted, or another Architect run is
     /// still running there.
-    AlreadyRunning(AlreadyRunning),
+    NotAdmitted(NotAdmitted),
     /// These Architect plans are still open on this repository: at least
     /// one.
     OpenPlans(Vec<ListedIssue>),
@@ -106,7 +107,7 @@ impl Skipped {
     /// its start, at the Command limit or beside another Architect run.
     pub fn urls(&self) -> Vec<&str> {
         match self {
-            Self::AlreadyRunning(_) => Vec::new(),
+            Self::NotAdmitted(_) => Vec::new(),
             Self::OpenPlans(issues) | Self::IdeasWaiting(issues) => issues
                 .iter()
                 .map(|listed| listed.issue.url.as_str())
@@ -121,7 +122,7 @@ impl Skipped {
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AlreadyRunning(running) => running.fmt(f),
+            Self::NotAdmitted(running) => running.fmt(f),
             Self::OpenPlans(plans) => write_joined(f, plans, |plan, title| {
                 format!(
                     "Architect plan #{} \"{title}\" is still open: pick it up with thirdshift {}",
@@ -313,9 +314,9 @@ pub fn run(
         Sharing::OneOfAKind(PassKind::Architect),
     ) {
         Ok(Start::Clear(launch)) => launch,
-        Ok(Start::AlreadyRunning(running)) => {
+        Ok(Start::NotAdmitted(running)) => {
             logs::skipped(Pass::Architect, &running.repo, &running);
-            return Outcome::Skipped(Skipped::AlreadyRunning(running));
+            return Outcome::Skipped(Skipped::NotAdmitted(running));
         }
         Err(error) => return failed(error.into()),
     };

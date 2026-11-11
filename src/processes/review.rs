@@ -25,6 +25,11 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                 crate::issue::Repo::of_origin(&launch.run(&["config", "remote.origin.url"])?)
                     .context("review --author needs a GitHub origin")?;
             logs::pass_fired(&repo);
+            if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+                logs::skipped(logs::Pass::Review, &repo, &skipped);
+                progress::step(&skipped);
+                return Ok(String::new());
+            }
             if let Some(running) = command_limit::hold_pass(
                 &repo,
                 config.command_limit,
