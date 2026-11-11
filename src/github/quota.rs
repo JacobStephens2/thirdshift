@@ -1,4 +1,5 @@
-//! GitHub's two quota clocks. The Inbox leaves a fixed reserve for the factory.
+//! Shared machine-local Quota waits. Observing a wait does not yet change how
+//! Passes or running Commands execute.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,37 @@ use serde_json::Value;
 
 use super::GitHub;
 
-#[derive(Clone, Serialize, Deserialize)]
+mod identity;
+mod store;
+#[cfg(test)]
+mod tests;
+// The wait planner is the seam the following Command-wait Ticket consumes.
+#[expect(
+    dead_code,
+    reason = "wait planning is connected to Commands by a later Ticket"
+)]
+pub(crate) mod wait;
+
+pub(crate) use store::QuotaWait;
+use store::Store;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Resource {
+    Core,
+    Graphql,
+}
+
+impl Resource {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Graphql => "graphql",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Quota {
     remaining: u64,
     reset_at: DateTime<Utc>,
@@ -39,46 +70,116 @@ impl Quota {
         })
     }
 
-    fn low(&self) -> bool {
-        self.remaining < 500 && self.reset_at > Utc::now()
+    fn low(&self, now: DateTime<Utc>) -> bool {
+        self.remaining < 500 && self.reset_at > now
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Quotas {
-    pub graphql: Quota,
-    rest: Quota,
-}
-
-impl Quotas {
-    pub fn warning(&self) -> Option<String> {
-        let reasons: Vec<_> = [
-            (&self.graphql, "GraphQL points"),
-            (&self.rest, "REST requests"),
-        ]
-        .into_iter()
-        .filter(|(quota, _)| quota.low())
-        .map(|(quota, name)| {
-            format!(
-                "{} {name} remaining (fewer than 500); Inbox reads paused until {}",
-                quota.remaining,
-                quota.reset_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-            )
-        })
-        .collect();
+impl QuotaWait {
+    pub fn warning(waits: &[Self]) -> Option<String> {
+        let reasons: Vec<_> = waits
+            .iter()
+            .filter(|wait| wait.quota.reset_at > Utc::now())
+            .map(|wait| {
+                let name = match wait.resource {
+                    Resource::Graphql => "GraphQL points",
+                    Resource::Core => "REST requests",
+                };
+                let reserve = if wait.quota.remaining < 500 {
+                    " (fewer than 500)"
+                } else {
+                    ""
+                };
+                format!(
+                    "{} {name} remaining{reserve}; Inbox reads paused until {}",
+                    wait.quota.remaining,
+                    wait.quota
+                        .reset_at
+                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                )
+            })
+            .collect();
         (!reasons.is_empty()).then(|| reasons.join("; "))
     }
 }
 
 impl GitHub {
+    // Quota probes deliberately bypass failure recording: learning a reset or
+    // identity must never recursively probe another failure.
+    fn quota_json(&self, args: &[&str]) -> Result<Value> {
+        let output = self.raw_output_with_input(args, None)?;
+        anyhow::ensure!(output.status.success(), "GitHub quota probe failed");
+        Ok(serde_json::from_slice(&output.stdout)?)
+    }
+
+    /// Read-only access for the Inbox and later GitHub callers. With a known
+    /// identity this makes no GitHub calls, even across process restarts.
+    pub(crate) fn quota_waits(&self) -> Result<Vec<QuotaWait>> {
+        let host = identity::host(&[]);
+        self.quota_waits_for(&host)
+    }
+
+    pub(crate) fn quota_waits_for(&self, host: &str) -> Result<Vec<QuotaWait>> {
+        let store = Store::machine()?;
+        let host = host.to_ascii_lowercase();
+        match identity::cached(&store, &host)? {
+            Some(account) => store.waiting(&account, Utc::now()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(super) fn observe_quota(&self, resource: Resource, quota: Quota) -> Result<()> {
+        let store = Store::machine()?;
+        let host = identity::host(&[]);
+        let account = identity::resolve(self, &store, &host)?;
+        store.observe(&account, resource, quota, Utc::now())
+    }
+
     /// This endpoint reports both quotas and does not spend REST requests:
     /// https://docs.github.com/en/rest/rate-limit/rate-limit
-    pub(crate) fn inbox_quotas(&self) -> Result<Quotas> {
+    pub(crate) fn inbox_quotas(&self) -> Result<Vec<QuotaWait>> {
         let json = self.gh_json(&["api", "rate_limit"])?;
-        let resources = &json["resources"];
-        Ok(Quotas {
-            graphql: Quota::rest(&resources["graphql"])?,
-            rest: Quota::rest(&resources["core"])?,
-        })
+        for resource in [Resource::Graphql, Resource::Core] {
+            self.observe_quota(resource, Quota::rest(&json["resources"][resource.name()])?)?;
+        }
+        self.quota_waits()
+    }
+
+    pub(super) fn record_quota_failure(&self, args: &[&str], stderr: &[u8]) -> Result<()> {
+        let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+        if diagnostic.contains("secondary rate limit")
+            || !(diagnostic.contains("api rate limit exceeded")
+                || diagnostic.contains("api rate limit already exceeded")
+                || diagnostic.contains("rate_limit_exceeded")
+                || diagnostic.contains("rate_limited"))
+        {
+            return Ok(());
+        }
+        let resource = if diagnostic.contains("graphql")
+            || args.first() == Some(&"api") && args.contains(&"graphql")
+            || args.first() != Some(&"api")
+                && (diagnostic.contains("rate_limit_exceeded")
+                    || diagnostic.contains("rate_limited"))
+        {
+            Resource::Graphql
+        } else {
+            Resource::Core
+        };
+        let host = identity::host(args);
+        let store = Store::machine()?;
+        let account = identity::resolve(self, &store, &host)?;
+        let now = Utc::now();
+        let resource_json = self
+            .quota_json(&["api", "rate_limit", "--hostname", &host])
+            .unwrap_or(Value::Null);
+        let resource_json = &resource_json["resources"][resource.name()];
+        let quota = Quota {
+            remaining: resource_json["remaining"].as_u64().unwrap_or(0),
+            reset_at: resource_json["reset"]
+                .as_i64()
+                .and_then(|reset| DateTime::from_timestamp(reset, 0))
+                .unwrap_or(now + chrono::Duration::minutes(15)),
+        };
+        store.exhausted(&account, resource, quota, now)
     }
 }

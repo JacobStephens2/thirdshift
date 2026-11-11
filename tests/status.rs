@@ -3451,9 +3451,7 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
 
 #[test]
 fn status_reserves_both_quotas_until_their_resets() {
-    for (resource, kept_name, description) in
-        [("graphql", "graphql", "GraphQL"), ("core", "rest", "REST")]
-    {
+    for (resource, description) in [("graphql", "GraphQL"), ("core", "REST")] {
         let scenario = Scenario::new();
         ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
         github_pr_is(&scenario, 7, "OPEN", None, None);
@@ -3504,9 +3502,15 @@ fn status_reserves_both_quotas_until_their_resets() {
             "read while {description} quota was low"
         );
         // Move the recorded reset into the past at the fixture's time seam.
-        let path = scenario.path(GITHUB_CACHE);
+        let path = scenario.path("home/.thirdshift/github-quota.json");
         let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        kept["quotas"][kept_name]["reset_at"] = hours_ago(1).into();
+        let wait = kept["waits"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|wait| wait["resource"] == resource)
+            .unwrap();
+        wait["reset_at"] = hours_ago(1).into();
         fs::write(path, serde_json::to_vec(&kept).unwrap()).unwrap();
         gh["rate_limits"][resource]["remaining"] = 5000.into();
         scenario.write_gh_state(&gh);
