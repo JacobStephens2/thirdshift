@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
@@ -42,6 +43,12 @@ pub(super) struct Record<O: Outside> {
     parent_dispatch: Option<String>,
     record_warned: bool,
     unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    clocks: Option<Clocks>,
+}
+
+struct Clocks {
+    wall: chrono::DateTime<chrono::FixedOffset>,
+    monotonic: Duration,
 }
 
 enum Log<W> {
@@ -82,6 +89,49 @@ impl Started {
 }
 
 impl<O: Outside> Record<O> {
+    /// Called by the periodic sampler and before transitions. Each reading
+    /// replaces the baseline, so smaller clock corrections never accumulate.
+    pub(super) fn check_suspension(&mut self) {
+        let clocks = Clocks {
+            wall: self.outside.now(),
+            monotonic: self.outside.monotonic(),
+        };
+        let Some(previous) = self.clocks.replace(clocks) else {
+            return;
+        };
+        let current = self.clocks.as_ref().unwrap();
+        let Ok(wall) = (current.wall - previous.wall).to_std() else {
+            return;
+        };
+        let suspended = wall.saturating_sub(current.monotonic.saturating_sub(previous.monotonic));
+        if suspended < Duration::from_secs(60) {
+            return;
+        }
+        let Some((_, tree)) = &mut self.command_record else {
+            return;
+        };
+        if tree.command.outcome.is_some() {
+            return;
+        }
+        for facts in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
+            if facts.outcome.is_none()
+                && let Some(stage) = facts.stages.last_mut()
+            {
+                stage.suspended_seconds =
+                    stage.suspended_seconds.saturating_add(suspended.as_secs());
+            }
+        }
+        self.write_record();
+        // Child Ticket runs retain their own stage facts. Their owning
+        // Command emits the one log line, rather than relaying duplicates.
+        if !self.child {
+            self.step(format_args!(
+                "host was suspended {}",
+                super::status::age(suspended.as_secs() as i64)
+            ));
+        }
+    }
+
     pub(super) fn new(outside: O) -> Self {
         Self {
             outside,
@@ -103,6 +153,7 @@ impl<O: Outside> Record<O> {
             parent_dispatch: None,
             record_warned: false,
             unaddressed_findings: None,
+            clocks: None,
         }
     }
 
@@ -369,6 +420,8 @@ impl<O: Outside> Record<O> {
                 dispatched: Vec::new(),
             },
         ));
+        self.clocks = None;
+        self.check_suspension();
         if let Some(stage) = work.initial_stage() {
             self.stage(stage, None);
         } else {
@@ -475,6 +528,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
+        self.check_suspension();
         let name = stage.name();
         let Some((_, tree)) = &mut self.command_record else {
             return;
@@ -488,6 +542,7 @@ impl<O: Outside> Record<O> {
                 name: name.into(),
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
+                suspended_seconds: 0,
             });
         } else if let Some(stage) = facts.stages.last_mut() {
             stage.session_log = facts.session_log.clone();
@@ -503,6 +558,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.check_suspension();
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(
@@ -538,6 +594,7 @@ impl<O: Outside> Record<O> {
 
     /// How a Command ended when it has no Run account: an Experiment or a Process.
     pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
+        self.check_suspension();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
             tree.command.cause = cause.map(String::from);
@@ -547,6 +604,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.check_suspension();
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.active_dispatch()
@@ -567,6 +625,7 @@ impl<O: Outside> Record<O> {
         harness: &Choice,
         security_fix_findings: &[crate::security::RecordedFinding],
     ) {
+        self.check_suspension();
         // Entered while the pass is still the active record, timing the
         // dispatch. An Architect run keeps its Architecture review stage,
         // as #889 asked only for Pickup runs and Security runs.

@@ -8,6 +8,54 @@ use support::Scenario;
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn show_explains_suspended_stage_time_in_text_and_json_and_reads_legacy_stages() {
+    let scenario = Scenario::new();
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let record = serde_json::json!({
+        "version": 1, "kind": "Run", "repository": "acme/widgets", "name": "acme/widgets#7",
+        "issue": {"number": 7, "url": scenario.issue_url(7), "title": "Make widgets"},
+        "hostname": "factory", "process_id": 0, "process_start": "gone", "harness": "claude",
+        "model": null, "effort": null, "started_at": "2026-10-03T12:00:00-04:00",
+        "ended_at": "2026-10-03T22:07:00-04:00", "outcome": "ready for review", "cause": null,
+        "issue_branch": null, "pull_request": null, "session_log": null,
+        "stages": [
+            {"name": "implement", "began_at": "2026-10-03T12:00:00-04:00", "suspended_seconds": 34800},
+            {"name": "pull request", "began_at": "2026-10-03T22:06:00-04:00"}
+        ]
+    });
+    fs::write(
+        folder.join("7-20261003T120000-0400.command.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let shown = scenario.run(&["show", "widgets#7"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown.stdout.contains("10 hr 6 min · 9 hr 40 min suspended"),
+        "{}",
+        shown.stdout
+    );
+    let legacy = shown
+        .stdout
+        .lines()
+        .find(|line| line.contains("  pull request ·"))
+        .unwrap();
+    assert!(legacy.ends_with(" · 1 min"), "{legacy}");
+    assert!(!legacy.contains("suspended"), "{legacy}");
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    let stages = &shown["command"]["stages"];
+    assert_eq!(stages[0]["seconds"], 36360.0);
+    assert_eq!(stages[0]["suspended_seconds"], 34800);
+    assert_eq!(stages[0]["time"], "10 hr 6 min · 9 hr 40 min suspended");
+    assert_eq!(stages[1]["seconds"], 60.0);
+    assert_eq!(stages[1]["time"], "1 min");
+    assert!(stages[1].get("suspended_seconds").is_none());
+}
+
+#[test]
 fn same_stamp_session_history_keeps_legacy_and_owned_inventories_disjoint() {
     let scenario = Scenario::new();
     let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");

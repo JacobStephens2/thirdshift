@@ -179,6 +179,12 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub suspended_seconds: u64,
+}
+
+fn is_zero(seconds: &u64) -> bool {
+    *seconds == 0
 }
 
 /// A retained stage interval, optionally extended to an observation of live work.

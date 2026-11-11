@@ -16,6 +16,7 @@ const ACTIVITY: &str = "/logs/acme/widgets/activity.log";
 #[derive(Default)]
 struct Memory {
     now: Option<DateTime<FixedOffset>>,
+    monotonic: Option<std::time::Duration>,
     terminal: Vec<(Stream, String)>,
     files: BTreeMap<PathBuf, String>,
     command_open_fails: bool,
@@ -32,6 +33,16 @@ struct Memory {
 struct Scripted(Arc<Mutex<Memory>>);
 
 impl Scripted {
+    fn advance(&self, wall_seconds: i64, monotonic_seconds: u64) {
+        let now = self.clone().now();
+        let mut memory = self.0.lock().unwrap();
+        memory.now = Some(now + chrono::Duration::seconds(wall_seconds));
+        memory.monotonic = Some(
+            memory.monotonic.unwrap_or_default()
+                + std::time::Duration::from_secs(monotonic_seconds),
+        );
+    }
+
     fn command_record(&self) -> CommandRecord {
         let memory = self.0.lock().unwrap();
         let records: Vec<_> = memory
@@ -193,6 +204,18 @@ impl Outside for Scripted {
             .unwrap_or_else(|| DateTime::parse_from_rfc3339("2026-10-03T12:00:00-04:00").unwrap())
     }
 
+    fn monotonic(&mut self) -> std::time::Duration {
+        let scripted = self.0.lock().unwrap().monotonic;
+        scripted.unwrap_or_else(|| {
+            self.now()
+                .signed_duration_since(
+                    DateTime::parse_from_rfc3339("2026-10-03T12:00:00-04:00").unwrap(),
+                )
+                .to_std()
+                .unwrap_or_default()
+        })
+    }
+
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()> {
         let mut memory = self.0.lock().unwrap();
         if memory.terminal_fails {
@@ -238,6 +261,122 @@ fn listed() -> ListedIssue {
         issue: issue(),
         title: "Make widgets".into(),
         labels: Default::default(),
+    }
+}
+
+fn started_recording(begin: Begin<'_>, work: Work<'_>) -> (Record<Scripted>, Scripted) {
+    let memory = Scripted::default();
+    memory.0.lock().unwrap().monotonic = Some(std::time::Duration::ZERO);
+    let mut record = Record::new(memory.clone());
+    record.begin(begin);
+    record.configured(&config(false));
+    record.started(work, &harness());
+    (record, memory)
+}
+
+#[test]
+fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
+    let (mut record, memory) = started_recording(Begin::Run(&issue()), Work::Run(&issue()));
+    record.check_suspension();
+    {
+        let mut clock = memory.0.lock().unwrap();
+        clock.now = Some(DateTime::parse_from_rfc3339("2026-10-03T12:02:30-04:00").unwrap());
+        clock.monotonic = Some(std::time::Duration::from_secs(30));
+    }
+    record.check_suspension();
+    record.check_suspension();
+    let saved: serde_json::Value =
+        serde_json::from_str(&memory.file(record.record_path().unwrap())).unwrap();
+    assert_eq!(saved["stages"][0]["suspended_seconds"], 120);
+    assert!(saved["outcome"].is_null());
+    assert_eq!(saved["stages"].as_array().unwrap().len(), 1);
+    let log = memory.file(record.command_log_path().unwrap());
+    assert_eq!(log.matches("host was suspended 2 min").count(), 1, "{log}");
+}
+
+#[test]
+fn small_clock_steps_are_ignored_and_suspensions_add_to_the_stage_that_was_live() {
+    let (mut record, memory) = started_recording(Begin::Run(&issue()), Work::Run(&issue()));
+    // Successive 30-second clock steps must not accumulate into a suspension.
+    for _ in 0..3 {
+        memory.advance(60, 30);
+        record.check_suspension();
+    }
+    assert_eq!(memory.command_record().stages[0].suspended_seconds, 0);
+    assert!(
+        !memory
+            .file(record.command_log_path().unwrap())
+            .contains("host was suspended")
+    );
+    memory.advance(150, 30);
+    record.check_suspension();
+    memory.advance(90, 30);
+    // The transition itself must sample before it changes the stage.
+    record.stage(StageName::CodeReview, None);
+    assert_eq!(memory.command_record().stages[0].suspended_seconds, 180);
+    assert_eq!(memory.command_record().stages[1].suspended_seconds, 0);
+    memory.advance(210, 30);
+    record.check_suspension();
+    let saved = memory.command_record();
+    assert_eq!(saved.stages[0].suspended_seconds, 180);
+    assert_eq!(saved.stages[1].suspended_seconds, 180);
+    let log = memory.file(record.command_log_path().unwrap());
+    assert_eq!(log.matches("host was suspended").count(), 3, "{log}");
+    assert!(log.contains("host was suspended 2 min"), "{log}");
+    assert!(log.contains("host was suspended 1 min"), "{log}");
+    assert!(log.contains("host was suspended 3 min"), "{log}");
+    record.outcome("ready for review", None);
+    memory.advance(150, 30);
+    record.check_suspension();
+    assert_eq!(memory.command_record().stages[1].suspended_seconds, 180);
+    assert_eq!(memory.file(record.command_log_path().unwrap()), log);
+}
+
+#[test]
+fn every_command_kind_records_suspension_in_its_live_stage() {
+    let issue = issue();
+    let listed = listed();
+    let repo = issue.repo();
+    for (begin, work) in [
+        (Begin::Run(&issue), Work::Run(&issue)),
+        (Begin::Run(&issue), Work::SpecRun(&issue)),
+        (Begin::ArchitectRun, Work::ArchitectRun(&repo)),
+        (Begin::PickupRun, Work::PickupRun(&listed)),
+        (Begin::SecurityRun, Work::SecurityRun(&repo)),
+        (Begin::ScoringRun, Work::ScoringRun(&repo)),
+        (Begin::TriageRun { pass: false }, Work::TriageRun(&repo)),
+        (Begin::FixRun { pass: false }, Work::FixRun(&repo)),
+        (Begin::ReviewRun { pass: false }, Work::ReviewRun(&repo)),
+        (Begin::Experiment, Work::Experiment(&repo)),
+        (
+            Begin::Process {
+                name: "eval",
+                pass: false,
+            },
+            Work::Process {
+                repo: &repo,
+                name: "eval",
+            },
+        ),
+    ] {
+        let (mut record, memory) = started_recording(begin, work);
+        record.stage(StageName::ProcessStep, None);
+        memory.advance(150, 30);
+        record.check_suspension();
+        let saved = memory.command_record();
+        assert_eq!(
+            saved.stages.last().unwrap().suspended_seconds,
+            120,
+            "{}",
+            saved.kind
+        );
+        let log = memory.file(record.command_log_path().unwrap());
+        assert_eq!(
+            log.matches("host was suspended 2 min").count(),
+            1,
+            "{}: {log}",
+            saved.kind
+        );
     }
 }
 
@@ -354,16 +493,19 @@ fn completion_metrics_place_each_stage_against_repository_history() {
             name: "implement".into(),
             began_at: "2026-10-01T12:00:00-04:00".into(),
             session_log: None,
+            suspended_seconds: 0,
         },
         Stage {
             name: "pull request".into(),
             began_at: "2026-10-01T12:01:00-04:00".into(),
             session_log: None,
+            suspended_seconds: 0,
         },
         Stage {
             name: "CI watch".into(),
             began_at: "2026-10-01T12:11:00-04:00".into(),
             session_log: None,
+            suspended_seconds: 0,
         },
     ];
     for number in 1..=3 {

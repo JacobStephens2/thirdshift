@@ -46,6 +46,10 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn observed_at(&self) -> DateTime<Local> {
+        self.now
+    }
+
     /// Merge opted-in accounts, isolating another account's read failures.
     pub(super) fn for_user(
         config: &crate::config::UserConfig,
