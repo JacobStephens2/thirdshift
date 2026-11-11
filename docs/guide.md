@@ -4241,8 +4241,9 @@ qualify. The script uses a qualifying commit immediately even
 if the tip's CI is pending or failed. If none qualifies, it waits for a run to
 succeed, still considering older pending commits when `main` moves. The
 Experiment's Candidate is that release base. The tag names exactly that content
-plus the version bump, so merges to `main` during a release do not change what
-is measured or shipped.
+plus the version bump. A repair or external head update can change that content;
+the script validates it and refreshes the requested Experiment and release notes
+before publishing.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
@@ -4250,7 +4251,37 @@ From a clone of this repo, signed in to `gh` and the User config's default Harne
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the PR checks fail, it stops before tagging and leaves the pull request open and untagged. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it warns that the bump PR is not merged, names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. A Merge conflict or completed failing PR checks can start the bounded Fix run described below. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Running CI and publication have no overall timeout.
+
+While waiting for PR CI, the script observes that PR's current head and mergeability.
+A Merge conflict, including one with no workflows, or completed failing CI starts
+at most one targeted `thirdshift fix <PR URL> --no-merge --no-base-fix` per release
+invocation, using this checkout's runner and User config. Those flags override
+Self-merge and Base fix defaults: the release script still tags, waits for
+publication, then merges. Healthy, queued and running CI start no Fix run.
+Missing workflows without a conflict have a five-minute startup grace period
+(`RELEASE_WORKFLOW_STARTUP_SECONDS=300`, adjustable for testing), then stop with
+the PR, head and recovery command. After CI passes, GitHub gets the same grace
+to report the PR mergeable. Neither is a deadline on CI runtime.
+
+After a Fix run or external push, the script fetches and validates the current
+PR identity, open state, readiness, origin, branches, head and exact version-bump
+tree against main. Extra source changes or a wrong version require human review
+before tagging. A changed content base reruns the Experiment when requested and
+regenerates the summary and version diff, honoring `--review`. More than five
+head updates, a failed or interrupted Fix, or another conflict or CI failure
+after the automatic Fix stops with recovery instructions and no new tag pushed.
+A closed, retargeted or draft PR, a changed origin, or a content base older than
+the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
+A failed or interrupted Fix run leaves the PR draft, so the rerun names
+`gh pr ready <url>`: mark it ready after review, then rerun.
+Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
+records the content base its notes describe; a resumed PR from before that marker
+has its summary and version diff regenerated once, honoring `--review`.
+
+After publication, a failed merge leaves the release standing and names the PR
+for the Day shift. If the PR is draft, mark it ready with `gh pr ready <PR URL>`
+before merging it. Rerunning the release command keeps the published tag in place.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 
