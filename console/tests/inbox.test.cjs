@@ -197,6 +197,8 @@ test('Copy fix command works on ready Inbox rows and in Command details', async 
         await row.waitFor();
         const copy = row.getByRole('button', { name: 'Copy fix command', exact: true });
         assert.equal(await copy.count(), offered ? 1 : 0, `${width}:${outcome}:${ci}:${mergeable}`);
+        // This Console knows no Launch directory: retain the copy fallback alone.
+        assert.equal(await row.getByRole('button', { name: 'Start Fix run', exact: true }).count(), 0);
         if (offered) {
           assert.equal(await copy.getAttribute('type'), 'button');
           assert.equal(await copy.getAttribute('data-copy-cli'), cli);

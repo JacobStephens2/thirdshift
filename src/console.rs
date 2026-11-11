@@ -1276,6 +1276,7 @@ impl InboxPage {
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            start: self.start.as_ref(),
             csrf: &self.csrf,
             can_copy: can_copy && row.console.is_empty(),
             can_act: self.page.can_act(),
@@ -1288,6 +1289,7 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    start: Option<&'a start_controls::Form>,
     csrf: &'a str,
     can_copy: bool,
     can_act: bool,
@@ -1295,6 +1297,10 @@ struct RowTemplate<'a> {
 }
 
 impl RowTemplate<'_> {
+    fn fix_start(&self) -> Option<start_controls::Fix> {
+        self.start?.fix(self.row)
+    }
+
     fn gist(&self) -> String {
         if !self.can_security && !self.row.findings.is_empty() {
             self.row.now_line.clone()
@@ -1306,6 +1312,7 @@ impl RowTemplate<'_> {
     fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate {
             row,
+            start: self.start,
             csrf: self.csrf,
             can_copy: false,
             can_act: self.can_act,
