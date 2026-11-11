@@ -62,7 +62,8 @@ pub fn triage(skill_path: &std::path::Path, report: &str, read_machine: bool) ->
 }
 
 /// Targeted triage uses the same investigation scope, with the supplied
-/// issue file as evidence and a single in-place recommendation.
+/// issue file as evidence and a single in-place recommendation, choosing
+/// from the supplied repository categories.
 pub fn triage_issue(
     skill_path: &std::path::Path,
     issue: &IssueUrl,

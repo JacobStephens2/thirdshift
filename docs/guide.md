@@ -3917,7 +3917,7 @@ thirdshift triage 123 --recommend-only
 
 The Base branch defaults to the Launch directory's checked-out branch. The issue must belong to that repository, have a Trusted-account author and have no title or body edits by other accounts. Any current triage state is accepted. The session receives `.thirdshift-issue.md` with the title, body and only Trusted-account comments. Combining an issue with `--file` is refused.
 
-The session also receives the repository's available category labels, excluding triage states and factory markers. It must recommend one of those categories even when publication will preserve an existing category. A Security finding's `security-finding` marker is kept, and a recommendation supplies a repository category when the issue has none.
+The session also receives the repository's available category labels, excluding triage states and factory labels. It must recommend one of those categories even when publication will preserve an existing category. A Security finding's `security-finding` label is kept, and a recommendation supplies a repository category when the issue has none.
 
 Before the session starts, thirdshift downloads up to ten unique images from Markdown images and HTML `img` tags in the trusted body and comments. Only HTTPS URLs on `github.com` or subdomains of `githubusercontent.com` are eligible. Each download has a 30-second timeout and a 20 MiB limit; failures and excess images produce warnings and the investigation continues. Successful images are kept under `.thirdshift-issue-images/` in the throwaway worktree, with their original URLs and local paths appended to `.thirdshift-issue.md`, so the session can inspect them with `--read-machine` too.
 

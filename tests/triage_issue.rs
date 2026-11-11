@@ -14,7 +14,7 @@ fn recommend(scenario: &Scenario, recommendation: &str) {
 }
 
 #[test]
-fn security_finding_triage_uses_repository_categories_instead_of_its_factory_marker() {
+fn security_finding_triage_uses_repository_categories_instead_of_its_factory_label() {
     for existing_category in [false, true] {
         for recommend_only in [false, true] {
             let scenario = Scenario::new();
