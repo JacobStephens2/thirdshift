@@ -8,22 +8,27 @@ use crate::github::TipCi;
 use crate::issue::IssueUrl;
 use crate::run::{Goal, Resolution};
 
+pub(super) enum Outcome {
+    Clear,
+    Skipped(String),
+    Run(Ended),
+}
+
 pub(super) fn run(
     launch: &crate::launch::Launch,
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
-) -> Result<Option<crate::command::Ending>> {
+) -> Result<Outcome> {
     let repo = &launch.repo;
     let base = launch.base.name();
     let tip = launch.base.origin_commit();
     // Share Pickup's CI reservation so overlapping hosts cannot re-run or
     // publish the same Base branch repair concurrently.
     let Some(_held) = crate::reservation::Reservation::ci_red(launch.directory.git())? else {
-        return Ok(Some(skipped(
-            repo,
+        return Ok(Outcome::Skipped(
             "Base branch CI is reserved on origin".into(),
-        )));
+        ));
     };
     let github = GitHub::new();
     // Delivery's repository-scoped adapters take an IssueUrl. No issue exists
@@ -36,22 +41,20 @@ pub(super) fn run(
     };
     let checks = match github.fix_base_tip(&repository, base, tip)? {
         TipCi::Waiting => {
-            return Ok(Some(skipped(
-                repo,
-                format!("CI on {base} is pending or re-running"),
+            return Ok(Outcome::Skipped(format!(
+                "CI on {base} is pending or re-running"
             )));
         }
         TipCi::Checks(checks) => checks,
     };
     if !ci::needs_repair(&checks) {
-        return Ok(None);
+        return Ok(Outcome::Clear);
     }
     let failed = ci::base_failures(checks);
     let branch = format!("fix-{base}-{}", ci::short(tip));
     if github.base_fix_pr_exists(repo, &branch)? || launch.directory.git().on_origin(&branch)? {
-        return Ok(Some(skipped(
-            repo,
-            format!("a repair branch or pull request from {branch} already exists"),
+        return Ok(Outcome::Skipped(format!(
+            "a repair branch or pull request from {branch} already exists"
         )));
     }
     harness.check()?;
@@ -121,9 +124,9 @@ pub(super) fn run(
             format_args!("could not close CI-red issues on {base}"),
         );
     }
-    Ok(Some(crate::command::Ending::Run(Ended {
+    Ok(Outcome::Run(Ended {
         outcome,
         base_fix: None,
         advice: Vec::new(),
-    })))
+    }))
 }

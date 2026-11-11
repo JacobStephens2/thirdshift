@@ -392,6 +392,13 @@ impl<O: Outside> Record<O> {
         );
     }
 
+    pub(super) fn base_ci_skipped(&mut self, repo: &Repo, reason: &str) {
+        let kind = Kind::BaseCi;
+        let message = format!("{kind} skipped: {reason}");
+        self.step(&message);
+        self.activity_write(&self.root(repo), &message, Some(kind));
+    }
+
     /// A skipped Custom process keeps the Activity log line and a Command
     /// record. The record is what shows the skipped ending; the other Passes
     /// drop the Command log they never kept.
