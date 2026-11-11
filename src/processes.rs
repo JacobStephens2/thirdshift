@@ -648,12 +648,21 @@ fn run(command: &ProcessRun) -> Result<String> {
     if issue.is_none() {
         logs::begin(Begin::Process { name, pass: true });
         logs::configured(&config);
-        let base = match launch::checked_out_base() {
-            Ok(base) => base,
-            Err(error) => return Err(failed_before_steps(notification, error)),
-        };
         let repo = match launch::repo() {
             Ok(repo) => repo,
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        };
+        let skip = |reason: &command_limit::NotAdmitted| {
+            let choice = Choice::of(&command.asked, &config.harness);
+            progress::step(reason);
+            logs::skipped_process(&repo, name, &choice, reason);
+            String::new()
+        };
+        if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+            return Ok(skip(&skipped));
+        }
+        let base = match launch::checked_out_base() {
+            Ok(base) => base,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
         match command_limit::hold_pass(
@@ -662,11 +671,7 @@ fn run(command: &ProcessRun) -> Result<String> {
             command_limit::Sharing::UpToTheLimit,
         ) {
             Ok(Some(running)) => {
-                let reason = running.to_string();
-                let choice = Choice::of(&command.asked, &config.harness);
-                progress::step(&reason);
-                logs::skipped_process(&repo, name, &choice, &reason);
-                return Ok(String::new());
+                return Ok(skip(&running));
             }
             Ok(None) => {}
             Err(error) => return Err(failed_before_steps(notification, error)),

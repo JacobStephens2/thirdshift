@@ -98,18 +98,21 @@ pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
 /// independently without changing the recorded request or other views.
 pub struct GitHub {
     interruption: Interruption,
+    wait_for_quota: bool,
 }
 
 impl GitHub {
     pub fn new() -> Self {
         Self {
             interruption: Interruption::Ordinary,
+            wait_for_quota: true,
         }
     }
 
     pub fn completion(&self) -> Self {
         Self {
             interruption: Interruption::Completion,
+            wait_for_quota: self.wait_for_quota,
         }
     }
 
@@ -1285,12 +1288,14 @@ impl GitHub {
             match quota::Limit::of(args, &output.stderr) {
                 Some(quota::Limit::Primary(resource)) => {
                     let reset = self.record_quota_failure(args, resource);
-                    if !quota::command::wait(reset, resource, self.interruption)? {
+                    if !self.wait_for_quota
+                        || !quota::command::wait(reset, resource, self.interruption)?
+                    {
                         return Ok(output);
                     }
                 }
                 Some(quota::Limit::Secondary)
-                    if quota::command::active() && secondary_retries < 5 =>
+                    if self.wait_for_quota && quota::command::active() && secondary_retries < 5 =>
                 {
                     secondary_retries += 1;
                     crate::progress::step(format!(

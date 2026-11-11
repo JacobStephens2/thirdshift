@@ -4073,9 +4073,9 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             github["failing_stderr"] = json!(format!(
                 "{diagnostic} token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
             ));
-            // A reset beyond the Command's cap reaches the original failure
-            // path whose notification privacy this test checks.
-            github["rate_limits"] = json!({
+            // Admit the Pass, then report a reset beyond the Command's cap
+            // to reach the failure path whose notification privacy this checks.
+            github["next_rate_limits"] = json!({
                 "core": {"remaining": 0, "reset": 4102444800u64},
                 "graphql": {"remaining": 0, "reset": 4102444800u64}
             });
@@ -4168,26 +4168,25 @@ fn within_cap_quota_wait_keeps_pre_audit_github_diagnostics_local() {
         "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
         scenario.path("custom-logs")
     ));
-    scenario.gh_fails(
-        "api --paginate --jq .[] repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100",
-    );
+    let call = "api --paginate --jq .[] repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100";
+    scenario.gh_fails(call);
     let reset = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 1;
+        + 3;
     let mut github = scenario.gh_state();
-    github["failing_stderr"] = json!(
-        "GraphQL: API rate limit already exceeded for user ID PRIVATE-IDENTIFIER. token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
-    );
-    github["rate_limits"] = json!({
-        "core": {"remaining": 0, "reset": reset},
-        "graphql": {"remaining": 0, "reset": reset}
+    let private = "for user ID PRIVATE-IDENTIFIER. token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic.";
+    github["fail_next"] = json!({
+        "call": call, "times": 1,
+        "error": format!("GraphQL: API rate limit already exceeded {private}")
     });
-    // The retry is past the cap, so the original diagnostic is what gets kept.
-    github["next_rate_limits"] = json!({
-        "core": {"remaining": 0, "reset": 4102444800u64},
-        "graphql": {"remaining": 0, "reset": 4102444800u64}
+    github["failing_stderr"] = json!(format!("API rate limit exceeded {private}"));
+    // Both reserves admit the Pass. GraphQL exhaustion waits within the cap;
+    // the retry exhausts REST past the cap and keeps its original diagnostic.
+    github["rate_limits"] = json!({
+        "core": {"remaining": 5000, "reset": 4102444800u64},
+        "graphql": {"remaining": 5000, "reset": reset}
     });
     scenario.write_gh_state(&github);
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
@@ -4199,6 +4198,11 @@ fn within_cap_quota_wait_keeps_pre_audit_github_diagnostics_local() {
     );
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Quota wait until"),
+        "{}",
+        result.stderr
+    );
     assert!(
         result.stderr.contains("PRIVATE-CREDENTIAL"),
         "the operator's stderr keeps the diagnostic: {}",

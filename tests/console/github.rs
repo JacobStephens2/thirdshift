@@ -10,7 +10,9 @@ fn start_binary(scenario: &Scenario, binary: &Path) -> Console {
     let mut command = Command::new(binary);
     command
         .args(["console", "--no-sign-in"])
+        .env_clear()
         .env("HOME", scenario.path("home"))
+        .env("XDG_CONFIG_HOME", scenario.path("home/.config"))
         .env(
             "PATH",
             format!(
@@ -616,9 +618,104 @@ fn console_and_status_share_both_quota_reserves_and_resume_at_reset() {
                 break;
             }
         }
-        assert!(scenario.gh_calls_of("api", "graphql").len() >= 2);
+        // Expiry can clear the warning before the background read starts.
+        wait_until(|| scenario.gh_calls_of("api", "graphql").len() >= 2);
         drop(stream);
         drop(console);
         assert!(!scenario.run(&["status"]).stdout.contains("Warning:"));
     }
+}
+
+#[test]
+fn inbox_shows_a_pass_quota_wait_and_updates_when_the_machine_record_expires() {
+    let scenario = Scenario::new();
+    configure(&scenario.path("home"));
+    let mut gh = scenario.gh_state();
+    gh["rate_limits"]["core"] = json!({
+        "remaining": 499,
+        "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+    });
+    scenario.write_gh_state(&gh);
+    assert_eq!(scenario.run(&["pickup"]).code, Some(0));
+    let console = start(&scenario);
+    let page = console.get("/").text().unwrap();
+    assert!(page.contains("Pickup last fired"), "{page}");
+    assert!(page.contains("class=\"github-quota-wait\""), "{page}");
+    assert!(page.contains("GitHub Quota wait until"), "{page}");
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap()
+        .get(format!("{}/events", console.address))
+        .send()
+        .unwrap();
+    let mut stream = BufReader::new(response);
+    assert!(sse_event(&mut stream).contains("event: commands"));
+    assert_idle_events(&console, Duration::from_secs(1));
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for wait in record["waits"].as_array_mut().unwrap() {
+        wait["reset_at"] = json!((chrono::Utc::now() + chrono::Duration::seconds(6)).to_rfc3339());
+    }
+    fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+    loop {
+        let event = sse_event(&mut stream);
+        assert!(event.contains("event: commands"));
+        if !console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("class=\"github-quota-wait\"")
+        {
+            break;
+        }
+    }
+    assert!(
+        !console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("class=\"github-quota-wait\"")
+    );
+    drop(stream);
+    drop(console);
+}
+
+#[test]
+fn relearning_quota_identity_without_a_wait_keeps_the_inbox_idle() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("failed"), 10);
+    scenario.issue_is(81, "OPEN");
+    let console = start(&scenario);
+    let mut first = events(&console);
+    wait_for(&console, &mut first, "needs you");
+    assert_idle_events(&console, Duration::from_secs(1));
+    // Keep the first subscription alive so this one does not restart the observer.
+    let mut stream = events(&console);
+    assert!(sse_event(&mut stream).contains("event: commands"));
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    assert!(path.exists());
+    fs::remove_file(&path).unwrap();
+    let began = std::time::Instant::now();
+    loop {
+        let mut line = String::new();
+        match stream.read_line(&mut line) {
+            Ok(0) => panic!("Inbox stream closed"),
+            Ok(_) => assert!(
+                !line.starts_with("event: commands"),
+                "identity bookkeeping woke the Inbox: {line}"
+            ),
+            Err(_) => {
+                assert!(began.elapsed() >= Duration::from_secs(2));
+                break;
+            }
+        }
+    }
+    assert!(path.exists(), "the quota identity was not relearned");
+    assert!(scenario.gh_calls_of("api", "user").len() >= 2);
+    drop(stream);
+    drop(first);
+    drop(console);
 }

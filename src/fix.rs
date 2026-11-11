@@ -44,7 +44,7 @@ pub(crate) fn run(
                 crate::command_limit::Sharing::UpToTheLimit,
             )? {
                 crate::launch::Start::Clear(launch) => launch,
-                crate::launch::Start::AlreadyRunning(running) => {
+                crate::launch::Start::NotAdmitted(running) => {
                     return Ok(skipped(&running.repo, running.to_string()));
                 }
             };

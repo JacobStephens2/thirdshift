@@ -183,6 +183,10 @@ impl Kept {
             .map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true))
     }
 
+    pub fn quota_wait(&self) -> Option<String> {
+        QuotaWait::pass_reason(&self.waits)
+    }
+
     pub fn warning(&self) -> Option<String> {
         let mut reasons = Vec::new();
         if let Some(reason) = QuotaWait::warning(&self.waits) {
@@ -206,10 +210,23 @@ impl Kept {
         })
     }
 
-    /// An open Inbox must also learn when a failed answer becomes stale.
+    /// An open Inbox must learn when an answer becomes stale or a Quota wait resets.
     pub fn next_warning_change(&self) -> Option<Duration> {
-        let age = self.age?;
-        (age <= FRESH_FOR).then(|| FRESH_FOR - age + Duration::from_millis(1))
+        let freshness = self
+            .age
+            .and_then(|age| (age <= FRESH_FOR).then(|| FRESH_FOR - age + Duration::from_millis(1)));
+        let now = Utc::now();
+        let reset = self
+            .waits
+            .iter()
+            .filter_map(|wait| {
+                (wait.reset_at() - now)
+                    .to_std()
+                    .ok()
+                    .filter(|delay| !delay.is_zero())
+            })
+            .min();
+        freshness.into_iter().chain(reset).min()
     }
 
     fn state(&self, row: &str, url: &str) -> Option<&InboxState> {

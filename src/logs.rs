@@ -380,7 +380,8 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
 
 /// Record that the Custom process `name`, started with no issue, was skipped
 /// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
-/// <reason>` unless that is already its last Process line. Unlike the other
+/// <reason>` unless that is already its last Process line (its own named
+/// Process's last skip during a Quota wait). Unlike the other
 /// Passes, it also keeps a Command record whose outcome is `skipped`: the
 /// Process's record shows that ending. `harness` is the choice it would have
 /// run on; the skip does not check that it can run.
@@ -388,9 +389,9 @@ pub fn skipped_process(
     repo: &Repo,
     name: &str,
     harness: &crate::harness::Choice,
-    reason: impl Display,
+    reason: &crate::command_limit::NotAdmitted,
 ) {
-    record().skipped_process(repo, name, harness, &reason.to_string());
+    record().skipped_process(repo, name, harness, reason);
 }
 
 /// Add an observation to the running command's repository Activity log.

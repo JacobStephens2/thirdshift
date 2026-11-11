@@ -352,7 +352,8 @@ fn a_pass_that_waited_before_skipping_finishes_its_command_record() {
     let mut state = scenario.gh_state();
     state["fail_next"] = json!({"call":"api --paginate --jq", "times":1,
         "error":"API rate limit exceeded (HTTP 403)"});
-    state["rate_limits"] = json!({"core":{"remaining":0,"reset":reset}});
+    // Admission sees enough quota; the Sweep's subsequent read exhausts it.
+    state["next_rate_limits"] = json!({"core":{"remaining":0,"reset":reset}});
     scenario.write_gh_state(&state);
     let result = scenario.run_with_env(&["pickup"], &[("THIRDSHIFT_QUOTA_MINUTE_MS", "1")]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
