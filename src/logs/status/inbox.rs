@@ -337,6 +337,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         effort: Option<String>,
         stage: Option<crate::logs::reading::CurrentStage>,
         health: Option<Health>,
+        #[serde(default)]
+        waiting_for: Vec<String>,
         resume_command: Option<String>,
         process_name: Option<String>,
         github_ci: Option<crate::github::InboxCi>,
@@ -462,6 +464,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
             &facts.state,
             facts.stage.as_ref(),
             facts.health.as_ref(),
+            &facts.waiting_for,
         ),
         timing: Timing::new(live, &facts.started_at, facts.ended_at.as_deref(), now),
         count: value["count"].as_u64().unwrap_or(1) as usize,

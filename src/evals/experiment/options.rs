@@ -19,6 +19,7 @@ pub struct Options {
     pub(super) json: bool,
     pub(super) release: bool,
     pub(super) yes: bool,
+    pub(super) no_wait: bool,
     pub(super) name: Option<String>,
     pub(super) prices: Option<std::path::PathBuf>,
 }
@@ -58,6 +59,7 @@ enum ArgumentKind {
     Json,
     Release,
     Yes,
+    NoWait,
     ValuedFlag,
     Positional,
 }
@@ -67,6 +69,7 @@ fn argument_kind(word: &str) -> ArgumentKind {
         "--json" => ArgumentKind::Json,
         "--release" => ArgumentKind::Release,
         "--yes" => ArgumentKind::Yes,
+        "--no-wait" => ArgumentKind::NoWait,
         flag if flag.starts_with("--") => ArgumentKind::ValuedFlag,
         _ => ArgumentKind::Positional,
     }
@@ -124,6 +127,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut json = false;
     let mut release = false;
     let mut yes = false;
+    let mut no_wait = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match argument_kind(arg) {
@@ -138,6 +142,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
             ArgumentKind::Yes => {
                 ensure!(!yes, "repeated --yes");
                 yes = true;
+            }
+            ArgumentKind::NoWait => {
+                ensure!(!no_wait, "repeated --no-wait");
+                no_wait = true;
             }
             ArgumentKind::ValuedFlag => {
                 let value = args
@@ -263,7 +271,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     }
     Ok(Options {
         candidate: candidate.context(
-            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes]",
+            "usage: thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json] [--yes] [--no-wait]",
         )?,
         baseline,
         baseline_setup,
@@ -274,6 +282,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         json,
         release,
         yes,
+        no_wait,
         name,
         prices,
     })

@@ -111,6 +111,8 @@ pub(super) struct CommandRecord {
     #[serde(default)]
     pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<crate::session::limits::Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +247,7 @@ stage_names! {
     /// A fixed finding's proof-of-concept recheck against the merged Base
     /// branch, before its private record is closed.
     SecurityCloseCheck => "Security close check",
+    WaitingForCommands => "Waiting for Commands",
     ArmBuilds => "Arm builds",
     EvalTasks => "Eval tasks",
     Trials => "Trials",
@@ -461,6 +464,7 @@ impl CommandRecord {
             outcome: None,
             run_metrics: None,
             cause: None,
+            waiting_for: Vec::new(),
             limit: None,
             resume_command: None,
             issue_branch: None,

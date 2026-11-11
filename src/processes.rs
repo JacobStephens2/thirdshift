@@ -666,7 +666,7 @@ fn run(command: &ProcessRun) -> Result<String> {
             logs::skipped_process(&repo, name, &choice, reason);
             String::new()
         };
-        if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+        if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
             return Ok(skip(&skipped));
         }
         let base = match launch::checked_out_base() {
