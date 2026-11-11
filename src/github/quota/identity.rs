@@ -17,7 +17,8 @@ pub(super) fn host(args: &[&str]) -> String {
             "--repo" | "-R" => repository = args.next(),
             // Text and API field values are payload, even when they look
             // like URLs or selector flags.
-            "--body" | "--title" | "-b" | "-t" | "-f" | "-F" => {
+            "--body" | "--title" | "--comment" | "--label" | "--search" | "-b" | "-t" | "-f"
+            | "-F" => {
                 args.next();
             }
             _ => {

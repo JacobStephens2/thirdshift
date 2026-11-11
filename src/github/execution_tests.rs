@@ -200,6 +200,38 @@ esac"#,
 }
 
 #[test]
+fn quota_failure_does_not_treat_a_close_comment_as_a_host_selector() {
+    with_recorded_signal(
+        "github::execution_tests::quota_failure_does_not_treat_a_close_comment_as_a_host_selector",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit') echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded' >&2; exit 1 ;;
+esac"#,
+            );
+            assert!(
+                GitHub::new()
+                    .close_issue(&issue(), "--hostname=docs.example.net")
+                    .is_err()
+            );
+            assert_eq!(
+                GitHub::new().quota_waits_for("github.com").unwrap().len(),
+                1
+            );
+            assert!(
+                GitHub::new()
+                    .quota_waits_for("docs.example.net")
+                    .unwrap()
+                    .is_empty()
+            );
+        },
+    );
+}
+
+#[test]
 fn quota_failure_uses_repository_host_instead_of_comment_url() {
     with_recorded_signal(
         "github::execution_tests::quota_failure_uses_repository_host_instead_of_comment_url",
