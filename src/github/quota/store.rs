@@ -154,9 +154,16 @@ impl Store {
             .open(self.path.with_extension("lock"))?;
         lock.lock()?;
         let mut record = self.read()?;
+        let previous = serde_json::to_vec(&record)?;
         change(&mut record);
+        let bytes = serde_json::to_vec(&record)?;
+        // The Console watches this record: unchanged quota observations
+        // must not wake open Inbox pages.
+        if bytes == previous {
+            return Ok(());
+        }
         let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-        tmp.write_all(&serde_json::to_vec(&record)?)?;
+        tmp.write_all(&bytes)?;
         tmp.persist(&self.path)?;
         Ok(())
     }
