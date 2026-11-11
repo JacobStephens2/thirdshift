@@ -98,18 +98,21 @@ pub(crate) fn operational_cause(error: &anyhow::Error) -> Option<&'static str> {
 /// independently without changing the recorded request or other views.
 pub struct GitHub {
     interruption: Interruption,
+    wait_for_quota: bool,
 }
 
 impl GitHub {
     pub fn new() -> Self {
         Self {
             interruption: Interruption::Ordinary,
+            wait_for_quota: true,
         }
     }
 
     pub fn completion(&self) -> Self {
         Self {
             interruption: Interruption::Completion,
+            wait_for_quota: self.wait_for_quota,
         }
     }
 
@@ -1276,13 +1279,33 @@ impl GitHub {
     }
 
     fn output_with_input(&self, args: &[&str], input: Option<&[u8]>) -> Result<Output> {
-        let output = self.raw_output_with_input(args, input)?;
-        if !output.status.success() && self.record_quota_failure(args, &output.stderr).is_err() {
-            // The original failure remains the caller's error, even when the
-            // machine cannot persist its wait or identify its signed-in user.
-            eprintln!("thirdshift: could not record GitHub Quota wait");
+        let mut secondary_retries = 0;
+        loop {
+            let output = self.raw_output_with_input(args, input)?;
+            if output.status.success() {
+                return Ok(output);
+            }
+            match quota::Limit::of(args, &output.stderr) {
+                Some(quota::Limit::Primary(resource)) => {
+                    let reset = self.record_quota_failure(args, resource);
+                    if !self.wait_for_quota
+                        || !quota::command::wait(reset, resource, self.interruption)?
+                    {
+                        return Ok(output);
+                    }
+                }
+                Some(quota::Limit::Secondary)
+                    if self.wait_for_quota && quota::command::active() && secondary_retries < 5 =>
+                {
+                    secondary_retries += 1;
+                    crate::progress::step(format!(
+                        "GitHub secondary limit; retry {secondary_retries}/5 in 60s"
+                    ));
+                    self.interruption.pause(quota::wait::minute())?;
+                }
+                _ => return Ok(output),
+            }
         }
-        Ok(output)
     }
 
     fn raw_output_with_input(&self, args: &[&str], input: Option<&[u8]>) -> Result<Output> {

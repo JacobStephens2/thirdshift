@@ -614,9 +614,9 @@ printf '%s' '{{"title":"Recovered"}}'
 }
 
 #[test]
-fn permanent_and_quota_read_failures_are_not_retried() {
+fn permanent_reads_and_quota_reads_outside_a_command_are_not_retried() {
     with_recorded_signal(
-        "github::execution_tests::permanent_and_quota_read_failures_are_not_retried",
+        "github::execution_tests::permanent_reads_and_quota_reads_outside_a_command_are_not_retried",
         |_| {
             let fixture = Fixture::new("");
             for stderr in [
@@ -1620,7 +1620,7 @@ fn check_reads_classify_transport_and_api_failures_without_hiding_diagnostics() 
                 ("read tcp: connection reset by peer", true),
                 ("net/http: TLS handshake timeout", true),
                 ("gh: too many requests (HTTP 429)", true),
-                ("GraphQL: secondary rate limit exceeded (HTTP 429)", true),
+                ("GraphQL: secondary rate limit exceeded (HTTP 429)", false),
                 ("gh: Bad Gateway (HTTP 502)", true),
                 ("gh: service unavailable (HTTP 503)", true),
                 ("gh: Gateway Timeout (HTTP 504)", true),

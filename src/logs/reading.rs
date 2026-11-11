@@ -418,13 +418,26 @@ impl Command {
         } else {
             "died"
         };
-        let stage = record.current_stage().map(|stage| CurrentStage {
-            name: stage.name.clone(),
-            began_at: stage.began_at.clone(),
-            age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
-                .map(|began| now.signed_duration_since(began).num_seconds().max(0))
-                .unwrap_or(0),
-        });
+        let stage = record
+            .current_stage()
+            .map(|stage| CurrentStage {
+                name: record
+                    .quota_wait_until
+                    .as_ref()
+                    .map(|until| format!("Quota wait until {until}"))
+                    .unwrap_or_else(|| stage.name.clone()),
+                began_at: stage.began_at.clone(),
+                age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
+                    .map(|began| now.signed_duration_since(began).num_seconds().max(0))
+                    .unwrap_or(0),
+            })
+            .or_else(|| {
+                record.quota_wait_until.as_ref().map(|until| CurrentStage {
+                    name: format!("Quota wait until {until}"),
+                    began_at: record.started_at.clone(),
+                    age_seconds: 0,
+                })
+            });
         Self {
             account: None,
             activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
