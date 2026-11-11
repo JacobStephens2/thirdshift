@@ -39,6 +39,269 @@ fn checkout(home: &Path, name: &str, origin: &str) -> std::path::PathBuf {
     path
 }
 
+fn changing_crontab(home: &Path) {
+    checkout(home, "first", "https://github.com/acme/first.git");
+    checkout(home, "second", "https://github.com/acme/second.git");
+    support::write_executable(
+        &home.join("bin/crontab"),
+        "#!/bin/sh\nn=0\n[ ! -f \"$HOME/reads\" ] || n=$(cat \"$HOME/reads\")\nn=$((n+1))\necho $n > \"$HOME/reads\"\nif [ $n = 1 ]; then repo=first; else repo=second; fi\necho \"@daily cd ~/$repo && thirdshift pickup\"\n",
+    );
+}
+
+#[test]
+fn start_options_share_one_crontab_capture_and_refresh_on_the_next_request() {
+    let home = fixture();
+    changing_crontab(home.path());
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (read, repo) in [(1, "first"), (2, "second")] {
+        let options = api::json(console.get("/api/v1/start-options"));
+        assert_eq!(
+            fs::read_to_string(home.path().join("reads"))
+                .unwrap()
+                .trim(),
+            read.to_string()
+        );
+        assert_eq!(
+            options["form"]["repositories"][0]["repository"],
+            format!("acme/{repo}")
+        );
+        let request: Value =
+            serde_json::from_str(options["passes"][0]["request"].as_str().unwrap()).unwrap();
+        assert_eq!(request["repository"], format!("acme/{repo}"));
+    }
+}
+
+#[test]
+fn local_cron_page_shares_its_capture_with_run_now() {
+    let home = fixture();
+    changing_crontab(home.path());
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (read, repo) in [(1, "first"), (2, "second")] {
+        let html = console.get("/cronjobs").text().unwrap();
+        let document = scraper::Html::parse_document(&html);
+        let commands = scraper::Selector::parse(".cron-command").unwrap();
+        let buttons = scraper::Selector::parse("[data-start-request]").unwrap();
+        assert_eq!(
+            document
+                .select(&commands)
+                .next()
+                .unwrap()
+                .text()
+                .collect::<String>(),
+            format!("cd ~/{repo} && thirdshift pickup")
+        );
+        let request: Value = serde_json::from_str(
+            document
+                .select(&buttons)
+                .next()
+                .unwrap()
+                .attr("data-start-request")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request["repository"], format!("acme/{repo}"));
+        assert_eq!(
+            fs::read_to_string(home.path().join("reads"))
+                .unwrap()
+                .trim(),
+            read.to_string()
+        );
+    }
+}
+
+#[test]
+fn cron_page_keeps_repository_order_while_start_options_keep_crontab_order() {
+    let home = fixture();
+    checkout(home.path(), "a", "https://github.com/acme/a.git");
+    checkout(home.path(), "b", "https://github.com/acme/b.git");
+    fs::write(home.path().join("crontab"), "@daily cd ~/b && thirdshift pickup\n@hourly cd ~/a && thirdshift architect\n@daily cd ~/b && thirdshift secure\n").unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(
+        options["passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pass| pass["command"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "cd ~/b && thirdshift pickup",
+            "cd ~/a && thirdshift architect",
+            "cd ~/b && thirdshift secure"
+        ]
+    );
+    let html = console.get("/cronjobs").text().unwrap();
+    let document = scraper::Html::parse_document(&html);
+    let buttons = scraper::Selector::parse("[data-start-request]").unwrap();
+    let commands: Vec<_> = document
+        .select(&buttons)
+        .map(|button| {
+            let request: Value =
+                serde_json::from_str(button.attr("data-start-request").unwrap()).unwrap();
+            request["command"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(commands, ["architect", "pickup", "secure"]);
+}
+
+#[test]
+fn aliases_and_duplicate_entries_share_successful_and_failed_origin_observations() {
+    let home = fixture();
+    let valid = checkout(home.path(), "valid", "https://github.com/acme/widgets.git");
+    let invalid = checkout(
+        home.path(),
+        "invalid",
+        "https://gitlab.com/acme/widgets.git",
+    );
+    std::os::unix::fs::symlink(&valid, home.path().join("alias")).unwrap();
+    std::os::unix::fs::symlink(&invalid, home.path().join("bad-alias")).unwrap();
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/alias', '~/valid']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    fs::write(home.path().join("crontab"), "@daily cd ~/alias && thirdshift pickup\n@daily cd ~/valid && thirdshift pickup\n@hourly cd ~/alias && thirdshift secure\n@daily cd ~/invalid && thirdshift pickup\n@daily cd ~/bad-alias && thirdshift pickup\n").unwrap();
+    support::write_executable(
+        &home.path().join("bin/git"),
+        "#!/bin/sh\nif [ \"$1 $2 $3\" = 'config --get remote.origin.url' ]; then echo \"$PWD\" >> \"$HOME/origin-reads\"; fi\nexec /usr/bin/git \"$@\"\n",
+    );
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(options["form"]["repositories"].as_array().unwrap().len(), 1);
+    assert_eq!(options["passes"].as_array().unwrap().len(), 3);
+    let reads = fs::read_to_string(home.path().join("origin-reads")).unwrap();
+    assert_eq!(
+        reads.lines().collect::<Vec<_>>(),
+        [valid.to_str().unwrap(), invalid.to_str().unwrap()]
+    );
+}
+
+#[test]
+fn invalid_configured_directory_keeps_cron_inventory_and_reports_start_error() {
+    let home = fixture();
+    checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    fs::write(
+        home.path().join("crontab"),
+        "@daily cd ~/repo && thirdshift pickup\n",
+    )
+    .unwrap();
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/missing']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    assert_eq!(
+        api::json(console.get("/api/v1/cronjobs"))["jobs"][0]["repository"],
+        "acme/widgets"
+    );
+    assert_eq!(console.get("/api/v1/launch-directories").status(), 422);
+    assert_eq!(console.get("/api/v1/start-options").status(), 422);
+    let page = console.get("/cronjobs");
+    assert_eq!(page.status(), 200);
+    let html = page.text().unwrap();
+    assert!(html.contains("acme/widgets"), "{html}");
+    assert!(
+        html.contains("Could not load startable Passes: invalid configured Launch directory"),
+        "{html}"
+    );
+    assert!(
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("invalid configured Launch directory")
+    );
+}
+
+#[test]
+fn owning_machine_projections_keep_crontab_error_rules() {
+    let home = fixture();
+    checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/repo']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/usr/bin/git", home.path().join("bin/git")).unwrap();
+    let mut start = command(home.path());
+    start
+        .env("PATH", home.path().join("bin"))
+        .args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (script, strict, discovery) in [
+        (Some("#!/bin/sh\nexit 0\n"), 200, 200),
+        (
+            Some("#!/bin/sh\necho 'crontab: no crontab for owner' >&2\nexit 1\n"),
+            200,
+            200,
+        ),
+        (None, 422, 200),
+        (
+            Some("#!/bin/sh\necho 'crontab: permission denied' >&2\nexit 1\n"),
+            422,
+            422,
+        ),
+        (Some("#!/bin/sh\nprintf '\\377'\n"), 422, 422),
+    ] {
+        let executable = home.path().join("bin/crontab");
+        if let Some(script) = script {
+            support::write_executable(&executable, script);
+        } else {
+            fs::remove_file(&executable).unwrap();
+        }
+        for path in ["/api/v1/cronjobs", "/cronjobs"] {
+            let status = if path == "/cronjobs" && strict == 422 {
+                500
+            } else {
+                strict
+            };
+            assert_eq!(console.get(path).status(), status, "{script:?}: {path}");
+        }
+        for path in ["/api/v1/launch-directories", "/api/v1/start-options"] {
+            let response = console.get(path);
+            assert_eq!(response.status(), discovery, "{script:?}: {path}");
+            if discovery == 200 {
+                let value = api::json(response);
+                if path.ends_with("start-options") {
+                    assert_eq!(
+                        value["form"]["repositories"][0]["repository"],
+                        "acme/widgets"
+                    );
+                    assert!(value["passes"].as_array().unwrap().is_empty());
+                } else {
+                    assert_eq!(value["directories"][0]["repository"], "acme/widgets");
+                }
+            }
+        }
+        for (args, expected) in [
+            (vec!["cronjobs", "--json"], strict),
+            (vec!["launch-directories", "--json"], discovery),
+        ] {
+            let output = command(home.path())
+                .env("PATH", home.path().join("bin"))
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                expected == 200,
+                "{script:?}: {output:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn cron_job_projections_agree_without_conflating_kind_directory_and_start() {
     let home = fixture();

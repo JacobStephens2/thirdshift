@@ -11,7 +11,7 @@ mod command;
 pub(crate) mod fleet;
 pub(crate) use command::{Interpretation, LaunchFacts};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct CronJobs {
     pub jobs: Vec<CronJob>,
     pub pass_starts: Vec<PassStart>,
@@ -35,7 +35,7 @@ impl CronJobs {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
@@ -124,15 +124,14 @@ where
 
 pub(crate) fn load() -> Result<CronJobs> {
     let config = UserConfig::load()?;
-    let home = crate::config::home()?;
-    let mut jobs = jobs()?;
+    Ok(crate::launch_directories::Captured::capture(&config)?
+        .cronjobs()?
+        .clone())
+}
+
+pub(crate) fn inventory(mut jobs: Vec<CronJob>, logs_dir: &std::path::Path) -> Result<CronJobs> {
     for job in &mut jobs {
-        job.repository = repository_label(
-            Interpretation::new(&job.command)
-                .into_launch(&home)
-                .and_then(crate::launch_directories::from_facts)
-                .map(|directory| directory.repository),
-        );
+        job.repository = repository_label(job.repository.take());
     }
     // Stable sorting retains crontab order and duplicates within each repository.
     jobs.sort_by(|a, b| {
@@ -140,11 +139,16 @@ pub(crate) fn load() -> Result<CronJobs> {
     });
     Ok(CronJobs {
         jobs,
-        pass_starts: pass_starts::load(&config.logs_dir)?,
+        pass_starts: pass_starts::load(logs_dir)?,
     })
 }
 
-pub(crate) fn jobs() -> Result<Vec<CronJob>> {
+pub(crate) struct InterpretedEntry {
+    pub job: CronJob,
+    pub interpretation: Interpretation,
+}
+
+pub(crate) fn entries() -> Result<Vec<InterpretedEntry>> {
     let output = Command::new("crontab")
         .arg("-l")
         .env("LC_ALL", "C")
@@ -166,7 +170,11 @@ pub(crate) fn jobs() -> Result<Vec<CronJob>> {
         );
     }
     let crontab = String::from_utf8(output.stdout).context("crontab is not UTF-8")?;
-    Ok(crontab.lines().filter_map(entry).collect())
+    Ok(parse(&crontab))
+}
+
+pub(crate) fn parse(crontab: &str) -> Vec<InterpretedEntry> {
+    crontab.lines().filter_map(entry).collect()
 }
 
 pub fn show(json: bool) -> Result<String> {
@@ -194,7 +202,7 @@ pub fn show(json: bool) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn entry(line: &str) -> Option<CronJob> {
+fn entry(line: &str) -> Option<InterpretedEntry> {
     let mut command = line.trim();
     // User crontabs have five schedule fields, or one @-schedule field.
     // Requiring a schedule excludes comments and environment assignments.
@@ -212,11 +220,14 @@ fn entry(line: &str) -> Option<CronJob> {
         command = command[end..].trim_start();
     }
     let interpreted = Interpretation::new(command);
-    interpreted.recognized().then(|| CronJob {
-        schedule: schedule.join(" "),
-        command: command.into(),
-        repository: None,
-        command_kind: interpreted.command_kind(),
+    interpreted.recognized().then(|| InterpretedEntry {
+        job: CronJob {
+            schedule: schedule.join(" "),
+            command: command.into(),
+            repository: None,
+            command_kind: interpreted.command_kind(),
+        },
+        interpretation: interpreted,
     })
 }
 

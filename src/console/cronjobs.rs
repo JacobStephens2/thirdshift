@@ -58,6 +58,11 @@ pub(super) async fn show(
             });
         }
         let remote = selection.remote(&config, &viewer, format)?;
+        let captured = if remote.is_none() {
+            Some(crate::launch_directories::Captured::capture(&config)?)
+        } else {
+            None
+        };
         let mut remote_passes = None;
         // Run lists startable Passes. The crontab and last-fired times stay behind read.
         let (inventory, show_jobs) = if let Some(remote) = &remote {
@@ -81,7 +86,7 @@ pub(super) async fn show(
                 )
             }
         } else {
-            (cronjobs::load()?, true)
+            (captured.as_ref().unwrap().cronjobs()?.clone(), true)
         };
         format.render(inventory, |inventory| {
             let can_run = remote_passes.is_some()
@@ -89,7 +94,7 @@ pub(super) async fn show(
             let (passes, start_error) = if let Some(passes) = remote_passes {
                 (passes, None)
             } else if remote.is_none() && can_run {
-                match super::start_controls::passes(&config, &inventory.jobs) {
+                match super::start_controls::cron_passes(&config, captured.as_ref().unwrap()) {
                     Ok(passes) => (passes, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 }
