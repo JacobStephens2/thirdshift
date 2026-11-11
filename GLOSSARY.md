@@ -332,7 +332,7 @@ A **Command** owned by another OS account on the same machine, included by choic
 _Avoid_: remote Command, shared Command
 
 **Fleet**:
-The machines one **Console** shows: its own, and each machine its **User config** lists that has given it access. From the Console, the **Day shift** can see and do on each of them whatever that machine's own Console offers. A machine listed without access is only a link to its Console.
+The machines one **Console** shows: its own, each machine its **User config** lists that has given it access, and any machine permitted to report to it. From the Console, the **Day shift** can see and do on each reachable machine whatever that machine's own Console offers, while a machine that only reports outward is read-only there and one listed without access is only a link to its Console.
 _Avoid_: cluster, network, hosts
 
 **Stop**:
@@ -450,8 +450,8 @@ The weekly **Command** that evaluates production work. A **Grader** gives **Scor
 _Avoid_: grading run, tasting, production monitoring
 
 **Run metrics**:
-What a **Ticket run**'s **Command record** and **Session traces** show about how it went, such as its outcome, **Repairs**, CI rounds, **Unaddressed findings**, stage times, tokens and tool errors. Each is kept apart, never combined into one number.
-_Avoid_: Run score, KPI
+What a completed **Command**'s **Command record** and **Session traces** show about how it went, such as its outcome, **Repairs**, CI rounds, **Unaddressed findings**, stage times, tokens and tool errors. Each is kept apart, never combined into one number.
+_Avoid_: Run score, KPI, health score
 
 **Bug origin**:
 The pull request that introduced a bug, and the **Ticket run** that made it if a Ticket run did, as a session proposed it and the **Day shift** confirmed it.
