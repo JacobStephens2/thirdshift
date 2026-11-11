@@ -24,6 +24,7 @@ class GenerateRelease(unittest.TestCase):
                 "name: Release\non:\n  pull_request:\n  push:\n    tags: ['v*']\n"
                 "\njobs:\n  plan:\n    runs-on: ubuntu-24.04\n"
                 "  build-local-artifacts:\n    runs-on: ubuntu-24.04\n"
+                "    steps:\n      - name: Install dependencies\n        run: echo install\n"
                 "  build-global-artifacts:\n    runs-on: ubuntu-24.04\n"
                 "  custom-release-smoke:\n    uses: ./.github/workflows/release-smoke.yml\n"
                 "    with:\n      plan: val\n    secrets: inherit\n"
@@ -66,6 +67,12 @@ class GenerateRelease(unittest.TestCase):
                 expected,
             )
             self.assertIn("    timeout-minutes: 20\n", expected)
+            self.assertIn(
+                "      - name: Resolve Ubuntu package hosts\n"
+                "        run: bash scripts/release-dns.sh\n"
+                "      - name: Install dependencies\n",
+                expected,
+            )
             self.assertEqual(expected.count("    timeout-minutes: 5\n"), 2)
             self.assertIn(
                 "  build-local-artifacts:\n    permissions:\n"

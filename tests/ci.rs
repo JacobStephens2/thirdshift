@@ -237,33 +237,94 @@ fn unchanged_running_checks_keep_writing_waiting_lines_to_the_command_log() {
             args.push("merge".to_string());
         }
 
-        let result = scenario.run_with_env(
+        assert_ci_waiting_lines(
+            &scenario,
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            &[("THIRDSHIFT_WAITING_MINUTE_MS", "150")],
-        );
-
-        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-        let waiting = "1 still running out of 1 checks listed so far";
-        assert!(
-            result.stderr.matches(waiting).count() >= 3,
-            "{}",
-            result.stderr
-        );
-        let logs = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
-        let log = std::fs::read_dir(logs)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| path.extension().is_some_and(|ext| ext == "log"))
-            .unwrap();
-        let log = std::fs::read_to_string(log).unwrap();
-        assert_eq!(
-            log.matches(waiting).count(),
-            result.stderr.matches(waiting).count()
+            "issue",
         );
         if merge {
             assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
         }
     }
+}
+
+#[test]
+fn custom_process_ci_waiting_lines_use_the_configured_interval() {
+    for config in [
+        "[logs]\nwaiting_line_minutes = 1\n",
+        "[logs]\nwaiting_line_minutes = 20\n[inbox]\nsilent_minutes = 4\n",
+    ] {
+        custom_process_ci_waiting_lines(config);
+    }
+}
+
+fn custom_process_ci_waiting_lines(config: &str) {
+    let scenario = Scenario::new();
+    scenario.user_config_is(config);
+    let processes = scenario.path("home/.thirdshift/processes");
+    std::fs::create_dir_all(&processes).unwrap();
+    std::fs::write(
+        processes.join("ship.toml"),
+        include_str!("../processes/ticket-run.toml"),
+    )
+    .unwrap();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name":"test","conclusion":"success","pending_polls":14}]"#)
+    ));
+
+    assert_ci_waiting_lines(&scenario, &["process", "ship", "issue", "7"], "process");
+}
+
+#[test]
+fn review_ci_waiting_lines_use_the_configured_interval() {
+    for author in [false, true] {
+        for config in [
+            "[logs]\nwaiting_line_minutes = 1\n",
+            "[logs]\nwaiting_line_minutes = 20\n[inbox]\nsilent_minutes = 4\n",
+        ] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(config);
+            scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+            let url = scenario.github_has_pr("colleague", "main", "OPEN");
+            scenario.agent_does(&format!(
+                "{}printf 'No findings.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+                checks_on_head(r#"[{"name":"test","conclusion":"success","pending_polls":14}]"#)
+            ));
+            let args = if author {
+                vec!["review", "--author", "colleague"]
+            } else {
+                vec!["review", &url]
+            };
+
+            assert_ci_waiting_lines(&scenario, &args, "review");
+        }
+    }
+}
+
+fn assert_ci_waiting_lines(scenario: &Scenario, args: &[&str], command: &str) {
+    let result = scenario.run_with_env(args, &[("THIRDSHIFT_WAITING_MINUTE_MS", "150")]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let waiting = "1 still running out of 1 checks listed so far";
+    assert!(
+        result.stderr.matches(waiting).count() >= 3,
+        "expected repeated CI waiting lines, got {}:\n{}",
+        result.stderr.matches(waiting).count(),
+        result.stderr
+    );
+    let log = std::fs::read_dir(scenario.path(&format!(
+        "home/.thirdshift/logs/acme/widgets/commands/{command}"
+    )))
+    .unwrap()
+    .map(|entry| entry.unwrap().path())
+    .find(|path| path.extension().is_some_and(|ext| ext == "log"))
+    .unwrap();
+    let log = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        log.matches(waiting).count(),
+        result.stderr.matches(waiting).count()
+    );
 }
 
 #[test]

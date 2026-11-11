@@ -21,6 +21,38 @@ mod spec_review;
 #[path = "process/spec_run.rs"]
 mod spec_run;
 mod support;
+
+#[test]
+fn issue_branch_process_retries_quota_during_branch_selection() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        "echo feature > feature.txt\ngit add feature.txt\ngit commit -qm 'Add feature'\nprintf implemented > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+    scenario.agent_does_for_in_session(7, 2, "printf reviewed > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n");
+    let reset = (chrono::Utc::now() + chrono::Duration::seconds(2)).timestamp();
+    let mut state = scenario.gh_state();
+    state["fail_next"] = serde_json::json!({
+        "call": "pr list", "times": 1,
+        "error": "GraphQL: API rate limit exceeded (HTTP 403)"
+    });
+    state["rate_limits"]["graphql"] = serde_json::json!({"remaining": 0, "reset": reset});
+    scenario.write_gh_state(&state);
+    let result = scenario.run_with_env(
+        &["process", "ship", "issue", "7"],
+        &[("THIRDSHIFT_QUOTA_MINUTE_MS", "1")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Quota wait until"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "list").len() >= 2);
+}
 #[path = "process/ticket_run.rs"]
 mod ticket_run;
 
@@ -3246,7 +3278,10 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
     );
     assert!(scenario.claude_calls().is_empty(), "a session started");
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+    );
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
     release(&scenario);
     let process = process.finish();

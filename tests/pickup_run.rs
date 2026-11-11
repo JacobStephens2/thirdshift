@@ -3,7 +3,7 @@
 //! that makes an Unready Ticket, no Claim and no `base-fix` label, that is
 //! not a sub-issue, has no open blocker and was never started or was handed
 //! back after its last Claim ended, is not a
-//! Spec whose Tickets are all closed, and has settled, and
+//! Spec whose Tickets are all closed without a resumable Spec branch, and has settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
 //! way gets a line saying why. With no Ready issue, with the repository at
@@ -1355,6 +1355,247 @@ fn spec_with_every_ticket_closed() -> Scenario {
     scenario
 }
 
+fn hand_back_spec(scenario: &Scenario) {
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        ],
+    );
+}
+
+#[test]
+fn pickup_continues_an_all_closed_spec_through_review_and_delivery() {
+    for open_pr in [false, true] {
+        let scenario = spec_with_every_ticket_closed();
+        scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+        let existing_pr = open_pr.then(|| scenario.github_has_pr("issue-7", "main", "OPEN"));
+        hand_back_spec(&scenario);
+
+        let result = scenario.run(&["pickup"]);
+
+        let pr = pr_from(&scenario, "issue-7");
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert_eq!(sessions(&scenario), ["7"], "no Ticket may run again");
+        assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+        assert_eq!(pr["isDraft"], false);
+        if let Some(url) = existing_pr {
+            assert_eq!(pr["url"], url);
+        }
+        assert_eq!(scenario.issue_labels(7), NO_LABELS);
+        assert_eq!(
+            scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+            ""
+        );
+        assert!(
+            result.stderr.contains("labelling #7 in-progress"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn an_all_closed_spec_continues_its_latest_numbered_branch() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.origin_has_branch("issue-7", "main", &["First attempt"]);
+    scenario.github_has_pr("issue-7", "main", "MERGED");
+    scenario.origin_has_branch("issue-7-branch-3", "main", &["Landed Tickets"]);
+    let url = scenario.github_has_pr("issue-7-branch-3", "main", "OPEN");
+    hand_back_spec(&scenario);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(
+        &result,
+        &pr_from(&scenario, "issue-7-branch-3"),
+        "ready for review",
+    );
+    assert_eq!(result.stdout, format!("{url}\n"));
+    assert_eq!(sessions(&scenario), ["7"]);
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7-branch-3");
+}
+
+#[test]
+fn an_all_closed_spec_still_requires_a_resumable_latest_branch_and_a_hand_back() {
+    for case in [
+        "no branch",
+        "PR only",
+        "CLOSED",
+        "MERGED",
+        "newer finished",
+        "no hand-back",
+    ] {
+        let scenario = spec_with_every_ticket_closed();
+        if case != "no branch" && case != "PR only" {
+            scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+        }
+        match case {
+            "PR only" => {
+                scenario.github_has_pr("issue-7", "main", "OPEN");
+            }
+            "CLOSED" | "MERGED" => {
+                scenario.github_has_pr("issue-7", "main", "OPEN");
+                scenario.github_has_pr("issue-7", "main", case);
+            }
+            "newer finished" => {
+                scenario.github_has_pr("issue-7", "main", "OPEN");
+                scenario.github_has_pr("issue-7-branch-2", "main", "MERGED");
+            }
+            _ => {}
+        }
+        if case != "no hand-back" {
+            hand_back_spec(&scenario);
+        }
+        let github = scenario.gh_state();
+
+        let result = scenario.run(&["pickup"]);
+
+        let reason = if case == "no hand-back" {
+            "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended"
+        } else {
+            EVERY_TICKET_CLOSED
+        };
+        assert_skipped(&scenario, &result, &no_ready_issue_after(&[reason]));
+        assert_eq!(scenario.gh_state(), github, "{case}");
+    }
+}
+
+/// Change GitHub after the candidate response has been sampled, so the
+/// following Tickets read sees a different state through the real CLI.
+fn after_spec_candidate(scenario: &Scenario, change: &str) {
+    fs::create_dir_all(scenario.path("bin/real")).unwrap();
+    fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+    write_executable(
+        &scenario.path("bin/gh"),
+        &format!(
+            r#"#!/bin/sh
+real="$(dirname "$0")/real/gh"
+case "$*" in
+'api graphql '*timelineItems*)
+    "$real" "$@" > "$TMPDIR/spec-candidate" || exit $?
+    if [ ! -f "$TMPDIR/spec-changed" ]; then
+        touch "$TMPDIR/spec-changed"
+        {change}
+    fi
+    cat "$TMPDIR/spec-candidate"
+    exit 0
+    ;;
+esac
+exec "$real" "$@"
+"#
+        ),
+    );
+}
+
+#[test]
+fn tickets_closing_between_reads_or_after_reservation_follow_the_continuation_rule() {
+    for after_reservation in [false, true] {
+        for branch in [false, true] {
+            let scenario = spec_with_every_ticket_closed();
+            scenario.issue_is(5, "OPEN");
+            scenario.issue_is(6, "OPEN");
+            if branch {
+                scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+                hand_back_spec(&scenario);
+            }
+            if after_reservation {
+                install_git_wrapper(&scenario, |git| {
+                    format!(
+                        r#"#!/bin/sh
+"{git}" "$@" || exit $?
+case "$*" in
+push*' '[0-9a-f]*:refs/heads/thirdshift/pickup/7)
+    gh fake issue 5 CLOSED
+    gh fake issue 6 CLOSED
+    ;;
+esac
+"#
+                    )
+                });
+            } else {
+                after_spec_candidate(
+                    &scenario,
+                    "\"$real\" fake issue 5 CLOSED\n\"$real\" fake issue 6 CLOSED",
+                );
+            }
+
+            let result = scenario.run(&["pickup"]);
+
+            if branch {
+                assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+                assert_eq!(sessions(&scenario), ["7"]);
+            } else {
+                assert_eq!(result.code, Some(0), "{}", result.stderr);
+                assert!(scenario.claude_calls().is_empty(), "a session was started");
+                let reason = if after_reservation {
+                    unreservable(7)
+                } else {
+                    format!("thirdshift: {EVERY_TICKET_CLOSED}\n")
+                };
+                assert!(result.stderr.contains(&reason), "{}", result.stderr);
+                assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+            }
+            assert_eq!(
+                scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+                ""
+            );
+        }
+    }
+}
+
+#[test]
+fn an_all_closed_spec_with_an_empty_later_ticket_read_is_still_passed_over() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+    hand_back_spec(&scenario);
+    after_spec_candidate(&scenario, "\"$real\" fake sub-issues 7 '[]'");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[EVERY_TICKET_CLOSED]),
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn an_all_closed_spec_losing_its_branch_after_reservation_is_not_dispatched() {
+    let scenario = spec_with_every_ticket_closed();
+    scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+    hand_back_spec(&scenario);
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+"{git}" "$@" || exit $?
+case "$*" in
+push*' '[0-9a-f]*:refs/heads/thirdshift/pickup/7)
+    "{git}" push origin :refs/heads/issue-7 ;;
+esac
+"#
+        )
+    });
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(
+        result.stderr.contains(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+}
+
 #[test]
 fn a_spec_whose_tickets_are_all_closed_is_passed_over_and_the_next_ready_issue_is_taken() {
     let scenario = spec_with_every_ticket_closed();
@@ -1785,12 +2026,21 @@ fn base_makes_the_named_branch_the_dispatched_spec_runs_base_branch() {
 }
 
 /// Assert the Pickup run was stopped by a preflight check with `message`,
-/// exit 1, before any work: no session, and no call to GitHub, so no label
-/// was read or changed.
+/// exit 1, before any work: no session or issue read/change. Quota admission
+/// may have checked the resource and authenticated account first.
 fn assert_stopped_by_preflight(scenario: &Scenario, result: &RunResult, message: &str) {
     scenario.assert_rejected_before_any_work(result, message);
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    let calls = scenario.gh_calls();
+    assert!(
+        calls.is_empty()
+            || calls
+                == [
+                    vec!["api", "rate_limit"],
+                    vec!["api", "user", "--hostname", "github.com"]
+                ],
+        "GitHub work beyond quota admission: {calls:?}"
+    );
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
@@ -1896,7 +2146,10 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
     assert_eq!(result.stdout, "");
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+    );
     assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
     release(&scenario);
     architect.finish();
@@ -1929,7 +2182,10 @@ fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_ru
         assert_eq!(skipped.stdout, "");
         assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
         assert_eq!(scenario.gh_state(), github);
-        assert_eq!(scenario.gh_calls(), gh_calls);
+        assert_eq!(
+            scenario.gh_calls(),
+            [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+        );
         release(&scenario);
         let first = first.finish();
         assert_ended_with_pr(&first, &pr_from(&scenario, "issue-7"), "ready for review");
@@ -2000,7 +2256,10 @@ fn at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_na
         assert_eq!(skipped.stdout, "");
     }
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]; 2]].concat()
+    );
     let reason = "Pickup run skipped: at the Command limit on acme/widgets: \
                   2 Commands are running, pass.command_limit is 2";
     assert_eq!(
@@ -2795,6 +3054,13 @@ fn a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_re
     assert_eq!(
         scenario.gh_calls(),
         [
+            vec!["api".to_string(), "rate_limit".into()],
+            vec![
+                "api".to_string(),
+                "user".into(),
+                "--hostname".into(),
+                "github.com".into()
+            ],
             vec![
                 "api".to_string(),
                 "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),

@@ -32,6 +32,49 @@ fn targeted_fix_keeps_run_scope_csrf_and_launch_directory_checks() {
 }
 
 #[test]
+fn submission_captures_fresh_directories_instead_of_trusting_a_start_choice() {
+    let scenario = fixture();
+    let console = server(&scenario);
+    let runner = tokens::create(&scenario.path("home"), "runner", &["--scopes", "run"]);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(
+        options["form"]["repositories"][0]["repository"],
+        "acme/widgets"
+    );
+    let request: Value =
+        serde_json::from_str(options["passes"][0]["request"].as_str().unwrap()).unwrap();
+    for change in ["crontab", "origin"] {
+        if change == "crontab" {
+            fs::write(scenario.path("home/crontab"), "").unwrap();
+        } else {
+            scenario.user_config_is(&format!(
+                "launch_directories = [{}]\n[console]\nport = 0\n",
+                serde_json::to_string(&scenario.launch_dir()).unwrap()
+            ));
+            let output = Command::new("git")
+                .current_dir(scenario.launch_dir())
+                .args([
+                    "remote",
+                    "set-url",
+                    "origin",
+                    "https://github.com/acme/changed.git",
+                ])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+        let response = post(&console, &runner, &request);
+        assert_eq!(
+            response.status(),
+            422,
+            "{change}: {}",
+            response.text().unwrap()
+        );
+    }
+    assert!(!scenario.path("claude-calls.json").exists());
+}
+
+#[test]
 fn fix_row_action_keeps_other_account_commands_read_only() {
     let scenario = fixture();
     let machine = super::other_accounts::Machine::new();

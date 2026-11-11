@@ -80,7 +80,11 @@ pub(super) fn observe(
         if let Some(stage) = &command.stage
             && !StageName::is_dispatch(&stage.name)
         {
-            if let Some(range) = ranges.get(&command.record.repository, &stage.name) {
+            if let Some(range) = command
+                .record
+                .current_stage()
+                .and_then(|underlying| ranges.get(&command.record.repository, &underlying.name))
+            {
                 // The first Slow step starts strictly above the upper range;
                 // the second starts at twice that range, on sampled seconds.
                 for threshold in [

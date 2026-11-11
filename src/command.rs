@@ -113,10 +113,12 @@ pub fn start(
         .and_then(|()| UserConfig::load())
         .map_err(|error| failure(&error))?;
     logs::configured(&config);
-    crate::poll::configure_waiting_lines(config.effective_waiting_line_interval());
     // First, so no interrupt can end the command once its notification is
     // checked.
     interrupt::install().map_err(|error| failure(&error))?;
+    if let About::Issue(issue) = &about {
+        logs::preflight_issue(issue);
+    }
     let notification = if started.is_some() {
         Some(
             RunNotification::new(ask(&config), &config.email, about)
@@ -187,6 +189,14 @@ impl Started {
             | Ending::Security(_)
             | Ending::Skipped(_) => None,
         };
+        // progress::step keeps lines in a Command log a Quota wait may already
+        // have opened. The raw pre-audit diagnostic stays on the terminal.
+        if let Some(diagnostic) = account
+            .pre_audit_failure
+            .and(account.ended.as_ref().err().map(|cause| cause.full()))
+        {
+            eprintln!("{diagnostic}");
+        }
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.finish(&account);

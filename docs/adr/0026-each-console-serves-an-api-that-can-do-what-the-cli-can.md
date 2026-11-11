@@ -15,6 +15,7 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `console fleet list`: Fleet pairing metadata is inspected through the shell alongside pairing and removal.
   - `console fleet remove`: Fleet removal stays in the shell alongside pairing and its Credentials changes.
   - Details commands with `--machine`: Fleet detail forwarding uses the owning machine's API directly; API reads stay local and never relay through saved Fleet tokens.
+  - `cronjobs --fleet`: Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.
   - The Console sign-in list and `console sign-out`: Console sign-in administration, including revoking sign-ins, stays in the shell.
   - `console install`: Console installation writes the machine's proxy and service setup.
   - `setup`: Interactive setup bootstraps the machine and its Console sign-in list.

@@ -1566,7 +1566,7 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         advisory_api(state, positional, flags);
         return;
     }
-    if path == "user" && flags.is_empty() {
+    if path == "user" && flags.keys().all(|flag| flag == "hostname") {
         let email = state.get("user_email").cloned().unwrap_or(Null);
         println!(
             "{}",

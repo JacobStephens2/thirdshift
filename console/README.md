@@ -40,6 +40,12 @@ Command name, including Security runs, Triage runs and Custom processes.
 Long repository names wrap on desktop and phone; the full Command subject
 remains available on hover and in Command details.
 
+Live Fix runs and Review runs also show a clickable **PR #number** in the compact
+Working row, including Overview, for explicit and Pass-selected targets, locally
+and across the Fleet. Base branch CI repairs show their recorded **Base branch**
+before PR publication and retain it alongside the PR link afterwards. Older
+records without a target keep their repository and Command label.
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
@@ -207,7 +213,14 @@ folding still works through live updates. Keyboard row navigation skips folded
 rows, and the same controls work in every Theme and on phones. Without
 JavaScript, groups start open and their native disclosures still work.
 The folders on the left can filter to one section, including Done and Resolved.
-Rows show on one line each: state, subject, title, gist and age. Ready for review
+Rows show state, subject, title, gist and age. A Spec with recorded Tickets also
+shows `2 / 5 Tickets complete`, including on phones and on the visible row of a
+Pass that dispatched it. This counts recorded merged Tickets, including Tickets
+closed before the run, and updates with the Command record. Fleet uses the owning
+machine's records. The last count remains after the run ends; absent or empty
+Ticket accounting shows no counter. Completing all Tickets still leaves Spec
+review and Delivery to finish; the row's state and stage show where it stands.
+Ready for review
 subjects link to the recorded pull request and show its title from the batched
 GitHub refresh, including Review runs without an issue. Until a title is known,
 the PR link stays usable with “(title unavailable)”. Without a PR, rows keep

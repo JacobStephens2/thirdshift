@@ -1,5 +1,6 @@
 //! Cron job inventory with confirmed starts through the Console API.
 use askama::Template;
+use axum::http::StatusCode;
 use axum::response::Response;
 
 use super::filters;
@@ -21,15 +22,47 @@ struct CronJobsPage {
     targets: Vec<super::fleet_control::Target>,
 }
 
+#[derive(Template)]
+#[template(path = "console/cronjobs_fleet.html")]
+struct FleetPage {
+    page: super::PageContext,
+    inventory: cronjobs::fleet::Inventory,
+}
+
 pub(super) async fn show(
     axum::Extension(viewer): axum::Extension<super::auth::Viewer>,
     axum::Extension(format): axum::Extension<super::api::Format>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Response {
+    let fleet = super::query_value(&query, "fleet");
+    if format == super::api::Format::Json && !fleet.is_empty() {
+        return super::api::error(
+            StatusCode::BAD_REQUEST,
+            "Fleet schedules are an explicit client view; call each owning machine's API directly",
+        );
+    }
+    if fleet == "true" && !viewer.scopes.contains(&super::Scope::Read) {
+        return super::api::error(StatusCode::FORBIDDEN, "Fleet schedules need read scope");
+    }
     super::api::read(format, move || {
         let selection = super::fleet_control::Selection::query(&query);
         let config = UserConfig::load()?;
+        if fleet == "true" {
+            let inventory = cronjobs::fleet::load(&config, viewer.fleet_person());
+            return format.render(inventory, |inventory| {
+                Ok(FleetPage {
+                    page: super::PageContext::new(&config, &viewer.scopes),
+                    inventory,
+                }
+                .render()?)
+            });
+        }
         let remote = selection.remote(&config, &viewer, format)?;
+        let captured = if remote.is_none() {
+            Some(crate::launch_directories::Captured::capture(&config)?)
+        } else {
+            None
+        };
         let mut remote_passes = None;
         // Run lists startable Passes. The crontab and last-fired times stay behind read.
         let (inventory, show_jobs) = if let Some(remote) = &remote {
@@ -53,7 +86,7 @@ pub(super) async fn show(
                 )
             }
         } else {
-            (cronjobs::load()?, true)
+            (captured.as_ref().unwrap().cronjobs()?.clone(), true)
         };
         format.render(inventory, |inventory| {
             let can_run = remote_passes.is_some()
@@ -61,7 +94,7 @@ pub(super) async fn show(
             let (passes, start_error) = if let Some(passes) = remote_passes {
                 (passes, None)
             } else if remote.is_none() && can_run {
-                match super::start_controls::passes(&config, &inventory.jobs) {
+                match super::start_controls::cron_passes(&config, captured.as_ref().unwrap()) {
                     Ok(passes) => (passes, None),
                     Err(error) => (Vec::new(), Some(error.to_string())),
                 }
