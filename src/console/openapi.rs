@@ -234,7 +234,8 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
         })),
         View::CronJobs => object(json!({
             "jobs": array(object(json!({
-                "schedule": text, "command": text, "repository": {"type": ["string", "null"]}
+                "schedule": text, "command": text, "repository": {"type": ["string", "null"]},
+                "command_kind": {"type": ["string", "null"], "description": "Conservative owning-machine Command recognition; null when unknown"}
             }))), "pass_starts": array(record)
         })),
         View::LaunchDirectories => object(json!({

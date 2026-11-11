@@ -141,9 +141,14 @@ fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
 pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
     let home = config::home().ok()?;
     let invocation = cron_invocation(command, &home)?;
-    let arguments: Vec<_> = invocation
-        .words
-        .into_iter()
+    let arguments = literal_cli_arguments(&invocation.words)?;
+    Some((invocation.directory.canonicalize().ok()?, arguments))
+}
+
+/// Keep literal CLI words before shell redirects; expansions remain unknown.
+pub(crate) fn literal_cli_arguments(words: &[String]) -> Option<Vec<String>> {
+    let arguments: Vec<_> = words
+        .iter()
         .take_while(|word| {
             let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
             !matches!(
@@ -151,16 +156,17 @@ pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
                 ">" | ">>" | "&>" | "&>>" | "<" | ">&" | "<&" | "#"
             )
         })
+        .cloned()
         .collect();
     if arguments.iter().any(|word| word.contains(['$', '`'])) {
         return None;
     }
-    Some((invocation.directory.canonicalize().ok()?, arguments))
+    Some(arguments)
 }
 
 // shlex splits shell words, but leaves operators attached to those words.
 // Separate unquoted operators first, preserving quotes and escaped characters.
-fn shell_words(command: &str) -> Option<Vec<String>> {
+pub(crate) fn shell_words(command: &str) -> Option<Vec<String>> {
     let mut spaced = String::new();
     let mut quote = None;
     let mut escaped = false;
