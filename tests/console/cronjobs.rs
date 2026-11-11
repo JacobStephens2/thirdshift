@@ -40,6 +40,56 @@ fn checkout(home: &Path, name: &str, origin: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn cronjobs_classifies_literal_commands_without_executing_them() {
+    let home = fixture();
+    let repo = checkout(
+        home.path(),
+        "widgets",
+        "https://github.com/acme/widgets.git",
+    );
+    let examples = [
+        ("pickup base main", Some("Pickup run")),
+        ("secure base main", Some("Security run")),
+        ("architect base main", Some("Architect run")),
+        ("triage", Some("Triage run")),
+        ("fix", Some("Fix run")),
+        ("review --author acme", Some("Review run")),
+        ("process inspect", Some("Custom process")),
+        ("https://github.com/acme/widgets/issues/7", None),
+        ("pickup > cron.log && thirdshift secure", None),
+        ("status --json", None),
+        ("pickup base \"$BASE\"", None),
+        ("unknown-command", None),
+    ];
+    fs::write(
+        home.path().join("crontab"),
+        examples
+            .iter()
+            .map(|(args, _)| {
+                format!(
+                    "@daily cd '{}' && thirdshift {args} >> cron.log 2>&1\n",
+                    repo.display()
+                )
+            })
+            .collect::<String>(),
+    )
+    .unwrap();
+    let output = command(home.path())
+        .args(["cronjobs", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let inventory: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for (job, (_, expected)) in inventory["jobs"].as_array().unwrap().iter().zip(examples) {
+        assert_eq!(job.get("command_kind"), Some(&json!(expected)), "{job}");
+    }
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    assert_eq!(api::json(console.get("/api/v1/cronjobs")), inventory);
+}
+
+#[test]
 fn cronjobs_groups_repositories_stably_in_cli_and_api() {
     let home = fixture();
     let zulu = checkout(home.path(), "zulu", "git@github.com:zeta/widgets.git");
@@ -68,11 +118,11 @@ fn cronjobs_groups_repositories_stably_in_cli_and_api() {
     assert_eq!(
         inventory,
         json!({"jobs": [
-        {"repository": "acme/widgets", "schedule": "0 2 * * *", "command": alpha_command},
-        {"repository": "acme/widgets", "schedule": "*/10 * * * *", "command": another_alpha},
-        {"repository": "zeta/widgets", "schedule": "*/5 * * * *", "command": zulu_command},
-        {"repository": "zeta/widgets", "schedule": "*/5 * * * *", "command": zulu_command},
-        {"repository": null, "schedule": "@reboot", "command": "thirdshift secure base main"}
+        {"repository": "acme/widgets", "command_kind":"Architect run", "schedule": "0 2 * * *", "command": alpha_command},
+        {"repository": "acme/widgets", "command_kind":null, "schedule": "*/10 * * * *", "command": another_alpha},
+        {"repository": "zeta/widgets", "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": zulu_command},
+        {"repository": "zeta/widgets", "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": zulu_command},
+        {"repository": null, "command_kind":"Security run", "schedule": "@reboot", "command": "thirdshift secure base main"}
     ], "pass_starts": []})
     );
     let text = command(home.path()).arg("cronjobs").output().unwrap();
@@ -96,6 +146,21 @@ fn cronjobs_remote_and_legacy_inventories_use_the_owning_machines_metadata() {
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/console/cronjobs_remote.py"
+            ),
+            env!("CARGO_BIN_EXE_thirdshift"),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn cronjobs_fleet_combines_inventories_and_isolates_failures() {
+    let output = Command::new("python3")
+        .args([
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/console/cronjobs_fleet.py"
             ),
             env!("CARGO_BIN_EXE_thirdshift"),
         ])
@@ -150,7 +215,7 @@ fn cronjobs_keeps_directory_changing_compounds_under_other() {
     for (job, expected) in jobs.iter().zip(commands) {
         assert_eq!(
             job,
-            &json!({"repository": null, "schedule": "@daily", "command": expected})
+            &json!({"repository": null, "command_kind":null, "schedule": "@daily", "command": expected})
         );
     }
     let mut start = command(home.path());
@@ -211,16 +276,24 @@ fn cronjobs_keeps_unresolved_entries_and_never_evaluates_shell_text() {
     assert_eq!(jobs.len(), 8, "{inventory}");
     assert_eq!(
         jobs[0],
-        json!({"repository":"acme/widgets", "schedule":"@daily", "command":literal})
+        json!({"repository":"acme/widgets", "command_kind":null, "schedule":"@daily", "command":literal})
     );
     assert_eq!(
         jobs[1],
-        json!({"repository":"acme/widgets", "schedule":"@hourly", "command":display_only})
+        json!({"repository":"acme/widgets", "command_kind":null, "schedule":"@hourly", "command":display_only})
     );
-    for (job, expected) in jobs[2..].iter().zip(unresolved) {
+    let kinds = [
+        Some("Pickup run"),
+        Some("Pickup run"),
+        Some("Pickup run"),
+        None,
+        None,
+        None,
+    ];
+    for ((job, expected), kind) in jobs[2..].iter().zip(unresolved).zip(kinds) {
         assert_eq!(
             job,
-            &json!({"repository":null, "schedule":"@reboot", "command":expected})
+            &json!({"repository":null, "command_kind":kind, "schedule":"@reboot", "command":expected})
         );
     }
     let mut start = command(home.path());
@@ -288,8 +361,8 @@ fn cronjobs_pairs_cli_and_console_without_running_scheduled_commands() {
     assert_eq!(
         jobs,
         json!({"jobs": [
-            {"repository": null, "schedule": "*/5 * * * *", "command": "cd /srv/repo && /home/me/.cargo/bin/thirdshift pickup base main >> /tmp/cron.log 2>&1"},
-            {"repository": null, "schedule": "@reboot", "command": "thirdshift secure base main # <script>alert(1)</script>"}
+            {"repository": null, "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": "cd /srv/repo && /home/me/.cargo/bin/thirdshift pickup base main >> /tmp/cron.log 2>&1"},
+            {"repository": null, "command_kind":"Security run", "schedule": "@reboot", "command": "thirdshift secure base main # <script>alert(1)</script>"}
         ], "pass_starts": []})
     );
     let mut start = command(home.path());
@@ -456,7 +529,7 @@ fn cronjobs_respects_crons_command_and_stdin_separator() {
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
         json!({"jobs": [
-            {"repository": null, "schedule": "* * * * *", "command": "/usr/local/bin/thirdshift%stdin"}
+            {"repository": null, "command_kind":null, "schedule": "* * * * *", "command": "/usr/local/bin/thirdshift%stdin"}
         ], "pass_starts": []})
     );
 }

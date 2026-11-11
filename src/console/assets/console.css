@@ -262,6 +262,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .command > .fix-command { display: flex; margin: 4px 10px 8px; }
   .one-line .command:hover { background: var(--sel-bg); }
   .one-line .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) auto fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
+  .one-line .row-head:has(> .ticket-progress) { row-gap: 0; padding-block: 2px; line-height: 1.2; }
   .one-line .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .one-line .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
   .one-line .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
@@ -269,7 +270,9 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head > .issue-title { grid-column: 3; color: var(--text); }
   .one-line .row-head > .issue-title:empty { display: none; }
   .one-line .row-head > .gist { display: block; grid-column: 4; }
-  .one-line .row-head > .issue-title:empty + .gist { grid-column: 3 / 5; }
+  .one-line .row-head:not(:has(> .ticket-progress)) > .issue-title:empty + .gist { grid-column: 3 / 5; }
+  .one-line .row-head > .ticket-progress { grid-column: 2; grid-row: 2; color: var(--text); white-space: normal; }
+  .one-line .row-head:has(> .ticket-progress) > .gist { grid-column: 3 / -1; grid-row: 2; white-space: normal; }
   /* Keep the pull request indicators together as the row narrows. */
   .one-line .row-head > .pr-checks { grid-column: 5; grid-row: 1; align-self: center; overflow: visible; }
   .one-line .row-head > .new { grid-column: 6; font-size: 0; }
@@ -300,6 +303,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 }
 @media (scripting: enabled) and (min-width: 761px) and (max-width: 1100px) {
   .one-line .row-head > .pr-checks { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+  .one-line .row-head:has(> .ticket-progress) > .pr-checks { grid-row: 3; }
 }
 @media (max-width: 760px) {
   #inbox { display: block; }
@@ -307,12 +311,16 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .folders a { flex: none; }
   @media (scripting: enabled) {
     .one-line .row-head { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 2px; }
+    .one-line .row-head:has(> .ticket-progress) { row-gap: 2px; padding-block: 7px; line-height: 1.4; }
     .one-line .row-head > .new { display: none; }
     .one-line .row-head > .pr-checks { grid-column: 1 / 3; grid-row: 3; justify-self: start; }
     .one-line .row-head > .age { grid-column: 3; grid-row: 1; }
     .one-line .row-head > .row-controls { grid-column: 3; grid-row: 2; justify-self: end; }
     .one-line .row-head > .issue-title { grid-column: 1 / 3; grid-row: 2; }
     .one-line .row-head > .gist { display: none; }
-    .one-line .row-head > .issue-title:empty + .gist { display: block; grid-column: 1 / 3; grid-row: 2; }
+    .one-line .row-head:not(:has(> .ticket-progress)) > .issue-title:empty + .gist { display: block; grid-column: 1 / 3; grid-row: 2; }
+    .one-line .row-head > .ticket-progress { grid-column: 1 / -1; grid-row: 3; }
+    .one-line .row-head:has(> .ticket-progress) > .gist { display: block; grid-column: 1 / -1; grid-row: 4; white-space: normal; }
+    .one-line .row-head:has(> .ticket-progress) > .pr-checks { grid-row: 5; }
   }
 }

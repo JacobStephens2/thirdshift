@@ -97,6 +97,7 @@ const FLEET: &[(&str, &str)] = &[
 
 // Distinct actions represented by fields of a CLI command, rather than enums.
 const ACTIONS: &[&str] = &[
+    "cronjobs --fleet",
     "update --check",
     "config spec.parallel",
     "config spec.parallel 3",
@@ -118,6 +119,10 @@ const ACTIONS: &[&str] = &[
 // Keep these reasons and ADR 0026's CLI-only list together. A prefix is never
 // an exclusion: each entry is parsed and covers only its command/action.
 const EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "cronjobs --fleet",
+        "Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.",
+    ),
     (
         "console token list",
         "Token management stays in the shell so the API cannot widen its own access.",
@@ -212,6 +217,7 @@ fn identity(words: &str) -> (Discriminant<Command>, String) {
         Command::ConsoleFleet(action) => format!("{:?}", discriminant(action)),
         Command::Update { check, .. } => check.to_string(),
         Command::Config { key, value, .. } => format!("{}:{}", key.is_some(), value.is_some()),
+        Command::CronJobs { fleet, .. } => fleet.to_string(),
         Command::ConsoleOtherAccounts { value, .. } => value.is_some().to_string(),
         Command::ConsoleTheme { name, .. } => name.is_some().to_string(),
         Command::ConsoleSections { hide, show, .. } => {
