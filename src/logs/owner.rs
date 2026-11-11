@@ -151,7 +151,7 @@ pub(super) fn allocate<F: Files>(
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
         Work::ReviewRun(_) => (CommandKind::Review, String::new()),
         Work::FixRun(_) => (CommandKind::Fix, String::new()),
-        Work::TriageRun(_) => (CommandKind::Triage, String::new()),
+        Work::TriageRun { .. } => (CommandKind::Triage, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
         Work::Process { .. } => (CommandKind::Process, String::new()),
     };

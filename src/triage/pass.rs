@@ -102,7 +102,13 @@ pub fn run(
             continue;
         }
         crate::progress::step(format!("triaging {}", issue.url));
-        logs::started(Work::TriageRun(&repo), harness);
+        logs::started(
+            Work::TriageRun {
+                repo: &repo,
+                issue: Some(issue),
+            },
+            harness,
+        );
         base.pull();
         let mut origin = Some(origin);
         let claim = if options.recommend_only {

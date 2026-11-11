@@ -111,6 +111,22 @@ impl Timing {
 }
 
 impl Row {
+    fn present_needs_you_target(&mut self, kind: &str, repository: &str) {
+        if !matches!(kind, "Review run" | "Triage run") {
+            return;
+        }
+        let Ok(pr) = crate::review::PullRequestUrl::parse(&self.pull_request) else {
+            return;
+        };
+        if !pr.issue.repo_slug().eq_ignore_ascii_case(repository) {
+            return;
+        }
+        self.subject = format!("{repository}#{}", pr.issue.number);
+        self.subject_url = Some(pr.url);
+        // The subject now carries the PR, including for a live problem row.
+        self.target_pr = None;
+    }
+
     fn present_ready(
         &mut self,
         title: Option<&str>,
@@ -524,6 +540,8 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     }
     if ready {
         row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
+    } else if group == Some(Group::NeedsYou) {
+        row.present_needs_you_target(&facts.kind, &facts.repository);
     }
     Ok(row)
 }
@@ -719,6 +737,14 @@ pub(super) fn from_read(
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
+                    if group == Group::NeedsYou
+                        && let Observation::Record(command) = item.command
+                    {
+                        row.present_needs_you_target(
+                            &command.record.kind,
+                            &command.record.repository,
+                        );
+                    }
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)

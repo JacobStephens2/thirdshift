@@ -46,6 +46,13 @@ and across the Fleet. Base branch CI repairs show their recorded **Base branch**
 before PR publication and retain it alongside the PR link afterwards. Older
 records without a target keep their repository and Command label.
 
+Needs you Review and Triage rows link their recorded PR in the compact header,
+including Overview, on desktop and phone and across the Fleet. Without a PR,
+they link the recorded issue. Existing-issue Triage records its explicit or
+Pass-selected issue when the Command starts, so failures retain the link.
+Older records and Report-based Triage without a target keep the repository and
+Command fallback; links are never inferred from failure messages.
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
