@@ -178,78 +178,70 @@ fn a_non_quota_probe_failure_admits_every_pass_but_exhaustion_records_a_wait() {
 }
 
 #[test]
-fn unchanged_quota_wait_deduplicates_alternating_custom_processes() {
+fn exhausted_quotas_skip_even_when_login_cannot_be_probed() {
     let scenario = Scenario::new();
-    setup(&scenario);
-    std::fs::copy(
-        scenario.path("home/.thirdshift/processes/notes.toml"),
-        scenario.path("home/.thirdshift/processes/other-notes.toml"),
-    )
-    .unwrap();
-    let mut gh = scenario.gh_state();
-    gh["rate_limits"]["core"] = json!({
-        "remaining": 499,
-        "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    let mut state = scenario.gh_state();
+    state["rate_limits"] = json!({
+        "core": {"remaining": 0, "reset": reset},
+        "graphql": {"remaining": 0, "reset": reset}
     });
-    scenario.write_gh_state(&gh);
-    for _ in 0..3 {
-        for name in ["notes", "other-notes"] {
-            let output = scenario.run(&["process", name]);
-            assert_eq!(output.code, Some(0), "{name}: {}", output.stderr);
-            assert!(output.stdout.is_empty(), "{name}: {}", output.stdout);
-        }
-    }
-    let activity =
-        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
-            .unwrap();
-    for name in ["notes", "other-notes"] {
-        let prefix = format!("Process {name} skipped: GitHub Quota wait until");
-        assert_eq!(
-            activity
-                .lines()
-                .filter(|line| line.contains(&prefix))
-                .count(),
-            1,
-            "unchanged quota reason repeated for {name}:\n{activity}"
-        );
-    }
+    state["failing"] = json!(["api user", "api graphql", "auth status"]);
+    state["failing_stderr"] = json!("API rate limit exceeded (HTTP 403)");
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["pickup"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("GitHub Quota wait until"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !scenario
+            .path("home/.thirdshift/command-slots/acme/widgets/0.slot")
+            .exists()
+    );
+    assert!(scenario.claude_calls().is_empty());
 }
 
 #[test]
-fn unchanged_quota_wait_deduplicates_process_names_with_spaces() {
-    let scenario = Scenario::new();
-    setup(&scenario);
-    std::fs::copy(
-        scenario.path("home/.thirdshift/processes/notes.toml"),
-        scenario.path("home/.thirdshift/processes/notes daily.toml"),
-    )
-    .unwrap();
-    let mut gh = scenario.gh_state();
-    gh["rate_limits"]["core"] = json!({
-        "remaining": 499,
-        "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-    });
-    scenario.write_gh_state(&gh);
-    for _ in 0..3 {
-        for name in ["notes", "notes daily"] {
-            let output = scenario.run(&["process", name]);
-            assert_eq!(output.code, Some(0), "{name}: {}", output.stderr);
-            assert!(output.stdout.is_empty(), "{name}: {}", output.stdout);
+fn unchanged_quota_wait_deduplicates_alternating_custom_processes() {
+    for names in [["notes", "other-notes"], ["notes", "notes daily"]] {
+        let scenario = Scenario::new();
+        setup(&scenario);
+        std::fs::copy(
+            scenario.path("home/.thirdshift/processes/notes.toml"),
+            scenario.path(&format!("home/.thirdshift/processes/{}.toml", names[1])),
+        )
+        .unwrap();
+        let mut gh = scenario.gh_state();
+        gh["rate_limits"]["core"] = json!({
+            "remaining": 499,
+            "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        });
+        scenario.write_gh_state(&gh);
+        for _ in 0..3 {
+            for name in names {
+                let output = scenario.run(&["process", name]);
+                assert_eq!(output.code, Some(0), "{name}: {}", output.stderr);
+                assert!(output.stdout.is_empty(), "{name}: {}", output.stdout);
+            }
         }
-    }
-    let activity =
-        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
-            .unwrap();
-    for name in ["notes", "notes daily"] {
-        let prefix = format!("Process {name} skipped: GitHub Quota wait until");
-        assert_eq!(
-            activity
-                .lines()
-                .filter(|line| line.contains(&prefix))
-                .count(),
-            1,
-            "unchanged quota reason repeated for {name}:\n{activity}"
-        );
+        let activity = std::fs::read_to_string(
+            scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"),
+        )
+        .unwrap();
+        for name in names {
+            let prefix = format!("Process {name} skipped: GitHub Quota wait until");
+            assert_eq!(
+                activity
+                    .lines()
+                    .filter(|line| line.contains(&prefix))
+                    .count(),
+                1,
+                "unchanged quota reason repeated for {name}:\n{activity}"
+            );
+        }
     }
 }
 

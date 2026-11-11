@@ -68,6 +68,15 @@ impl Quota {
     fn low(&self, now: DateTime<Utc>) -> bool {
         self.remaining < 500 && self.reset_at > now
     }
+
+    fn pass_reason(&self, resource: Resource) -> String {
+        format!(
+            "GitHub Quota wait until {} ({}: {} left)",
+            self.reset_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            resource.name(),
+            self.remaining,
+        )
+    }
 }
 
 impl QuotaWait {
@@ -77,12 +86,7 @@ impl QuotaWait {
             .iter()
             .filter(|wait| wait.reset_at() > Utc::now())
             .max_by_key(|wait| wait.reset_at())?;
-        Some(format!(
-            "GitHub Quota wait until {} ({}: {} left)",
-            wait.reset_at().to_rfc3339_opts(SecondsFormat::Secs, true),
-            wait.resource.name(),
-            wait.remaining(),
-        ))
+        Some(wait.quota.pass_reason(wait.resource))
     }
 
     pub fn reset_at(&self) -> DateTime<Utc> {
@@ -131,10 +135,20 @@ impl GitHub {
             interruption: self.interruption,
             wait_for_quota: false,
         };
-        let waits = probe
-            .inbox_quotas()
-            .unwrap_or_else(|_| self.quota_waits().unwrap_or_default());
-        QuotaWait::pass_reason(&waits)
+        if let Ok(quotas) = probe.current_quotas() {
+            // Admission depends on GitHub's observation even when an
+            // exhausted account cannot identify itself for shared storage.
+            let reason = quotas
+                .iter()
+                .filter(|(_, quota)| quota.low(Utc::now()))
+                .max_by_key(|(_, quota)| quota.reset_at)
+                .map(|(resource, quota)| quota.pass_reason(*resource));
+            for (resource, quota) in quotas {
+                let _ = probe.observe_quota(resource, quota);
+            }
+            return reason;
+        }
+        QuotaWait::pass_reason(&self.quota_waits().unwrap_or_default())
     }
 
     // Quota probes deliberately bypass failure recording: learning a reset or
@@ -170,10 +184,20 @@ impl GitHub {
 
     /// This endpoint reports both quotas and does not spend REST requests:
     /// https://docs.github.com/en/rest/rate-limit/rate-limit
-    pub(crate) fn inbox_quotas(&self) -> Result<Vec<QuotaWait>> {
+    fn current_quotas(&self) -> Result<[(Resource, Quota); 2]> {
         let json = self.gh_json(&["api", "rate_limit"])?;
-        for resource in [Resource::Graphql, Resource::Core] {
-            self.observe_quota(resource, Quota::rest(&json["resources"][resource.name()])?)?;
+        Ok([
+            (
+                Resource::Graphql,
+                Quota::rest(&json["resources"]["graphql"])?,
+            ),
+            (Resource::Core, Quota::rest(&json["resources"]["core"])?),
+        ])
+    }
+
+    pub(crate) fn inbox_quotas(&self) -> Result<Vec<QuotaWait>> {
+        for (resource, quota) in self.current_quotas()? {
+            self.observe_quota(resource, quota)?;
         }
         self.quota_waits()
     }
