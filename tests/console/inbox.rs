@@ -11,40 +11,126 @@ fn suspended_time_health_agrees_in_status_and_the_console_inbox() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let now = chrono::Local::now();
+    struct Case {
+        number: u64,
+        stage: &'static str,
+        stage_minutes: i64,
+        quiet_minutes: u64,
+        suspended_minutes: i64,
+        resumed_minutes_ago: i64,
+        group: &'static str,
+        state: &'static str,
+    }
     let cases = [
-        (1, "implement", 65, 0, 60, 5, "working", "live"),
-        (2, "implement", 65, 0, 0, 0, "needs you", "Slow"),
-        (3, "implement", 75, 0, 60, 5, "needs you", "Slow"),
-        (4, "Code review", 180, 65, 60, 5, "working", "live"),
-        (5, "Code review", 180, 65, 0, 0, "needs you", "Silent"),
-        (6, "Code review", 180, 74, 60, 5, "needs you", "Silent"),
-        (7, "Code review", 180, 20, 60, 25, "needs you", "Silent"),
-        (8, "CI watch", 65, 65, 60, 5, "landing", "Landing"),
+        Case {
+            number: 1,
+            stage: "implement",
+            stage_minutes: 65,
+            quiet_minutes: 0,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "working",
+            state: "live",
+        },
+        Case {
+            number: 2,
+            stage: "implement",
+            stage_minutes: 65,
+            quiet_minutes: 0,
+            suspended_minutes: 0,
+            resumed_minutes_ago: 0,
+            group: "needs you",
+            state: "Slow",
+        },
+        Case {
+            number: 3,
+            stage: "implement",
+            stage_minutes: 75,
+            quiet_minutes: 0,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "needs you",
+            state: "Slow",
+        },
+        Case {
+            number: 4,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 65,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "working",
+            state: "live",
+        },
+        Case {
+            number: 5,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 65,
+            suspended_minutes: 0,
+            resumed_minutes_ago: 0,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 6,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 74,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 7,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 20,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 25,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 8,
+            stage: "CI watch",
+            stage_minutes: 65,
+            quiet_minutes: 65,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "landing",
+            state: "Landing",
+        },
     ];
-    for (number, stage, age, quiet, suspended, resumed_ago, _, _) in cases {
-        let mut fixture = live_record(home.path(), number, std::process::id());
-        let began = (now - chrono::Duration::minutes(age)).to_rfc3339();
+    for case in &cases {
+        let mut fixture = live_record(home.path(), case.number, std::process::id());
+        let began = (now - chrono::Duration::minutes(case.stage_minutes)).to_rfc3339();
         fixture["kind"] = json!("Run");
         fixture["tickets"] = json!([]);
         fixture["started_at"] = json!(began);
         fixture["stages"] = json!([{
-            "name": stage, "began_at": began, "session_log": null
+            "name": case.stage, "began_at": began, "session_log": null
         }]);
-        if suspended > 0 {
-            fixture["stages"][0]["suspended_seconds"] = json!(suspended * 60);
+        if case.suspended_minutes > 0 {
+            fixture["stages"][0]["suspended_seconds"] = json!(case.suspended_minutes * 60);
             fixture["stages"][0]["suspensions"] = json!([{
-                "resumed_at": (now - chrono::Duration::minutes(resumed_ago)).to_rfc3339(),
-                "seconds": suspended * 60
+                "resumed_at": (now - chrono::Duration::minutes(case.resumed_minutes_ago)).to_rfc3339(),
+                "seconds": case.suspended_minutes * 60
             }]);
         }
-        super::write_record(home.path(), number, &fixture);
+        super::write_record(home.path(), case.number, &fixture);
         let log = home.path().join(format!(
-            ".thirdshift/logs/acme/widgets/commands/issue/{number}-fixture.log"
+            ".thirdshift/logs/acme/widgets/commands/issue/{}-fixture.log",
+            case.number
         ));
         fs::write(&log, "working\n").unwrap();
         fs::File::open(log)
             .unwrap()
-            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(quiet * 60))
+            .set_modified(
+                std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(case.quiet_minutes * 60),
+            )
             .unwrap();
     }
     for number in 20..23 {
@@ -67,24 +153,34 @@ fn suspended_time_health_agrees_in_status_and_the_console_inbox() {
             .count(),
         cases.len()
     );
-    for (number, _, _, _, _, _, group, state) in cases {
-        let subject = format!("href=\"https://github.com/acme/widgets/issues/{number}\"");
-        let row = section(&html, group)
+    for case in &cases {
+        let subject = format!(
+            "href=\"https://github.com/acme/widgets/issues/{}\"",
+            case.number
+        );
+        let row = section(&html, case.group)
             .split("<li class=\"command\"")
             .find(|row| row.contains(&subject))
             .unwrap_or_else(|| panic!("{html}"));
-        assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
-        assert_eq!(row.contains("data-dismiss>"), group == "needs you", "{row}");
+        assert!(
+            row.contains(&format!("data-state=\"{}\"", case.state)),
+            "{row}"
+        );
+        assert_eq!(
+            row.contains("data-dismiss>"),
+            case.group == "needs you",
+            "{row}"
+        );
         let command = status["commands"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|row| row["issue"]["number"] == number)
+            .find(|row| row["issue"]["number"] == case.number)
             .unwrap();
-        assert_eq!(command["group"], group, "{command}");
+        assert_eq!(command["group"], case.group, "{command}");
         assert_eq!(
             command["health"]["state"],
-            match state {
+            match case.state {
                 "Slow" => "slow",
                 "Silent" => "silent",
                 _ => "ok",

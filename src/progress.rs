@@ -91,6 +91,24 @@ pub fn relay(number: u64, line: &str) -> ChildLine<'_> {
     ChildLine::of(line)
 }
 
+/// The wake annotation stays informational through any number of relays.
+pub(crate) fn is_suspension_annotation(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix(PREFIX) else {
+        return false;
+    };
+    let mut message = split_stamp(rest).map_or(rest, |(_, message)| message);
+    while let Some((number, rest)) = message
+        .strip_prefix('#')
+        .and_then(|rest| rest.split_once(": "))
+    {
+        if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+            return false;
+        }
+        message = rest;
+    }
+    message.starts_with("host was suspended ")
+}
+
 /// The progress line that relays `line`, from the stderr of the child
 /// thirdshift running issue `number`: its message after `#<number>: `,
 /// keeping the time the child stamped it with (or stamped now, if it has

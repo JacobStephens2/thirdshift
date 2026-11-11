@@ -53,6 +53,12 @@ struct Clocks {
     monotonic: Duration,
 }
 
+#[derive(Clone, Copy)]
+enum LogActivity {
+    Work,
+    Suspension,
+}
+
 enum Log<W> {
     NotKept,
     Held {
@@ -131,10 +137,11 @@ impl<O: Outside> Record<O> {
         // Child Ticket runs retain their own stage facts. Their owning
         // Command emits the one log line, rather than relaying duplicates.
         if !self.child {
-            self.step(format_args!(
+            let line = self.progress_line(format_args!(
                 "host was suspended {}",
                 super::status::age(suspended.as_secs() as i64)
             ));
+            self.output(Stream::Stderr, line, LogActivity::Suspension);
         }
     }
 
@@ -234,7 +241,7 @@ impl<O: Outside> Record<O> {
             shown_early.push(lines.len());
             lines.push((Stream::Stderr, line));
         } else {
-            self.output(Stream::Stderr, line);
+            self.output(Stream::Stderr, line, LogActivity::Work);
         }
     }
 
@@ -786,15 +793,22 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn print(&mut self, line: &str) {
-        self.output(Stream::Stdout, line.to_string());
+        self.output(Stream::Stdout, line.to_string(), LogActivity::Work);
     }
     pub(super) fn eprint(&mut self, line: &str) {
-        self.output(Stream::Stderr, line.to_string());
+        // A child Command's wake annotation can be relayed through several
+        // parents. None of those copies is evidence that work resumed.
+        let activity = if progress::is_suspension_annotation(line) {
+            LogActivity::Suspension
+        } else {
+            LogActivity::Work
+        };
+        self.output(Stream::Stderr, line.to_string(), activity);
     }
 
     fn step(&mut self, message: impl Display) {
         let line = self.progress_line(message);
-        self.output(Stream::Stderr, line);
+        self.output(Stream::Stderr, line, LogActivity::Work);
     }
 
     fn progress_line(&mut self, message: impl Display) -> String {
@@ -803,9 +817,9 @@ impl<O: Outside> Record<O> {
 
     /// Warnings enter the same ordered output path without recursion. A
     /// failed writer is disabled before its warning is queued.
-    fn output(&mut self, stream: Stream, line: String) {
-        let mut pending = VecDeque::from([(stream, line)]);
-        while let Some((stream, line)) = pending.pop_front() {
+    fn output(&mut self, stream: Stream, line: String, activity: LogActivity) {
+        let mut pending = VecDeque::from([(stream, line, activity)]);
+        while let Some((stream, line, activity)) = pending.pop_front() {
             if !matches!(self.command_log, Log::Held { shown: false, .. }) {
                 let _ = self.outside.emit(stream, &line);
             }
@@ -813,7 +827,11 @@ impl<O: Outside> Record<O> {
                 Log::NotKept | Log::Failed { .. } => {}
                 Log::Held { lines, .. } => lines.push((stream, line)),
                 Log::Kept { path, writer } => {
-                    if let Err(error) = writeln!(writer, "{line}") {
+                    let written = match activity {
+                        LogActivity::Work => writeln!(writer, "{line}"),
+                        LogActivity::Suspension => self.outside.suspension_line(writer, &line),
+                    };
+                    if let Err(error) = written {
                         let error = anyhow::Error::new(error)
                             .context(format!("could not write {}", path.display()));
                         self.command_log = Log::Failed {
@@ -822,7 +840,7 @@ impl<O: Outside> Record<O> {
                         let warning = self.progress_line(format_args!(
                             "warning: could not keep the Command log: {error:#}"
                         ));
-                        pending.push_back((Stream::Stderr, warning));
+                        pending.push_back((Stream::Stderr, warning, LogActivity::Work));
                     }
                 }
             }

@@ -25,6 +25,8 @@ pub(super) struct Tail {
 }
 
 pub(super) trait Outside: owner::Files {
+    /// Keep the wake explanation without treating it as working log activity.
+    fn suspension_line(&mut self, writer: &mut Self::CommandLog, line: &str) -> io::Result<()>;
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>>;
     fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals>;
     fn command_records(
@@ -54,6 +56,12 @@ impl owner::Files for OnMachine {
 }
 
 impl Outside for OnMachine {
+    fn suspension_line(&mut self, writer: &mut File, line: &str) -> io::Result<()> {
+        let modified = writer.metadata()?.modified()?;
+        writeln!(writer, "{line}")?;
+        writer.set_modified(modified)
+    }
+
     fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals> {
         super::session_signals::read(log).ok().flatten()
     }
