@@ -264,14 +264,19 @@ fn listed() -> ListedIssue {
     }
 }
 
-#[test]
-fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
+fn started_recording(begin: Begin<'_>, work: Work<'_>) -> (Record<Scripted>, Scripted) {
     let memory = Scripted::default();
     memory.0.lock().unwrap().monotonic = Some(std::time::Duration::ZERO);
     let mut record = Record::new(memory.clone());
-    record.begin(Begin::Run(&issue()));
+    record.begin(begin);
     record.configured(&config(false));
-    record.started(Work::Run(&issue()), &harness());
+    record.started(work, &harness());
+    (record, memory)
+}
+
+#[test]
+fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
+    let (mut record, memory) = started_recording(Begin::Run(&issue()), Work::Run(&issue()));
     record.check_suspension();
     {
         let mut clock = memory.0.lock().unwrap();
@@ -291,12 +296,7 @@ fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
 
 #[test]
 fn small_clock_steps_are_ignored_and_suspensions_add_to_the_stage_that_was_live() {
-    let memory = Scripted::default();
-    memory.0.lock().unwrap().monotonic = Some(std::time::Duration::ZERO);
-    let mut record = Record::new(memory.clone());
-    record.begin(Begin::Run(&issue()));
-    record.configured(&config(false));
-    record.started(Work::Run(&issue()), &harness());
+    let (mut record, memory) = started_recording(Begin::Run(&issue()), Work::Run(&issue()));
     // Successive 30-second clock steps must not accumulate into a suspension.
     for _ in 0..3 {
         memory.advance(60, 30);
@@ -359,12 +359,7 @@ fn every_command_kind_records_suspension_in_its_live_stage() {
             },
         ),
     ] {
-        let memory = Scripted::default();
-        memory.0.lock().unwrap().monotonic = Some(std::time::Duration::ZERO);
-        let mut record = Record::new(memory.clone());
-        record.begin(begin);
-        record.configured(&config(false));
-        record.started(work, &harness());
+        let (mut record, memory) = started_recording(begin, work);
         record.stage(StageName::ProcessStep, None);
         memory.advance(150, 30);
         record.check_suspension();
