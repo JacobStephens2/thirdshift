@@ -1743,7 +1743,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 10`.
+[Experiment results format](experiment-results.md), identified by `format: 11`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1762,6 +1762,10 @@ evidence is absent. Reported Session cost wins, including zero; otherwise each
 Model's reported cost replaces its call-cost sum, retaining costs the total omits.
 Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
+Trials spanning Suspended time are marked suspended. Their time is left out of
+Arm summaries and time comparisons, including time ceilings; their outcomes and
+costs still count, and no Trial is rerun for suspension. Reports show how many
+Trials were left out of timing when any were. Process evals follow the same rule.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.
 
