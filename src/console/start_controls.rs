@@ -178,16 +178,20 @@ pub(super) async fn options() -> axum::response::Response {
 /// Preserve the cron Pass's CLI options, while the API still decides admission.
 pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> Result<Vec<Pass>> {
     let directories = crate::launch_directories::load()?;
+    let home = crate::config::home()?;
     let mut passes = Vec::new();
     for job in jobs {
-        let Some((path, arguments)) = crate::launch_directories::cron_arguments(&job.command)
+        let Some(facts) = crate::cronjobs::Interpretation::new(&job.command).into_launch(&home)
         else {
+            continue;
+        };
+        let Ok(path) = facts.directory.canonicalize() else {
             continue;
         };
         let Some(directory) = directories.directories.iter().find(|d| d.path == path) else {
             continue;
         };
-        let Ok(parsed) = args::parse(&arguments) else {
+        let Some(parsed) = facts.command else {
             continue;
         };
         let (mut request, flags, security) = match parsed {

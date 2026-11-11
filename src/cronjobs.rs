@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::UserConfig;
 use crate::logs::pass_starts::{self, PassStart};
 
+mod command;
 pub(crate) mod fleet;
+pub(crate) use command::{Interpretation, LaunchFacts};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct CronJobs {
@@ -89,48 +91,6 @@ where
     Ok(serde_json::from_value(value).unwrap_or(None))
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "inventory recognizes work Commands only; inspection and administration commands have unknown kind"
-)]
-fn command_kind(command: &str) -> Option<CommandKind> {
-    use crate::args::{self, Command as Parsed};
-    let words = crate::launch_directories::shell_words(shell_command(command))?;
-    let invocation = match words.as_slice() {
-        [cd, path, and, rest @ ..] if cd == "cd" && and == "&&" && !path.contains(['$', '`']) => {
-            rest
-        }
-        rest => rest,
-    };
-    let (executable, arguments) = invocation.split_first()?;
-    if executable.contains(['$', '`'])
-        || std::path::Path::new(executable).file_name()? != "thirdshift"
-    {
-        return None;
-    }
-    if arguments
-        .iter()
-        .any(|word| matches!(word.as_str(), "&&" | "||" | ";" | "|" | "&"))
-    {
-        return None;
-    }
-    let arguments = crate::launch_directories::literal_cli_arguments(arguments)?;
-    if arguments.is_empty() {
-        return None;
-    }
-    Some(match args::parse(&arguments).ok()? {
-        Parsed::Pickup(_) => CommandKind::Pickup,
-        Parsed::Secure(_) => CommandKind::Security,
-        Parsed::Architect(_) => CommandKind::Architect,
-        Parsed::Triage(_) => CommandKind::Triage,
-        Parsed::Fix(_) => CommandKind::Fix,
-        Parsed::Review(_) => CommandKind::Review,
-        Parsed::Process(args::ProcessAction::Run(_)) => CommandKind::Process,
-        // An Issue URL can select a Spec run or Ticket run; labels are not read here.
-        _ => return None,
-    })
-}
-
 /// One Fleet report field. A control character or Unicode line separator would
 /// start another line or a terminal control sequence, so one machine's schedule
 /// or error could look like another machine's entry. JSON keeps the original text.
@@ -168,7 +128,9 @@ pub(crate) fn load() -> Result<CronJobs> {
     let mut jobs = jobs()?;
     for job in &mut jobs {
         job.repository = repository_label(
-            crate::launch_directories::from_cron(&job.command, &home)
+            Interpretation::new(&job.command)
+                .into_launch(&home)
+                .and_then(crate::launch_directories::from_facts)
                 .map(|directory| directory.repository),
         );
     }
@@ -249,30 +211,13 @@ fn entry(line: &str) -> Option<CronJob> {
         schedule.push(&command[..end]);
         command = command[end..].trim_start();
     }
-    // Keep stdin text for display, but don't match it as a command.
-    let mentions_thirdshift = shell_command(command)
-        .split(|c: char| c.is_whitespace() || "'\";&|()<>".contains(c))
-        .any(|word| word.rsplit('/').next() == Some("thirdshift"));
-    mentions_thirdshift.then(|| CronJob {
+    let interpreted = Interpretation::new(command);
+    interpreted.recognized().then(|| CronJob {
         schedule: schedule.join(" "),
         command: command.into(),
         repository: None,
-        command_kind: command_kind(command),
+        command_kind: interpreted.command_kind(),
     })
-}
-
-/// Cron sends everything after its first unescaped % to stdin, even in quotes.
-pub(crate) fn shell_command(command: &str) -> &str {
-    let mut escaped = false;
-    let command_end = command
-        .char_indices()
-        .find_map(|(index, character)| {
-            let separator = character == '%' && !escaped;
-            escaped = character == '\\' && !escaped;
-            separator.then_some(index)
-        })
-        .unwrap_or(command.len());
-    &command[..command_end]
 }
 
 #[cfg(test)]
