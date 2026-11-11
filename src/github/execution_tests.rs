@@ -151,6 +151,28 @@ fn primary_quota_failure_scopes_graphql_and_defaults_only_unreadable_resets() {
 }
 
 #[test]
+fn a_rest_quota_failure_in_a_repository_named_graphql_keeps_the_core_resource() {
+    with_recorded_signal(
+        "github::execution_tests::a_rest_quota_failure_in_a_repository_named_graphql_keeps_the_core_resource",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit') echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'HTTP 403: API rate limit exceeded (https://api.github.com/repos/acme/graphql/issues/7/comments)' >&2; exit 1 ;;
+esac"#,
+            );
+            let issue = IssueUrl::parse("https://github.com/acme/graphql/issues/7").unwrap();
+            assert!(GitHub::new().comment_issue(&issue, "hello").is_err());
+            let waits = GitHub::new().quota_waits().unwrap();
+            assert_eq!(waits.len(), 1);
+            assert!(matches!(waits[0].resource, quota::Resource::Core));
+        },
+    );
+}
+
+#[test]
 fn changing_credentials_does_not_reuse_another_users_wait() {
     with_recorded_signal(
         "github::execution_tests::changing_credentials_does_not_reuse_another_users_wait",

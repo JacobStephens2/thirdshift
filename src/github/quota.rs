@@ -161,8 +161,8 @@ impl GitHub {
         {
             return Ok(());
         }
-        let resource = if diagnostic.contains("graphql")
-            || args.first() == Some(&"api") && args.contains(&"graphql")
+        let resource = if diagnostic.contains("graphql:")
+            || args.starts_with(&["api", "graphql"])
             || args.first() != Some(&"api")
                 && (diagnostic.contains("rate_limit_exceeded")
                     || diagnostic.contains("rate_limited"))
