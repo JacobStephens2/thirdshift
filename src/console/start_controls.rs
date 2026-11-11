@@ -192,7 +192,7 @@ pub(super) fn cron_passes(
     captured: &crate::launch_directories::Captured,
 ) -> Result<Vec<Pass>> {
     let mut choices = pass_choices(config, captured)?;
-    choices.sort_by(|(a, _), (b, _)| a.cmp(b));
+    choices.sort_by_key(|(repository, _)| *repository);
     Ok(choices.into_iter().map(|(_, pass)| pass).collect())
 }
 
