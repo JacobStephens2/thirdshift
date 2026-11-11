@@ -66,6 +66,73 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Ticket progress stays visible with stage and health, updates, and follows a dispatched Spec', { skip: process.platform !== 'linux' }, async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const began = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const log = path.replace('.command.json', '.log');
+  Object.assign(fixture, {
+    name: 'spec-progress', process_id: server.pid, process_start: start,
+    started_at: began, ended_at: null, outcome: null, cause: null,
+    stages: [{ name: 'Tickets', began_at: began, session_log: null }],
+    tickets: ['merged', 'merged', 'running', 'failed', 'waiting', 'not started'].map((state, index) => ({
+      issue: { number: 310 + index, url: `https://github.com/acme/widgets/issues/${310 + index}`, title: `Ticket ${index}` },
+      state, blockers: [],
+    })),
+  });
+  const page = await pageFor(t);
+  const row = page.locator('#inbox > .group > .commands > .command[data-command*="1-fixture.command.json"]');
+  const head = row.locator(':scope > .row-head');
+  const progress = head.locator('.ticket-progress');
+  try {
+    await utimes(log, new Date(began), new Date(began));
+    await replaceRecord(path, JSON.stringify(fixture));
+    await page.goto(`${origin}/?section=overview`);
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-light`);
+        await progress.getByText('2 / 6 Tickets complete', { exact: true }).waitFor();
+        await head.locator('.gist').getByText(/Tickets.*silent 15 min/).waitFor();
+        assert.equal(await head.locator('.state').textContent(), 'Silent');
+        assert.equal(await progress.evaluate(el => el.scrollWidth <= el.clientWidth), true, `${family}: full counter`);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}: page fits`);
+      }
+    }
+    fixture.tickets[2].state = 'merged';
+    await replaceRecord(path, JSON.stringify(fixture));
+    await progress.getByText('3 / 6 Tickets complete', { exact: true }).waitFor();
+
+    const now = new Date().toISOString();
+    const spec = { ...fixture, started_at: now, tickets: fixture.tickets.map(ticket => ({ ...ticket, state: 'merged' })),
+      stages: [{ name: 'Spec review', began_at: now, session_log: null }] };
+    Object.assign(fixture, { kind: 'Pickup run', name: 'pickup-progress', issue: null, tickets: [],
+      stages: [{ name: 'dispatched Spec run', began_at: now, session_log: null }], dispatched: [spec] });
+    await replaceRecord(path, JSON.stringify(fixture));
+    await progress.getByText('6 / 6 Tickets complete', { exact: true }).waitFor();
+    assert.equal(await row.getAttribute('data-live'), 'true', 'Tickets complete still leaves Spec review running');
+    assert.equal(await row.evaluate(el => el.closest('.group').dataset.group), 'working');
+    assert.equal(await row.locator(':scope > .children').isVisible(), false, 'progress is on the visible Pass row');
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await progress.waitFor({ state: 'visible' });
+      await head.locator('.gist').waitFor({ state: 'visible' });
+      assert.equal(await progress.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    }
+    fixture.outcome = 'failed'; fixture.ended_at = now;
+    fixture.dispatched[0].outcome = 'failed'; fixture.dispatched[0].ended_at = now;
+    await replaceRecord(path, JSON.stringify(fixture));
+    await head.locator('.state').getByText('Failed', { exact: true }).waitFor();
+    assert.equal(await progress.textContent(), '6 / 6 Tickets complete', 'ended accounting is retained');
+  } finally {
+    await replaceRecord(path, original);
+    await utimes(log, new Date(), new Date());
+  }
+});
+
 test('the header machine name returns to the full Overview from filtered and secondary pages', async t => {
   for (const javaScriptEnabled of [true, false]) {
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {

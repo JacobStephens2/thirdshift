@@ -2700,6 +2700,61 @@ fn the_lowest_numbered_ready_or_settling_issue_goes_first() {
 }
 
 #[test]
+fn an_all_closed_spec_has_architect_priority_only_with_a_handed_back_continuation() {
+    for (branch, handed_back, ready_ago) in [
+        (true, true, 60),
+        (true, true, 4),
+        (false, true, 60),
+        (false, true, 4),
+        (true, false, 60),
+    ] {
+        let scenario = scenario();
+        ready_issue(&scenario, 7, "Finish the Spec review", &[]);
+        scenario.spec_has_tickets(7, &[(9, &[])]);
+        scenario.issue_is(9, "CLOSED");
+        if branch {
+            scenario.origin_has_branch("issue-7", "main", &["Landed Tickets"]);
+        }
+        let mut timeline = Vec::new();
+        if handed_back {
+            timeline.extend([
+                (TimelineEvent::Labelled(IN_PROGRESS), 90),
+                (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+            ]);
+        }
+        timeline.push((TimelineEvent::Labelled("ready-for-agent"), ready_ago));
+        scenario.issue_timeline(7, &timeline);
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        let github = scenario.gh_state();
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        if branch && handed_back {
+            assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+            let reason = if ready_ago < 5 {
+                format!(
+                    "Ready issue #7 \"Finish the Spec review\" goes first once it settles: {}",
+                    scenario.issue_url(7)
+                )
+            } else {
+                goes_first(&scenario, 7, "Finish the Spec review")
+            };
+            assert_eq!(
+                after_start(&result.stderr),
+                format!("thirdshift: {reason}\n")
+            );
+            assert!(scenario.claude_calls().is_empty());
+            assert_eq!(scenario.gh_state(), github);
+            assert_nothing_left_behind(&scenario);
+        } else {
+            assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(10)));
+            assert_eq!(scenario.claude_calls().len(), 1);
+        }
+    }
+}
+
+#[test]
 fn a_settling_spec_goes_first_only_with_a_startable_ticket() {
     for startable in [false, true] {
         let scenario = scenario();

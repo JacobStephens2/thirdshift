@@ -431,6 +431,13 @@ impl<O: Outside> Record<O> {
         );
     }
 
+    pub(super) fn base_ci_skipped(&mut self, repo: &Repo, reason: &str) {
+        let kind = Kind::BaseCi;
+        let message = format!("{kind} skipped: {reason}");
+        self.step(&message);
+        self.activity_write(&self.root(repo), &message, Some(kind));
+    }
+
     /// A skipped Custom process keeps the Activity log line and a Command
     /// record. The record is what shows the skipped ending; the other Passes
     /// drop the Command log they never kept.
@@ -495,6 +502,13 @@ impl<O: Outside> Record<O> {
     pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.active().issue_branch = branch.map(String::from);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn base_branch(&mut self, branch: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().base_branch = Some(branch.into());
             self.write_record();
         }
     }

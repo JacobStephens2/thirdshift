@@ -205,6 +205,7 @@ impl<'a> Execution<'a> {
             &prepared_repo.repository,
             &setup.choice(),
         ));
+        let waiting = RefCell::new(crate::poll::WaitingLine::already_reported(()));
         let started = Instant::now();
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
@@ -223,7 +224,16 @@ impl<'a> Execution<'a> {
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
             Instant::now() + self.timeout,
-            &|| monitor.borrow_mut().check(self.signal),
+            &|| {
+                monitor.borrow_mut().check(self.signal)?;
+                // Trial work writes nothing to the Command log until its
+                // outcome. Repeat a line so a long Trial is not taken as
+                // Silent; supervision ends it, however the Trial ends.
+                if waiting.borrow_mut().should_report(()) {
+                    progress::step(format!("Trial {key} still running"));
+                }
+                Ok(())
+            },
         );
         let stopped_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?

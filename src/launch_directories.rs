@@ -1,4 +1,5 @@
 //! Known Launch directories, shared by CLI discovery and Console starts.
+use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,10 @@ use serde::Serialize;
 
 use crate::{config, cronjobs, git::Git, issue::Repo};
 
-#[derive(Serialize)]
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Serialize)]
 pub(crate) struct Directory {
     pub repository: String,
     pub path: PathBuf,
@@ -15,199 +19,165 @@ pub(crate) struct Directory {
     pub output_log: Option<PathBuf>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Inventory {
     pub directories: Vec<Directory>,
 }
 
 pub(crate) fn load() -> Result<Inventory> {
-    let home = config::home()?;
     let config = config::UserConfig::load()?;
-    let jobs = match cronjobs::jobs() {
-        Ok(jobs) => jobs,
-        Err(error)
-            if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            Vec::new()
-        }
-        Err(error) => return Err(error),
-    };
-    let mut directories = BTreeMap::new();
-    for job in jobs {
-        if let Some(directory) = from_cron(&job.command, &home) {
-            directories
-                .entry(directory.path.clone())
-                .or_insert(directory);
-        }
+    Ok(Captured::capture(&config)?.directories()?.clone())
+}
+
+/// Associated facts for one entry, independent of directory deduplication.
+pub(crate) struct Entry {
+    pub job: cronjobs::CronJob,
+    pub launch: Option<cronjobs::LaunchFacts>,
+    pub directory: Option<Directory>,
+}
+
+/// One owning-machine operation. Failed observations live as long as successes;
+/// configured directories and Pass history are acquired only by their projections.
+pub(crate) struct Captured {
+    entries: Result<Vec<Entry>>,
+    configured: Vec<PathBuf>,
+    logs_dir: PathBuf,
+    checkouts: RefCell<Checkouts>,
+    directories: OnceCell<Result<Inventory>>,
+    cronjobs: OnceCell<Result<cronjobs::CronJobs>>,
+}
+
+impl Captured {
+    pub(crate) fn capture(config: &config::UserConfig) -> Result<Self> {
+        let home = config::home()?;
+        Ok(Self::new(config, &home, cronjobs::entries()))
     }
-    for path in config.launch_directories {
-        let directory = resolve(&path)
-            .with_context(|| format!("invalid configured Launch directory {}", path.display()))?;
-        directories
-            .entry(directory.path.clone())
-            .or_insert(directory);
-    }
-    Ok(Inventory {
-        directories: directories.into_values().collect(),
-    })
-}
 
-fn resolve(path: &Path) -> Result<Directory> {
-    let path = path.canonicalize()?;
-    let origin = Git::new(&path).run(&["config", "--get", "remote.origin.url"])?;
-    let repo = Repo::of_origin(&origin).context("Launch directory origin is not on GitHub")?;
-    Ok(Directory {
-        repository: repo.slug(),
-        path,
-        output_log: None,
-    })
-}
-
-// Parse literal shell words only. Never execute cron text to discover a path.
-pub(crate) fn from_cron(command: &str, home: &Path) -> Option<Directory> {
-    let invocation = cron_invocation(command, home)?;
-    let mut directory = resolve(&invocation.directory).ok()?;
-    directory.output_log = invocation.output_log;
-    Some(directory)
-}
-
-struct CronInvocation {
-    directory: PathBuf,
-    words: Vec<String>,
-    output_log: Option<PathBuf>,
-}
-
-fn cron_invocation(command: &str, home: &Path) -> Option<CronInvocation> {
-    let words = shell_words(cronjobs::shell_command(command))?;
-    let [cd, path, and, rest @ ..] = words.as_slice() else {
-        return None;
-    };
-    if cd != "cd" || and != "&&" || path.contains(['$', '`']) {
-        return None;
-    }
-    let thirdshift = rest
-        .split(|word| matches!(word.as_str(), "&&" | ";" | "||"))
-        // A later directory change makes the initial cd unreliable. Leave
-        // these compounds display-only rather than infer the wrong checkout.
-        .take_while(|part| {
-            let executable = part.iter().map(String::as_str).find(|word| {
-                !word.contains('=') && !matches!(*word, "command" | "builtin" | "--" | "-p" | "!")
-            });
-            !matches!(
-                executable,
-                Some("cd" | "pushd" | "popd" | "eval" | "source" | ".")
-            )
-        })
-        .find(|part| {
-            let executable = if part.first().is_some_and(|word| {
-                Path::new(word)
-                    .file_name()
-                    .is_some_and(|name| name == "env")
-            }) {
-                // A literal env wrapper still uses this cd directory. Keep the
-                // wrapper words below so Run now cannot discard its environment.
-                part.iter().skip(1).find(|word| !word.contains('='))
-            } else {
-                part.first()
-            };
-            executable.is_some_and(|word| {
-                Path::new(word)
-                    .file_name()
-                    .is_some_and(|name| name == "thirdshift")
-            })
-        })?;
-    let path = config::expand_home(path, home)?;
-    let output_log = thirdshift
-        .windows(2)
-        .find(|pair| matches!(pair[0].as_str(), ">>" | ">" | "1>" | "1>>" | "&>" | "&>>"))
-        .and_then(|pair| {
-            let log = &pair[1];
-            if log.contains(['$', '`']) {
-                return None;
-            }
-            config::expand_home(log, home).or_else(|| Some(path.join(log)))
+    fn new(
+        config: &config::UserConfig,
+        home: &Path,
+        input: Result<Vec<cronjobs::InterpretedEntry>>,
+    ) -> Self {
+        let mut checkouts = Checkouts::default();
+        let entries = input.map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| {
+                    let launch = entry.interpretation.into_launch(home);
+                    let directory = launch.as_ref().and_then(|facts| {
+                        let mut directory = checkouts.resolve(&facts.directory).ok()?;
+                        directory.output_log = facts.output_log.clone();
+                        Some(directory)
+                    });
+                    Entry {
+                        job: entry.job,
+                        launch,
+                        directory,
+                    }
+                })
+                .collect()
         });
-    Some(CronInvocation {
-        directory: path,
-        words: thirdshift.iter().skip(1).cloned().collect(),
-        output_log,
-    })
-}
-
-/// A literal cron invocation that can also be represented by the start API.
-/// Shell expressions remain display-only; no cron text is ever executed here.
-pub(crate) fn cron_arguments(command: &str) -> Option<(PathBuf, Vec<String>)> {
-    let home = config::home().ok()?;
-    let invocation = cron_invocation(command, &home)?;
-    let arguments: Vec<_> = invocation
-        .words
-        .into_iter()
-        .take_while(|word| {
-            let operator = word.trim_start_matches(|c: char| c.is_ascii_digit());
-            !matches!(
-                operator,
-                ">" | ">>" | "&>" | "&>>" | "<" | ">&" | "<&" | "#"
-            )
-        })
-        .collect();
-    if arguments.iter().any(|word| word.contains(['$', '`'])) {
-        return None;
+        Self {
+            entries,
+            configured: config.launch_directories.clone(),
+            logs_dir: config.logs_dir.clone(),
+            checkouts: RefCell::new(checkouts),
+            directories: OnceCell::new(),
+            cronjobs: OnceCell::new(),
+        }
     }
-    Some((invocation.directory.canonicalize().ok()?, arguments))
-}
 
-// shlex splits shell words, but leaves operators attached to those words.
-// Separate unquoted operators first, preserving quotes and escaped characters.
-fn shell_words(command: &str) -> Option<Vec<String>> {
-    let mut spaced = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut chars = command.chars().peekable();
-    while let Some(character) = chars.next() {
-        if escaped {
-            spaced.push(character);
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote != Some('\'') {
-            spaced.push(character);
-            escaped = true;
-            continue;
-        }
-        if quote == Some(character) {
-            quote = None;
-        } else if quote.is_none() && matches!(character, '\'' | '"') {
-            quote = Some(character);
-        } else if quote.is_none() && "&|;<>".contains(character) {
-            // A contiguous IO number belongs to the redirect (2>&1); a
-            // standalone number remains a CLI argument (parallel 2 >> log).
-            let word_start = spaced.rfind(char::is_whitespace).map_or(0, |at| at + 1);
-            let word = &spaced[word_start..];
-            let io_number = matches!(character, '<' | '>')
-                && !word.is_empty()
-                && word.bytes().all(|byte| byte.is_ascii_digit());
-            if !io_number {
-                spaced.push(' ');
-            }
-            spaced.push(character);
-            if chars.peek() == Some(&character)
-                || matches!(character, '>' | '<') && chars.peek() == Some(&'&')
+    /// Start/discovery projections tolerate only an absent crontab executable.
+    pub(crate) fn entries(&self) -> Result<&[Entry]> {
+        match &self.entries {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
             {
-                spaced.push(chars.next()?);
-            } else if character == '&' && chars.peek() == Some(&'>') {
-                spaced.push(chars.next()?);
-                if chars.peek() == Some(&'>') {
-                    spaced.push(chars.next()?);
-                }
+                Ok(&[])
             }
-            spaced.push(' ');
-            continue;
+            result => Ok(observed(result)?.as_slice()),
         }
-        spaced.push(character);
     }
-    shlex::split(&spaced)
+
+    pub(crate) fn directories(&self) -> Result<&Inventory> {
+        observed(self.directories.get_or_init(|| {
+            let mut directories = BTreeMap::new();
+            for directory in self
+                .entries()?
+                .iter()
+                .filter_map(|entry| entry.directory.as_ref())
+            {
+                directories
+                    .entry(directory.path.clone())
+                    .or_insert_with(|| directory.clone());
+            }
+            for path in &self.configured {
+                // Validate aliases too; a Cron entry never authorizes a configured path.
+                let directory = self.checkouts.borrow_mut().resolve(path).with_context(|| {
+                    format!("invalid configured Launch directory {}", path.display())
+                })?;
+                directories
+                    .entry(directory.path.clone())
+                    .or_insert(directory);
+            }
+            Ok(Inventory {
+                directories: directories.into_values().collect(),
+            })
+        }))
+    }
+
+    /// Strict inventory, without configured-directory validation or start data.
+    pub(crate) fn cronjobs(&self) -> Result<&cronjobs::CronJobs> {
+        observed(self.cronjobs.get_or_init(|| {
+            let jobs = observed(&self.entries)?
+                .iter()
+                .map(|entry| {
+                    let mut job = entry.job.clone();
+                    job.repository = entry
+                        .directory
+                        .as_ref()
+                        .map(|directory| directory.repository.clone());
+                    job
+                })
+                .collect();
+            cronjobs::inventory(jobs, &self.logs_dir)
+        }))
+    }
+}
+
+fn observed<T>(result: &Result<T>) -> Result<&T> {
+    result
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error:#}"))
+}
+
+#[derive(Default)]
+struct Checkouts {
+    canonical: BTreeMap<PathBuf, Result<PathBuf>>,
+    origins: BTreeMap<PathBuf, Result<String>>,
+}
+
+impl Checkouts {
+    fn resolve(&mut self, literal: &Path) -> Result<Directory> {
+        let path = observed(
+            self.canonical
+                .entry(literal.to_owned())
+                .or_insert_with(|| Ok(literal.canonicalize()?)),
+        )?;
+        let repository = observed(self.origins.entry(path.clone()).or_insert_with(|| {
+            let origin = Git::new(path).run(&["config", "--get", "remote.origin.url"])?;
+            Ok(Repo::of_origin(&origin)
+                .context("Launch directory origin is not on GitHub")?
+                .slug())
+        }))?;
+        Ok(Directory {
+            repository: repository.clone(),
+            path: path.clone(),
+            output_log: None,
+        })
+    }
 }
 
 pub fn show(json: bool) -> Result<String> {

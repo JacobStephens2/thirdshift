@@ -176,7 +176,11 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `thirdshift cronjobs` and the Console's Cron jobs page group this account's thirdshift crontab entries alphabetically by full `owner/repo`, preserving crontab order and duplicate jobs within each group. A literal `cd <directory> && ... thirdshift ...` command is associated through that directory's GitHub `origin` remote on the owning machine, using the same quoted and home paths as Launch directory discovery. Unresolved entries stay visible in a trailing **Other** group. Cron command text is never executed. The page gives each group its own terminal-style block, with **Run Passes now** and **Last fired by repository** kept separately below.
 
-`cronjobs --json` and `/api/v1/cronjobs` retain the object with a flat `jobs` array in group order (each entry's `schedule`, `command` and nullable `repository`) and independent `pass_starts`. A selected Fleet machine supplies its own repository associations; older inventories without that metadata display under **Other**. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Both this inventory and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+`cronjobs --json` and `/api/v1/cronjobs` retain the object with a flat `jobs` array in group order (each entry's `schedule`, `command`, nullable `repository` and nullable `command_kind`) and independent `pass_starts`. Command kinds are recognized conservatively from literal CLI arguments; unknown or shell-dependent invocations remain visible. A selected Fleet machine supplies its own repository associations; older inventories without that metadata display under **Other**. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Both this inventory and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+
+Choose **Fleet schedules** on Cron jobs (`/cronjobs?fleet=true`), or run `thirdshift cronjobs --fleet [--json]`, to inspect this account's configured schedules on every Fleet machine. The overview groups repositories alphabetically, then machines, with **Other** last; it keeps each machine's entry order and duplicate jobs. Each entry shows its machine, recognized Command kind (or **Unknown Command kind**), original schedule and command. Repository metadata comes from the owning machine; remote checkout paths are never resolved locally. Schedules retain their owning cron time zones without conversion.
+
+The Fleet result's `repositories` contain `repository` and `machines` (each with `name` and `jobs`); its separate `machines` inventory lists `name`, Console `address`, `status` and nullable `error`. Successful empty inventories say so. Unavailable, refused, incompatible and link-only machines stay visible alongside healthy results. Link-only entries receive no requests. The overview inspects configured schedules only; use each machine's local view for separate **Run Passes now** controls and **Last fired** observations. Reads use the owning machine's effective `read` authorization and forward the signed-in person; CLI reads use the token holder. `/api/v1/cronjobs` stays local and refuses Fleet or remote-machine selection, so API callers cannot borrow saved Fleet credentials.
 
 `thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
@@ -406,6 +410,10 @@ thirdshift console --no-sign-in
 Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; `/?section=done` opens Done and `/?section=overview` returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row's Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. With `run`, use **Start work** on Inbox or **Run now** on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system's scheduler remain available too.
 
 Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
+
+Live Fix runs and Review runs show a clickable **PR #number** beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected **Base branch** before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.
+
+Specs with recorded Tickets show a count such as **2 / 5 Tickets complete** on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine's last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
 
@@ -2557,7 +2565,7 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
-waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
+waiting_line_minutes = 5  # repeat unchanged CI watch, Self-merge and Trial waiting lines
 
 [otlp]
 endpoint = "http://localhost:4318/v1/traces"   # also send ended spans to a local viewer
@@ -2624,7 +2632,7 @@ commands_by_repo = {}   # extra validation commands for each "owner/repo" in eve
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
-waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+waiting_line_minutes = 5   # repeat unchanged CI watch, Self-merge and Trial waiting lines; default 5 minutes
 
 [otlp]
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security and Scoring runs never export
@@ -2741,7 +2749,7 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Ticket run before any work, since the directory a Ticket run is launched from is no base for a setting that holds for every Ticket run.
 
-`logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+`logs.waiting_line_minutes` sets how often CI watch, Self-merge and an Experiment's running Trials repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability; each running Trial writes one saying it is still running, so a long Trial does not make its Experiment Silent.
 
 `inbox.days` defaults to 7 and must be a positive whole number of days. It bounds ended problems GitHub can't speak for in Needs you, and older completions in Resolved: Resolved runs to `inbox.days` after a Command ended, after the later Command started for a row one took up, after a ready row's pull request merged or closed on GitHub, or after the dismissal for a dismissed row. Done always covers one day. A ready Command whose pull request GitHub shows as open stays in Ready for review however old it is; only a row GitHub can't speak for still ages out of Ready for review after `inbox.days`. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
 
@@ -3247,8 +3255,12 @@ restricts selection to that account, which must itself be trusted. Neither
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
 `origin`. A failed first push-workflow attempt with failed jobs gets one
-failed-jobs re-run; the Pass logs it on stderr and skips while CI runs. Pending
-Base branch checks, including external checks, also skip before PR selection.
+failed-jobs re-run; the Pass logs it on stderr and continues to PR selection
+without waiting. Pending Base branch checks, including external checks, skip
+only this maintenance step, as does an occupied Base branch CI reservation.
+An existing repair branch or PR also skips only this step. Each maintenance
+skip and its reason appear on stderr and in the repository Activity log,
+including when no eligible PR is found.
 Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
 in a Worktree on `fix-<base>-<short-sha>`, from that origin tip. Delivery opens
 `Fix CI on <base>: <check>[, <check>…]` targeting the Base branch, treats every
@@ -3258,7 +3270,9 @@ or failed draft PR, prevents another repair for that commit. An existing repair
 branch also prevents another attempt if PR creation failed. When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
-share the Base branch CI reservation. A successful Self-merge closes open
+share the Base branch CI reservation without holding back unrelated PR fixes.
+A Pass that starts a Base branch CI repair ends with that Run's outcome.
+A successful Self-merge closes open
 `CI red on <base>` reports and Base fix issues naming that Base branch.
 
 The Pass selects the first PR with a Merge conflict or CI red on its current
@@ -3540,13 +3554,13 @@ Any triage decision releases the pause: take `needs-triage` off, whatever replac
 
 ### A Ready issue goes first
 
-Work a human shaped goes ahead of the factory's own: while the repository has a **Ready issue**, or an issue that meets every Ready issue condition except settling, every Architect run on it is skipped, before any review. For a Spec, that includes having a Startable Ticket. A [Pickup run](#pickup-runs) still waits until the issue has settled before taking it. The check comes last, after the [Command limit](#the-command-limit), the [open Architect plan](#one-architect-plan-at-a-time) check and the [waiting Architect idea](#an-architect-idea-waits-for-triage) check, so with an open plan or a waiting idea as well, the skip reports that instead. It is only the search: an Architect run makes no [Sweep](#the-sweep) and holds no [Failure limit](#the-failure-limit), which are the Pickup run's.
+Work a human shaped goes ahead of the factory's own: while the repository has a **Ready issue**, or an issue that meets every Ready issue condition except settling, every Architect run on it is skipped, before any review. A Spec qualifies with a Startable Ticket, or with every Ticket closed and a Spec branch on `origin` that can be continued under [ADR-0002](adr/0002-existing-issue-branch-means-continue.md): the latest branch has no PR or an open PR. Its hand-back and every other Ready issue condition still apply. A [Pickup run](#pickup-runs) still waits until the issue has settled before taking it. The check comes last, after the [Command limit](#the-command-limit), the [open Architect plan](#one-architect-plan-at-a-time) check and the [waiting Architect idea](#an-architect-idea-waits-for-triage) check, so with an open plan or a waiting idea as well, the skip reports that instead. It is only the search: an Architect run makes no [Sweep](#the-sweep) and holds no [Failure limit](#the-failure-limit), which are the Pickup run's.
 
 - **stdout** carries the URL of the lowest-numbered issue that is Ready or would be Ready once settled, whether it has settled or not.
 - **stderr** carries [a line on each issue labelled `ready-for-agent`](#why-an-issue-was-passed-over) passed over before it, then one progress line naming it: `Ready issue #<n> "<title>" goes first: <Issue URL>`, or, while it is settling, `Ready issue #<n> "<title>" goes first once it settles: <Issue URL>`.
 - **Exit code** `0`: skipped is not a failure. No agent session starts, and nothing else is done.
 
-An issue passed over for any reason other than settling never skips an Architect run: one that carries a Claim, has an open blocker or an untrusted edit, is a Ticket inside a Spec, is a Spec with no Startable Ticket, or is a Base fix's issue, among the rest of the rule. Those get their lines on stderr all the same, and the Architect run goes on. With `pickup.wait_minutes = 0`, there is no settling wait and the check is unchanged. Security runs still check only for settled Ready issues.
+An issue passed over for any reason other than settling never skips an Architect run: one that carries a Claim, has an open blocker or an untrusted edit, is a Ticket inside a Spec, is a Spec with open Tickets but no Startable Ticket, is an all-closed Spec without a resumable Spec branch, or is a Base fix's issue, among the rest of the rule. Those get their lines on stderr all the same, and the Architect run goes on. With `pickup.wait_minutes = 0`, there is no settling wait and the check is unchanged. Security runs still check only for settled Ready issues.
 
 The rule doesn't ask whether anything will take the Ready issue. A `ready-for-agent` issue that you mean to run by hand, on a repository with no Pickup line in its crontab, keeps every Architect run on it from starting until you run it, which makes the Claim, or take the label off.
 
@@ -3743,9 +3757,9 @@ A Ready issue is an open issue that:
 - is not labelled `base-fix` or `security-fix`: the Ticket run that opened a [Base fix](#base-fix)'s issue, or the Security run that dispatched a fix, owns it. A failed Security fix is still passed over if GitHub prevented its Claim from being made;
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
 - either was never started (no **Issue branch** on `origin` and no pull request from one, open, merged or closed), or you handed it back by applying `ready-for-agent` at or after its last [Claim](#the-claim) ended. A Spec whose Spec run ended only waiting is handed back by thirdshift the same way, unless its title or body was edited by an account that is not a Trusted account. For started work, the full label history must show an earlier `in-progress` application and its removal, with `ready-for-agent` applied at that removal's timestamp or later. A swap made in one edit counts in either listed order; a new Claim applied at the same timestamp leaves the issue Claimed. Work never Claimed, or without that hand-back, stays with you. An eligible branch with no PR or an open PR follows the existing [Continuation](#continuation) rule; merged or closed PRs follow ADR 0002 and start a fresh numbered branch. This is deliberate hand-back, not automatic retries;
-- is not a **Spec** whose **Tickets** are all closed. With nothing started on it, such a Spec was done some other way, and the [Spec run](#spec-runs) it would be dispatched as stops with nothing to do, so a Pickup run passes it over rather than take it on every pass. Waiting never makes it a Ready issue, so this comes before the next condition, however lately the Spec was labelled: close it, or take its `ready-for-agent` off. A Spec with at least one open Ticket is taken if it meets the conditions below;
+- if it is a **Spec** whose **Tickets** are all closed, its Spec run can continue its Spec branch on `origin` under [ADR-0002](adr/0002-existing-issue-branch-means-continue.md): the latest numbered branch is present, with no PR or an open PR. The dispatched Spec run goes straight to the Spec review and the Spec PR's Delivery and Repair loop, without running a Ticket again. A PR without its branch, or a retained branch whose latest PR is closed or merged, does not qualify. Without a resumable branch, waiting never makes it a Ready issue: close it, or take its `ready-for-agent` off;
 - is settled: by default, five minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and `pickup.wait_minutes` in the [User config](#user-config) sets the window in whole minutes from 0 up, within the supported duration range; 0 disables waiting. An Architect run also waits for an issue that meets every other Ready issue condition while it is settling. A later pass takes the issue once it has settled;
-- if it is a **Spec**, has a **Startable Ticket**: an open Ticket in the Spec's repository, with no sub-issues, no open blocker and none of the labels that make an Unready Ticket. That is the rule a [Spec run](#spec-runs) picks its next Ticket by, as if nothing were running yet, so a Spec whose open Tickets all wait on you, such as one whose last open Ticket is `needs-info`, is passed over rather than Claimed for a Spec run that could start nothing and would fail. This applies to a Spec handed back with `ready-for-agent` too. A Spec with one Startable Ticket is taken, and the Spec run handles its other Tickets as usual. Once a Ticket becomes startable, because its Unready label comes off or its blocker closes, a later pass takes the Spec. Its Tickets are read only for a Spec that meets every other condition.
+- if it is a **Spec** with open Tickets, has a **Startable Ticket**: an open Ticket in the Spec's repository, with no sub-issues, no open blocker and none of the labels that make an Unready Ticket. That is the rule a [Spec run](#spec-runs) picks its next Ticket by, as if nothing were running yet, so a Spec whose open Tickets all wait on you, such as one whose last open Ticket is `needs-info`, is passed over rather than Claimed for a Spec run that could start nothing and would fail. This applies to a Spec handed back with `ready-for-agent` too. A Spec with one Startable Ticket is taken, and the Spec run handles its other Tickets as usual. Once a Ticket becomes startable, because its Unready label comes off or its blocker closes, a later pass takes the Spec. Its Tickets are read only for a Spec that meets every other condition.
 
 A Pickup run:
 
@@ -3823,7 +3837,7 @@ thirdshift: 03:00:09 #38 has no Ticket that can start: #39 labelled needs-info; 
 thirdshift: 03:00:09 no Ready issue on acme/widgets
 ```
 
-A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed`, and one with no Startable Ticket with `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
+A line with `blocked by` names every open blocker. A Ticket's line names its Spec: the Ticket runs when its Spec does. A Ticket whose Spec is a Ready issue gets no line: its Spec is taken, by this pass or a later one. A started issue without a recorded hand-back gets the `started` line. Even with a hand-back, a Spec with every Ticket closed is passed over with `every Ticket is closed` unless its latest Spec branch on `origin` can be continued, with no PR or an open PR. A Spec whose later Ticket read is empty is still passed over. One with open Tickets but no Startable Ticket gets `has no Ticket that can start`, naming each open Ticket and why it can't start: the Unready label it has, the open issues blocking it, `has sub-issues` or `outside the Spec's repository`. When a later issue is a Ready issue, the lines on the earlier ones are printed and it is taken:
 
 ```
 thirdshift: 03:00:01 Pickup run starting, 2026-10-03 -0400
