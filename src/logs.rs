@@ -277,6 +277,7 @@ const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
+    crate::github::quota::command::begin();
     let mut record = record();
     if matches!(begin, Begin::ChildRun(..)) {
         record.inherit_owner(owner::Owner::inherited());
@@ -284,6 +285,19 @@ pub fn begin(begin: Begin) {
         record.child_dispatch(std::env::var(PARENT_DISPATCH).ok());
     }
     record.begin(begin);
+    drop(record);
+    attach_quota_budget();
+}
+
+fn attach_quota_budget() {
+    if let Ok(owner) = captured_owner()
+        && let Some(path) = owner.log_path()
+        && let Err(error) = crate::github::quota::command::attach(path.into())
+    {
+        crate::progress::step(format!(
+            "warning: could not attach Command quota budget: {error:#}"
+        ));
+    }
 }
 
 /// Give a child Run its exact parent, independently of second-resolution stamps.
@@ -328,6 +342,7 @@ pub(crate) fn pass_fired(repo: &Repo) {
 /// immediate parent, with no Command log of its own.
 pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
+    attach_quota_budget();
 }
 
 /// Capture the Custom process's loaded source before recording its start or skip.
@@ -389,6 +404,11 @@ pub fn issue_title(title: Option<String>) {
 /// Begin a stage, retaining its start time until the next transition.
 pub fn stage(stage: Stage) {
     record().stage(stage, None);
+}
+
+/// Temporarily overlay the active stage without resetting its timing.
+pub(crate) fn quota_wait(until: Option<&str>) {
+    record().quota_wait(until);
 }
 
 /// Keep the current Session trace, including a Resume's own log, as

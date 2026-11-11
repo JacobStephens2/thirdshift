@@ -293,6 +293,35 @@ fn a_stop_request_in_the_file_adapter_is_logged_before_the_ending() {
 }
 
 #[test]
+fn quota_wait_restores_the_previous_stage_without_restarting_its_clock() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    record.stage(StageName::CiWatch, None);
+    let began = memory
+        .command_record()
+        .current_stage()
+        .unwrap()
+        .began_at
+        .clone();
+    record.quota_wait(Some("2026-11-11T12:01:37Z"));
+    let waiting = memory.command_record();
+    assert_eq!(
+        waiting.quota_wait_until.as_deref(),
+        Some("2026-11-11T12:01:37Z")
+    );
+    assert_eq!(waiting.current_stage().unwrap().began_at, began);
+    record.quota_wait(None);
+    let resumed = memory.command_record();
+    assert!(resumed.quota_wait_until.is_none());
+    assert_eq!(resumed.current_stage().unwrap().name, "CI watch");
+    assert_eq!(resumed.current_stage().unwrap().began_at, began);
+    assert_eq!(resumed.stages.len(), 1);
+}
+
+#[test]
 fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
     let memory = Scripted::default();
     memory.0.lock().unwrap().record_write_fails = true;

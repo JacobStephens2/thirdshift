@@ -104,6 +104,8 @@ pub(super) struct CommandRecord {
     #[serde(skip)]
     pub end_time_estimated: bool,
     pub stages: Vec<Stage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_wait_until: Option<String>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
     #[serde(default)]
@@ -441,6 +443,7 @@ impl CommandRecord {
             ended_at: None,
             end_time_estimated: false,
             stages: Vec::new(),
+            quota_wait_until: None,
             session_log: None,
             outcome: None,
             run_metrics: None,

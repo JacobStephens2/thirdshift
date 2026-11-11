@@ -235,6 +235,13 @@ impl RunNotification {
             host.as_deref().unwrap_or("unknown host"),
             self.started.elapsed(),
         );
+        match crate::github::quota::command::notification_line() {
+            Ok(Some(line)) => text += &format!("\n{line}\n"),
+            Ok(None) => {}
+            Err(error) => progress::step(format!(
+                "warning: could not read Command quota waits: {error:#}"
+            )),
+        }
         if account.pre_audit_failure.is_some() {
             text += &format!(
                 "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",

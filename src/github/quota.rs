@@ -1,5 +1,4 @@
-//! Shared machine-local Quota waits. Observing a wait does not yet change how
-//! Passes or running Commands execute.
+//! Shared machine-local Quota waits and running Command recovery.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,15 +6,11 @@ use serde_json::Value;
 
 use super::GitHub;
 
+pub(crate) mod command;
 mod identity;
 mod store;
 #[cfg(test)]
 mod tests;
-// The wait planner is the seam the following Command-wait Ticket consumes.
-#[expect(
-    dead_code,
-    reason = "wait planning is connected to Commands by a later Ticket"
-)]
 pub(crate) mod wait;
 
 pub(crate) use store::QuotaWait;
@@ -151,29 +146,8 @@ impl GitHub {
         self.quota_waits()
     }
 
-    pub(super) fn record_quota_failure(&self, args: &[&str], stderr: &[u8]) -> Result<()> {
-        let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-        if diagnostic.contains("secondary rate limit")
-            || !(diagnostic.contains("api rate limit exceeded")
-                || diagnostic.contains("api rate limit already exceeded")
-                || diagnostic.contains("rate_limit_exceeded")
-                || diagnostic.contains("rate_limited"))
-        {
-            return Ok(());
-        }
-        let resource = if diagnostic.contains("graphql:")
-            || args.starts_with(&["api", "graphql"])
-            || args.first() != Some(&"api")
-                && (diagnostic.contains("rate_limit_exceeded")
-                    || diagnostic.contains("rate_limited"))
-        {
-            Resource::Graphql
-        } else {
-            Resource::Core
-        };
+    pub(super) fn record_quota_failure(&self, args: &[&str], resource: Resource) -> DateTime<Utc> {
         let host = identity::host(args);
-        let store = Store::machine()?;
-        let account = identity::resolve(self, &store, &host)?;
         let now = Utc::now();
         let resource_json = self
             .quota_json(&["api", "rate_limit", "--hostname", &host])
@@ -186,6 +160,48 @@ impl GitHub {
                 .and_then(|reset| DateTime::from_timestamp(reset, 0))
                 .unwrap_or(now + chrono::Duration::minutes(15)),
         };
-        store.exhausted(&account, resource, quota, now)
+        let reset = quota.reset_at;
+        let record = || -> Result<()> {
+            let store = Store::machine()?;
+            let account = identity::resolve(self, &store, &host)?;
+            store.exhausted(&account, resource, quota, now)
+        };
+        if record().is_err() {
+            // Recording failure must not prevent waiting or hide the original
+            // GitHub diagnostic if the Command reaches its wait cap.
+            crate::progress::step("warning: could not record GitHub Quota wait");
+        }
+        reset
+    }
+}
+
+pub(super) enum Limit {
+    Primary(Resource),
+    Secondary,
+}
+
+impl Limit {
+    pub(super) fn of(args: &[&str], stderr: &[u8]) -> Option<Self> {
+        let diagnostic = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+        if diagnostic.contains("secondary rate limit") || diagnostic.contains("abuse detection") {
+            return Some(Self::Secondary);
+        }
+        if !(diagnostic.contains("api rate limit exceeded")
+            || diagnostic.contains("api rate limit already exceeded")
+            || diagnostic.contains("rate_limit_exceeded")
+            || diagnostic.contains("rate_limited"))
+        {
+            return None;
+        }
+        let graphql = diagnostic.contains("graphql:")
+            || args.starts_with(&["api", "graphql"])
+            || args.first() != Some(&"api")
+                && (diagnostic.contains("rate_limit_exceeded")
+                    || diagnostic.contains("rate_limited"));
+        Some(Self::Primary(if graphql {
+            Resource::Graphql
+        } else {
+            Resource::Core
+        }))
     }
 }

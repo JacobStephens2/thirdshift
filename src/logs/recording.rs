@@ -481,6 +481,13 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    pub(super) fn quota_wait(&mut self, until: Option<&str>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().quota_wait_until = until.map(str::to_owned);
+            self.write_record();
+        }
+    }
+
     pub(super) fn unaddressed_findings(
         &mut self,
         counts: Option<crate::pull_request::UnaddressedFindings>,
