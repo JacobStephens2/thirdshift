@@ -1243,19 +1243,7 @@ fn a_changed_pr_stops_before_posting_recommendations() {
                 "Later author commit",
             );
         } else {
-            let mut state = scenario.gh_state();
-            match changed {
-                "retarget" => state["prs"][0]["base"] = json!("colleague"),
-                "branch" => {
-                    scenario.origin_has_branch("renamed", "colleague", &[]);
-                    state["prs"][0]["head"] = json!("renamed");
-                }
-                "closed" => state["prs"][0]["state"] = json!("CLOSED"),
-                "merged" => state["prs"][0]["state"] = json!("MERGED"),
-                "draft" => state["prs"][0]["isDraft"] = json!(true),
-                _ => unreachable!(),
-            }
-            scenario.write_gh_state(&state);
+            change_review_target(&scenario, changed);
         }
         std::fs::write(release, "").unwrap();
         let result = held.finish();
@@ -1279,6 +1267,22 @@ fn a_changed_pr_stops_before_posting_recommendations() {
     }
 }
 
+fn change_review_target(scenario: &Scenario, change: &str) {
+    let mut state = scenario.gh_state();
+    match change {
+        "retarget" => state["prs"][0]["base"] = json!("colleague"),
+        "branch" => {
+            scenario.origin_has_branch("renamed", "colleague", &[]);
+            state["prs"][0]["head"] = json!("renamed");
+        }
+        "closed" => state["prs"][0]["state"] = json!("CLOSED"),
+        "merged" => state["prs"][0]["state"] = json!("MERGED"),
+        "draft" => state["prs"][0]["isDraft"] = json!(true),
+        _ => unreachable!(),
+    }
+    scenario.write_gh_state(&state);
+}
+
 #[test]
 fn address_mode_reports_a_moved_head_but_stops_publication_after_branch_or_eligibility_changes() {
     for changed in ["head", "retarget", "branch", "closed", "merged", "draft"] {
@@ -1297,21 +1301,7 @@ fn address_mode_reports_a_moved_head_but_stops_publication_after_branch_or_eligi
                 "Author work",
                 "Later author commit",
             ),
-            _ => {
-                let mut state = scenario.gh_state();
-                match changed {
-                    "retarget" => state["prs"][0]["base"] = json!("colleague"),
-                    "branch" => {
-                        scenario.origin_has_branch("renamed", "colleague", &[]);
-                        state["prs"][0]["head"] = json!("renamed");
-                    }
-                    "closed" => state["prs"][0]["state"] = json!("CLOSED"),
-                    "merged" => state["prs"][0]["state"] = json!("MERGED"),
-                    "draft" => state["prs"][0]["isDraft"] = json!(true),
-                    _ => unreachable!(),
-                }
-                scenario.write_gh_state(&state);
-            }
+            _ => change_review_target(&scenario, changed),
         }
         std::fs::write(release, "").unwrap();
         let result = held.finish();
