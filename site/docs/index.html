@@ -380,6 +380,7 @@ thirdshift metrics --from 2026-10-05 --through 2026-10-19 --repo acme/widgets --
 </code></pre>
 <p>Open the localhost address it prints. The Console shows the same Inbox as <code>thirdshift status</code>, with live stages, logs and Session traces. It opens on Overview, showing Needs you, Ready for review, Landing and Working together under labeled headings with counts. The folders beside the one-line rows filter to an individual section; <code>/?section=done</code> opens Done and <code>/?section=overview</code> returns to Overview. Hidden sections stay hidden in Overview, and these views work without JavaScript. A clicked row&#39;s Command details open alongside on a wide screen. Ended rows show their relative age, with the recorded finish in this machine&#39;s time zone on hover, or in full without JavaScript, for example <strong>Ended 2026-10-23 19:03 EDT · 52 min ago</strong>. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command&#39;s own finish time; missing or invalid finish times say <strong>End time unknown</strong>. The finish information also works without JavaScript. With <code>run</code>, use <strong>Start work</strong> on Inbox or <strong>Run now</strong> on Cron jobs to request a Command with confirmation. The Console starts work only when asked; the CLI and operating system&#39;s scheduler remain available too.</p>
 <p>Click the serving machine&#39;s name in the Console header to return to Overview (<code>/?section=overview</code>) from another page or section, clearing any machine filter.</p>
+<p>Live Fix runs and Review runs show a clickable <strong>PR #number</strong> beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected <strong>Base branch</strong> before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.</p>
 <p>Specs with recorded Tickets show a count such as <strong>2 / 5 Tickets complete</strong> on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine&#39;s last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.</p>
 <p>Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.</p>
 <p>Command details shows the last five lines of recent Command output above <strong>Full Command log</strong>, updating as output arrives. It reads at most 4 KiB, so a long log stays a small preview. This helps assess a Slow run without leaving its details. Empty or unavailable logs say so; the full-log link stays available.</p>
@@ -3128,8 +3129,12 @@ restricts selection to that account, which must itself be trusted. Neither
 <code>base</code> nor <code>author</code> can be combined with a targeted PR.</p>
 <p>Without <code>--author</code>, the Pass first checks the selected Base branch&#39;s tip on
 <code>origin</code>. A failed first push-workflow attempt with failed jobs gets one
-failed-jobs re-run; the Pass logs it on stderr and skips while CI runs. Pending
-Base branch checks, including external checks, also skip before PR selection.
+failed-jobs re-run; the Pass logs it on stderr and continues to PR selection
+without waiting. Pending Base branch checks, including external checks, skip
+only this maintenance step, as does an occupied Base branch CI reservation.
+An existing repair branch or PR also skips only this step. Each maintenance
+skip and its reason appear on stderr and in the repository Activity log,
+including when no eligible PR is found.
 Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
 in a Worktree on <code>fix-&lt;base&gt;-&lt;short-sha&gt;</code>, from that origin tip. Delivery opens
 <code>Fix CI on &lt;base&gt;: &lt;check&gt;[, &lt;check&gt;…]</code> targeting the Base branch, treats every
@@ -3139,7 +3144,9 @@ or failed draft PR, prevents another repair for that commit. An existing repair
 branch also prevents another attempt if PR creation failed. When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
-share the Base branch CI reservation. A successful Self-merge closes open
+share the Base branch CI reservation without holding back unrelated PR fixes.
+A Pass that starts a Base branch CI repair ends with that Run&#39;s outcome.
+A successful Self-merge closes open
 <code>CI red on &lt;base&gt;</code> reports and Base fix issues naming that Base branch.</p>
 <p>The Pass selects the first PR with a Merge conflict or CI red on its current
 head. It skips <code>in-progress</code> PRs, pending CI without a Merge conflict, and

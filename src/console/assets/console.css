@@ -288,6 +288,8 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
 /* A Command name must never push its repository out of view. */
 .row-head > .subject:has(> .subject-command) { min-width: 0; max-width: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .subject-command { display: block; color: var(--dim); }
+.working-target { display: block; overflow-wrap: anywhere; }
+.row-head > .subject:has(.working-target) { white-space: normal; overflow: visible; }
 .machine-filter select { max-width: 100%; }
 .machine-filter, .fleet-machines { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
 .one-line .command > .machine-tag { display: block; padding: 4px 10px 0; font-size: .8em; color: var(--dim); overflow-wrap: anywhere; }
