@@ -21,7 +21,7 @@
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
   {% if !page.consoles.is_empty() %}{% include "console/machine_controls.html" %}{% endif %}
-  {% if let Some(start) = start %}{% include "console/start_form.html" %}{% include "console/start_confirm.html" %}{% endif %}
+  <div id="inbox-start">{% if let Some(start) = start %}{% include "console/start_form.html" %}{% include "console/start_confirm.html" %}{% endif %}</div>
   <main {% if title == "Inbox" %}id="inbox" class="one-line"{% else if archive.is_some() %}class="one-line"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
