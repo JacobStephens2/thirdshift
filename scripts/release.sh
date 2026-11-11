@@ -105,6 +105,12 @@ main() {
 	with_experiment=
 	fix_attempted=
 	head_updates=0
+	# Notes claim captured before a yield, and the base this process measured.
+	# A PR body edit must not count as an Experiment of a base we have not run.
+	release_notes_known=
+	release_notes_base=
+	release_notes_refresh=
+	experimented_base=
 	while :; do
 		case ${1-} in
 		--review) review=1 ;;
@@ -157,7 +163,12 @@ main() {
 	OPEN)
 		progress "resuming: $url is open"
 		recut_untagged_bump
-		if [ -z "$tagged" ] && [ -z "$recut" ]; then wait_for_experiment "$(release_content_base)"; fi
+		if [ -z "$tagged" ] && [ -z "$recut" ]; then
+			# The Experiment yields. Snapshot the notes claim first so a body
+			# edit during it cannot name a base this process has not measured.
+			remember_notes_claim
+			wait_for_experiment "$(release_content_base)"
+		fi
 		;;
 	MERGED)
 		progress "resuming: $url was merged as ${merge:0:7}"
@@ -442,6 +453,8 @@ saved_candidate_is_current() {
 # wait_for_experiment <content commit>
 # Use this checkout's runner and private Eval suites, as for summary_agent.
 wait_for_experiment() {
+	# Including the skip path: adoption must not treat an unmeasured base as covered.
+	experimented_base=$1
 	local snapshot status outcome id answer previous
 	local baseline_args=()
 	if [ -z "$with_experiment" ]; then
@@ -522,16 +535,45 @@ open_pr() {
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
 		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
+	remember_written_notes
 }
 
 # The subshell owns the temporary PR body even if gh fails.
-edit_pr() (
+edit_pr() {
+	edit_pr_file
+	remember_written_notes
+}
+
+edit_pr_file() (
 	local body_file
 	body_file=$(mktemp)
 	trap 'rm -f "$body_file"' EXIT
 	pr_body "$summary" "$diff" >"$body_file"
 	gh pr edit "$url" --body-file "$body_file" >/dev/null
 )
+
+# Snapshot the PR's notes claim before a yield. Reading the marker again
+# after the Experiment returns would let a body edit name an unmeasured base.
+remember_notes_claim() {
+	local notes_ref=refs/thirdshift/release-notes/$version
+	observe_release_pr
+	if [ "$observed_notes_base" = - ]; then
+		release_notes_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
+		# Without a marker the notes may predate this script/checkout.
+		release_notes_refresh=1
+	else
+		release_notes_base=$observed_notes_base
+		release_notes_refresh=
+	fi
+	release_notes_known=1
+}
+
+# Notes this process just wrote. Do not re-read the body for that claim.
+remember_written_notes() {
+	release_notes_known=1
+	release_notes_base=$summary_base
+	release_notes_refresh=
+}
 
 # wait_for_pr_checks
 # Observe this PR throughout CI. One targeted Fix run shares Delivery's Repair
@@ -540,16 +582,23 @@ wait_for_pr_checks() {
 	local runs failed content_base next_base refresh_notes= startup=$SECONDS
 	local notes_ref=refs/thirdshift/release-notes/$version
 	[[ "$workflow_startup_seconds" =~ ^[0-9]+$ ]] || refuse "RELEASE_WORKFLOW_STARTUP_SECONDS must be a nonnegative integer"
-	observe_release_pr
-	content_base=$observed_notes_base
-	if [ "$content_base" = - ]; then
-		# Older PR bodies lack the marker. Remember their starting content
-		# before Fix can push and then fail, so rerunning still detects it.
-		content_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
-		# Without a marker the notes may predate this script/checkout. The
-		# current head alone cannot establish what their summary describes.
-		refresh_notes=1
+	if [ -n "$release_notes_known" ]; then
+		content_base=$release_notes_base
+		refresh_notes=$release_notes_refresh
+	else
+		observe_release_pr
+		content_base=$observed_notes_base
+		if [ "$content_base" = - ]; then
+			# Older PR bodies lack the marker. Remember their starting content
+			# before Fix can push and then fail, so rerunning still detects it.
+			content_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
+			# Without a marker the notes may predate this script/checkout. The
+			# current head alone cannot establish what their summary describes.
+			refresh_notes=1
+		fi
 	fi
+	# A path that has not called wait_for_experiment has not measured another base.
+	if [ -z "$experimented_base" ]; then experimented_base=$content_base; fi
 	git update-ref "$notes_ref" "$content_base"
 	progress "waiting for CI on $url"
 	while :; do
@@ -563,8 +612,13 @@ wait_for_pr_checks() {
 			fetch_main
 			validate_bump_pr
 			next_base=$(git merge-base "$head" origin/main)
-			if [ "$next_base" != "$content_base" ]; then
+			# Measure a base this process has not run. Refresh notes when the
+			# snapshotted claim is a different base, even if a body edit now
+			# names the one we are adopting.
+			if [ "$next_base" != "$experimented_base" ]; then
 				wait_for_experiment "$next_base"
+			fi
+			if [ "$next_base" != "$content_base" ]; then
 				refresh_notes=1
 			fi
 			content_base=$next_base

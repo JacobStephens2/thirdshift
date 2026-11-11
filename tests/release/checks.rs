@@ -487,6 +487,120 @@ fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
 }
 
+/// The Experiment is a yield: the cargo stand-in moves the release branch to
+/// an exact bump of newer main and rewrites the notes marker to that base
+/// before the script observes the pull request again.
+fn forge_new_base_during_experiment(release: &Release, repaired: &str, new_base: &str) {
+    let driver = release.bin().join("cargo-driver");
+    if !driver.exists() {
+        fs::copy(release.bin().join("cargo"), &driver).unwrap();
+    }
+    let body = format!("Old release notes\n<!-- release-content-base: {new_base} -->");
+    fs::write(
+        release.root().join("during-experiment.sh"),
+        format!(
+            r#"set -euo pipefail
+git --git-dir="${{FAKE_GH_STATE%/*}}/origin.git" update-ref refs/heads/release-0.2.0 {repaired}
+gh fake pr release-0.2.0 mergeable '"MERGEABLE"'
+gh fake pr release-0.2.0 body '{body}'
+gh fake checks {repaired} '[{{"name": "test", "conclusion": "success"}}]'
+"#,
+            repaired = repaired,
+            body = serde_json::to_string(&body).unwrap(),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        release.root().join("experiment-views.json"),
+        json!([experiments::verdict("pass"), experiments::verdict("pass")]).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        release.bin().join("cargo"),
+        r#"#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[sys.argv.index('--') + 1:]
+root = pathlib.Path(os.environ['FAKE_GH_STATE']).parent
+if args == ['--release-summary'] or args[:1] == ['fix']:
+    driver = str(root / 'bin/cargo-driver')
+    os.execv(driver, [driver, *sys.argv[1:]])
+branch = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/release-0.2.0'], text=True).strip()
+with (root / 'experiment-calls.jsonl').open('a') as calls:
+    calls.write(json.dumps(dict(args=args, branch=branch)) + '\n')
+marker = root / 'experiment-mutated'
+if not marker.exists():
+    marker.write_text('1')
+    subprocess.check_call(['bash', str(root / 'during-experiment.sh')])
+views = root / 'experiment-views.json'
+remaining = json.loads(views.read_text())
+assert remaining, 'unexpected Experiment call'
+view = remaining.pop(0)
+views.write_text(json.dumps(remaining))
+print(json.dumps(view))
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_base_change_during_the_experiment_is_measured_before_tagging() {
+    let release = Release::new();
+    let (old, repaired) = conflicted_bump(&release);
+    let old_base = release.origin(&["rev-parse", &format!("{old}^")]);
+    let new_base = release.origin(&["rev-parse", "main"]);
+    assert_ne!(old_base, new_base);
+    set_pr(
+        &release,
+        "body",
+        json!(format!(
+            "Old release notes\n<!-- release-content-base: {old_base} -->"
+        )),
+    );
+    set_pr(&release, "mergeable", json!("MERGEABLE"));
+    release.gh(&[
+        "fake",
+        "checks",
+        &old,
+        r#"[{"name": "test", "conclusion": "success"}]"#,
+    ]);
+    forge_new_base_during_experiment(&release, &repaired, &new_base);
+
+    let output = run(&release, &["--with-experiment", "0.2.0"], &[]);
+
+    let tag = release.origin_tag("v0.2.0");
+    let calls = experiments::calls(&release);
+    let measured: Vec<&str> = calls
+        .iter()
+        .filter_map(|call| call["args"].get(2).and_then(Value::as_str))
+        .collect();
+    // The hook rewrote the marker. Publishing that head anyway requires a
+    // measurement of its base and notes that describe the new diff.
+    assert!(
+        release
+            .pr_body("release-0.2.0")
+            .contains(&format!("release-content-base: {new_base}"))
+            || measured.contains(&new_base.as_str()),
+        "experiment hook did not run: {}\n{}",
+        release.pr_body("release-0.2.0"),
+        stderr(&output)
+    );
+    if tag.as_deref() == Some(repaired.as_str()) {
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            measured.contains(&new_base.as_str()),
+            "tagged {repaired} under an experiment for {old_base}, not {new_base}: {measured:?}\n{}",
+            stderr(&output)
+        );
+        assert!(
+            release
+                .pr_body("release-0.2.0")
+                .contains("-version = \"0.1.1\""),
+            "published repaired content with the pre-change notes: {}",
+            release.pr_body("release-0.2.0")
+        );
+    }
+}
+
 #[test]
 fn an_unmarked_legacy_pr_repaired_before_resume_refreshes_its_notes() {
     let release = Release::new();
