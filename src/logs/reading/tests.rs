@@ -67,6 +67,39 @@ fn retained_pull_request_lookup_orders_instants_across_offsets() {
 }
 
 #[test]
+fn quota_wait_keeps_slow_timing_on_the_underlying_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    for number in 1..=8 {
+        let mut past = record(number);
+        past["outcome"] = "ready for review".into();
+        past["ended_at"] = "2026-10-19T11:01:00-04:00".into();
+        past["stages"] = json!([{"name":"CI watch", "began_at":"2026-10-19T11:00:00-04:00", "session_log":null}]);
+        write(dir.path(), &format!("{number}-past.command.json"), &past);
+    }
+    let mut live = record(9);
+    live["stages"] =
+        json!([{"name":"CI watch", "began_at":"2026-10-19T11:30:00-04:00", "session_log":null}]);
+    live["quota_wait_until"] = "2026-10-19T12:01:37-04:00".into();
+    write(dir.path(), "9-live.command.json", &live);
+    fs::write(
+        dir.path().join("acme/widgets/commands/issue/9-live.log"),
+        "still waiting\n",
+    )
+    .unwrap();
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    let selected = snapshot.resolve("widgets#9").unwrap();
+    let Observation::Record(command) = selected.observation else {
+        panic!("record-backed Command")
+    };
+    assert_eq!(
+        command.stage.as_ref().unwrap().name,
+        "Quota wait until 2026-10-19T12:01:37-04:00"
+    );
+    assert_eq!(command.stage.as_ref().unwrap().age_seconds, 1800);
+    assert!(matches!(command.health, Some(health::Health::Slow { .. })));
+}
+
+#[test]
 fn direct_run_selection_captures_its_owner_and_reloads_retained_work() {
     let dir = tempfile::tempdir().unwrap();
     let path = write(

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::reading::Snapshot;
 use crate::config::UserConfig;
-use crate::github::{GitHub, InboxState, IssueState, PullRequestState, Quotas};
+use crate::github::{GitHub, InboxState, IssueState, PullRequestState, QuotaWait};
 
 /// How long `status` reuses the kept answer before reading GitHub again.
 pub const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
@@ -60,8 +60,6 @@ struct File {
     answered_at: BTreeMap<String, String>,
     #[serde(default)]
     failure: Option<String>,
-    #[serde(default)]
-    quotas: Option<Quotas>,
     /// The warning at the last refresh, so crossing the age threshold
     /// wakes pages even when the facts and failure are unchanged.
     #[serde(default)]
@@ -81,7 +79,7 @@ pub struct Kept {
     pub age: Option<Duration>,
     last_answered: Option<DateTime<Utc>>,
     pub failure: Option<String>,
-    quotas: Option<Quotas>,
+    waits: Vec<QuotaWait>,
 }
 
 /// The exact kept facts for a row, including dispatched work and private
@@ -185,9 +183,13 @@ impl Kept {
             .map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true))
     }
 
+    pub fn quota_wait(&self) -> Option<String> {
+        QuotaWait::pass_reason(&self.waits)
+    }
+
     pub fn warning(&self) -> Option<String> {
         let mut reasons = Vec::new();
-        if let Some(reason) = self.quotas.as_ref().and_then(Quotas::warning) {
+        if let Some(reason) = QuotaWait::warning(&self.waits) {
             reasons.push(reason);
         }
         if self.age.is_none_or(|age| age > FRESH_FOR)
@@ -208,10 +210,23 @@ impl Kept {
         })
     }
 
-    /// An open Inbox must also learn when a failed answer becomes stale.
+    /// An open Inbox must learn when an answer becomes stale or a Quota wait resets.
     pub fn next_warning_change(&self) -> Option<Duration> {
-        let age = self.age?;
-        (age <= FRESH_FOR).then(|| FRESH_FOR - age + Duration::from_millis(1))
+        let freshness = self
+            .age
+            .and_then(|age| (age <= FRESH_FOR).then(|| FRESH_FOR - age + Duration::from_millis(1)));
+        let now = Utc::now();
+        let reset = self
+            .waits
+            .iter()
+            .filter_map(|wait| {
+                (wait.reset_at() - now)
+                    .to_std()
+                    .ok()
+                    .filter(|delay| !delay.is_zero())
+            })
+            .min();
+        freshness.into_iter().chain(reset).min()
     }
 
     fn state(&self, row: &str, url: &str) -> Option<&InboxState> {
@@ -306,10 +321,13 @@ pub fn load(logs_dir: &Path) -> Kept {
                 age: modified.and_then(|at| at.elapsed().ok()),
                 last_answered: modified.map(DateTime::from),
                 failure: file.failure,
-                quotas: file.quotas,
+                waits: GitHub::new().quota_waits().unwrap_or_default(),
             }
         }
-        None => Kept::default(),
+        None => Kept {
+            waits: GitHub::new().quota_waits().unwrap_or_default(),
+            ..Kept::default()
+        },
     }
 }
 
@@ -360,16 +378,20 @@ pub(super) fn refresh(
     }
     let subjects = &work.subjects;
     let findings = &work.findings;
-    if kept.age.is_some_and(|age| age < fresh_for)
-        || !work.has_remote_reads()
-        || kept.quotas.as_ref().and_then(Quotas::warning).is_some()
-    {
+    if QuotaWait::warning(&kept.waits).is_some() {
+        // A factory call may have learned this wait outside the Inbox. Keep
+        // the warning marker in sync so open pages learn about it too.
+        save(&config.logs_dir, &kept, false)?;
+        return Ok(kept);
+    }
+    if kept.age.is_some_and(|age| age < fresh_for) || !work.has_remote_reads() {
         return Ok(kept);
     }
     let github = GitHub::new();
     match github.inbox_quotas() {
-        Ok(quotas) => kept.quotas = Some(quotas),
+        Ok(waits) => kept.waits = waits,
         Err(error) => {
+            kept.waits = github.quota_waits().unwrap_or_default();
             kept.failure = Some(format!("{error:#}"));
             save(&config.logs_dir, &kept, false)?;
             return Ok(kept);
@@ -378,12 +400,12 @@ pub(super) fn refresh(
     let mut answered = false;
     let mut read_failed = false;
     for chunk in subjects.chunks(100) {
-        if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
+        if QuotaWait::warning(&kept.waits).is_some() {
             break;
         }
         let urls: Vec<_> = chunk.iter().map(|subject| subject.url.clone()).collect();
         match github.inbox_states(&urls) {
-            Ok((states, quota)) => {
+            Ok(states) => {
                 let answered_at = Utc::now().to_rfc3339();
                 for subject in chunk {
                     let url = &subject.url;
@@ -406,13 +428,11 @@ pub(super) fn refresh(
                     kept.states.insert(url.clone(), state);
                     kept.answered_at.insert(url.clone(), answered_at.clone());
                 }
-                kept.quotas
-                    .as_mut()
-                    .expect("quotas read before rows")
-                    .graphql = quota;
+                kept.waits = github.quota_waits()?;
                 answered = true;
             }
             Err(error) => {
+                kept.waits = github.quota_waits().unwrap_or_default();
                 kept.failure = Some(format!("{error:#}"));
                 read_failed = true;
                 break;
@@ -427,7 +447,7 @@ pub(super) fn refresh(
             .push(subject);
     }
     for (repository, subjects) in repositories {
-        if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
+        if QuotaWait::warning(&kept.waits).is_some() {
             break;
         }
         // One record must not choose the request path or fail every other read.
@@ -472,8 +492,8 @@ pub(super) fn refresh(
             Err(error) => {
                 kept.failure = Some(format!("{error:#}"));
                 read_failed = true;
-                if let Ok(quotas) = github.inbox_quotas() {
-                    kept.quotas = Some(quotas);
+                if let Ok(waits) = github.inbox_quotas() {
+                    kept.waits = waits;
                 }
                 break;
             }
@@ -481,8 +501,9 @@ pub(super) fn refresh(
         // Includes every paginated request and private-storage discovery, so
         // another repository cannot start a list on an exhausted reserve.
         match github.inbox_quotas() {
-            Ok(quotas) => kept.quotas = Some(quotas),
+            Ok(waits) => kept.waits = waits,
             Err(error) => {
+                kept.waits = github.quota_waits().unwrap_or_default();
                 kept.failure = Some(format!("{error:#}"));
                 read_failed = true;
                 break;
@@ -510,7 +531,6 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         findings: kept.findings.clone(),
         answered_at: kept.answered_at.clone(),
         failure: kept.failure.clone(),
-        quotas: kept.quotas.clone(),
         warning: kept.warning(),
     };
     let bytes = serde_json::to_vec(&file)?;

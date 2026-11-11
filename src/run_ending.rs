@@ -586,10 +586,15 @@ impl Shown {
         match &account.ended {
             // Also on stderr, so the outcome shows even when stdout is captured.
             Ok(line) => steps.push(line.clone()),
-            Err(cause) => steps.push(cause.full().to_string()),
+            Err(cause) => steps.push(
+                account
+                    .pre_audit_failure
+                    .unwrap_or_else(|| cause.full())
+                    .to_string(),
+            ),
         }
         steps.extend(account.advice.iter().map(Advice::to_string));
-        if account.ended.is_err() {
+        if account.ended.is_err() && account.pre_audit_failure.is_none() {
             if let Some(log) = account.log {
                 steps.push(format!("{SESSION_LOG}{}", log.display()));
             }

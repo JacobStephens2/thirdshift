@@ -912,11 +912,8 @@ pub(super) fn run_issue_branch(
         }
     };
     let mut held = Some(checkout);
-    // Session traces ask for the log root, which exists once this command is
-    // configured. The Command record stays the Process; the traces are named
-    // for the issue.
-    logs::begin(Begin::Process { name, pass: false });
-    logs::configured(config);
+    // Recording began before preflight GitHub reads. The Command record
+    // stays the Process; the Session traces are named for the issue.
     if let Some(made) = &mut claim.claim {
         made.capture_private_reports();
     }

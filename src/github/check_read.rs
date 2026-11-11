@@ -45,10 +45,7 @@ pub(crate) fn is_transient(error: &anyhow::Error) -> bool {
     let stderr = failure.stderr.trim().to_ascii_lowercase();
     // Quota exhaustion belongs to quota-aware deferral, not a short retry.
     // gh can report GraphQL quota errors with or without an HTTP status.
-    if stderr.contains("api rate limit")
-        || stderr.contains("rate_limited")
-        || stderr.contains("rate_limit_exceeded")
-    {
+    if super::quota::Limit::of(&[], stderr.as_bytes()).is_some() {
         return false;
     }
     // gh reports HTTP status in stderr. Prefer it to incidental prose, so

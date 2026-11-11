@@ -4073,11 +4073,19 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             github["failing_stderr"] = json!(format!(
                 "{diagnostic} token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
             ));
+            // Admit the Pass, then report a reset beyond the Command's cap
+            // to reach the failure path whose notification privacy this checks.
+            github["next_rate_limits"] = json!({
+                "core": {"remaining": 0, "reset": 4102444800u64},
+                "graphql": {"remaining": 0, "reset": 4102444800u64}
+            });
             scenario.write_gh_state(&github);
             let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let mut env = resend_env(&resend).to_vec();
+            env.push(("THIRDSHIFT_QUOTA_MINUTE_MS", "1"));
             let result = scenario.run_with_env(
                 &["secure", "harness", "codex", "email", "me@example.com"],
-                &resend_env(&resend),
+                &env,
             );
             assert_eq!(result.code, Some(1), "{}", result.stderr);
             assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
@@ -4147,6 +4155,116 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             }
         }
     }
+}
+
+/// A within-cap Quota wait creates the Command record before pre-audit work
+/// finishes. The raw GitHub diagnostic still must not reach the Run
+/// notification, the Command log or the Command record: those outlive the
+/// process, and the notification is sent through a third party.
+#[test]
+fn within_cap_quota_wait_keeps_pre_audit_github_diagnostics_local() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(&format!(
+        "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
+        scenario.path("custom-logs")
+    ));
+    let call = "api --paginate --jq .[] repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100";
+    scenario.gh_fails(call);
+    let reset = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3;
+    let mut github = scenario.gh_state();
+    let private = "for user ID PRIVATE-IDENTIFIER. token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic.";
+    github["fail_next"] = json!({
+        "call": call, "times": 1,
+        "error": format!("GraphQL: API rate limit already exceeded {private}")
+    });
+    github["failing_stderr"] = json!(format!("API rate limit exceeded {private}"));
+    // Both reserves admit the Pass. GraphQL exhaustion waits within the cap;
+    // the retry exhausts REST past the cap and keeps its original diagnostic.
+    github["rate_limits"] = json!({
+        "core": {"remaining": 5000, "reset": 4102444800u64},
+        "graphql": {"remaining": 5000, "reset": reset}
+    });
+    scenario.write_gh_state(&github);
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let mut env = resend_env(&resend).to_vec();
+    env.push(("THIRDSHIFT_QUOTA_MINUTE_MS", "1"));
+    let result = scenario.run_with_env(
+        &["secure", "harness", "codex", "email", "me@example.com"],
+        &env,
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Quota wait until"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("PRIVATE-CREDENTIAL"),
+        "the operator's stderr keeps the diagnostic: {}",
+        result.stderr
+    );
+    for root in ["custom-logs", "home/.thirdshift/logs"] {
+        let root = scenario.path(root);
+        if !root.exists() {
+            continue;
+        }
+        for body in log_bodies(&root) {
+            for private in [
+                "PRIVATE-IDENTIFIER",
+                "PRIVATE-CREDENTIAL",
+                "Private candidate write-up.",
+                "Private provider/verifier diagnostic.",
+            ] {
+                assert!(
+                    !body.contains(private),
+                    "{private} was stored under {}: {body}",
+                    root.display()
+                );
+            }
+        }
+    }
+    let (_subject, text) = the_one_notification(&resend);
+    assert!(
+        text.contains("Cause:        GitHub rate-limit exhaustion"),
+        "{text}"
+    );
+    for private in [
+        "PRIVATE-IDENTIFIER",
+        "PRIVATE-CREDENTIAL",
+        "Private candidate write-up.",
+        "Private provider/verifier diagnostic.",
+        "Command log:",
+        "token=",
+    ] {
+        assert!(
+            !text.contains(private),
+            "{private} reached the notification: {text}"
+        );
+    }
+}
+
+fn log_bodies(root: &std::path::Path) -> Vec<String> {
+    let mut bodies = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(bytes) = fs::read(&path) {
+                bodies.push(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+    }
+    bodies
 }
 
 fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) {
