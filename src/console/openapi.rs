@@ -535,7 +535,7 @@ fn span() -> Value {
 
 fn experiment() -> Value {
     object(json!({
-        "format": {"type": "integer", "const": 10}, "id": {"type": "string"},
+        "format": {"type": "integer", "const": 11}, "id": {"type": "string"},
         "name": {"type": "string"}, "state": {"type": "string"}, "created_at": {"type": "string"},
         "tasks": array(json!({"type": "object"})), "results": array(json!({"type": "object"})),
         "sessions": array(json!({"type": "object"})), "running_trials": array(json!({"type": "object"}))
