@@ -267,7 +267,7 @@ fn api_repeated_completed_experiment_is_successful() {
         &json!({
             "repository":"acme/widgets", "command":"experiment", "experiment": {
                 "candidate":"HEAD", "baseline":"HEAD", "baseline_harness":"claude", "candidate_harness":"codex",
-                "suite":["code-review"], "pass_level":0.95, "fail_level":0.95, "draws":100
+                "suite":["code-review"], "pass_level":0.95, "fail_level":0.95, "draws":100, "no_wait":true
             }
         }),
     );

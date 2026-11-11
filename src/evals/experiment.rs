@@ -2,6 +2,7 @@
 //! recording stays in the ordinary logs; private Eval data stays here.
 
 mod accounting;
+mod coordination;
 mod cost;
 pub(crate) mod deciders;
 mod difficulty;
@@ -422,6 +423,7 @@ pub fn run(options: Options) -> Result<()> {
     let result = (|| {
         experiment.state = State::Running;
         experiment.save()?;
+        coordination::start(&mut experiment, options.no_wait)?;
         logs::stage(logs::Stage::ArmBuilds);
         if experiment.description.prepared.is_none() {
             let description = &experiment.description;
@@ -476,6 +478,8 @@ pub fn run(options: Options) -> Result<()> {
         .as_ref()
         .err()
         .map(|error: &anyhow::Error| format!("{error:#}"));
+    logs::waiting_for(&[]);
+    experiment.details.waiting_for.clear();
     if result.is_err() {
         experiment.state = if interrupt::requested() {
             State::Interrupted
@@ -613,7 +617,9 @@ const PAIR_USAGE: &str = "experiments <id> --pair <pair-id> [--merge <ready|not-
 fn resume_args(mut args: impl Iterator<Item = String>) -> Vec<String> {
     let mut kept = Vec::new();
     while let Some(arg) = args.next() {
-        if arg == "--json" || arg == "--release" || !arg.starts_with("--") {
+        if matches!(arg.as_str(), "--json" | "--release" | "--yes" | "--no-wait")
+            || !arg.starts_with("--")
+        {
             kept.push(arg);
         } else if arg == "--name" {
             args.next();
