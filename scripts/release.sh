@@ -537,7 +537,7 @@ edit_pr() (
 # Observe this PR throughout CI. One targeted Fix run shares Delivery's Repair
 # budget; a second blockage or continued head churn returns to the operator.
 wait_for_pr_checks() {
-	local runs failed content_base next_base startup=$SECONDS
+	local runs failed content_base next_base refresh_notes= startup=$SECONDS
 	local notes_ref=refs/thirdshift/release-notes/$version
 	[[ "$workflow_startup_seconds" =~ ^[0-9]+$ ]] || refuse "RELEASE_WORKFLOW_STARTUP_SECONDS must be a nonnegative integer"
 	observe_release_pr
@@ -546,6 +546,9 @@ wait_for_pr_checks() {
 		# Older PR bodies lack the marker. Remember their starting content
 		# before Fix can push and then fail, so rerunning still detects it.
 		content_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
+		# Without a marker the notes may predate this script/checkout. The
+		# current head alone cannot establish what their summary describes.
+		refresh_notes=1
 	fi
 	git update-ref "$notes_ref" "$content_base"
 	progress "waiting for CI on $url"
@@ -562,15 +565,9 @@ wait_for_pr_checks() {
 			next_base=$(git merge-base "$head" origin/main)
 			if [ "$next_base" != "$content_base" ]; then
 				wait_for_experiment "$next_base"
-				write_summary "no new tag was pushed"
-				# A Harness or Experiment can take time. Check identity again
-				# before editing, and never publish stale notes on a newer head.
-				observe_release_pr
-				if [ "$observed_head" != "$head" ]; then continue; fi
-				edit_pr
+				refresh_notes=1
 			fi
 			content_base=$next_base
-			git update-ref "$notes_ref" "$content_base"
 			startup=$SECONDS
 			progress "adopted $url at ${head:0:7}"
 		fi
@@ -596,6 +593,17 @@ wait_for_pr_checks() {
 				previous=$(last_release_tag)
 				if [ -n "$previous" ] && ! git merge-base --is-ancestor "$previous" "$content_base"; then
 					release_blocked "the content base predates the latest release $previous"
+				fi
+				if [ -n "$refresh_notes" ]; then
+					write_summary "no new tag was pushed"
+					# A Harness can take time; never edit a changed PR or
+					# publish these notes on a newer head.
+					observe_release_pr
+					if [ "$observed_head" != "$head" ]; then continue; fi
+					edit_pr
+					git update-ref "$notes_ref" "$content_base"
+					refresh_notes=
+					continue
 				fi
 				observe_release_pr
 				if [ "$observed_head" = "$head" ] && [ "$observed_mergeable" = MERGEABLE ]; then return; fi

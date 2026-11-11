@@ -2335,7 +2335,14 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
     let pr = release.pr("release-0.2.0");
     assert_eq!(pr["state"], "MERGED");
-    assert_eq!(pr["body"], "Summary from the first run");
+    // A legacy PR without a notes-base marker gets a verified summary once.
+    assert!(pr["body"].as_str().unwrap().contains(AGENT_SUMMARY));
+    assert!(
+        pr["body"]
+            .as_str()
+            .unwrap()
+            .contains("release-content-base:")
+    );
     assert_eq!(release.pr_head("release-0.2.0"), head);
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);

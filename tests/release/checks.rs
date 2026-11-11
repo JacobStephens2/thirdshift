@@ -486,3 +486,27 @@ fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
     assert!(resumed.status.success(), "{}", stderr(&resumed));
     assert_eq!(release.origin_tag("v0.2.0"), Some(head));
 }
+
+#[test]
+fn an_unmarked_legacy_pr_repaired_before_resume_refreshes_its_notes() {
+    let release = Release::new();
+    let (_, repaired) = conflicted_bump(&release);
+    set_pr(
+        &release,
+        "body",
+        json!("Legacy notes: version diff starts at 0.1.0"),
+    );
+    release.origin(&["update-ref", "refs/heads/release-0.2.0", &repaired]);
+    set_pr(&release, "mergeable", json!("MERGEABLE"));
+    release.ci_reports(GREEN);
+    let output = run(&release, &["0.2.0"], &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
+    assert!(
+        release
+            .pr_body("release-0.2.0")
+            .contains("-version = \"0.1.1\""),
+        "Published repaired legacy content with stale release notes: {}",
+        release.pr_body("release-0.2.0")
+    );
+}
