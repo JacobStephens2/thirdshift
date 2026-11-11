@@ -100,12 +100,25 @@ def benchmark(directory):
                                 datetime.fromisoformat(step["started_at"])).total_seconds()
                  for step in job["steps"]
                  if step.get("started_at") and step.get("completed_at")}
+        phases = Counter()
+        phase_names = {
+            "Compile tests": "compilation", "Test inventory": "inventory",
+            "Nextest execution": "test_execution", "Summarize timings": "reporting",
+            "Run Swatinem/rust-cache@v2": "cache_transfer",
+            "Run actions/upload-artifact@v4": "report_transfer",
+            "Run actions/download-artifact@v4": "report_transfer",
+            "Tooling checks": "checks", "Clippy": "checks",
+        }
+        for name, seconds in steps.items():
+            phase = "cleanup" if name.startswith("Post ") else phase_names.get(name, "setup")
+            phases[phase] += seconds
         group["jobs"].append({
             "name": job["name"], "conclusion": job["conclusion"],
             "runner": job["runner_name"],
             "start_delay_seconds": (start - created).total_seconds(),
             "execution_seconds": (end - start).total_seconds(),
-            "end_to_end_seconds": (end - created).total_seconds(), "steps": steps,
+            "end_to_end_seconds": (end - created).total_seconds(),
+            "steps": steps, "phases": dict(phases),
         })
     print("| Runner / partitions | Elapsed seconds incl. start delay | Runner minutes | Results |")
     print("| --- | ---: | ---: | --- |")

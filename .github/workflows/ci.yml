@@ -82,7 +82,7 @@ jobs:
     uses: ./.github/workflows/rust-tests.yml
     with:
       runner: ubuntu-24.04
-      partitions: '[1]'
+      partitions: ${{ github.event_name == 'schedule' && '[1]' || '[1,2,3,4]' }}
       artifact: rust-x86
       checks: true
       nightly: ${{ github.event_name == 'schedule' }}
@@ -106,7 +106,7 @@ jobs:
     uses: ./.github/workflows/rust-tests.yml
     with:
       runner: ubuntu-24.04-arm
-      partitions: '[1]'
+      partitions: ${{ github.event_name == 'schedule' && '[1]' || '[1,2,3,4]' }}
       artifact: rust-arm
       nightly: ${{ github.event_name == 'schedule' }}
       probe: ${{ inputs.probe || 'none' }}

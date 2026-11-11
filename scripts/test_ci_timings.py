@@ -38,6 +38,7 @@ class CiTimings(unittest.TestCase):
             self.assertEqual(group["runner_minutes"], 3)
             self.assertEqual(group["critical_path_seconds"], 140)
             self.assertEqual([job["start_delay_seconds"] for job in group["jobs"]], [10, 20])
+            self.assertEqual(group["jobs"][1]["phases"]["test_execution"], 120)
 
     def test_actual_workflow_gates_reject_failed_cancelled_skipped_or_missing_work(self):
         from test_workflow_timeouts import ROOT, job_blocks
