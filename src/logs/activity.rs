@@ -78,10 +78,26 @@ pub(super) fn tail(path: &Path, limit: u64) -> Result<Tail> {
 /// The time and unstamped text of the last line of `kind` in the tail.
 pub(super) fn last_of(tail: &str, kind: Kind) -> Option<(&str, &str)> {
     let kind = kind.to_string();
-    tail.lines().rev().find_map(|line| {
-        let unstamped = line.get(TIME_FORMAT_LENGTH + 1..)?;
-        let rest = unstamped.strip_prefix(&kind)?;
-        (rest.starts_with(' ') || rest.starts_with(':'))
-            .then_some((line.get(..TIME_FORMAT_LENGTH)?, unstamped))
+    lines(tail).rev().find(|(_, text)| {
+        text.strip_prefix(&kind)
+            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with(':'))
+    })
+}
+
+/// Compare the complete Process name: names can contain spaces and colons.
+pub(super) fn last_process_skip<'a>(tail: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    lines(tail).rev().find(|(_, text)| {
+        text.rsplit_once(" skipped: ")
+            .and_then(|(subject, _)| subject.strip_prefix("Process "))
+            == Some(name)
+    })
+}
+
+fn lines(tail: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
+    tail.lines().filter_map(|line| {
+        Some((
+            line.get(..TIME_FORMAT_LENGTH)?,
+            line.get(TIME_FORMAT_LENGTH + 1..)?,
+        ))
     })
 }

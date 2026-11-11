@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::command_limit;
-use crate::command_limit::{AlreadyRunning, Sharing};
+use crate::command_limit::{NotAdmitted, Sharing};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::issue::{IssueInput, IssueUrl, Repo};
@@ -338,7 +338,7 @@ pub enum Start {
     /// Its checks passed and it holds a slot on its repository.
     Clear(Launch),
     /// It is skipped, with nothing done.
-    AlreadyRunning(AlreadyRunning),
+    NotAdmitted(NotAdmitted),
 }
 
 /// Start a run with no Issue URL from the Launch directory, the current
@@ -346,8 +346,9 @@ pub enum Start {
 /// whatever the Launch directory has checked out, or without one the branch
 /// checked out there, so a detached HEAD with neither fails it.
 ///
-/// Once the preflight checks pass, the run is [`AlreadyRunning`], with
-/// nothing done, if its repository is at its Command `limit` on this
+/// A Quota wait skips the Pass before remote preparation. Once the preflight
+/// checks pass, the run is also [`NotAdmitted`], with nothing done, if its
+/// repository is at its Command `limit` on this
 /// machine, or, as `sharing` says, another Pass of its kind runs there.
 /// Otherwise this process holds a slot there, and the lock of its kind if it
 /// has one, until it exits, through whatever it dispatches.
@@ -355,10 +356,13 @@ pub fn start(base: Option<&str>, limit: NonZeroUsize, sharing: Sharing) -> Resul
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
     crate::logs::pass_fired(&repo);
+    if let Some(skipped) = command_limit::quota_wait(&repo, limit) {
+        return Ok(Start::NotAdmitted(skipped));
+    }
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
     if let Some(running) = command_limit::hold_pass(&repo, limit, sharing)? {
-        return Ok(Start::AlreadyRunning(running));
+        return Ok(Start::NotAdmitted(running));
     }
     Ok(Start::Clear(Launch {
         directory,
