@@ -114,6 +114,9 @@ pub(super) struct CommandRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
     pub issue_branch: Option<String>,
+    /// The selected Base branch for a Fix Pass repairing its CI, not its repair branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
     pub pull_request: Option<String>,
     #[serde(default)]
     pub parent_record: Option<PathBuf>,
@@ -448,6 +451,7 @@ impl CommandRecord {
             limit: None,
             resume_command: None,
             issue_branch: None,
+            base_branch: None,
             pull_request: None,
             parent_record: None,
             parent_dispatch: None,
