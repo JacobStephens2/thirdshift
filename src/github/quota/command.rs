@@ -1,7 +1,7 @@
 //! One budget and notification total per owning Command, including subprocess
 //! Ticket runs. The Command log owner supplies their shared sidecar path.
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -72,12 +72,7 @@ impl Command {
         let Some(path) = &self.path else {
             return Ok(change(&mut self.totals));
         };
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path.with_extension("lock"))?;
-        lock.lock()?;
+        let _lock = super::store::lock_exclusive(&path.with_extension("lock"))?;
         let mut totals = self.read()?;
         let value = change(&mut totals);
         let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
@@ -150,4 +145,36 @@ pub(crate) fn notification_line() -> Result<Option<String>> {
                 .join(", ")
         )
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    #[test]
+    fn quota_wait_sidecar_lock_stays_private_to_the_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.quota-wait.json");
+        let lock_path = path.with_extension("lock");
+        fs::write(&lock_path, []).unwrap();
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let mut command = Command {
+            totals: Totals::default(),
+            path: Some(path),
+        };
+        command
+            .update(|totals| {
+                totals.waited = Duration::from_secs(1);
+            })
+            .unwrap();
+        let mode = fs::metadata(&lock_path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "sidecar lock mode {mode:o} lets another local user block the owner"
+        );
+    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 use store::Account;
 use wait::{WaitBudget, WaitCapExceeded};
@@ -98,6 +99,31 @@ fn concurrent_writers_preserve_each_other_and_readers_only_see_complete_records(
         assert_eq!(waits.len(), 2);
         assert!(waits.iter().all(|wait| wait.quota.remaining == 100 + user));
     }
+}
+
+#[test]
+fn quota_record_lock_stays_private_to_the_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let lock_path = dir.path().join("quota.lock");
+    // A lock created under the usual umask is group- and world-readable.
+    // Opening it read-only is enough to take an exclusive flock.
+    std::fs::write(&lock_path, []).unwrap();
+    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let store = Store::new(dir.path().join("quota.json"));
+    store
+        .observe(
+            &Account::new("github.com", "octocat"),
+            Resource::Core,
+            quota(100),
+            now(),
+        )
+        .unwrap();
+    let mode = std::fs::metadata(&lock_path).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o077,
+        0,
+        "quota lock mode {mode:o} lets another local user block the owner"
+    );
 }
 
 #[test]

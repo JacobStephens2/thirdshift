@@ -1,7 +1,8 @@
 //! One machine-local record, with a stable lock across atomic replacements.
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -147,12 +148,7 @@ impl Store {
     fn update(&self, change: impl FnOnce(&mut Record)) -> Result<()> {
         let dir = self.path.parent().expect("quota record has a parent");
         fs::create_dir_all(dir)?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.path.with_extension("lock"))?;
-        lock.lock()?;
+        let _lock = lock_exclusive(&self.path.with_extension("lock"))?;
         let mut record = self.read()?;
         let previous = serde_json::to_vec(&record)?;
         change(&mut record);
@@ -167,4 +163,19 @@ impl Store {
         tmp.persist(&self.path)?;
         Ok(())
     }
+}
+
+/// Another local user can take an exclusive flock on a lock they can open,
+/// even with a read-only descriptor, and stall every Quota update. Creation
+/// mode is masked by umask, so an existing lock is tightened explicitly.
+pub(super) fn lock_exclusive(path: &Path) -> Result<File> {
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
+    lock.set_permissions(fs::Permissions::from_mode(0o600))?;
+    lock.lock()?;
+    Ok(lock)
 }
