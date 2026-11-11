@@ -463,3 +463,26 @@ fn a_notes_marker_detects_an_external_repair_from_another_checkout() {
             .contains("-version = \"0.1.1\"")
     );
 }
+
+#[test]
+fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
+    let release = Release::new();
+    let (_, repaired) = conflicted_bump(&release);
+    fix_runs(&release, &adopt_script(&repaired));
+    release.release_workflow(failed_release());
+    let failed = run(&release, &["0.2.0"], &[]);
+    assert_release_failed(&release, &failed, &repaired);
+    release.merge_pr("newer-content", "Recovery content", "");
+    release.main_ci("completed", "success");
+    release.ci_reports(RED);
+    fix_runs(&release, "exit 1");
+    let stopped = run(&release, &["0.2.0"], &[]);
+    assert_eq!(stopped.status.code(), Some(1), "{}", stderr(&stopped));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
+    let head = release.pr_head("release-0.2.0");
+    release.gh(&["fake", "checks", &head, GREEN]);
+    release.release_workflow(json!({}));
+    let resumed = run(&release, &["0.2.0"], &[]);
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(head));
+}

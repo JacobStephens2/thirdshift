@@ -354,7 +354,7 @@ bump_tree() (
 # left behind by an interrupted recovery. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
 find_existing_tag() {
-	local old_base base run id run_url status conclusion attempt
+	local old_base= parent base run id run_url status conclusion attempt
 	tagged=
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return
@@ -371,13 +371,19 @@ find_existing_tag() {
 	# tag. Accept only two exact bumps, a strictly newer content base, and an
 	# unpublished failed workflow on the old tag; unrelated tags still refuse.
 	git fetch --quiet origin "$tagged"
-	old_base=$(git rev-parse "$tagged^1")
-	base=$(git rev-parse "$head^1")
+	base=$(release_content_base)
+	# Fix can leave a merge with the old bump first and main second. Accept
+	# only a parent on the new content's history whose exact bump is the tag.
+	for parent in $(git show -s --format=%P "$tagged"); do
+		if [ "$parent" != "$base" ] && git merge-base --is-ancestor "$parent" "$base" &&
+			[ "$(bump_tree "$parent")" = "$(git rev-parse "$tagged^{tree}")" ]; then
+			old_base=$parent
+			break
+		fi
+	done
 	run=$(release_run "$tagged")
 	read -r id run_url status conclusion attempt <<<"$run"
-	if [ "$pr_state" = OPEN ] && [ "$old_base" != "$base" ] &&
-		git merge-base --is-ancestor "$old_base" "$base" &&
-		[ "$(bump_tree "$old_base")" = "$(git rev-parse "$tagged^{tree}")" ] &&
+	if [ "$pr_state" = OPEN ] && [ -n "$old_base" ] &&
 		[ "$status" = completed ] && [ "$conclusion" != success ] &&
 		release_is_absent; then
 		progress "resuming re-cut of unpublished $tag on ${head:0:7}"
