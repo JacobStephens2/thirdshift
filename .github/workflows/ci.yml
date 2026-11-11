@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Resolve Ubuntu package hosts
+        run: bash scripts/release-dns.sh
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -54,6 +56,9 @@ jobs:
         working-directory: site
     steps:
       - uses: actions/checkout@v7
+      - name: Resolve Ubuntu package hosts
+        working-directory: .
+        run: bash scripts/release-dns.sh
       - uses: actions/setup-node@v6
         with:
           node-version: 24

@@ -64,6 +64,15 @@ def harden_release_workflow(generated):
         bounded_anchor = f"{permissions_anchor}    timeout-minutes: {timeout}\n"
         if bounded_anchor not in generated:
             generated = generated.replace(permissions_anchor, bounded_anchor, 1)
+    dependencies = '      - name: Install dependencies\n'
+    if generated.count(dependencies) != 1:
+        raise RuntimeError("expected one local-artifact dependency installation step")
+    generated = generated.replace(
+        dependencies,
+        '      - name: Resolve Ubuntu package hosts\n'
+        '        run: bash scripts/release-dns.sh\n' + dependencies,
+        1,
+    )
     smoke_anchor = "  custom-release-smoke:\n"
     if generated.count(smoke_anchor) == 1:
         start = generated.index(smoke_anchor)
