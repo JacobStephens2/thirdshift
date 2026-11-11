@@ -3,6 +3,64 @@ use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
 
+/// A Triage URL that fails the origin check is still recorded. The compact
+/// header must not lend the launch repository's name to that other issue.
+#[test]
+fn a_rejected_foreign_triage_issue_is_not_linked_under_the_local_repository() {
+    let scenario = super::support::Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    let foreign = "https://github.com/attacker/phish/issues/4";
+    let result = scenario.run(&["triage", foreign]);
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("origin mismatch"),
+        "{}",
+        result.stderr
+    );
+    let console = Console::start(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        &scenario.path("home"),
+    );
+    for page in ["/?section=overview", "/?section=needs-you"] {
+        let html = console.get(page).text().unwrap();
+        let heads: Vec<_> = html
+            .split("<div class=\"row-head\">")
+            .skip(1)
+            .map(|head| head.split("</div>").next().unwrap())
+            .collect();
+        assert!(
+            heads.iter().any(|head| head.contains("acme/widgets#4")),
+            "compact rows lost the recorded subject on {page}"
+        );
+        for head in &heads {
+            assert!(
+                !head.contains("href=\"https://github.com/attacker/phish/issues/4\""),
+                "header lends the local repository to {foreign}: {head}"
+            );
+        }
+        let mut saw_heading = false;
+        for peek in html.split("data-peek=\"").skip(1) {
+            let path = peek.split('"').next().unwrap();
+            let details = console.get(path).text().unwrap();
+            let heading = details
+                .split("class=\"peek-heading\"")
+                .nth(1)
+                .unwrap_or("")
+                .split("</h2>")
+                .next()
+                .unwrap_or("");
+            if heading.contains("acme/widgets#4") {
+                saw_heading = true;
+            }
+            assert!(
+                !heading.contains("href=\"https://github.com/attacker/phish/issues/4\""),
+                "details lend the local repository to {foreign}: {heading}"
+            );
+        }
+        assert!(saw_heading, "details lost the recorded subject on {page}");
+    }
+}
+
 #[test]
 fn needs_you_review_and_triage_headers_link_targets_locally_and_across_fleet() {
     use serde_json::json;

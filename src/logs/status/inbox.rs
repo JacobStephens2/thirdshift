@@ -543,6 +543,9 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     } else if group == Some(Group::NeedsYou) {
         row.present_needs_you_target(&facts.kind, &facts.repository);
     }
+    // A record can name one repository and carry another repository's issue
+    // URL. The visible subject stays; the href has to name that same record.
+    bind_subject_link(&mut row);
     Ok(row)
 }
 
@@ -645,7 +648,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 command.issue.as_ref(),
                 None,
             );
-            Ok(Row {
+            let mut row = Row {
                 order: Group::History.row_order(
                     None,
                     command.ended_at.as_deref().or(Some(&command.started_at)),
@@ -703,7 +706,9 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 children: Vec::new(),
                 findings: Vec::new(),
                 sessions: Observation::History(command).sessions()?,
-            })
+            };
+            bind_subject_link(&mut row);
+            Ok(row)
         }
     }
 }
@@ -751,6 +756,9 @@ pub(super) fn from_read(
                             .and_then(|pr| pr.title.as_deref());
                         row.present_ready(title, item.github.ci, item.github.mergeable);
                     }
+                    // Needs you may replace the subject with its pull request
+                    // after `present` checked the recorded issue link.
+                    bind_subject_link(&mut row);
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);
