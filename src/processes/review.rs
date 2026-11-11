@@ -30,7 +30,7 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                 progress::step(reason);
                 String::new()
             };
-            if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+            if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
                 return Ok(skip(&skipped));
             }
             if let Some(running) = command_limit::hold_pass(

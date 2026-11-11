@@ -107,6 +107,7 @@ impl Command {
                     &record.view.state,
                     record.view.stage.as_ref(),
                     record.view.health.as_ref(),
+                    &record.facts.waiting_for,
                 );
                 super::print_command_line(
                     &record.facts,

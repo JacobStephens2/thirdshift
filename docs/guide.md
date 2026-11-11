@@ -22,6 +22,15 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 
 Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
+Every Pass, including Triage with no Report or Issue URL and a Custom process
+started with no issue, skips before work while an Experiment of the same OS
+account is live on this machine, across all repositories. A waiting Experiment
+counts too. The Activity log names the Experiment, once per change of reason,
+and the Pass exits successfully. This includes the nightly Security run.
+Commands started on an Issue or pull request URL still run, with a warning on
+stderr that they will compete with the Experiment's Trials. Existing Runs keep
+running; Passes on other machines carry on.
+
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code. See [Harness, Model and Effort](#harness-model-and-effort).
 
 ## What a Ticket run does
@@ -1216,6 +1225,21 @@ Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a `[trial]` table. This check also precedes the release Baseline probe.
 
+At startup and on resume, an Experiment becomes live, so every Pass of the same
+OS account on this machine skips. Before starting Trials, it waits for that
+account's other live Commands across repositories to end. Its Command log,
+`status` and the Console name the Commands it waits on and refresh the list as
+they end. Stop or interrupt during the wait ends the Experiment cleanly as
+interrupted; resuming waits again. Multiple waiting Experiments take turns once
+the other Commands have ended.
+
+Use `thirdshift experiment <candidate> --no-wait` to start immediately. Results
+record `no_wait: true` and `commands_at_start`, the number of other live Commands
+at this invocation's start, displayed beside the Verdict in text and the Console.
+A normal invocation records `no_wait: false` and zero. `waiting_for` names the
+current blockers and is empty after the wait. These fields do not change the Bar
+or Experiment identity. The structured Console API option is `no_wait: true`.
+
 For an **A/A Experiment**, use one commit and the same flags in both Arms.
 This measures how often the Arms disagree when nothing differs, so you can
 assess ordinary Trial variation before weighing a change. For example:
@@ -1747,7 +1771,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 10`.
+[Experiment results format](experiment-results.md), identified by `format: 11`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1805,7 +1829,7 @@ versions or end times where those facts were not retained.
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
 (the Activity log is at the repository level). The record names both Arms and
-the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+the Bar and moves through Waiting for Commands when needed, Arm builds, Eval tasks and Trials. A waiting Command record includes `waiting_for`, an array of Command names; it is omitted when empty. It appears in the
 Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
 go in Needs you. Rechecking a Score updates the latest invocation's Command
 outcome and Inbox group alongside the saved Verdict, keeping its completion time.
@@ -3904,6 +3928,8 @@ When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](htt
 
 ## Triage runs
 
+When a completed investigation returns an invalid recommendation, thirdshift gives it one correction turn in the same worktree and launch policy, including the `--read-machine` sandbox. That turn receives the original instructions, rejected output and exact validation error, and returns the complete recommendation without repeating the investigation. Both Session traces and their Model evidence are retained separately. All recommendation and publication checks still apply before GitHub writes; a second invalid recommendation fails with diagnostics pointing to the retained analysis. Harness execution failures and GitHub or publication failures do not start a correction turn.
+
 With no issue or `--file`, `thirdshift triage [base <branch>]` is an unattended **Pass** when stdin is a terminal or reaches EOF without non-whitespace text. This includes `/dev/null` under cron. Non-empty piped stdin remains a Report, read before command startup. An explicitly named empty Report file is an error.
 
 ```sh
@@ -4237,8 +4263,9 @@ qualify. The script uses a qualifying commit immediately even
 if the tip's CI is pending or failed. If none qualifies, it waits for a run to
 succeed, still considering older pending commits when `main` moves. The
 Experiment's Candidate is that release base. The tag names exactly that content
-plus the version bump, so merges to `main` during a release do not change what
-is measured or shipped.
+plus the version bump. A repair or external head update can change that content;
+the script validates it and refreshes the requested Experiment and release notes
+before publishing.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
@@ -4246,7 +4273,37 @@ From a clone of this repo, signed in to `gh` and the User config's default Harne
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the PR checks fail, it stops before tagging and leaves the pull request open and untagged. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged between the last release tag and the release base, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. Kimi Code runs an agent whose tool list is empty, with the release input as its instructions in a file beside the prompt. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, tags the bump commit at the head of `release-<version>` as `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below). The script waits for that workflow on the bump commit, printing the run's URL so you can watch it. Only after the workflow succeeds does it merge the bump PR into `main` with a merge commit, preserving the tagged commit in main's history even if other content has arrived. If that merge fails, the published release stands: it warns that the bump PR is not merged, names the open PR for the Day shift to merge and still exits `0`. CI's run on `main` for the merge isn't waited for. The script prints the GitHub Release's URL last. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. A Merge conflict or completed failing PR checks can start the bounded Fix run described below. If the release workflow fails, it exits `1`, naming the failed jobs and run URL, leaving the tag in place and the PR open and unmerged. Recovery happens when you run the script again with the same version. Running CI and publication have no overall timeout.
+
+While waiting for PR CI, the script observes that PR's current head and mergeability.
+A Merge conflict, including one with no workflows, or completed failing CI starts
+at most one targeted `thirdshift fix <PR URL> --no-merge --no-base-fix` per release
+invocation, using this checkout's runner and User config. Those flags override
+Self-merge and Base fix defaults: the release script still tags, waits for
+publication, then merges. Healthy, queued and running CI start no Fix run.
+Missing workflows without a conflict have a five-minute startup grace period
+(`RELEASE_WORKFLOW_STARTUP_SECONDS=300`, adjustable for testing), then stop with
+the PR, head and recovery command. After CI passes, GitHub gets the same grace
+to report the PR mergeable. Neither is a deadline on CI runtime.
+
+After a Fix run or external push, the script fetches and validates the current
+PR identity, open state, readiness, origin, branches, head and exact version-bump
+tree against main. Extra source changes or a wrong version require human review
+before tagging. A changed content base reruns the Experiment when requested and
+regenerates the summary and version diff, honoring `--review`. More than five
+head updates, a failed or interrupted Fix, or another conflict or CI failure
+after the automatic Fix stops with recovery instructions and no new tag pushed.
+A closed, retargeted or draft PR, a changed origin, or a content base older than
+the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
+A failed or interrupted Fix run leaves the PR draft, so the rerun names
+`gh pr ready <url>`: mark it ready after review, then rerun.
+Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
+records the content base its notes describe; a resumed PR from before that marker
+has its summary and version diff regenerated once, honoring `--review`.
+
+After publication, a failed merge leaves the release standing and names the PR
+for the Day shift. If the PR is draft, mark it ready with `gh pr ready <PR URL>`
+before merging it. Rerunning the release command keeps the published tag in place.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, or a `v<version>` tag that already exists locally or on origin. A resumed PR must belong to origin and match its branch tip while open. Its tree (or a pushed branch without a PR) must be exactly the version bump in `Cargo.toml` and `Cargo.lock` from its merge base; extra content is refused even when already tagged.
 

@@ -281,6 +281,7 @@ pub(super) fn stage_text(command: &Command) -> String {
         command.state,
         command.stage.as_ref(),
         command.health.as_ref(),
+        &command.record.waiting_for,
     )
 }
 
@@ -289,6 +290,7 @@ fn stage_details(
     state: &str,
     stage: Option<&super::reading::CurrentStage>,
     health: Option<&super::reading::Health>,
+    waiting_for: &[String],
 ) -> String {
     if let Some(outcome) = outcome {
         return outcome.to_owned();
@@ -313,6 +315,9 @@ fn stage_details(
             }
         },
     );
+    if state == "live" && !waiting_for.is_empty() {
+        text.push_str(&format!(" · {}", waiting_for.join(", ")));
+    }
     if let Some(health) = health.and_then(super::reading::Health::text) {
         text.push_str(&format!(" · {health}"));
     }

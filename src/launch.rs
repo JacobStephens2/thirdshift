@@ -356,7 +356,7 @@ pub fn start(base: Option<&str>, limit: NonZeroUsize, sharing: Sharing) -> Resul
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
     crate::logs::pass_fired(&repo);
-    if let Some(skipped) = command_limit::quota_wait(&repo, limit) {
+    if let Some(skipped) = command_limit::early_skip(&repo, limit) {
         return Ok(Start::NotAdmitted(skipped));
     }
     directory.check_identity()?;
