@@ -131,6 +131,20 @@ fn command_kind(command: &str) -> Option<CommandKind> {
     })
 }
 
+/// One Fleet report field. A control character or Unicode line separator would
+/// start another line or a terminal control sequence, so one machine's schedule
+/// or error could look like another machine's entry. JSON keeps the original text.
+pub(crate) fn report_line(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\n' | '\u{2028}' | '\u{2029}' => '\u{240A}',
+            '\r' => '\u{240D}',
+            character if character.is_control() => '\u{FFFD}',
+            character => character,
+        })
+        .collect()
+}
+
 fn repository_label(repository: Option<String>) -> Option<String> {
     repository.filter(|label| {
         !label

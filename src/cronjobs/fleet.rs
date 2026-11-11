@@ -179,23 +179,27 @@ pub(crate) fn show(json: bool) -> Result<String> {
     if json {
         return Ok(serde_json::to_string_pretty(&inventory)?);
     }
+    Ok(text(&inventory))
+}
+
+fn text(inventory: &Inventory) -> String {
     let mut lines = Vec::new();
     for machine in &inventory.machines {
-        let mut line = format!("{}: {}", machine.name, machine.status);
+        let mut line = format!("{}: {}", super::report_line(&machine.name), machine.status);
         if let Some(address) = &machine.address {
-            line.push_str(&format!(" ({address})"));
+            line.push_str(&format!(" ({})", super::report_line(address)));
         }
         if let Some(error) = &machine.error {
-            line.push_str(&format!(" — {error}"));
+            line.push_str(&format!(" — {}", super::report_line(error)));
         } else if machine.empty {
             line.push_str(" — No thirdshift cron jobs in this account's crontab.");
         }
         lines.push(line);
     }
     for repository in &inventory.repositories {
-        lines.push(repository.heading().into());
+        lines.push(super::report_line(repository.heading()));
         for machine in &repository.machines {
-            lines.push(format!("  {}", machine.name));
+            lines.push(format!("  {}", super::report_line(&machine.name)));
             for job in &machine.jobs {
                 let kind = job
                     .command_kind
@@ -203,11 +207,66 @@ pub(crate) fn show(json: bool) -> Result<String> {
                     .unwrap_or_else(|| "Unknown Command kind".into());
                 lines.push(format!(
                     "    {kind}: {}  {}",
-                    job.schedule,
-                    job.command.replace(['\r', '\n'], " ")
+                    super::report_line(&job.schedule),
+                    super::report_line(&job.command)
                 ));
             }
         }
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cronjobs::{CommandKind, CronJob};
+
+    #[test]
+    fn a_fleet_report_cannot_forge_another_machines_line() {
+        let schedule = "* * * * *\n  west\u{2028}forged";
+        let command = "thirdshift pickup\r\u{1b}[1K\u{8}";
+        let error = "denied\nwest: ok";
+        let inventory = Inventory {
+            machines: vec![Machine {
+                name: "east".into(),
+                address: Some("https://east.example".into()),
+                status: Status::Refused,
+                error: Some(error.into()),
+                empty: false,
+            }],
+            repositories: vec![Repository {
+                repository: Some("acme/widgets".into()),
+                machines: vec![Schedules {
+                    name: "east".into(),
+                    jobs: vec![CronJob {
+                        schedule: schedule.into(),
+                        command: command.into(),
+                        repository: Some("acme/widgets".into()),
+                        command_kind: Some(CommandKind::Pickup),
+                    }],
+                }],
+            }],
+        };
+        // Structured JSON keeps the owning machine's original field text.
+        let json = serde_json::to_string(&inventory).unwrap();
+        assert!(json.contains(r"\n  west"), "{json}");
+        assert!(json.contains(r"\u001b"), "{json}");
+        assert!(json.contains('\u{2028}'), "{json}");
+        let report = text(&inventory);
+        let lines: Vec<_> = report.lines().collect();
+        assert!(
+            lines.iter().all(|line| !line.chars().any(|character| {
+                character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
+            })),
+            "{report:?}"
+        );
+        assert_eq!(lines.len(), 4, "{report:?}");
+        assert!(lines[0].starts_with("east: refused"), "{report:?}");
+        assert!(lines[0].contains("west: ok"), "{report:?}");
+        assert_eq!(lines[1], "acme/widgets");
+        assert_eq!(lines[2], "  east");
+        assert!(lines[3].starts_with("    Pickup run:"), "{report:?}");
+        assert!(lines[3].contains("thirdshift pickup"), "{report:?}");
+        assert!(lines[3].contains("* * * * *"), "{report:?}");
+    }
 }
