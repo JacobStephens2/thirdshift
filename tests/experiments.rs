@@ -66,6 +66,9 @@ mod pairs;
 #[path = "experiments/panel.rs"]
 mod panel;
 
+#[path = "experiments/update.rs"]
+mod update;
+
 #[test]
 fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
     let fixture = Fixture::new();
