@@ -58,6 +58,209 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+#[test]
+fn primary_quota_failure_records_a_shared_wait() {
+    with_recorded_signal(
+        "github::execution_tests::primary_quota_failure_records_a_shared_wait",
+        |_| {
+            let fixture = Fixture::new("");
+            // SAFETY: this test runs in an isolated child before any workers.
+            unsafe { std::env::set_var("HOME", fixture.temp.path()) };
+            fixture.script(
+                r#"case "$*" in
+  'api user --hostname github.com') echo '{"login":"octocat"}' ;;
+  'api rate_limit --hostname github.com')
+    echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded for user ID 123. (HTTP 403)' >&2; exit 1 ;;
+esac"#,
+            );
+            let error = GitHub::new().issue_title(&issue()).unwrap_err();
+            assert!(format!("{error:#}").contains("API rate limit exceeded"));
+            let path = fixture.path(".thirdshift/github-quota.json");
+            assert!(
+                path.exists(),
+                "primary quota failure left no shared Quota wait"
+            );
+            let record: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(record["waits"][0]["host"], "github.com");
+            assert_eq!(record["waits"][0]["login"], "octocat");
+            assert_eq!(record["waits"][0]["resource"], "core");
+            assert_eq!(record["waits"][0]["reset_at"], "2100-01-01T00:00:00Z");
+            assert_eq!(record["waits"][0]["remaining"], 0);
+        },
+    );
+}
+
+#[test]
+fn primary_quota_failure_scopes_graphql_and_defaults_only_unreadable_resets() {
+    with_recorded_signal(
+        "github::execution_tests::primary_quota_failure_scopes_graphql_and_defaults_only_unreadable_resets",
+        |_| {
+            for (index, response) in [
+                "{}",
+                r#"{"resources":{"graphql":{"reset":"bad"}}}"#,
+                r#"{"resources":{"graphql":{"reset":4102444800}}}"#,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let fixture = Fixture::new("");
+                // SAFETY: isolated test process, before workers start.
+                unsafe {
+                    std::env::set_var("GH_HOST", "git.example.com");
+                    std::env::set_var("GH_ENTERPRISE_TOKEN", "test-secret-never-stored");
+                }
+                fixture.script(&format!(
+                    "case \"$1 $2\" in\n  'api user') echo '{{\"login\":\"enterprise-user\"}}' ;;\n  'api rate_limit') echo '{response}' ;;\n  *) echo 'GraphQL: RATE_LIMIT_EXCEEDED (HTTP 429)' >&2; exit 1 ;;\nesac"
+                ));
+                let before = Utc::now();
+                assert!(GitHub::new().issue_title(&issue()).is_err());
+                let after = Utc::now();
+                let bytes = fs::read(fixture.path(".thirdshift/github-quota.json")).unwrap();
+                assert!(!String::from_utf8_lossy(&bytes).contains("test-secret-never-stored"));
+                let record: Value = serde_json::from_slice(&bytes).unwrap();
+                let wait = &record["waits"][0];
+                assert_eq!(wait["host"], "git.example.com");
+                assert_eq!(wait["login"], "enterprise-user");
+                assert_eq!(wait["resource"], "graphql");
+                let reset = DateTime::parse_from_rfc3339(wait["reset_at"].as_str().unwrap())
+                    .unwrap()
+                    .to_utc();
+                if index == 2 {
+                    assert_eq!(reset.timestamp(), 4102444800);
+                } else {
+                    assert!(reset >= before + chrono::Duration::minutes(15));
+                    assert!(reset <= after + chrono::Duration::minutes(15));
+                }
+                assert!(
+                    GitHub::new()
+                        .quota_waits_for("github.com")
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(
+                    GitHub::new()
+                        .quota_waits_for("git.example.com")
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn a_rest_quota_failure_in_a_repository_named_graphql_keeps_the_core_resource() {
+    with_recorded_signal(
+        "github::execution_tests::a_rest_quota_failure_in_a_repository_named_graphql_keeps_the_core_resource",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit') echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'HTTP 403: API rate limit exceeded (https://api.github.com/repos/acme/graphql/issues/7/comments)' >&2; exit 1 ;;
+esac"#,
+            );
+            let issue = IssueUrl::parse("https://github.com/acme/graphql/issues/7").unwrap();
+            assert!(GitHub::new().comment_issue(&issue, "hello").is_err());
+            let waits = GitHub::new().quota_waits().unwrap();
+            assert_eq!(waits.len(), 1);
+            assert!(matches!(waits[0].resource, quota::Resource::Core));
+        },
+    );
+}
+
+#[test]
+fn changing_credentials_does_not_reuse_another_users_wait() {
+    with_recorded_signal(
+        "github::execution_tests::changing_credentials_does_not_reuse_another_users_wait",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') printf '{"login":"%s"}\n' "$GH_TOKEN" ;;
+  'api rate_limit') echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded' >&2; exit 1 ;;
+esac"#,
+            );
+            // SAFETY: isolated test process, before workers start.
+            unsafe { std::env::set_var("GH_TOKEN", "alice") };
+            assert!(GitHub::new().issue_title(&issue()).is_err());
+            assert_eq!(GitHub::new().quota_waits().unwrap().len(), 1);
+            unsafe { std::env::set_var("GH_TOKEN", "bob") };
+            assert!(GitHub::new().quota_waits().unwrap().is_empty());
+            assert!(GitHub::new().issue_title(&issue()).is_err());
+            assert_eq!(GitHub::new().quota_waits().unwrap().len(), 1);
+            unsafe { std::env::set_var("GH_TOKEN", "alice") };
+            assert_eq!(GitHub::new().quota_waits().unwrap().len(), 1);
+        },
+    );
+}
+
+#[test]
+fn quota_failure_does_not_treat_a_close_comment_as_a_host_selector() {
+    with_recorded_signal(
+        "github::execution_tests::quota_failure_does_not_treat_a_close_comment_as_a_host_selector",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit') echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded' >&2; exit 1 ;;
+esac"#,
+            );
+            assert!(
+                GitHub::new()
+                    .close_issue(&issue(), "--hostname=docs.example.net")
+                    .is_err()
+            );
+            assert_eq!(
+                GitHub::new().quota_waits_for("github.com").unwrap().len(),
+                1
+            );
+            assert!(
+                GitHub::new()
+                    .quota_waits_for("docs.example.net")
+                    .unwrap()
+                    .is_empty()
+            );
+        },
+    );
+}
+
+#[test]
+fn quota_failure_uses_repository_host_instead_of_comment_url() {
+    with_recorded_signal(
+        "github::execution_tests::quota_failure_uses_repository_host_instead_of_comment_url",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit')
+    echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded for user ID 123. (HTTP 403)' >&2; exit 1 ;;
+esac"#,
+            );
+            assert!(
+                GitHub::new()
+                    .comment_issue(&issue(), "https://docs.example.net/")
+                    .is_err()
+            );
+            let record: Value = serde_json::from_slice(
+                &fs::read(fixture.path(".thirdshift/github-quota.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record["waits"][0]["host"], "github.com");
+            assert_eq!(record["waits"][0]["login"], "octocat");
+            assert_eq!(record["waits"][0]["resource"], "core");
+        },
+    );
+}
+
 /// PATH changes happen only in the isolated process. Cleanup uses the
 /// executable's recorded PID, including after a failed assertion.
 struct Fixture {
@@ -77,7 +280,11 @@ impl Fixture {
         );
         // SAFETY: this isolated process runs one test; no environment readers
         // or execution workers have started.
-        unsafe { std::env::set_var("PATH", path) };
+        unsafe {
+            std::env::set_var("PATH", path);
+            std::env::set_var("HOME", fixture.temp.path());
+            std::env::remove_var("GH_HOST");
+        }
         fixture
     }
 
@@ -424,7 +631,7 @@ fn permanent_and_quota_read_failures_are_not_retried() {
                 "API rate limit exceeded for user ID 123. (HTTP 429)",
             ] {
                 fixture.script(&format!(
-                    "echo read >> '{}'\ncat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1",
+                    "case \"$1 $2\" in\n  'api user') echo '{{\"login\":\"runner\"}}'; exit 0 ;;\n  'api rate_limit') echo '{{}}'; exit 0 ;;\nesac\necho read >> '{}'\ncat >&2 <<'ERROR'\n{stderr}\nERROR\nexit 1",
                     fixture.path("reads").display()
                 ));
                 let error = GitHub::new().issue_title(&issue()).unwrap_err();
