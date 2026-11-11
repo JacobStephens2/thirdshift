@@ -408,6 +408,10 @@ the relevant grid to its left edge. Historical Runs without stage metadata show
 an unknown time, distinct from a stage that was not reached. Choose
 a column's Run link to open its exact peek. Repeated stages retain every visit;
 missing end timestamps say “time unknown” rather than inventing a duration.
+Command details and both time pages keep wall-clock stage times and append
+recorded Suspended time, such as “10 hr 6 min · 9 hr 40 min suspended”. Stages
+without Suspended time show no annotation. A suspended stage supplies no Usual
+range sample; other stages in its Command and older records still count.
 Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
 time tests check scale in all windows, grouping, both views, preferences, live

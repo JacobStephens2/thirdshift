@@ -53,6 +53,15 @@ fn show_explains_suspended_stage_time_in_text_and_json_and_reads_legacy_stages()
     assert_eq!(stages[1]["seconds"], 60.0);
     assert_eq!(stages[1]["time"], "1 min");
     assert!(stages[1].get("suspended_seconds").is_none());
+
+    let metrics = scenario.run(&["metrics", "widgets#7", "--json"]);
+    assert_eq!(metrics.code, Some(0), "{}", metrics.stderr);
+    let metrics: Value = serde_json::from_str(&metrics.stdout).unwrap();
+    let metrics = &metrics["command"]["metrics"];
+    assert_eq!(metrics["stages"][0]["seconds"], 36360.0);
+    assert_eq!(metrics["stages"][0]["minutes"], 606.0);
+    assert_eq!(metrics["stages"][1]["seconds"], 60.0);
+    assert_eq!(metrics["total_minutes"], 607.0);
 }
 
 #[test]

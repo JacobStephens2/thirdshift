@@ -142,6 +142,39 @@ impl Drop for LiveRun {
 }
 
 #[test]
+fn status_explains_suspended_stage_time_without_changing_its_wall_clock_age() {
+    let mut run = LiveRun::new();
+    run.stage_age(606);
+    run.log_ages(0, 0);
+    for suspended in [None, Some(0), Some(34800)] {
+        if let Some(seconds) = suspended {
+            run.record["stages"][0]["suspended_seconds"] = seconds.into();
+        }
+        fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+        let output = run.scenario.run(&["status"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert!(
+            output.stdout.contains("implement · 10 hr"),
+            "{}",
+            output.stdout
+        );
+        let stage = &run.status()["stage"];
+        assert!(stage["age_seconds"].as_i64().unwrap() >= 36360, "{stage}");
+        if suspended == Some(34800) {
+            assert!(
+                output.stdout.contains(" · 9 hr 40 min suspended"),
+                "{}",
+                output.stdout
+            );
+            assert_eq!(stage["suspended_seconds"], 34800);
+        } else {
+            assert!(!output.stdout.contains("suspended"), "{}", output.stdout);
+            assert!(stage.get("suspended_seconds").is_none(), "{stage}");
+        }
+    }
+}
+
+#[test]
 fn silent_requires_both_logs_and_escalates_in_status_and_show() {
     let mut run = LiveRun::new();
     run.stage_age(60);

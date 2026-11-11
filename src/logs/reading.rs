@@ -382,6 +382,12 @@ pub(super) struct CurrentStage {
     pub(super) name: String,
     pub(super) began_at: String,
     pub(super) age_seconds: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) suspended_seconds: u64,
+}
+
+fn is_zero(seconds: &u64) -> bool {
+    *seconds == 0
 }
 
 impl Command {
@@ -428,6 +434,7 @@ impl Command {
             age_seconds: DateTime::parse_from_rfc3339(&stage.began_at)
                 .map(|began| now.signed_duration_since(began).num_seconds().max(0))
                 .unwrap_or(0),
+            suspended_seconds: stage.suspended_seconds,
         });
         Self {
             account: None,
