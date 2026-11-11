@@ -14,6 +14,16 @@ on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Compare one, two and four independent cached builds on both Linux runners
+        type: boolean
+        default: false
+      probe:
+        description: Exercise the stable gates without running the suite (manual diagnostics only)
+        type: choice
+        options: [none, success, failure, skipped]
+        default: none
 
 # PR numbers distinguish fork branches. Unique non-PR groups also preserve
 # pending main runs, which GitHub would otherwise replace.
@@ -68,51 +78,60 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm test
 
+  rust-x86:
+    uses: ./.github/workflows/rust-tests.yml
+    with:
+      runner: ubuntu-24.04
+      partitions: '[1]'
+      artifact: rust-x86
+      checks: true
+      nightly: ${{ github.event_name == 'schedule' }}
+      probe: ${{ inputs.probe || 'none' }}
+
   test:
-    timeout-minutes: 60
+    timeout-minutes: 5
     runs-on: ubuntu-24.04
+    needs: rust-x86
+    if: ${{ always() }}
     steps:
-      - uses: actions/checkout@v7
-      - name: Install the Rust version and components rust-toolchain.toml names
-        run: |
-          rustup toolchain install
-          rustc --version
-      - uses: Swatinem/rust-cache@v2
-      - name: Check the Release workflow generator
-        run: |
-          python3 -m unittest discover -s scripts -p 'test_*.py'
-          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-installer.sh | sh
-          python3 scripts/generate-release.py --check
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      # The tests run the binary against real git and fake gh and claude,
-      # which the tests build from tests/fakes.rs with rustc.
-      # nextest fills idle slots across test binaries (#1317). Keep the
-      # contributor's cargo test path exercised by the nightly run too.
-      - uses: taiki-e/install-action@nextest
-        if: ${{ github.event_name != 'schedule' }}
-      - run: cargo nextest run
-        if: ${{ github.event_name != 'schedule' }}
-      - run: cargo test
-        if: ${{ github.event_name == 'schedule' }}
+      - name: Require all x86 work
+        env:
+          RESULT: ${{ needs.rust-x86.result }}
+        run: test "$RESULT" = success
 
   # One stable check name. Full ARM Linux coverage on main, nightly and manual
   # runs; PRs into main opt in with `test:linux-arm` (#1663).
-  test-linux-arm:
-    timeout-minutes: 60
+  rust-arm:
     if: ${{ github.event_name != 'pull_request' || (github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'test:linux-arm')) }}
+    uses: ./.github/workflows/rust-tests.yml
+    with:
+      runner: ubuntu-24.04-arm
+      partitions: '[1]'
+      artifact: rust-arm
+      nightly: ${{ github.event_name == 'schedule' }}
+      probe: ${{ inputs.probe || 'none' }}
+
+  test-linux-arm:
+    timeout-minutes: 5
     runs-on: ubuntu-24.04-arm
+    needs: rust-arm
+    if: ${{ always() && (github.event_name != 'pull_request' || (github.base_ref == 'main' && contains(github.event.pull_request.labels.*.name, 'test:linux-arm'))) }}
     steps:
-      - uses: actions/checkout@v7
-      - name: Install the Rust version and components rust-toolchain.toml names
-        run: |
-          rustup toolchain install
-          rustc --version
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
-      - uses: taiki-e/install-action@nextest
-        if: ${{ github.event_name != 'schedule' }}
-      - run: cargo nextest run
-        if: ${{ github.event_name != 'schedule' }}
-      - run: cargo test
-        if: ${{ github.event_name == 'schedule' }}
+      - name: Require all ARM work
+        env:
+          RESULT: ${{ needs.rust-arm.result }}
+        run: test "$RESULT" = success
+
+  benchmark:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        partitions: ['[1]', '[1,2]', '[1,2,3,4]']
+    uses: ./.github/workflows/rust-tests.yml
+    with:
+      runner: ${{ matrix.runner }}
+      partitions: ${{ matrix.partitions }}
+      artifact: benchmark-${{ matrix.runner }}-${{ strategy.job-index }}
+      clippy: false

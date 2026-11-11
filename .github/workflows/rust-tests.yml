@@ -1,0 +1,130 @@
+name: Rust test partitions
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        required: true
+      partitions:
+        type: string
+        default: '[1]'
+      artifact:
+        type: string
+        required: true
+      checks:
+        type: boolean
+        default: false
+      clippy:
+        type: boolean
+        default: true
+      nightly:
+        type: boolean
+        default: false
+      probe:
+        type: string
+        default: none
+
+jobs:
+  run:
+    timeout-minutes: 60
+    if: ${{ inputs.probe != 'skipped' }}
+    runs-on: ${{ inputs.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: ${{ fromJSON(inputs.partitions) }}
+    steps:
+      - uses: actions/checkout@v7
+      # A dispatch-only probe exercises this job and the real stable gates
+      # without executing a deliberately broken Rust test in ordinary CI.
+      - name: Gate probe
+        if: ${{ inputs.probe != 'none' }}
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: test "$PROBE" = success
+      - name: Install toolchain
+        if: ${{ inputs.probe == 'none' }}
+        run: |
+          rustup toolchain install
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ inputs.probe == 'none' }}
+        id: cache
+      - name: Tooling checks
+        if: ${{ inputs.checks && inputs.probe == 'none' && matrix.partition == 1 }}
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-installer.sh | sh
+          python3 scripts/generate-release.py --check
+          cargo fmt --check
+      - name: Clippy
+        if: ${{ inputs.clippy && inputs.probe == 'none' && matrix.partition == 1 }}
+        run: cargo clippy --all-targets -- -D warnings
+      - uses: taiki-e/install-action@v2
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+        with:
+          tool: cargo-nextest@0.9.151
+      - name: Compile tests
+        if: ${{ inputs.probe == 'none' }}
+        run: cargo test --no-run --locked
+      - name: Test inventory
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+        env:
+          PARTITION: ${{ matrix.partition }}/${{ strategy.job-total }}
+          REPORT: target/ci-report/${{ inputs.artifact }}-${{ matrix.partition }}
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          python3 scripts/ci-timings.py inventory "$REPORT" --partition "$PARTITION"
+          git rev-parse HEAD > "$REPORT/revision.txt"
+          printf '%s\n' "$CACHE_HIT" > "$REPORT/cache-hit.txt"
+      - name: Nextest execution
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+        env:
+          PARTITION: ${{ matrix.partition }}/${{ strategy.job-total }}
+        run: cargo nextest run --profile ci --partition "hash:$PARTITION"
+      - name: Contributor cargo test execution
+        if: ${{ inputs.nightly && inputs.probe == 'none' }}
+        run: cargo test
+      - name: Summarize timings
+        if: ${{ always() && !inputs.nightly && inputs.probe == 'none' }}
+        env:
+          REPORT: target/ci-report/${{ inputs.artifact }}-${{ matrix.partition }}
+        run: |
+          if test -f target/nextest/ci/junit.xml; then
+            mkdir -p "$REPORT"
+            cp target/nextest/ci/junit.xml "$REPORT/junit.xml"
+            python3 scripts/ci-timings.py summary "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !inputs.nightly && inputs.probe == 'none' }}
+        with:
+          name: ${{ inputs.artifact }}-${{ matrix.partition }}
+          path: target/ci-report/${{ inputs.artifact }}-${{ matrix.partition }}/
+          retention-days: 14
+          if-no-files-found: error
+
+  complete:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    needs: run
+    if: ${{ always() }}
+    steps:
+      - name: Require every partition
+        env:
+          RESULT: ${{ needs.run.result }}
+        run: test "$RESULT" = success
+      - uses: actions/checkout@v7
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+      - uses: actions/download-artifact@v4
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+        with:
+          pattern: ${{ inputs.artifact }}-*
+          path: reports
+      - name: Prove coverage and report balance
+        if: ${{ !inputs.nightly && inputs.probe == 'none' }}
+        env:
+          PARTITIONS: ${{ inputs.partitions }}
+        run: |
+          count=$(python3 -c 'import json,os; print(len(json.loads(os.environ["PARTITIONS"])))')
+          python3 scripts/ci-timings.py verify --count "$count" reports/* >> "$GITHUB_STEP_SUMMARY"
