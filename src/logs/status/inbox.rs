@@ -64,10 +64,17 @@ pub(crate) struct Row {
     pub pull_request: String,
     pub ci: Option<crate::github::InboxCi>,
     pub merge_conflict: bool,
+    pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
     pub sessions: Vec<std::path::PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TicketProgress {
+    pub complete: usize,
+    pub total: usize,
 }
 
 pub(crate) struct Timing {
@@ -479,6 +486,19 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         pull_request: facts.pull_request.unwrap_or_default(),
         ci: None,
         merge_conflict: false,
+        ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
+            complete: facts
+                .tickets
+                .iter()
+                .filter(|ticket| {
+                    matches!(
+                        ticket.state,
+                        crate::logs::command_record::TicketState::Merged
+                    )
+                })
+                .count(),
+            total: facts.tickets.len(),
+        }),
         tickets: facts
             .tickets
             .iter()
@@ -493,6 +513,14 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
+    // recorded accounting onto its Pass without counting child attempts.
+    if row.ticket_progress.is_none() {
+        row.ticket_progress = row.children[..facts.dispatched.len()]
+            .iter()
+            .rev()
+            .find_map(|child| child.ticket_progress);
+    }
     if ready {
         row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
     }
@@ -651,6 +679,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 pull_request: String::new(),
                 ci: None,
                 merge_conflict: false,
+                ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
                 findings: Vec::new(),
