@@ -71,23 +71,24 @@ impl GitHub {
         Ok(candidates)
     }
 
-    /// Recheck admission both before reserving and while our label is held.
-    pub fn needs_fix(
+    /// Recheck admission both before reserving and while our label is held,
+    /// returning the eligible head branch from that same observation.
+    pub fn fix_candidate_branch(
         &self,
         pr: &PullRequestUrl,
         base: &str,
         author: Option<&str>,
         reserved: bool,
-    ) -> Result<bool> {
+    ) -> Result<Option<String>> {
         let node = self.gh_json(&[
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
         ])?;
         if !fix_candidate(pr, &node, base, author, reserved)? {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(snapshot) = self.pr_snapshot(&pr.issue, &pr.issue.number.to_string())? else {
-            return Ok(false);
+            return Ok(None);
         };
         if snapshot.pr.state != super::PrState::Open
             || snapshot.pr.is_draft
@@ -95,14 +96,15 @@ impl GitHub {
             || snapshot.pr.base != base
             || node["head"]["sha"].as_str() != Some(&snapshot.head_commit)
         {
-            return Ok(false);
+            return Ok(None);
         }
         if snapshot.mergeable == super::Mergeable::No {
-            return Ok(true);
+            return Ok(Some(snapshot.pr.head));
         }
-        Ok(crate::ci::needs_repair(
-            &self.checks_on(&pr.issue, &snapshot.head_commit)?,
-        ))
+        Ok(
+            crate::ci::needs_repair(&self.checks_on(&pr.issue, &snapshot.head_commit)?)
+                .then_some(snapshot.pr.head),
+        )
     }
 
     pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {

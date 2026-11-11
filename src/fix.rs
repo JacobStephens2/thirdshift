@@ -61,14 +61,31 @@ pub(crate) fn run(
                     }
                 }
             }
+            let mut passed_over = Vec::new();
             for pr in github.fix_candidates(&launch.repo, base, author.as_deref())? {
-                if !github.needs_fix(&pr, base, author.as_deref(), false)? {
+                let Some(branch) =
+                    github.fix_candidate_branch(&pr, base, author.as_deref(), false)?
+                else {
+                    continue;
+                };
+                if let Some(path) = Worktree::branch_checkout(launch.directory.git(), &branch)? {
+                    let reason = format!(
+                        "passed over {}: head branch {} is checked out at {}",
+                        pr.url,
+                        branch,
+                        path.display()
+                    );
+                    crate::progress::step(&reason);
+                    passed_over.push(reason);
                     continue;
                 }
                 let Some(held) = Reservation::take(launch.directory.git(), &github, &pr)? else {
                     continue;
                 };
-                if !github.needs_fix(&pr, base, author.as_deref(), true)? {
+                if github
+                    .fix_candidate_branch(&pr, base, author.as_deref(), true)?
+                    .is_none()
+                {
                     continue;
                 }
                 let selected = FixArgs {
@@ -82,13 +99,14 @@ pub(crate) fn run(
                     Some(held),
                 )));
             }
-            return Ok(skipped(
-                &launch.repo,
-                format!(
-                    "no eligible pull request targeting {base} on {}",
-                    launch.repo.slug()
-                ),
-            ));
+            let mut reason = format!(
+                "no eligible pull request targeting {base} on {}",
+                launch.repo.slug()
+            );
+            if !passed_over.is_empty() {
+                reason.push_str(&format!("; {}", passed_over.join("; ")));
+            }
+            return Ok(skipped(&launch.repo, reason));
         }
         Ok(crate::command::Ending::Run(targeted(
             command, config, harness, None,

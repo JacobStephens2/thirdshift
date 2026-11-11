@@ -3279,6 +3279,13 @@ The Pass selects the first PR with a Merge conflict or CI red on its current
 head. It skips `in-progress` PRs, pending CI without a Merge conflict, and
 mergeable PRs with green or absent CI. It reserves and rechecks each candidate;
 if another machine reserved it first, it continues to the next candidate.
+Before reserving a candidate, it also checks local worktree registrations,
+including the main checkout and retained worktrees. A checked-out head branch
+is passed over, with the PR URL and occupying path on stderr, so later
+candidates can proceed. Occupied checkouts and their registrations are left
+intact. If none is eligible, the Activity log skip includes those reasons;
+no failed Fix run is recorded. An explicit `thirdshift fix <PR URL>` still
+fails when its head branch is occupied and names the occupying worktree.
 At the repository's Command limit, or with no eligible PR it can reserve,
 it exits `0`, prints a skip reason on stderr, records an Activity log skip
 when the reason changes, and sends no Run notification. A failed Fix run
