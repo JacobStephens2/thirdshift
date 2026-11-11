@@ -8,7 +8,7 @@ use super::*;
 use crate::github::ListedIssue;
 use crate::harness::{ChosenBy, Harness};
 use crate::issue::IssueUrl;
-use crate::logs::effects::Tail;
+use crate::logs::effects::{OnMachine, Tail};
 
 const STAMP: &str = "20261003T120000-0400";
 const ACTIVITY: &str = "/logs/acme/widgets/activity.log";
@@ -131,6 +131,10 @@ impl owner::Files for Scripted {
 }
 
 impl Outside for Scripted {
+    fn suspension_line(&mut self, writer: &mut Writer, line: &str) -> io::Result<()> {
+        writeln!(writer, "{line}")
+    }
+
     fn session_signals(
         &mut self,
         _log: &Path,
@@ -288,10 +292,77 @@ fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
     let saved: serde_json::Value =
         serde_json::from_str(&memory.file(record.record_path().unwrap())).unwrap();
     assert_eq!(saved["stages"][0]["suspended_seconds"], 120);
+    assert_eq!(
+        saved["stages"][0]["suspensions"],
+        serde_json::json!([{
+            "resumed_at": "2026-10-03T12:02:30-04:00", "seconds": 120
+        }])
+    );
     assert!(saved["outcome"].is_null());
     assert_eq!(saved["stages"].as_array().unwrap().len(), 1);
     let log = memory.file(record.command_log_path().unwrap());
     assert_eq!(log.matches("host was suspended 2 min").count(), 1, "{log}");
+}
+
+#[test]
+fn wake_annotation_keeps_silent_work_and_real_output_clears_it() {
+    use crate::logs::reading::{Health, Snapshot};
+
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(false);
+    config.logs_dir = root.path().to_path_buf();
+    let mut recorder = Record::new(OnMachine);
+    recorder.begin(Begin::Run(&issue()));
+    recorder.configured(&config);
+    recorder.started(Work::Run(&issue()), &harness());
+    let now = chrono::Local::now();
+    let path = recorder.record_path().unwrap();
+    let mut facts: CommandRecord = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    facts.stages[0].began_at = (now - chrono::Duration::minutes(90)).to_rfc3339();
+    facts.stages[0].suspended_seconds = 3600;
+    facts.stages[0].suspensions = vec![Suspension {
+        resumed_at: now.fixed_offset(),
+        seconds: 3600,
+    }];
+    std::fs::write(&path, serde_json::to_vec(&facts).unwrap()).unwrap();
+    let log = recorder.command_log_path().unwrap();
+    std::fs::File::open(&log)
+        .unwrap()
+        .set_modified((now - chrono::Duration::minutes(74)).into())
+        .unwrap();
+    let observed = |expected_silent| {
+        let snapshot = Snapshot::load(root.path(), now).unwrap();
+        let command = snapshot.resolve(&facts.name).unwrap().owner.unwrap();
+        assert_eq!(
+            matches!(command.health, Some(Health::Silent { .. })),
+            expected_silent
+        );
+        if expected_silent {
+            assert!(matches!(
+                command.health,
+                Some(Health::Silent { seconds: 840, .. })
+            ));
+        }
+    };
+    observed(true);
+    let annotation = progress::progress_line("12:00:00", "host was suspended 1 hr");
+    recorder.eprint(&annotation);
+    observed(true);
+    // Multiple suspension annotations must keep the same real-activity baseline.
+    recorder.eprint(&progress::relayed(7, &annotation));
+    observed(true);
+    recorder.eprint(&progress::relayed(8, &progress::relayed(7, &annotation)));
+    observed(true);
+    let real_output = progress::progress_line("12:00:01", "test output: host was suspended 1 hr");
+    recorder.eprint(&progress::relayed(7, &real_output));
+    observed(false);
+    recorder.print("working again");
+    observed(false);
+    assert!(
+        std::fs::read_to_string(log)
+            .unwrap()
+            .contains("host was suspended 1 hr")
+    );
 }
 
 #[test]
@@ -494,18 +565,21 @@ fn completion_metrics_place_each_stage_against_repository_history() {
             began_at: "2026-10-01T12:00:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
         Stage {
             name: "pull request".into(),
             began_at: "2026-10-01T12:01:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
         Stage {
             name: "CI watch".into(),
             began_at: "2026-10-01T12:11:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
     ];
     for number in 1..=3 {

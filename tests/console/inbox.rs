@@ -4,6 +4,193 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn suspended_time_health_agrees_in_status_and_the_console_inbox() {
+    use super::watching::live_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let now = chrono::Local::now();
+    struct Case {
+        number: u64,
+        stage: &'static str,
+        stage_minutes: i64,
+        quiet_minutes: u64,
+        suspended_minutes: i64,
+        resumed_minutes_ago: i64,
+        group: &'static str,
+        state: &'static str,
+    }
+    let cases = [
+        Case {
+            number: 1,
+            stage: "implement",
+            stage_minutes: 65,
+            quiet_minutes: 0,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "working",
+            state: "live",
+        },
+        Case {
+            number: 2,
+            stage: "implement",
+            stage_minutes: 65,
+            quiet_minutes: 0,
+            suspended_minutes: 0,
+            resumed_minutes_ago: 0,
+            group: "needs you",
+            state: "Slow",
+        },
+        Case {
+            number: 3,
+            stage: "implement",
+            stage_minutes: 75,
+            quiet_minutes: 0,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "needs you",
+            state: "Slow",
+        },
+        Case {
+            number: 4,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 65,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "working",
+            state: "live",
+        },
+        Case {
+            number: 5,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 65,
+            suspended_minutes: 0,
+            resumed_minutes_ago: 0,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 6,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 74,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 7,
+            stage: "Code review",
+            stage_minutes: 180,
+            quiet_minutes: 20,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 25,
+            group: "needs you",
+            state: "Silent",
+        },
+        Case {
+            number: 8,
+            stage: "CI watch",
+            stage_minutes: 65,
+            quiet_minutes: 65,
+            suspended_minutes: 60,
+            resumed_minutes_ago: 5,
+            group: "landing",
+            state: "Landing",
+        },
+    ];
+    for case in &cases {
+        let mut fixture = live_record(home.path(), case.number, std::process::id());
+        let began = (now - chrono::Duration::minutes(case.stage_minutes)).to_rfc3339();
+        fixture["kind"] = json!("Run");
+        fixture["tickets"] = json!([]);
+        fixture["started_at"] = json!(began);
+        fixture["stages"] = json!([{
+            "name": case.stage, "began_at": began, "session_log": null
+        }]);
+        if case.suspended_minutes > 0 {
+            fixture["stages"][0]["suspended_seconds"] = json!(case.suspended_minutes * 60);
+            fixture["stages"][0]["suspensions"] = json!([{
+                "resumed_at": (now - chrono::Duration::minutes(case.resumed_minutes_ago)).to_rfc3339(),
+                "seconds": case.suspended_minutes * 60
+            }]);
+        }
+        super::write_record(home.path(), case.number, &fixture);
+        let log = home.path().join(format!(
+            ".thirdshift/logs/acme/widgets/commands/issue/{}-fixture.log",
+            case.number
+        ));
+        fs::write(&log, "working\n").unwrap();
+        fs::File::open(log)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::now()
+                    - std::time::Duration::from_secs(case.quiet_minutes * 60),
+            )
+            .unwrap();
+    }
+    for number in 20..23 {
+        let mut fixture = record(home.path(), number, Some("merged"), 0);
+        let end = now - chrono::Duration::hours(4);
+        fixture["started_at"] = json!((end - chrono::Duration::minutes(10)).to_rfc3339());
+        fixture["ended_at"] = json!(end.to_rfc3339());
+        fixture["stages"][0]["began_at"] = fixture["started_at"].clone();
+        super::write_record(home.path(), number, &fixture);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let status = super::api::cli(home.path(), &["status", "--json"]);
+    assert_eq!(
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["state"] == "live")
+            .count(),
+        cases.len()
+    );
+    for case in &cases {
+        let subject = format!(
+            "href=\"https://github.com/acme/widgets/issues/{}\"",
+            case.number
+        );
+        let row = section(&html, case.group)
+            .split("<li class=\"command\"")
+            .find(|row| row.contains(&subject))
+            .unwrap_or_else(|| panic!("{html}"));
+        assert!(
+            row.contains(&format!("data-state=\"{}\"", case.state)),
+            "{row}"
+        );
+        assert_eq!(
+            row.contains("data-dismiss>"),
+            case.group == "needs you",
+            "{row}"
+        );
+        let command = status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["issue"]["number"] == case.number)
+            .unwrap();
+        assert_eq!(command["group"], case.group, "{command}");
+        assert_eq!(
+            command["health"]["state"],
+            match case.state {
+                "Slow" => "slow",
+                "Silent" => "silent",
+                _ => "ok",
+            },
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn overview_ticket_progress_counts_recorded_states_and_omits_missing_accounting() {
     use serde_json::json;
 

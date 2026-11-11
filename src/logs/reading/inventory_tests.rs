@@ -348,6 +348,63 @@ fn activity_file(path: &Path, text: &str, age_seconds: i64) {
 }
 
 #[test]
+fn aggregate_suspended_time_is_excluded_when_quiet_covers_the_whole_stage() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = record(7);
+    fixture["stages"] = json!([{
+        "name": "implement", "began_at": "2026-10-19T11:00:00.500-04:00",
+        "session_log": null, "suspended_seconds": 3300
+    }]);
+    write(root.path(), "7-fixture.command.json", &fixture);
+    let snapshot = Snapshot::load(root.path(), now()).unwrap();
+    let command = records(&snapshot)[0];
+    assert_eq!(command.quiet_age(), 299);
+    assert!(matches!(command.health, Some(Health::Ok)));
+    assert_eq!(
+        command.next_health_change,
+        Some(now() + chrono::Duration::seconds(301))
+    );
+}
+
+#[test]
+fn suspended_time_delays_slow_and_silent_transition_deadlines() {
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = record(7);
+    fixture["stages"] = json!([{
+        "name": "implement", "began_at": (now() - chrono::Duration::minutes(65)).to_rfc3339(),
+        "session_log": null, "suspended_seconds": 3600,
+        "suspensions": [{"resumed_at": (now() - chrono::Duration::minutes(5)).to_rfc3339(), "seconds": 3600}]
+    }]);
+    write(root.path(), "7-fixture.command.json", &fixture);
+    for number in 20..23 {
+        let mut history = record(number);
+        history["outcome"] = json!("merged");
+        history["ended_at"] = json!("2026-10-19T10:10:00-04:00");
+        history["stages"] = json!([{
+            "name": "implement", "began_at": "2026-10-19T10:00:00-04:00", "session_log": null
+        }]);
+        write(
+            root.path(),
+            &format!("{number}-fixture.command.json"),
+            &history,
+        );
+    }
+    for (silent, deadline) in [(600, 300), (3600, 301)] {
+        let snapshot =
+            Snapshot::load_with_silence(root.path(), now(), Duration::from_secs(silent)).unwrap();
+        let command = records(&snapshot)
+            .into_iter()
+            .find(|command| command.state == "live")
+            .unwrap();
+        assert!(matches!(command.health, Some(Health::Ok)));
+        assert_eq!(
+            command.next_health_change,
+            Some(now() + chrono::Duration::seconds(deadline))
+        );
+    }
+}
+
+#[test]
 fn unavailable_activity_uses_stage_age_and_zero_lengths_until_a_fresh_capture() {
     let dir = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
