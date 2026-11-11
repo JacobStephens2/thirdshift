@@ -3146,6 +3146,13 @@ red check as its own to fix, and follows the usual merge and email flags and
 User config. A PR already opened from that branch, including an <code>in-progress</code>
 or failed draft PR, prevents another repair for that commit. An existing repair
 branch also prevents another attempt if PR creation failed. When the opening
+session commits nothing, the Fix run pushes no repair branch, opens no PR and
+exits successfully. Stderr and the Activity log say the CI-fix found nothing
+to change on the Base branch at that commit. A local Git ref in the Launch
+repository remembers that Base branch and full commit, so later Passes there
+skip another CI-fix session for it while leaving PR selection available. It
+requests no further Check re-run.
+When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
 share the Base branch CI reservation without holding back unrelated PR fixes.
