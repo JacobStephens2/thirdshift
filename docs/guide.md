@@ -405,6 +405,8 @@ Open the localhost address it prints. The Console shows the same Inbox as `third
 
 Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
 
+Live Fix runs and Review runs show a clickable **PR #number** beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected **Base branch** before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.
+
 Specs with recorded Tickets show a count such as **2 / 5 Tickets complete** on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine's last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
