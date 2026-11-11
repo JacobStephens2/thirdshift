@@ -4073,11 +4073,19 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             github["failing_stderr"] = json!(format!(
                 "{diagnostic} token=PRIVATE-CREDENTIAL Private candidate write-up. Private provider/verifier diagnostic."
             ));
+            // A reset beyond the Command's cap reaches the original failure
+            // path whose notification privacy this test checks.
+            github["rate_limits"] = json!({
+                "core": {"remaining": 0, "reset": 4102444800u64},
+                "graphql": {"remaining": 0, "reset": 4102444800u64}
+            });
             scenario.write_gh_state(&github);
             let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+            let mut env = resend_env(&resend).to_vec();
+            env.push(("THIRDSHIFT_QUOTA_MINUTE_MS", "1"));
             let result = scenario.run_with_env(
                 &["secure", "harness", "codex", "email", "me@example.com"],
-                &resend_env(&resend),
+                &env,
             );
             assert_eq!(result.code, Some(1), "{}", result.stderr);
             assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
