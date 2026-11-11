@@ -262,6 +262,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .command > .fix-command { display: flex; margin: 4px 10px 8px; }
   .one-line .command:hover { background: var(--sel-bg); }
   .one-line .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) auto fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
+  .one-line .row-head:has(> .ticket-progress) { row-gap: 0; padding-block: 2px; line-height: 1.2; }
   .one-line .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .one-line .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
   .one-line .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
@@ -310,6 +311,7 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .folders a { flex: none; }
   @media (scripting: enabled) {
     .one-line .row-head { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 2px; }
+    .one-line .row-head:has(> .ticket-progress) { row-gap: 2px; padding-block: 7px; line-height: 1.4; }
     .one-line .row-head > .new { display: none; }
     .one-line .row-head > .pr-checks { grid-column: 1 / 3; grid-row: 3; justify-self: start; }
     .one-line .row-head > .age { grid-column: 3; grid-row: 1; }
