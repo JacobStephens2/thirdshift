@@ -365,11 +365,15 @@ impl CommandRecord {
     ) {
         self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
-        self.cause = account
-            .ended
-            .as_ref()
-            .err()
-            .map(|cause| cause.full().into());
+        // A Quota wait may already have opened this record. Pre-audit GitHub
+        // diagnostics stay on the terminal; the record keeps the fixed cause.
+        self.cause = account.pre_audit_failure.map(str::to_owned).or_else(|| {
+            account
+                .ended
+                .as_ref()
+                .err()
+                .map(|cause| cause.full().to_owned())
+        });
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();

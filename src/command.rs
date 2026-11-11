@@ -190,6 +190,14 @@ impl Started {
             | Ending::Security(_)
             | Ending::Skipped(_) => None,
         };
+        // progress::step keeps lines in a Command log a Quota wait may already
+        // have opened. The raw pre-audit diagnostic stays on the terminal.
+        if let Some(diagnostic) = account
+            .pre_audit_failure
+            .and(account.ended.as_ref().err().map(|cause| cause.full()))
+        {
+            eprintln!("{diagnostic}");
+        }
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
             notification.finish(&account);

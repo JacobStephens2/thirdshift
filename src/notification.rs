@@ -486,7 +486,11 @@ fn body(
     if let Some(log) = account.log {
         text += &format!("Session trace:  {}\n", log.display());
     }
-    if let Some(log) = command_log {
+    // A pre-audit notification uses the fixed cause. The Command log path
+    // stays on this machine: the email goes through a third party.
+    if account.pre_audit_failure.is_none()
+        && let Some(log) = command_log
+    {
         text += &format!("Command log:  {}\n", log.display());
     }
     if let Some(configured) = configured {
