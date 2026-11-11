@@ -266,6 +266,17 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
         },
         Prompt {
+            id: "prompt-triage-correction",
+            title: "Triage recommendation correction",
+            when: "After a completed Triage investigation returns invalid recommendation output, requests one complete correction in the same worktree and launch policy, without repeating the investigation. Both Session traces are retained separately.",
+            sender: TriageRun,
+            text: prompt::triage_correction(
+                &prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
+                Some("Triage recommendation: <rejected JSON>"),
+                "the Triage questionnaire is required only for needs-info or ready-for-human issues: <issue title>",
+            ),
+        },
+        Prompt {
             id: "prompt-triage-issue",
             title: "Existing-issue Triage run",
             when: "Investigates one existing open issue against the selected Base branch. thirdshift supplies the issue file, owns the reservation and Claim, and publishes the recommendation in place unless --recommend-only is given.",
