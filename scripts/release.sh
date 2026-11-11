@@ -68,6 +68,15 @@
 # version is no longer higher than main. An invalid pin is selected again.
 # Main can gain content after selection: the tagged tree is still exactly the
 # Candidate plus the version bump, and merging later preserves it in history.
+# While waiting for PR CI, a Merge conflict or completed failing CI starts at
+# most one targeted Fix run, with --no-merge and --no-base-fix. After a Fix or
+# external push, the current PR/head must still be an exact version bump. A
+# changed content base refreshes the requested Experiment, summary and diff.
+# More than five head changes, an unsuccessful Fix, or another blockage stops
+# before tagging with recovery instructions. Workflows have 300 seconds to
+# appear (RELEASE_WORKFLOW_STARTUP_SECONDS), and the same grace bounds GitHub
+# reporting green checks as mergeable; queued/running CI has no deadline. A
+# draft PR stops before tagging, naming gh pr ready.
 #
 # Prints a progress line on stderr for each step, stamped with the local time
 # as HH:MM:SS, with the release workflow run's URL once it waits for that run,
@@ -75,13 +84,13 @@
 # Exits 0 once the release workflow run for the tag has succeeded: the GitHub
 # Release is published with its final body and the crate is on crates.io. It
 # exits 1 with nothing more pushed if it refuses or the review says no, exits
-# 1 leaving the PR open if the PR's checks fail, and exits 1 leaving the tag in
-# place and the PR open if the release workflow run fails, naming its failed
+# 1 leaving the PR open if automatic CI recovery fails, and exits 1 leaving
+# the tag in place and the PR open if the release workflow run fails, naming its failed
 # jobs and run URL. Recovery is only attempted on a subsequent invocation.
 # A failed merge after publication leaves the release standing, names
 # the PR for the Day shift and still exits 0.
-# It waits with no overall timeout, so Ctrl-C and running it again
-# with the same version carries on waiting.
+# Running CI and publication wait with no overall timeout, so Ctrl-C and
+# running it again with the same version carries on waiting.
 set -euo pipefail
 
 # The prompt the summary agent gets ahead of the release's input.
@@ -90,10 +99,20 @@ summary_manifest=$(dirname "$summary_prompt")/../Cargo.toml
 
 # Seconds between reads of main's CI, the PR's runs and the release workflow.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
+# Only workflow startup is timed out, never queued/running CI.
+workflow_startup_seconds=${RELEASE_WORKFLOW_STARTUP_SECONDS:-300}
 
 main() {
 	review=
 	with_experiment=
+	fix_attempted=
+	head_updates=0
+	# Notes claim captured before a yield, and the base this process measured.
+	# A PR body edit must not count as an Experiment of a base we have not run.
+	release_notes_known=
+	release_notes_base=
+	release_notes_refresh=
+	experimented_base=
 	while :; do
 		case ${1-} in
 		--review) review=1 ;;
@@ -117,6 +136,7 @@ main() {
 	# first, including macOS's older Bash, which does not have this option.
 	shopt -s inherit_errexit
 
+	release_origin=$(git remote get-url origin)
 	fetch_main
 	find_earlier_run
 	case $pr_state in
@@ -136,7 +156,7 @@ main() {
 			validate_bump_pr
 			recut_untagged_bump
 			if [ -z "$recut" ]; then
-				if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
+				if [ -z "$tagged" ]; then wait_for_experiment "$(release_content_base)"; fi
 				write_summary "no PR was opened"
 			fi
 		fi
@@ -145,11 +165,16 @@ main() {
 	OPEN)
 		progress "resuming: $url is open"
 		recut_untagged_bump
-		if [ -z "$tagged" ] && [ -z "$recut" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
+		if [ -z "$tagged" ] && [ -z "$recut" ]; then
+			# The Experiment yields. Snapshot the notes claim first so a body
+			# edit during it cannot name a base this process has not measured.
+			remember_notes_claim
+			wait_for_experiment "$(release_content_base)"
+		fi
 		;;
 	MERGED)
 		progress "resuming: $url was merged as ${merge:0:7}"
-		if [ -z "$tagged" ]; then wait_for_experiment "$(git rev-parse "$head^1")"; fi
+		if [ -z "$tagged" ]; then wait_for_experiment "$(release_content_base)"; fi
 		;;
 	*)
 		refuse "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
@@ -178,7 +203,7 @@ recut_untagged_bump() {
 	recut=
 	if [ -n "$tagged" ]; then return; fi
 	previous=$(last_release_tag)
-	if [ -z "$previous" ] || git merge-base --is-ancestor "$previous" "$head^1"; then return; fi
+	if [ -z "$previous" ] || git merge-base --is-ancestor "$previous" "$(release_content_base)"; then return; fi
 	base=$(check_can_release "$version" "$tag")
 	progress "re-cutting untagged $tag from main at ${base:0:7}"
 	commit_bump "$base"
@@ -202,13 +227,13 @@ recover_failed_release() {
 	run=$(release_run "$tagged")
 	read -r id run_url status conclusion attempt <<<"$run"
 	if [ "$status" != completed ] || [ "$conclusion" = success ]; then return; fi
-	base=$(newest_green_main "$(git rev-parse "$head^1")")
+	base=$(newest_green_main "$(release_content_base)")
 	if [ -n "$base" ] || [ "$head" != "$tagged" ]; then
 		if [ -n "$base" ]; then
 			progress "re-cutting unpublished $tag from main at ${base:0:7}"
 			commit_bump "$base"
 		else
-			wait_for_experiment "$(git rev-parse "$head^1")"
+			wait_for_experiment "$(release_content_base)"
 		fi
 		write_summary "the release branch and tag were not moved"
 		refuse_if_published
@@ -304,19 +329,23 @@ find_earlier_run() {
 # bump_version result from its merge base. A merged PR uses main just before
 # its merge, since its head is already an ancestor of main now.
 validate_bump_pr() {
-	local base target expected candidate=${url:-$branch on origin}
+	local base expected candidate=${url:-$branch on origin}
 	if ! git fetch --quiet origin "$head"; then
 		refuse "$candidate head could not be fetched from origin"
 	fi
-	target=origin/main
-	if [ "$pr_state" = MERGED ]; then
-		target=$merge^1
-	fi
-	base=$(git merge-base "$head" "$target")
+	base=$(release_content_base)
 	expected=$(bump_tree "$base")
 	if [ "$expected" != "$(git rev-parse "$head^{tree}")" ]; then
-		refuse "$candidate changes more than the version bump to $version in Cargo.toml and Cargo.lock"
+		refuse "$candidate changes more than the version bump to $version in Cargo.toml and Cargo.lock; human review is required before tagging"
 	fi
+}
+
+# A repaired bump can be a merge commit whose first parent is the old bump.
+# Its content is the merge base with main, not that first parent.
+release_content_base() {
+	local target=origin/main
+	if [ "$pr_state" = MERGED ]; then target=$merge^1; fi
+	git merge-base "$head" "$target"
 }
 
 # bump_tree <base>
@@ -338,7 +367,7 @@ bump_tree() (
 # left behind by an interrupted recovery. With no earlier run,
 # check_can_release refuses an existing tag in its turn.
 find_existing_tag() {
-	local old_base base run id run_url status conclusion attempt
+	local old_base= parent base run id run_url status conclusion attempt
 	tagged=
 	if [ -z "$pr_state" ] && [ -z "$head" ]; then
 		return
@@ -355,13 +384,19 @@ find_existing_tag() {
 	# tag. Accept only two exact bumps, a strictly newer content base, and an
 	# unpublished failed workflow on the old tag; unrelated tags still refuse.
 	git fetch --quiet origin "$tagged"
-	old_base=$(git rev-parse "$tagged^1")
-	base=$(git rev-parse "$head^1")
+	base=$(release_content_base)
+	# Fix can leave a merge with the old bump first and main second. Accept
+	# only a parent on the new content's history whose exact bump is the tag.
+	for parent in $(git show -s --format=%P "$tagged"); do
+		if [ "$parent" != "$base" ] && git merge-base --is-ancestor "$parent" "$base" &&
+			[ "$(bump_tree "$parent")" = "$(git rev-parse "$tagged^{tree}")" ]; then
+			old_base=$parent
+			break
+		fi
+	done
 	run=$(release_run "$tagged")
 	read -r id run_url status conclusion attempt <<<"$run"
-	if [ "$pr_state" = OPEN ] && [ "$old_base" != "$base" ] &&
-		git merge-base --is-ancestor "$old_base" "$base" &&
-		[ "$(bump_tree "$old_base")" = "$(git rev-parse "$tagged^{tree}")" ] &&
+	if [ "$pr_state" = OPEN ] && [ -n "$old_base" ] &&
 		[ "$status" = completed ] && [ "$conclusion" != success ] &&
 		release_is_absent; then
 		progress "resuming re-cut of unpublished $tag on ${head:0:7}"
@@ -420,6 +455,8 @@ saved_candidate_is_current() {
 # wait_for_experiment <content commit>
 # Use this checkout's runner and private Eval suites, as for summary_agent.
 wait_for_experiment() {
+	# Including the skip path: adoption must not treat an unmeasured base as covered.
+	experimented_base=$1
 	local snapshot status outcome id answer previous
 	local baseline_args=()
 	if [ -z "$with_experiment" ]; then
@@ -484,6 +521,7 @@ experiment_status() {
 write_summary() {
 	local base
 	base=$(git merge-base "$head" origin/main)
+	summary_base=$base
 	progress "writing the summary with the configured Harness"
 	diff=$(version_diff "$base" "$head")
 	summary=$(release_summary "$base" "$tag" "$diff")
@@ -499,10 +537,16 @@ open_pr() {
 	url=$(gh pr create --base main --head "$branch" --title "Release $version" \
 		--body "$(pr_body "$summary" "$diff")" | tail -n 1)
 	progress "opened $url"
+	remember_written_notes
 }
 
 # The subshell owns the temporary PR body even if gh fails.
-edit_pr() (
+edit_pr() {
+	edit_pr_file
+	remember_written_notes
+}
+
+edit_pr_file() (
 	local body_file
 	body_file=$(mktemp)
 	trap 'rm -f "$body_file"' EXIT
@@ -510,28 +554,189 @@ edit_pr() (
 	gh pr edit "$url" --body-file "$body_file" >/dev/null
 )
 
-# wait_for_pr_checks
-# Leaves the PR open and untagged and exits 1 if its checks failed.
-wait_for_pr_checks() {
-	local failed tag_state="no tag was pushed"
-	progress "waiting for CI on $url"
-	failed=$(wait_for_workflow_runs "$head")
-	if [ -n "$failed" ]; then
-		if [ -n "$tagged" ]; then tag_state="the existing tag is unchanged"; fi
-		progress "CI failed on $url ($failed), so the PR is left open and unmerged; $tag_state"
-		exit 1
+# Read the content base the PR's notes describe, and whether they need a refresh.
+read_notes_claim() {
+	local notes_ref=refs/thirdshift/release-notes/$version
+	observe_release_pr
+	if [ "$observed_notes_base" = - ]; then
+		# Older PR bodies lack the marker. Remember their starting content
+		# before Fix can push and then fail, so rerunning still detects it.
+		release_notes_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
+		# Without a marker the notes may predate this script/checkout. The
+		# current head alone cannot establish what their summary describes.
+		release_notes_refresh=1
+	else
+		release_notes_base=$observed_notes_base
+		release_notes_refresh=
 	fi
+}
+
+# Snapshot the PR's notes claim before a yield. Reading the marker again
+# after the Experiment returns would let a body edit name an unmeasured base.
+remember_notes_claim() {
+	read_notes_claim
+	release_notes_known=1
+}
+
+# Notes this process just wrote. Do not re-read the body for that claim.
+remember_written_notes() {
+	release_notes_known=1
+	release_notes_base=$summary_base
+	release_notes_refresh=
+}
+
+# wait_for_pr_checks
+# Observe this PR throughout CI. One targeted Fix run shares Delivery's Repair
+# budget; a second blockage or continued head churn returns to the operator.
+wait_for_pr_checks() {
+	local runs failed content_base next_base refresh_notes= startup=$SECONDS settling=
+	local notes_ref=refs/thirdshift/release-notes/$version
+	[[ "$workflow_startup_seconds" =~ ^[0-9]+$ ]] || refuse "RELEASE_WORKFLOW_STARTUP_SECONDS must be a nonnegative integer"
+	[ -n "$release_notes_known" ] || read_notes_claim
+	content_base=$release_notes_base
+	refresh_notes=$release_notes_refresh
+	# A path that has not called wait_for_experiment has not measured another base.
+	if [ -z "$experimented_base" ]; then experimented_base=$content_base; fi
+	git update-ref "$notes_ref" "$content_base"
+	progress "waiting for CI on $url"
+	while :; do
+		observe_release_pr
+		if [ "$observed_head" != "$head" ] || [ "$(release_content_base)" != "$content_base" ]; then
+			if [ "$observed_head" != "$head" ]; then
+				head_updates=$((head_updates + 1))
+				[ "$head_updates" -le 5 ] || release_blocked "the PR head changed more than five times"
+			fi
+			head=$observed_head
+			fetch_main
+			validate_bump_pr
+			next_base=$(git merge-base "$head" origin/main)
+			# Measure a base this process has not run. Refresh notes when the
+			# snapshotted claim is a different base, even if a body edit now
+			# names the one we are adopting.
+			if [ "$next_base" != "$experimented_base" ]; then
+				wait_for_experiment "$next_base"
+			fi
+			if [ "$next_base" != "$content_base" ]; then
+				refresh_notes=1
+			fi
+			content_base=$next_base
+			startup=$SECONDS
+			settling=
+			progress "adopted $url at ${head:0:7}"
+		fi
+		if [ "$observed_mergeable" = CONFLICTING ]; then
+			fix_release_pr "Merge conflict"
+			continue
+		fi
+		runs=$(workflow_runs "$head")
+		# A workflow read can race an external push or Fix completion.
+		observe_release_pr
+		if [ "$observed_head" != "$head" ] || [ "$observed_mergeable" = CONFLICTING ]; then continue; fi
+		if [ -n "$runs" ] && ! grep -qv '^completed ' <<<"$runs"; then
+			failed=$(failed_workflows <<<"$runs")
+			if [ -n "$failed" ]; then
+				fix_release_pr "CI failed ($failed)"
+				continue
+			fi
+			if [ "$observed_mergeable" = MERGEABLE ]; then
+				fetch_main
+				validate_bump_pr
+				# A newly merged release can invalidate ancestry during CI.
+				local previous
+				previous=$(last_release_tag)
+				if [ -n "$previous" ] && ! git merge-base --is-ancestor "$previous" "$content_base"; then
+					release_stopped "the content base predates the latest release $previous"
+				fi
+				if [ -n "$refresh_notes" ]; then
+					write_summary "no new tag was pushed"
+					# A Harness can take time; never edit a changed PR or
+					# publish these notes on a newer head.
+					observe_release_pr
+					if [ "$observed_head" != "$head" ]; then continue; fi
+					edit_pr
+					git update-ref "$notes_ref" "$content_base"
+					refresh_notes=
+					continue
+				fi
+				observe_release_pr
+				if [ "$observed_head" = "$head" ] && [ "$observed_mergeable" = MERGEABLE ]; then return; fi
+				continue
+			fi
+			# Green CI on a head GitHub has not reported mergeable gets the
+			# same grace as workflow startup, never an unbounded wait.
+			settling=${settling:-$SECONDS}
+			if [ "$((SECONDS - settling))" -ge "$workflow_startup_seconds" ]; then
+				release_stopped "GitHub did not report the PR mergeable within ${workflow_startup_seconds}s of its checks passing"
+			fi
+		elif [ -z "$runs" ] && [ "$((SECONDS - startup))" -ge "$workflow_startup_seconds" ]; then
+			release_blocked "no workflows appeared within ${workflow_startup_seconds}s; inspect GitHub Actions"
+		fi
+		sleep "$poll_seconds"
+	done
+}
+
+# Re-read the captured PR, never search for a replacement. Refuse identity,
+# state, origin or branch changes before adopting a head or publishing a tag.
+observe_release_pr() {
+	local observation origin_head draft
+	[ "$(git remote get-url origin)" = "$release_origin" ] || release_stopped "origin changed"
+	if ! observation=$(gh pr view "$url" --json url,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,body |
+		python3 -c '
+import json, re, sys
+pr = json.load(sys.stdin)
+url, branch = sys.argv[1:]
+if (pr["url"] != url or pr["state"] != "OPEN" or pr["headRefName"] != branch
+        or pr["baseRefName"] != "main" or pr["isCrossRepository"]):
+    sys.exit("release PR identity/state/branch changed")
+notes = re.search(r"^<!-- release-content-base: ([0-9a-f]{40}) -->$", pr["body"], re.M)
+print(pr["headRefOid"], pr["mergeable"], notes[1] if notes else "-", pr["isDraft"])
+' "$url" "$branch"); then
+		release_stopped "could not validate the release PR identity/state/branch"
+	fi
+	read -r observed_head observed_mergeable observed_notes_base draft <<<"$observation"
+	# A failed or interrupted Fix run drafts the PR; publishing it would leave
+	# the merge blocked, so a human reviews it and marks it ready first.
+	[ "$draft" = False ] || release_stopped "the PR is a draft, as a failed or interrupted Fix run leaves it; review it and mark it ready with gh pr ready $url"
+	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
+	[ -n "$origin_head" ] && [ "$observed_head" = "$origin_head" ] || release_stopped "PR head does not match refs/heads/$branch on origin"
+}
+
+fix_release_pr() {
+	[ -z "$fix_attempted" ] || release_blocked "$1 after the automatic Fix run"
+	fix_attempted=1
+	progress "$1 on $url; starting one targeted Fix run"
+	# Cargo itself can be interrupted before thirdshift installs its handler.
+	trap 'release_blocked "the targeted Fix run was interrupted"' INT TERM HUP
+	if ! cargo run --quiet --manifest-path "$summary_manifest" -- fix "$url" --no-merge --no-base-fix; then
+		release_blocked "$1; the targeted Fix run failed or was interrupted"
+	fi
+	trap - INT TERM HUP
+}
+
+release_blocked() {
+	refuse "$url at $head: $1; the PR is left open for human review and no new tag was pushed. Recover with thirdshift fix $url --no-merge --no-base-fix, then scripts/release.sh${with_experiment:+ --with-experiment} $version"
+}
+
+# A changed PR, origin or release boundary is not something a Fix run repairs.
+release_stopped() {
+	refuse "$url at $head: $1; no new tag was pushed. Inspect the PR, then rerun scripts/release.sh${with_experiment:+ --with-experiment} $version"
 }
 
 # merge_bump_pr
 # The tag is already public. A failed merge leaves the release standing and
-# names the PR for the Day shift; publication has already succeeded.
+# names the PR for the Day shift; publication has already succeeded. A PR
+# made draft after its last validation names the ready step it needs.
 merge_bump_pr() {
+	local action="merge $url"
 	if gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null; then
 		progress "merged $url"
-	else
-		progress "warning: $tag is left in place and the release still stands; the Day shift must merge $url"
+		return
 	fi
+	if gh pr view "$url" --json isDraft 2>/dev/null |
+		python3 -c 'import json, sys; sys.exit(not json.load(sys.stdin)["isDraft"])' 2>/dev/null; then
+		action="merge $url; $url is a draft, so first mark it ready with gh pr ready $url"
+	fi
+	progress "warning: $tag is left in place and the release still stands, but the bump PR is not merged; the Day shift must $action"
 }
 
 # wait_for_release
@@ -721,6 +926,8 @@ pr_body() {
 		<!-- release-summary:end -->
 
 		$2
+
+		<!-- release-content-base: $summary_base -->
 	EOF
 }
 
@@ -821,24 +1028,19 @@ summary_input() {
 		done
 }
 
-# wait_for_workflow_runs <sha>
-# Waits until <sha> has workflow runs and all of them have completed, then
-# prints the names of those that did not succeed, comma-separated, or nothing.
+# workflow_runs <sha>
+# One observation; the PR wait owns startup grace, head refresh and recovery.
 # A workflow run completes only once all its jobs have, including jobs that
 # start after others finish, which a commit's check runs would not show yet.
-wait_for_workflow_runs() {
-	local runs
-	while :; do
-		runs=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=100" \
-			--jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.name)"')
-		if [ -n "$runs" ] && ! grep -qv '^completed ' <<<"$runs"; then
-			break
-		fi
-		sleep "$poll_seconds"
-	done
+workflow_runs() {
+	gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=100" \
+		--jq '.workflow_runs[] | "\(.status) \(.conclusion) \(.name)"'
+}
+
+failed_workflows() {
 	awk '$2 != "success" && $2 != "skipped" && $2 != "neutral" {
 		sub(/^[^ ]+ [^ ]+ /, ""); printf "%s%s", sep, $0; sep = ", "
-	}' <<<"$runs"
+	}'
 }
 
 # Only when run, so the tests can source the script and call its functions.
