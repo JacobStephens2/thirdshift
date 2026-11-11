@@ -309,8 +309,10 @@ pub(crate) fn tickets(tickets: Vec<TicketRecord>) {
 /// `activity.quiet_skips` is set, show the lines a pass held from the
 /// terminal and every line from here on. With it set, a pass's lines stay
 /// held until it starts work, ends or fails, so a skipped pass prints
-/// nothing.
+/// nothing. Capture the Command's effective waiting-line interval before
+/// any waiting stages begin.
 pub fn configured(config: &UserConfig) {
+    crate::poll::configure_waiting_lines(config.effective_waiting_line_interval());
     record().configured(config);
 }
 
