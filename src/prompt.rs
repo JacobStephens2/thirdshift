@@ -76,9 +76,6 @@ pub fn triage_issue(
          needs-info or ready-for-human, or a wontfix explanation. Propose a split through a \
          ready-for-human questionnaire. For a duplicate, recommend wontfix here and optionally \
          cross-reference the other open issue in recommendation.comments.\n\
-         Choose recommendation.category and any issue category from the available repository \
-         categories below, even when publication will preserve an existing category. \
-         security-finding is a factory marker, not a category.\n\
          Available repository categories (JSON): {}\n",
         triage(
             skill_path,

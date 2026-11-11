@@ -107,8 +107,6 @@ fn finding_category_guidance_uses_actual_names_and_filters_factory_labels() {
         .expect("existing-issue Triage must supply usable category names");
     let categories: Vec<String> = serde_json::from_str(categories).unwrap();
     assert_eq!(categories, [category]);
-    assert!(prompt.contains("security-finding is a factory marker, not a category"));
-    assert!(prompt.contains("even when publication will preserve an existing category"));
     assert_eq!(scenario.gh_state(), before);
 }
 
