@@ -184,8 +184,8 @@ fn eof_selects_an_issue_and_triages_it_on_the_selected_base() {
         "{notification}"
     );
     let activity = std::fs::read_to_string(scenario.path(&format!("{LOGS}/activity.log"))).unwrap();
-    assert!(activity.contains("Triage run started"), "{activity}");
-    assert!(activity.contains("Triage run ended"), "{activity}");
+    assert!(activity.contains("Triage run #7 started"), "{activity}");
+    assert!(activity.contains("Triage run #7 ended"), "{activity}");
     assert!(
         !scenario
             .log_files(&format!("{LOGS}/commands/triage"), "log")
