@@ -690,8 +690,8 @@ fn unchanged(github: &GitHub, pr: &PullRequestUrl, snapshot: &ReviewPullRequest)
     Ok(())
 }
 
-/// Delivery may report a moved head, but never publish to a changed base,
-/// branch or an ineligible pull request.
+/// Delivery may report a moved head and the Base branch tip may advance,
+/// but never publish to changed branch names or an ineligible pull request.
 fn compatible(
     github: &GitHub,
     pr: &PullRequestUrl,
@@ -699,9 +699,7 @@ fn compatible(
 ) -> Result<ReviewPullRequest> {
     let current = github.review_pull_request(pr)?;
     ensure!(
-        current.base_head == snapshot.base_head
-            && current.base == snapshot.base
-            && current.branch == snapshot.branch,
+        current.base == snapshot.base && current.branch == snapshot.branch,
         "pull request changed during Review run"
     );
     Ok(current)

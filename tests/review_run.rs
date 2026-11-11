@@ -15,6 +15,150 @@ fn pull_request(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn advancing_base_during_review_delivers_fixes_and_posts_findings() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("unrelated", "main", &["Unrelated change"]);
+    scenario.agent_does(
+        r#"
+echo review-fix > review-fix.txt
+git add review-fix.txt
+git commit -qm 'Address review finding'
+git fetch -q origin unrelated
+git push -q origin FETCH_HEAD:refs/heads/main
+printf 'Standards: fixed export. Spec: no findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario
+            .origin_file("colleague", "review-fix.txt")
+            .as_deref(),
+        Some("review-fix\n")
+    );
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("fixed export"), "{comment}");
+    assert!(comment.contains("pushed_head"), "{comment}");
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(notification.contains("ready for review"), "{notification}");
+}
+
+#[test]
+fn advancing_base_into_conflict_keeps_review_fixes_local() {
+    let scenario = Scenario::new();
+    scenario.origin_has_commit("main", "shared.txt", "original\n", "Shared file");
+    let url = pull_request(&scenario);
+    scenario.origin_has_commit("colleague", "shared.txt", "author\n", "Author change");
+    scenario.origin_has_branch("base-update", "main", &[]);
+    scenario.origin_has_commit(
+        "base-update",
+        "shared.txt",
+        "upstream\n",
+        "Conflicting change",
+    );
+    scenario.agent_does(
+        r#"
+echo review-fix > review-fix.txt
+git add review-fix.txt
+git commit -qm 'Address review finding'
+git fetch -q origin base-update
+git push -q origin FETCH_HEAD:refs/heads/main
+gh fake pr colleague mergeable '"CONFLICTING"'
+printf 'Standards: fixed export. Spec: no findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("needs updating before merge"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        scenario
+            .origin_file("colleague", "review-fix.txt")
+            .is_none()
+    );
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("needs updating before merge"), "{comment}");
+    assert!(!comment.contains("pushed_head"), "{comment}");
+    let calls = scenario.claude_calls();
+    let worktree = Path::new(calls[0]["cwd"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("review-fix.txt")).unwrap(),
+        "review-fix\n"
+    );
+}
+
+#[test]
+fn advancing_base_during_recommend_only_posts_findings_without_pushing() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("unrelated", "main", &["Unrelated change"]);
+    let before = scenario.origin_log("colleague");
+    scenario.agent_does(
+        r#"
+git fetch -q origin unrelated
+git push -q origin FETCH_HEAD:refs/heads/main
+printf 'Standards: consider export. Spec: no findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url, "--recommend-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.origin_log("colleague"), before);
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("consider export"), "{comment}");
+    assert!(
+        comment.contains("--recommend-only; nothing pushed"),
+        "{comment}"
+    );
+    assert!(!comment.contains("pushed_head"), "{comment}");
+}
+
+#[test]
+fn advancing_base_during_review_ci_watch_keeps_the_delivered_head_ready() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    scenario.origin_has_branch("unrelated", "main", &["Unrelated change"]);
+    scenario.agent_does(
+        r#"
+echo review-fix > review-fix.txt
+git add review-fix.txt
+git commit -qm 'Address review finding'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success","pending_polls":2}]'
+gh fake on-ci-read 1 'git fetch -q origin unrelated; git push -q origin FETCH_HEAD:refs/heads/main'
+printf 'Standards: fixed export. Spec: no findings.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["review", &url]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario
+            .origin_file("colleague", "review-fix.txt")
+            .as_deref(),
+        Some("review-fix\n")
+    );
+    let state = scenario.gh_state();
+    let comment = state["prs"][0]["postedComments"][0].as_str().unwrap();
+    assert!(comment.contains("fixed export"), "{comment}");
+    assert!(comment.contains("pushed_head"), "{comment}");
+    let (_, notification) = support::resend::saved_notification(&scenario, "review");
+    assert!(notification.contains("ready for review"), "{notification}");
+}
+
+#[test]
 fn retry_delivers_commits_retained_after_delivery_validation_failed() {
     let scenario = Scenario::new();
     let url = pull_request(&scenario);
@@ -1081,7 +1225,7 @@ fn review_process_file_can_be_inspected_checked_and_copied() {
 
 #[test]
 fn a_changed_pr_stops_before_posting_recommendations() {
-    for changed in ["head", "merged", "draft"] {
+    for changed in ["head", "retarget", "branch", "closed", "merged", "draft"] {
         let scenario = Scenario::new();
         let url = pull_request(&scenario);
         let started = scenario.path("started");
@@ -1100,10 +1244,16 @@ fn a_changed_pr_stops_before_posting_recommendations() {
             );
         } else {
             let mut state = scenario.gh_state();
-            if changed == "merged" {
-                state["prs"][0]["state"] = json!("MERGED");
-            } else {
-                state["prs"][0]["isDraft"] = json!(true);
+            match changed {
+                "retarget" => state["prs"][0]["base"] = json!("colleague"),
+                "branch" => {
+                    scenario.origin_has_branch("renamed", "colleague", &[]);
+                    state["prs"][0]["head"] = json!("renamed");
+                }
+                "closed" => state["prs"][0]["state"] = json!("CLOSED"),
+                "merged" => state["prs"][0]["state"] = json!("MERGED"),
+                "draft" => state["prs"][0]["isDraft"] = json!(true),
+                _ => unreachable!(),
             }
             scenario.write_gh_state(&state);
         }
@@ -1111,16 +1261,18 @@ fn a_changed_pr_stops_before_posting_recommendations() {
         let result = held.finish();
         assert_eq!(result.code, Some(1), "{changed}: {}", result.stderr);
         assert!(scenario.gh_state()["prs"][0]["postedComments"].is_null());
-        if changed == "head" {
+        if matches!(changed, "head" | "retarget" | "branch") {
             assert!(
                 result.stderr.contains("changed during Review run"),
                 "{}",
                 result.stderr
             );
-            assert_eq!(
-                scenario.origin_file("colleague", "later.txt").as_deref(),
-                Some("Later author work")
-            );
+            if changed == "head" {
+                assert_eq!(
+                    scenario.origin_file("colleague", "later.txt").as_deref(),
+                    Some("Later author work")
+                );
+            }
         } else {
             assert!(result.stderr.contains(changed), "{}", result.stderr);
         }
@@ -1128,8 +1280,8 @@ fn a_changed_pr_stops_before_posting_recommendations() {
 }
 
 #[test]
-fn address_mode_reports_a_moved_head_but_stops_publication_after_base_or_eligibility_changes() {
-    for changed in ["head", "base", "merged", "draft"] {
+fn address_mode_reports_a_moved_head_but_stops_publication_after_branch_or_eligibility_changes() {
+    for changed in ["head", "retarget", "branch", "closed", "merged", "draft"] {
         let scenario = Scenario::new();
         let url = pull_request(&scenario);
         let release = scenario.path("release");
@@ -1145,15 +1297,18 @@ fn address_mode_reports_a_moved_head_but_stops_publication_after_base_or_eligibi
                 "Author work",
                 "Later author commit",
             ),
-            "base" => {
-                scenario.origin_has_commit("main", "base.txt", "Base work", "Later base commit")
-            }
             _ => {
                 let mut state = scenario.gh_state();
-                if changed == "merged" {
-                    state["prs"][0]["state"] = json!("MERGED");
-                } else {
-                    state["prs"][0]["isDraft"] = json!(true);
+                match changed {
+                    "retarget" => state["prs"][0]["base"] = json!("colleague"),
+                    "branch" => {
+                        scenario.origin_has_branch("renamed", "colleague", &[]);
+                        state["prs"][0]["head"] = json!("renamed");
+                    }
+                    "closed" => state["prs"][0]["state"] = json!("CLOSED"),
+                    "merged" => state["prs"][0]["state"] = json!("MERGED"),
+                    "draft" => state["prs"][0]["isDraft"] = json!(true),
+                    _ => unreachable!(),
                 }
                 scenario.write_gh_state(&state);
             }
