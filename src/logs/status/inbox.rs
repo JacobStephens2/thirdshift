@@ -117,9 +117,11 @@ impl Row {
         if self.pull_request.is_empty() {
             return;
         }
-        self.subject = crate::review::PullRequestUrl::parse(&self.pull_request)
+        let pull_request = crate::review::PullRequestUrl::parse(&self.pull_request).ok();
+        self.subject = pull_request
+            .as_ref()
             .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
-            .unwrap_or_else(|_| self.pull_request.clone());
+            .unwrap_or_else(|| self.pull_request.clone());
         self.subject_url =
             Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
         self.title = title
@@ -128,6 +130,11 @@ impl Row {
             .into();
         self.ci = Some(ci.unwrap_or_default());
         self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
+        self.fix_command = if self.ci == Some(crate::github::InboxCi::Red) || self.merge_conflict {
+            pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
+        } else {
+            None
+        };
     }
 
     /// The one-line row's summary: where the Command stands and, for a
@@ -696,7 +703,6 @@ pub(super) fn from_read(
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
-                    row.fix_command = item.fix_command();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)

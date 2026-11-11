@@ -146,7 +146,7 @@ Ready for review rows show the pull request's latest head CI as **CI green**, **
 
 A conflicting pull request also shows a separate **Merge conflict** pill beside CI, even when CI is green. It stays in Ready for review. The same GitHub read refreshes mergeability and wakes open pages when it changes; `status` prints **Merge conflict** too. `status --json` includes `github_mergeable` (`mergeable`, `conflicting` or `unknown`). Only `conflicting` shows the pill; unknown and older saved answers do not claim a conflict. Failed reads retain the last answer with the same freshness warning.
 
-Ready for review rows with a pull request and either **CI red** or **Merge conflict** show `thirdshift fix <PR URL>` and a **Copy fix command** button, both on the Inbox row and in Command details (Peek). Clicking it copies the command; run it from a clone of that repository to start a [Fix run](#fix-runs). A later Command on the same pull request URL takes up the earlier waiting row in Ready for review or Needs you, just as one on the same issue does, including when neither Command has a linked issue. The row says `taken up by a later Command started at <time>`, and retention counts from that later start.
+Ready for review rows with a pull request and either **CI red** or **Merge conflict** offer **Start Fix run** when the owning machine currently permits `run` and knows a Launch directory for that repository. Review the pull request, repository and owning machine, then confirm to start a [Fix run](#fix-runs) there. Cancel or Escape starts nothing. Omitted options use that machine's User config and CLI defaults; the earlier Command's options are not replayed. Other-account Commands stay read-only. The row and Command details (Peek) also retain `thirdshift fix <PR URL>` with **Copy fix command**; copy it and run it from a clone of that repository. A later Command on the same pull request URL takes up the earlier waiting row in Ready for review or Needs you, just as one on the same issue does, including when neither Command has a linked issue. The row says `taken up by a later Command started at <time>`, and retention counts from that later start.
 
 Each row with a kept answer also carries `github`: `subjects` maps its own or dispatched issue and pull request URLs to their `facts` and RFC 3339 `answered_at`. An unresolved URL has null facts; an older cache without an observation time has null `answered_at`. Finding rows include `github.findings` with per-URL waiting flags, the first observed `triaged_at`, and `answered_at`, without private write-ups. History freezes these observation times with its facts. The existing `github_state` and `github_at` fields still describe the row's own pull request and its merge or close event.
 
@@ -2553,7 +2553,7 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
-waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
+waiting_line_minutes = 5  # repeat unchanged CI watch, Self-merge and Trial waiting lines
 
 [otlp]
 endpoint = "http://localhost:4318/v1/traces"   # also send ended spans to a local viewer
@@ -2620,7 +2620,7 @@ commands_by_repo = {}   # extra validation commands for each "owner/repo" in eve
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
-waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+waiting_line_minutes = 5   # repeat unchanged CI watch, Self-merge and Trial waiting lines; default 5 minutes
 
 [otlp]
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security and Scoring runs never export
@@ -2737,7 +2737,7 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Ticket run before any work, since the directory a Ticket run is launched from is no base for a setting that holds for every Ticket run.
 
-`logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+`logs.waiting_line_minutes` sets how often CI watch, Self-merge and an Experiment's running Trials repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability; each running Trial writes one saying it is still running, so a long Trial does not make its Experiment Silent.
 
 `inbox.days` defaults to 7 and must be a positive whole number of days. It bounds ended problems GitHub can't speak for in Needs you, and older completions in Resolved: Resolved runs to `inbox.days` after a Command ended, after the later Command started for a row one took up, after a ready row's pull request merged or closed on GitHub, or after the dismissal for a dismissed row. Done always covers one day. A ready Command whose pull request GitHub shows as open stays in Ready for review however old it is; only a row GitHub can't speak for still ages out of Ready for review after `inbox.days`. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
 
@@ -3207,9 +3207,13 @@ Running the Spec again picks up where the last Spec run stopped. The Spec branch
 ## Fix runs
 
 Use a **Fix run** when a delivered pull request needs its Base branch merged in,
-a merge conflict resolved or CI repaired. The Console offers **Copy fix command**
-on Ready for review rows with CI red or Merge conflict and in their Command
-details. Starting it takes up earlier waiting Inbox rows on that pull request,
+a merge conflict resolved or CI repaired. On Ready for review rows with CI red
+or Merge conflict, the Console offers **Start Fix run** with confirmation of the
+pull request, repository and owning machine. It requires current `run` permission
+and a known Launch directory on that machine, and uses its User config and CLI
+defaults. The Console shows the returned Command or failure; after an uncertain
+response, check Inbox and logs before retrying. **Copy fix command** remains on
+the row and in Command details. Starting a Fix run takes up earlier waiting Inbox rows on that pull request,
 whether or not they name the same issue. Other later Commands on that pull
 request make the same hand-off.
 
