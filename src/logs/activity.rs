@@ -75,10 +75,14 @@ pub(super) fn tail(path: &Path, limit: u64) -> Result<Tail> {
 
 /// The time and unstamped text of the last line of `kind` in the tail.
 pub(super) fn last_of(tail: &str, kind: Kind) -> Option<(&str, &str)> {
-    let kind = kind.to_string();
+    last_with_prefix(tail, &kind.to_string())
+}
+
+/// Last line of one kind or named Process, respecting the subject boundary.
+pub(super) fn last_with_prefix<'a>(tail: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
     tail.lines().rev().find_map(|line| {
         let unstamped = line.get(TIME_FORMAT_LENGTH + 1..)?;
-        let rest = unstamped.strip_prefix(&kind)?;
+        let rest = unstamped.strip_prefix(prefix)?;
         (rest.starts_with(' ') || rest.starts_with(':'))
             .then_some((line.get(..TIME_FORMAT_LENGTH)?, unstamped))
     })

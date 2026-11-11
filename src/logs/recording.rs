@@ -190,7 +190,7 @@ impl<O: Outside> Record<O> {
             self.activity_write(
                 root,
                 &format!("{} warning: {warning}", Kind::UserConfig),
-                Some(Kind::UserConfig),
+                Some(&Kind::UserConfig.to_string()),
             );
         }
     }
@@ -388,7 +388,7 @@ impl<O: Outside> Record<O> {
         self.activity_write(
             &self.root(repo),
             &format!("{kind} skipped: {reason}"),
-            Some(kind),
+            Some(&kind.to_string()),
         );
     }
 
@@ -404,10 +404,17 @@ impl<O: Outside> Record<O> {
     ) {
         let root = self.root(repo);
         self.record_config_warnings(&root);
+        // Quota waits compare this named Process's last reason even when
+        // another Custom process fires between its Passes.
+        let history = if reason.starts_with("GitHub Quota wait until ") {
+            format!("Process {name}")
+        } else {
+            Kind::Process.to_string()
+        };
         self.activity_write(
             &root,
             &format!("Process {name} skipped: {reason}"),
-            Some(Kind::Process),
+            Some(&history),
         );
         let stamp = self.stamp();
         // Leave held lines unshown, so a quiet skip prints nothing. They are
@@ -810,7 +817,7 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<Kind>) {
+    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<&str>) {
         let appended = self.activity_append(&root.join(activity::FILE), line, unless_last_of);
         if let Err(error) = appended
             && !self.activity_warned
@@ -827,9 +834,9 @@ impl<O: Outside> Record<O> {
         &mut self,
         path: &Path,
         line: &str,
-        unless_last_of: Option<Kind>,
+        unless_last_of: Option<&str>,
     ) -> Result<()> {
-        if let Some(kind) = unless_last_of {
+        if let Some(prefix) = unless_last_of {
             let tail = self.outside.activity_tail(path, activity::TAIL)?;
             let text = String::from_utf8_lossy(&tail.bytes);
             let whole = if tail.from > 0 {
@@ -837,7 +844,7 @@ impl<O: Outside> Record<O> {
             } else {
                 &text
             };
-            if activity::last_of(whole, kind).map(|(_, text)| text) == Some(line) {
+            if activity::last_with_prefix(whole, prefix).map(|(_, text)| text) == Some(line) {
                 return Ok(());
             }
         }
