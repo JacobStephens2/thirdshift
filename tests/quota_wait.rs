@@ -290,3 +290,53 @@ fn a_child_tickets_quota_wait_belongs_to_its_spec_commands_notification() {
     assert_eq!(sidecars.len(), 1, "{sidecars:?}");
     assert!(sidecars[0].starts_with("20-"), "{sidecars:?}");
 }
+
+#[test]
+fn preflight_quota_wait_is_visible_and_can_be_stopped() {
+    use std::{fs, process::Stdio};
+    let scenario = Scenario::new();
+    let reset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let mut state = scenario.gh_state();
+    state["fail_next"] = json!({"call":"api graphql", "times":1,
+        "error":"GraphQL: API rate limit exceeded (HTTP 403)"});
+    state["rate_limits"] = json!({"graphql":{"remaining":0,"reset":reset}});
+    scenario.write_gh_state(&state);
+    let stderr_path = scenario.path("preflight.stderr");
+    let owned = support::child_lifetime::OwnedRuns::new();
+    let mut command = scenario.command(&[&scenario.issue_url(7)]);
+    command
+        .env("THIRDSHIFT_QUOTA_MINUTE_MS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(fs::File::create(&stderr_path).unwrap());
+    let mut child = owned.spawn(&mut command);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let stderr = fs::read_to_string(&stderr_path).unwrap();
+        if stderr.contains("Quota wait until") {
+            break;
+        }
+        assert!(
+            child.try_wait().is_none() && Instant::now() < deadline,
+            "{stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for args in [vec!["status"], vec!["show", "widgets#7"]] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stdout.contains("Quota wait until"),
+            "{}",
+            result.stdout
+        );
+    }
+    let stopped = scenario.run(&["stop", "widgets#7"]);
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert!(!child.wait().success());
+    assert!(scenario.claude_calls().is_empty());
+}

@@ -117,6 +117,9 @@ pub fn start(
     // First, so no interrupt can end the command once its notification is
     // checked.
     interrupt::install().map_err(|error| failure(&error))?;
+    if let About::Issue(issue) = &about {
+        logs::preflight_issue(issue);
+    }
     let notification = if started.is_some() {
         Some(
             RunNotification::new(ask(&config), &config.email, about)

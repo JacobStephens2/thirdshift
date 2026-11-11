@@ -184,6 +184,12 @@ pub enum Begin<'a> {
 /// The work a command starts.
 #[derive(Clone, Copy)]
 pub enum Work<'a> {
+    /// A Command still in preflight, retained only because it hit a Quota wait.
+    Starting {
+        repo: &'a Repo,
+        command: CommandKind,
+        issue: Option<&'a IssueUrl>,
+    },
     /// A Run on its issue.
     Run(&'a IssueUrl),
     /// A Base fix, a child Run into the Run's Base branch.
@@ -328,6 +334,10 @@ pub fn configured(config: &UserConfig) {
     record().configured(config);
 }
 
+pub(crate) fn preflight_issue(issue: &IssueUrl) {
+    record().preflight_issue(issue.clone());
+}
+
 /// Keep the Pass's latest start once its repository is known, before gates.
 pub(crate) fn pass_fired(repo: &Repo) {
     record().pass_fired(repo);
@@ -408,7 +418,14 @@ pub fn stage(stage: Stage) {
 
 /// Temporarily overlay the active stage without resetting its timing.
 pub(crate) fn quota_wait(until: Option<&str>) {
+    if until.is_some() && record().needs_quota_repo() {
+        let repo = crate::launch::repo().ok();
+        record().preflight_repo(repo);
+    }
     record().quota_wait(until);
+    if until.is_some() {
+        attach_quota_budget();
+    }
 }
 
 /// Keep the current Session trace, including a Resume's own log, as
@@ -594,6 +611,7 @@ impl<'a> Work<'a> {
     fn process(self) -> crate::processes::Identity {
         use crate::processes::Identity;
         let file = match self {
+            Self::Starting { .. } => return Identity::default(),
             Self::Run(_) | Self::BaseFix(_) => "ticket-run",
             Self::SpecRun(_) => "spec-run",
             Self::ArchitectRun(_) => "architect-run",
@@ -611,6 +629,7 @@ impl<'a> Work<'a> {
 
     fn initial_stage(self) -> Option<Stage> {
         match self {
+            Work::Starting { .. } => None,
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
@@ -626,6 +645,7 @@ impl<'a> Work<'a> {
     /// The repository whose work it records.
     fn repo(self) -> Repo {
         match self {
+            Work::Starting { repo, .. } => repo.clone(),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
             Work::ArchitectRun(repo)
@@ -642,6 +662,18 @@ impl<'a> Work<'a> {
     /// Its kind, in the Activity log.
     fn kind(self) -> Kind {
         match self {
+            Work::Starting { command, .. } => match command {
+                CommandKind::Issue => Kind::Run,
+                CommandKind::Architect => Kind::Pass(Pass::Architect),
+                CommandKind::Pickup => Kind::Pass(Pass::Pickup),
+                CommandKind::Secure => Kind::Pass(Pass::Security),
+                CommandKind::Scoring => Kind::ScoringRun,
+                CommandKind::Review => Kind::ReviewRun,
+                CommandKind::Fix => Kind::FixRun,
+                CommandKind::Triage => Kind::TriageRun,
+                CommandKind::Experiment => Kind::Experiment,
+                CommandKind::Process => Kind::Process,
+            },
             Work::Run(_) | Work::BaseFix(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
@@ -659,6 +691,7 @@ impl<'a> Work<'a> {
     /// Its issue, if it has one.
     pub(crate) fn issue_url(self) -> Option<&'a IssueUrl> {
         match self {
+            Work::Starting { issue, .. } => issue,
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
             Work::ArchitectRun(_)

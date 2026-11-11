@@ -14,6 +14,9 @@ pub(crate) struct WaitBudget {
 pub(crate) struct WaitCapExceeded;
 
 impl WaitBudget {
+    pub(super) fn is_empty(&self) -> bool {
+        self.total.is_zero()
+    }
     pub fn next(&mut self, reset: DateTime<Utc>) -> Result<Duration, WaitCapExceeded> {
         self.next_with(reset, Utc::now, || rand::random_range(0..=60))
     }

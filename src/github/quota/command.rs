@@ -49,7 +49,7 @@ pub(crate) fn attach(path: PathBuf) -> Result<()> {
         command.path = Some(path.with_extension("quota-wait.json"));
         // Before log allocation, only the parent can have waited. Commands
         // that never wait need no quota sidecar.
-        if !totals.waited.is_zero() {
+        if !totals.budget.is_empty() {
             command.update(|stored| *stored = totals)?;
         }
     }

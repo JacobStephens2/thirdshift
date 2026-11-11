@@ -258,6 +258,7 @@ impl StageName {
     /// The stage a pass enters while `work`, the Command it dispatched, runs.
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
+            Work::Starting { .. } => Self::ProcessStep,
             Work::SpecRun(_) => Self::DispatchedSpecRun,
             Work::Run(_)
             | Work::BaseFix(_)
@@ -395,7 +396,8 @@ impl CommandRecord {
             // The Ready issue listing named a Pickup run's issue before it started.
             title: match work {
                 Work::PickupRun(listed) => Some(listed.title.clone()),
-                Work::Run(_)
+                Work::Starting { .. }
+                | Work::Run(_)
                 | Work::BaseFix(_)
                 | Work::SpecRun(_)
                 | Work::ArchitectRun(_)
@@ -409,6 +411,10 @@ impl CommandRecord {
             },
         });
         let name = match work {
+            Work::Starting { command, issue, .. } => match issue {
+                Some(issue) => format!("{}#{}", issue.repo_slug(), issue.number),
+                None => format!("{}-{stamp}", command.folder()),
+            },
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::ScoringRun(_) => format!("scoring-{stamp}"),

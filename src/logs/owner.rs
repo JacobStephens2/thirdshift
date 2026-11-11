@@ -136,6 +136,12 @@ pub(super) fn allocate<F: Files>(
     stamp: &str,
 ) -> Result<Allocation<F::CommandLog>> {
     let (kind, subject) = match work {
+        Work::Starting { command, issue, .. } => (
+            command,
+            issue
+                .map(|issue| format!("{}-", issue.number))
+                .unwrap_or_default(),
+        ),
         Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
             (CommandKind::Issue, format!("{}-", issue.number))
         }
