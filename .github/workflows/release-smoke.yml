@@ -41,7 +41,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] ||
             git diff --name-only HEAD^1 HEAD |
-              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|rust-toolchain\.toml|Cargo\.(toml|lock)'
+              grep -qxE '\.github/workflows/release.*\.yml|scripts/release-dns\.sh|dist-workspace\.toml|rust-toolchain\.toml|Cargo\.(toml|lock)'
           then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
