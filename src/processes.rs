@@ -652,12 +652,15 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
-            let reason = skipped.to_string();
+        let skip = |reason: &dyn std::fmt::Display| {
+            let reason = reason.to_string();
             let choice = Choice::of(&command.asked, &config.harness);
             progress::step(&reason);
             logs::skipped_process(&repo, name, &choice, &reason);
-            return Ok(String::new());
+            String::new()
+        };
+        if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
+            return Ok(skip(&skipped));
         }
         let base = match launch::checked_out_base() {
             Ok(base) => base,
@@ -669,11 +672,7 @@ fn run(command: &ProcessRun) -> Result<String> {
             command_limit::Sharing::UpToTheLimit,
         ) {
             Ok(Some(running)) => {
-                let reason = running.to_string();
-                let choice = Choice::of(&command.asked, &config.harness);
-                progress::step(&reason);
-                logs::skipped_process(&repo, name, &choice, &reason);
-                return Ok(String::new());
+                return Ok(skip(&running));
             }
             Ok(None) => {}
             Err(error) => return Err(failed_before_steps(notification, error)),

@@ -25,19 +25,20 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
                 crate::issue::Repo::of_origin(&launch.run(&["config", "remote.origin.url"])?)
                     .context("review --author needs a GitHub origin")?;
             logs::pass_fired(&repo);
+            let skip = |reason: &dyn std::fmt::Display| {
+                logs::skipped(logs::Pass::Review, &repo, reason);
+                progress::step(reason);
+                String::new()
+            };
             if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
-                logs::skipped(logs::Pass::Review, &repo, &skipped);
-                progress::step(&skipped);
-                return Ok(String::new());
+                return Ok(skip(&skipped));
             }
             if let Some(running) = command_limit::hold_pass(
                 &repo,
                 config.command_limit,
                 command_limit::Sharing::UpToTheLimit,
             )? {
-                logs::skipped(logs::Pass::Review, &repo, &running);
-                progress::step(&running);
-                return Ok(String::new());
+                return Ok(skip(&running));
             }
             let github = GitHub::new();
             let mut selected = None;
@@ -54,9 +55,7 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
             }
             let Some(selected) = selected else {
                 let reason = format!("no waiting pull request by {author} on {}", repo.slug());
-                logs::skipped(logs::Pass::Review, &repo, &reason);
-                progress::step(reason);
-                return Ok(String::new());
+                return Ok(skip(&reason));
             };
             selected
         }
