@@ -315,6 +315,9 @@ _Avoid_: completion email, alert
 
 ### Console
 
+**Cron job**:
+An entry in a machine account's operating-system crontab that mentions thirdshift. Its recorded schedule and command are shown even when its **Launch directory** or Command kind cannot be recognized, and a displayed entry need not offer a **Console** start choice.
+
 **Console**:
 The web page a machine serves that shows the serving OS account's **Commands**, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. The **User config** can include readable **Other-account Commands** on that machine, and the Commands of every machine in its **Fleet**, which it can stop and dismiss as their own Consoles can. Each machine serves its own Console, behind a sign-in, and every view and action it offers is also a CLI command.
 _Avoid_: dashboard, floor, UI, web UI
