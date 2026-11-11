@@ -207,17 +207,11 @@ impl Snapshot {
             );
         }
         let ranges = super::usual_range::UsualRanges::from_records(&records);
-        let roots: Vec<_> = records
-            .iter()
-            .filter(|(_, tree)| {
-                let record = &tree.command;
-                record.parent_record.is_none()
-            })
-            .map(|(path, _)| path.clone())
-            .collect();
-        commands.extend(roots.into_iter().map(|path| {
-            Entry::Record(Box::new(tree(&inventory, &path, None, &mut records, &now)))
-        }));
+        commands.extend(
+            command_trees(&inventory, &mut records, &now)
+                .into_iter()
+                .map(|command| Entry::Record(Box::new(command))),
+        );
         for entry in &mut commands {
             if let Entry::Record(command) = entry {
                 health::observe(command, &now, silent, &ranges);
@@ -249,6 +243,38 @@ impl Snapshot {
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
     }
+}
+
+/// Admission needs only retained Command trees and process identities. In
+/// particular, an unreadable Activity log must not prevent taking a slot.
+pub(super) fn live_commands(root: &Path, now: DateTime<Local>) -> Result<Vec<Command>> {
+    let inventory = Arc::new(Inventory::capture(Arc::new(inventory::Native), root)?);
+    let mut records = BTreeMap::new();
+    for repo in inventory.repositories() {
+        for folder in &repo.folders {
+            records.extend(read_records(&inventory, folder, false)?);
+        }
+    }
+    Ok(command_trees(&inventory, &mut records, &now)
+        .into_iter()
+        .filter(inbox::active)
+        .collect())
+}
+
+fn command_trees(
+    inventory: &Arc<Inventory>,
+    records: &mut BTreeMap<PathBuf, CommandTree>,
+    now: &DateTime<Local>,
+) -> Vec<Command> {
+    let roots: Vec<_> = records
+        .iter()
+        .filter(|(_, tree)| tree.command.parent_record.is_none())
+        .map(|(path, _)| path.clone())
+        .collect();
+    roots
+        .into_iter()
+        .map(|path| tree(inventory, &path, None, records, now))
+        .collect()
 }
 
 /// The Command log `show` and the Console may read for a Process's Steps.

@@ -22,6 +22,15 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 
 Architect, Pickup and Security runs, `review --author <login>`, and `fix` with no PR target are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
+Every Pass, including Triage with no Report or Issue URL and a Custom process
+started with no issue, skips before work while an Experiment of the same OS
+account is live on this machine, across all repositories. A waiting Experiment
+counts too. The Activity log names the Experiment, once per change of reason,
+and the Pass exits successfully. This includes the nightly Security run.
+Commands started on an Issue or pull request URL still run, with a warning on
+stderr that they will compete with the Experiment's Trials. Existing Runs keep
+running; Passes on other machines carry on.
+
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code. See [Harness, Model and Effort](#harness-model-and-effort).
 
 ## What a Ticket run does
@@ -1216,6 +1225,21 @@ Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a `[trial]` table. This check also precedes the release Baseline probe.
 
+At startup and on resume, an Experiment becomes live, so every Pass of the same
+OS account on this machine skips. Before starting Trials, it waits for that
+account's other live Commands across repositories to end. Its Command log,
+`status` and the Console name the Commands it waits on and refresh the list as
+they end. Stop or interrupt during the wait ends the Experiment cleanly as
+interrupted; resuming waits again. Multiple waiting Experiments take turns once
+the other Commands have ended.
+
+Use `thirdshift experiment <candidate> --no-wait` to start immediately. Results
+record `no_wait: true` and `commands_at_start`, the number of other live Commands
+at this invocation's start, displayed beside the Verdict in text and the Console.
+A normal invocation records `no_wait: false` and zero. `waiting_for` names the
+current blockers and is empty after the wait. These fields do not change the Bar
+or Experiment identity. The structured Console API option is `no_wait: true`.
+
 For an **A/A Experiment**, use one commit and the same flags in both Arms.
 This measures how often the Arms disagree when nothing differs, so you can
 assess ordinary Trial variation before weighing a change. For example:
@@ -1747,7 +1771,7 @@ That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. Both use the versioned
-[Experiment results format](experiment-results.md), identified by `format: 10`.
+[Experiment results format](experiment-results.md), identified by `format: 11`.
 The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm's tokens by observed Model and its cost
@@ -1805,7 +1829,7 @@ versions or end times where those facts were not retained.
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
 (the Activity log is at the repository level). The record names both Arms and
-the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+the Bar and moves through Waiting for Commands when needed, Arm builds, Eval tasks and Trials. A waiting Command record includes `waiting_for`, an array of Command names; it is omitted when empty. It appears in the
 Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
 go in Needs you. Rechecking a Score updates the latest invocation's Command
 outcome and Inbox group alongside the saved Verdict, keeping its completion time.
