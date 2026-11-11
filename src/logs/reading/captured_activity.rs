@@ -36,26 +36,24 @@ impl Command {
         std::iter::once(self.activity.log.as_path()).chain(self.activity.session.as_deref())
     }
 
-    /// Stage age bounds quiet age, even when activity metadata is unavailable.
+    /// Quiet time starts at the latest activity or stage entry and excludes
+    /// only the suspensions overlapping that interval.
     pub(in crate::logs) fn quiet_age(&self) -> u64 {
-        let stage_age = self
-            .stage
-            .as_ref()
-            .map_or(0, |stage| stage.age_seconds as u64);
-        self.activity_paths().fold(stage_age, |quiet, path| {
-            self.inventory
-                .activity(path)
-                .modified
-                .map_or(quiet, |modified| {
-                    quiet.min(
-                        self.activity
-                            .now
-                            .signed_duration_since(DateTime::<Local>::from(modified))
-                            .num_seconds()
-                            .max(0) as u64,
-                    )
-                })
-        })
+        let Some(stage) = self.record.current_stage() else {
+            return 0;
+        };
+        let Ok(began) = DateTime::parse_from_rfc3339(&stage.began_at) else {
+            return 0;
+        };
+        let since = self
+            .activity_paths()
+            .filter_map(|path| self.inventory.activity(path).modified)
+            .map(|modified| DateTime::<Local>::from(modified).fixed_offset())
+            .fold(began, std::cmp::max);
+        let now = self.activity.now.fixed_offset();
+        let quiet = (now - since).num_seconds().max(0) as u64;
+        let suspended = stage.suspended_between(since, now);
+        quiet.saturating_sub(suspended)
     }
 
     /// Lengths share the health sample, with zero for an unavailable file.

@@ -4,6 +4,97 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn suspended_time_health_agrees_in_status_and_the_console_inbox() {
+    use super::watching::live_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let now = chrono::Local::now();
+    let cases = [
+        (1, "implement", 65, 0, 60, 5, "working", "live"),
+        (2, "implement", 65, 0, 0, 0, "needs you", "Slow"),
+        (3, "implement", 75, 0, 60, 5, "needs you", "Slow"),
+        (4, "Code review", 180, 65, 60, 5, "working", "live"),
+        (5, "Code review", 180, 65, 0, 0, "needs you", "Silent"),
+        (6, "Code review", 180, 74, 60, 5, "needs you", "Silent"),
+        (7, "Code review", 180, 20, 60, 25, "needs you", "Silent"),
+        (8, "CI watch", 65, 65, 60, 5, "landing", "Landing"),
+    ];
+    for (number, stage, age, quiet, suspended, resumed_ago, _, _) in cases {
+        let mut fixture = live_record(home.path(), number, std::process::id());
+        let began = (now - chrono::Duration::minutes(age)).to_rfc3339();
+        fixture["kind"] = json!("Run");
+        fixture["tickets"] = json!([]);
+        fixture["started_at"] = json!(began);
+        fixture["stages"] = json!([{
+            "name": stage, "began_at": began, "session_log": null
+        }]);
+        if suspended > 0 {
+            fixture["stages"][0]["suspended_seconds"] = json!(suspended * 60);
+            fixture["stages"][0]["suspensions"] = json!([{
+                "resumed_at": (now - chrono::Duration::minutes(resumed_ago)).to_rfc3339(),
+                "seconds": suspended * 60
+            }]);
+        }
+        super::write_record(home.path(), number, &fixture);
+        let log = home.path().join(format!(
+            ".thirdshift/logs/acme/widgets/commands/issue/{number}-fixture.log"
+        ));
+        fs::write(&log, "working\n").unwrap();
+        fs::File::open(log)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(quiet * 60))
+            .unwrap();
+    }
+    for number in 20..23 {
+        let mut fixture = record(home.path(), number, Some("merged"), 0);
+        let end = now - chrono::Duration::hours(4);
+        fixture["started_at"] = json!((end - chrono::Duration::minutes(10)).to_rfc3339());
+        fixture["ended_at"] = json!(end.to_rfc3339());
+        fixture["stages"][0]["began_at"] = fixture["started_at"].clone();
+        super::write_record(home.path(), number, &fixture);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let status = super::api::cli(home.path(), &["status", "--json"]);
+    assert_eq!(
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["state"] == "live")
+            .count(),
+        cases.len()
+    );
+    for (number, _, _, _, _, _, group, state) in cases {
+        let subject = format!("href=\"https://github.com/acme/widgets/issues/{number}\"");
+        let row = section(&html, group)
+            .split("<li class=\"command\"")
+            .find(|row| row.contains(&subject))
+            .unwrap_or_else(|| panic!("{html}"));
+        assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
+        assert_eq!(row.contains("data-dismiss>"), group == "needs you", "{row}");
+        let command = status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["issue"]["number"] == number)
+            .unwrap();
+        assert_eq!(command["group"], group, "{command}");
+        assert_eq!(
+            command["health"]["state"],
+            match state {
+                "Slow" => "slow",
+                "Silent" => "silent",
+                _ => "ok",
+            },
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn overview_ticket_progress_counts_recorded_states_and_omits_missing_accounting() {
     use serde_json::json;
 

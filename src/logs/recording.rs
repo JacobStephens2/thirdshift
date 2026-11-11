@@ -10,7 +10,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
+use super::command_record::{
+    CommandRecord, CommandTree, Stage, StageName, Suspension, TicketRecord,
+};
 use super::effects::{Outside, Stream};
 use super::owner::{self, Owner};
 use super::{Begin, CommandKind, Pass, Work, root_under};
@@ -119,6 +121,10 @@ impl<O: Outside> Record<O> {
             {
                 stage.suspended_seconds =
                     stage.suspended_seconds.saturating_add(suspended.as_secs());
+                stage.suspensions.push(Suspension {
+                    resumed_at: current.wall,
+                    seconds: suspended.as_secs(),
+                });
             }
         }
         self.write_record();
@@ -543,6 +549,7 @@ impl<O: Outside> Record<O> {
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
                 suspended_seconds: 0,
+                suspensions: Vec::new(),
             });
         } else if let Some(stage) = facts.stages.last_mut() {
             stage.session_log = facts.session_log.clone();

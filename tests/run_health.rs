@@ -83,6 +83,11 @@ impl LiveRun {
         }
     }
 
+    fn suspended(&mut self, minutes: u64) {
+        self.record["stages"][0]["suspended_seconds"] = json!(minutes * 60);
+        fs::write(&self.path, serde_json::to_vec(&self.record).unwrap()).unwrap();
+    }
+
     fn status(&self) -> Value {
         let result = self.scenario.run(&["status", "--json"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -243,6 +248,85 @@ fn slow_uses_the_repositorys_last_thirty_records_and_escalates_at_twice_the_top(
     }
     run.log_ages(45, 45);
     assert_eq!(run.status()["health"]["state"], "silent");
+}
+
+#[test]
+fn slow_leaves_out_suspended_time_without_resetting_work_before_wake() {
+    let mut run = LiveRun::new();
+    for stage in ["implement", "CI watch"] {
+        for number in 10..13 {
+            run.named_history(stage, number, Some(10), 200, "acme/widgets");
+        }
+        for (age, suspended, health, step, multiple) in [
+            (65, 60, "ok", Value::Null, Value::Null),
+            (65, 0, "slow", json!(2), json!(6)),
+            (75, 60, "slow", json!(1), json!(1)),
+            (85, 60, "slow", json!(2), json!(2)),
+        ] {
+            run.named_stage_age(stage, age);
+            run.suspended(suspended);
+            run.log_ages(0, 0);
+            let status = run.status();
+            assert_eq!(status["health"]["state"], health, "{status}");
+            assert_eq!(status["health"]["step"], step, "{status}");
+            assert_eq!(status["health"]["multiple"], multiple, "{status}");
+            assert_eq!(
+                status["group"],
+                if health == "ok" {
+                    if stage == "CI watch" {
+                        "landing"
+                    } else {
+                        "working"
+                    }
+                } else {
+                    "needs you"
+                },
+                "{status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn silent_leaves_out_only_suspensions_since_the_logs_last_grew() {
+    let mut run = LiveRun::new();
+    for (quiet, suspended, resumed_ago, health, worked, step) in [
+        (65, 60, 5, "ok", 5, Value::Null),
+        (74, 60, 5, "silent", 14, json!(1)),
+        (105, 60, 5, "silent", 45, json!(2)),
+        (20, 60, 25, "silent", 20, json!(1)),
+        (14, 0, 0, "silent", 14, json!(1)),
+    ] {
+        run.stage_age(180);
+        run.suspended(suspended);
+        if suspended > 0 {
+            run.record["stages"][0]["suspensions"] = json!([{
+                "resumed_at": (chrono::Local::now() - chrono::Duration::minutes(resumed_ago)).to_rfc3339(),
+                "seconds": suspended * 60
+            }]);
+            fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+        }
+        run.log_ages(quiet, quiet);
+        let status = run.status();
+        assert_eq!(status["health"]["state"], health, "{status}");
+        assert_eq!(status["health"]["step"], step, "{status}");
+        if health == "silent" {
+            let seconds = status["health"]["seconds"].as_u64().unwrap();
+            assert!(
+                (worked * 60..worked * 60 + 10).contains(&seconds),
+                "{status}"
+            );
+        }
+        assert_eq!(
+            status["group"],
+            if health == "ok" {
+                "working"
+            } else {
+                "needs you"
+            },
+            "{status}"
+        );
+    }
 }
 
 #[test]

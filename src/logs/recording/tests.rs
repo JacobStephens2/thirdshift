@@ -288,6 +288,12 @@ fn suspension_is_saved_and_logged_before_the_live_stage_ends() {
     let saved: serde_json::Value =
         serde_json::from_str(&memory.file(record.record_path().unwrap())).unwrap();
     assert_eq!(saved["stages"][0]["suspended_seconds"], 120);
+    assert_eq!(
+        saved["stages"][0]["suspensions"],
+        serde_json::json!([{
+            "resumed_at": "2026-10-03T12:02:30-04:00", "seconds": 120
+        }])
+    );
     assert!(saved["outcome"].is_null());
     assert_eq!(saved["stages"].as_array().unwrap().len(), 1);
     let log = memory.file(record.command_log_path().unwrap());
@@ -494,18 +500,21 @@ fn completion_metrics_place_each_stage_against_repository_history() {
             began_at: "2026-10-01T12:00:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
         Stage {
             name: "pull request".into(),
             began_at: "2026-10-01T12:01:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
         Stage {
             name: "CI watch".into(),
             began_at: "2026-10-01T12:11:00-04:00".into(),
             session_log: None,
             suspended_seconds: 0,
+            suspensions: Vec::new(),
         },
     ];
     for number in 1..=3 {

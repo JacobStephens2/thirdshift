@@ -80,6 +80,12 @@ pub(super) fn observe(
         if let Some(stage) = &command.stage
             && !StageName::is_dispatch(&stage.name)
         {
+            let age = (stage.age_seconds as u64).saturating_sub(
+                command
+                    .record
+                    .current_stage()
+                    .map_or(0, |stage| stage.suspended_seconds),
+            );
             if let Some(range) = ranges.get(&command.record.repository, &stage.name) {
                 // The first Slow step starts strictly above the upper range;
                 // the second starts at twice that range, on sampled seconds.
@@ -87,18 +93,17 @@ pub(super) fn observe(
                     range.upper_seconds.floor() as u64 + 1,
                     (range.upper_seconds * 2.0).ceil() as u64,
                 ] {
-                    schedule_transition(&mut next_change, now, threshold, stage.age_seconds as u64);
+                    schedule_transition(&mut next_change, now, threshold, age);
                 }
-                if stage.age_seconds as f64 > range.upper_seconds {
+                if age as f64 > range.upper_seconds {
                     command.health = Some(Health::Slow {
-                        step: if stage.age_seconds as f64 >= range.upper_seconds * 2.0 {
+                        step: if age as f64 >= range.upper_seconds * 2.0 {
                             2
                         } else {
                             1
                         },
                         usual_range: range,
-                        multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
-                            as u64,
+                        multiple: (age as f64 / range.upper_seconds.max(1.0)).floor() as u64,
                     });
                 }
             }
