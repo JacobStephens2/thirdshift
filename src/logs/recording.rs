@@ -37,6 +37,9 @@ pub(super) struct Record<O: Outside> {
     /// repository has them.
     config_warnings: Vec<String>,
     command_record: Option<(PathBuf, CommandTree)>,
+    preflight_repo: Option<Repo>,
+    preflight_issue: Option<crate::issue::IssueUrl>,
+    quota_record: bool,
     custom_process: Option<crate::processes::Identity>,
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
@@ -69,6 +72,11 @@ struct Started {
     process: Option<String>,
 }
 
+enum History<'a> {
+    Kind(Kind),
+    ProcessSkip(&'a str),
+}
+
 impl Started {
     fn subject(&self) -> String {
         if let Some(name) = &self.process {
@@ -98,6 +106,9 @@ impl<O: Outside> Record<O> {
             activity_warned: false,
             config_warnings: Vec::new(),
             command_record: None,
+            preflight_repo: None,
+            preflight_issue: None,
+            quota_record: false,
             custom_process: None,
             parent_record: None,
             parent_dispatch: None,
@@ -107,6 +118,9 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn begin(&mut self, begin: Begin) {
+        if let Begin::Run(issue) = &begin {
+            self.preflight_issue((*issue).clone());
+        }
         self.command = match &begin {
             Begin::Run(_) => CommandKind::Issue,
             Begin::ChildRun(_, command) => *command,
@@ -160,6 +174,21 @@ impl<O: Outside> Record<O> {
             }
             self.config_warnings = config.warnings.clone();
         }
+    }
+
+    pub(super) fn preflight_repo(&mut self, repo: Option<Repo>) {
+        if self.preflight_repo.is_none() {
+            self.preflight_repo = repo;
+        }
+    }
+
+    pub(super) fn needs_quota_repo(&self) -> bool {
+        self.command_record.is_none() && self.preflight_repo.is_none()
+    }
+
+    pub(super) fn preflight_issue(&mut self, issue: crate::issue::IssueUrl) {
+        self.preflight_repo = Some(issue.repo());
+        self.preflight_issue = Some(issue);
     }
 
     /// Hand on the progress line `message`, to the terminal even while a
@@ -255,7 +284,7 @@ impl<O: Outside> Record<O> {
         let stamp = self.stamp();
         let began = matches!(self.command_log, Log::Held { .. });
         self.keep(&root, work, &stamp);
-        if began {
+        if began || self.quota_record {
             self.start_record(work, harness);
         }
         self.step(format_args!("sessions run on {harness}"));
@@ -273,7 +302,8 @@ impl<O: Outside> Record<O> {
             issue: work.issue(),
             process: match work {
                 Work::Process { name, .. } => Some((*name).to_string()),
-                Work::Run(_)
+                Work::Starting { .. }
+                | Work::Run(_)
                 | Work::BaseFix(_)
                 | Work::SpecRun(_)
                 | Work::PickupRun(_)
@@ -335,6 +365,12 @@ impl<O: Outside> Record<O> {
     fn start_record(&mut self, work: Work, harness: &Choice) {
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if self.quota_record
+            && let Some((_, tree)) = &self.command_record
+        {
+            facts.started_at = tree.command.started_at.clone();
+        }
+        self.quota_record = false;
         if matches!(work, Work::Process { .. })
             && let Some(identity) = &self.custom_process
         {
@@ -384,6 +420,9 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn skipped(&mut self, pass: Pass, repo: &Repo, reason: impl Display) {
+        if self.quota_record {
+            self.outcome("skipped", Some(&reason.to_string()));
+        }
         let kind = Kind::Pass(pass);
         self.activity_write(
             &self.root(repo),
@@ -407,21 +446,28 @@ impl<O: Outside> Record<O> {
         repo: &Repo,
         name: &str,
         harness: &Choice,
-        reason: &str,
+        reason: &crate::command_limit::NotAdmitted,
     ) {
         let root = self.root(repo);
         self.record_config_warnings(&root);
-        self.activity_write(
+        // Quota waits compare this named Process's last reason even when
+        // another Custom process fires between its Passes.
+        let history = if reason.is_quota_wait() {
+            History::ProcessSkip(name)
+        } else {
+            History::Kind(Kind::Process)
+        };
+        self.activity_write_with_history(
             &root,
             &format!("Process {name} skipped: {reason}"),
-            Some(Kind::Process),
+            Some(history),
         );
         let stamp = self.stamp();
         // Leave held lines unshown, so a quiet skip prints nothing. They are
         // still the Command log.
         self.retain(&root, Work::Process { repo, name }, &stamp, false);
         self.start_record(Work::Process { repo, name }, harness);
-        self.outcome("skipped", Some(reason));
+        self.outcome("skipped", Some(&reason.to_string()));
     }
 
     pub(super) fn activity(&mut self, message: impl Display) {
@@ -493,6 +539,36 @@ impl<O: Outside> Record<O> {
             stage.session_log = facts.session_log.clone();
         }
         self.write_record();
+    }
+
+    pub(super) fn quota_wait(&mut self, until: Option<&str>) {
+        if until.is_some()
+            && self.command_record.is_none()
+            && let Some(repo) = self.preflight_repo.clone()
+            && self.logs_dir.is_some()
+            && (!self.child || self.preflight_issue.is_some())
+        {
+            let issue = self.preflight_issue.clone();
+            let work = Work::Starting {
+                repo: &repo,
+                command: self.command,
+                issue: issue.as_ref(),
+            };
+            if !self.child {
+                let stamp = self.stamp();
+                self.keep(&self.root(&repo), work, &stamp);
+            }
+            self.start_record(work, &Choice::default());
+            if let Some((_, tree)) = &mut self.command_record {
+                // No Harness has been selected or launched during preflight.
+                tree.command.harness = "not started".into();
+            }
+            self.quota_record = true;
+        }
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().quota_wait_until = until.map(str::to_owned);
+            self.write_record();
+        }
     }
 
     pub(super) fn unaddressed_findings(
@@ -825,6 +901,15 @@ impl<O: Outside> Record<O> {
     }
 
     fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<Kind>) {
+        self.activity_write_with_history(root, line, unless_last_of.map(History::Kind));
+    }
+
+    fn activity_write_with_history(
+        &mut self,
+        root: &Path,
+        line: &str,
+        unless_last_of: Option<History<'_>>,
+    ) {
         let appended = self.activity_append(&root.join(activity::FILE), line, unless_last_of);
         if let Err(error) = appended
             && !self.activity_warned
@@ -841,9 +926,9 @@ impl<O: Outside> Record<O> {
         &mut self,
         path: &Path,
         line: &str,
-        unless_last_of: Option<Kind>,
+        unless_last_of: Option<History<'_>>,
     ) -> Result<()> {
-        if let Some(kind) = unless_last_of {
+        if let Some(history) = unless_last_of {
             let tail = self.outside.activity_tail(path, activity::TAIL)?;
             let text = String::from_utf8_lossy(&tail.bytes);
             let whole = if tail.from > 0 {
@@ -851,7 +936,11 @@ impl<O: Outside> Record<O> {
             } else {
                 &text
             };
-            if activity::last_of(whole, kind).map(|(_, text)| text) == Some(line) {
+            let last = match history {
+                History::Kind(kind) => activity::last_of(whole, kind),
+                History::ProcessSkip(name) => activity::last_process_skip(whole, name),
+            };
+            if last.map(|(_, text)| text) == Some(line) {
                 return Ok(());
             }
         }
