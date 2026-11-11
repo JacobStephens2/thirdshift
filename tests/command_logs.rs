@@ -92,6 +92,63 @@ fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (Path
 }
 
 #[test]
+fn process_pass_and_issue_waiting_lines_reach_the_command_log() {
+    for issue in [false, true] {
+        for config in [
+            "[logs]\nwaiting_line_minutes = 1\n",
+            "[logs]\nwaiting_line_minutes = 20\n[inbox]\nsilent_minutes = 4\n",
+        ] {
+            let scenario = Scenario::new();
+            scenario.user_config_is(&format!(
+                "{config}[resources]\nmin_available_memory_mb = 9007199254740991\n"
+            ));
+            let processes = scenario.path("home/.thirdshift/processes");
+            fs::create_dir_all(&processes).unwrap();
+            fs::write(
+                processes.join("notes.toml"),
+                "version = 1\ndescription = 'Take notes'\n[[steps]]\nname = 'notes'\nskill = 'code-review'\n",
+            )
+            .unwrap();
+            scenario.agent_does("printf 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+            let blocked = |_: u32| assert!(scenario.claude_calls().is_empty());
+            let release = |pid: u32| {
+                blocked(pid);
+                scenario.user_config_is("");
+            };
+            let waiting = "waiting for host resources:";
+            let mut args = vec!["process", "notes"];
+            if issue {
+                args.extend(["issue", "7"]);
+            }
+
+            let result = scenario.run_terminal(
+                &args,
+                &[ZONE, ("THIRDSHIFT_WAITING_MINUTE_MS", "150")],
+                &[
+                    support::TerminalStep::inspect(waiting, &blocked),
+                    support::TerminalStep::inspect(waiting, &blocked),
+                    support::TerminalStep::inspect(waiting, &release),
+                ],
+            );
+
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            assert_eq!(scenario.claude_calls().len(), 1);
+            assert!(
+                result.stderr.matches(waiting).count() >= 3,
+                "{}",
+                result.stderr
+            );
+            let (path, _) = the_one_command_log(&scenario, "process", "");
+            let log = fs::read_to_string(path).unwrap();
+            assert_eq!(
+                log.matches(waiting).count(),
+                result.stderr.matches(waiting).count()
+            );
+        }
+    }
+}
+
+#[test]
 fn self_merge_keeps_writing_waiting_lines_while_github_calculates_mergeability() {
     let scenario = Scenario::new();
     scenario.user_config_is("[logs]\nwaiting_line_minutes = 1\n");

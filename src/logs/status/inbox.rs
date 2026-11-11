@@ -47,6 +47,8 @@ pub(crate) struct Row {
     pub subject: String,
     /// The pull request or issue's `https://` address, which the subject links to.
     pub subject_url: Option<String>,
+    pub target_pr: Option<crate::review::PullRequestUrl>,
+    pub base_branch: Option<String>,
     pub title: String,
     pub state: String,
     pub now_line: String,
@@ -62,10 +64,17 @@ pub(crate) struct Row {
     pub pull_request: String,
     pub ci: Option<crate::github::InboxCi>,
     pub merge_conflict: bool,
+    pub ticket_progress: Option<TicketProgress>,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
     pub sessions: Vec<std::path::PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TicketProgress {
+    pub complete: usize,
+    pub total: usize,
 }
 
 pub(crate) struct Timing {
@@ -110,9 +119,11 @@ impl Row {
         if self.pull_request.is_empty() {
             return;
         }
-        self.subject = crate::review::PullRequestUrl::parse(&self.pull_request)
+        let pull_request = crate::review::PullRequestUrl::parse(&self.pull_request).ok();
+        self.subject = pull_request
+            .as_ref()
             .map(|pr| format!("{}#{}", pr.issue.repo().slug(), pr.issue.number))
-            .unwrap_or_else(|_| self.pull_request.clone());
+            .unwrap_or_else(|| self.pull_request.clone());
         self.subject_url =
             Some(self.pull_request.clone()).filter(|url| url.starts_with("https://"));
         self.title = title
@@ -121,6 +132,11 @@ impl Row {
             .into();
         self.ci = Some(ci.unwrap_or_default());
         self.merge_conflict = mergeable == Some(crate::github::InboxMergeable::Conflicting);
+        self.fix_command = if self.ci == Some(crate::github::InboxCi::Red) || self.merge_conflict {
+            pull_request.map(|pr| format!("thirdshift fix {}", pr.url))
+        } else {
+            None
+        };
     }
 
     /// The one-line row's summary: where the Command stands and, for a
@@ -314,6 +330,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         command_log: Option<std::path::PathBuf>,
         cause: Option<String>,
         pull_request: Option<String>,
+        base_branch: Option<String>,
         harness: Option<String>,
         model: Option<String>,
         effort: Option<String>,
@@ -365,7 +382,10 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         .unwrap_or_default();
     let process =
         (facts.kind == "Process").then(|| facts.process_name.as_deref().unwrap_or(&facts.name));
-    let name = if value["source"] == "command_record" {
+    let live_target = live && matches!(facts.kind.as_str(), "Fix run" | "Review run");
+    let name = if live_target {
+        &facts.kind
+    } else if value["source"] == "command_record" {
         &facts.name
     } else {
         &facts.kind
@@ -427,6 +447,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         logs_url: String::new(),
         subject,
         subject_url,
+        target_pr: facts
+            .pull_request
+            .as_deref()
+            .filter(|_| live_target)
+            .and_then(|url| crate::review::PullRequestUrl::parse(url).ok())
+            .filter(|pr| pr.issue.repo_slug().eq_ignore_ascii_case(&facts.repository)),
+        base_branch: facts.base_branch.filter(|_| live_target),
         title,
         state,
         now_line: super::stage_details(
@@ -459,6 +486,19 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         pull_request: facts.pull_request.unwrap_or_default(),
         ci: None,
         merge_conflict: false,
+        ticket_progress: (!facts.tickets.is_empty()).then(|| TicketProgress {
+            complete: facts
+                .tickets
+                .iter()
+                .filter(|ticket| {
+                    matches!(
+                        ticket.state,
+                        crate::logs::command_record::TicketState::Merged
+                    )
+                })
+                .count(),
+            total: facts.tickets.len(),
+        }),
         tickets: facts
             .tickets
             .iter()
@@ -473,6 +513,14 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
+    // recorded accounting onto its Pass without counting child attempts.
+    if row.ticket_progress.is_none() {
+        row.ticket_progress = row.children[..facts.dispatched.len()]
+            .iter()
+            .rev()
+            .find_map(|child| child.ticket_progress);
+    }
     if ready {
         row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
     }
@@ -613,6 +661,8 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 subject_url: issue_url(command.issue.as_ref()),
+                target_pr: None,
+                base_branch: None,
                 title,
                 state: command.state.into(),
                 now_line: command
@@ -629,6 +679,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 pull_request: String::new(),
                 ci: None,
                 merge_conflict: false,
+                ticket_progress: None,
                 tickets: Vec::new(),
                 children: Vec::new(),
                 findings: Vec::new(),
@@ -667,7 +718,6 @@ pub(super) fn from_read(
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
-                    row.fix_command = item.fix_command();
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)

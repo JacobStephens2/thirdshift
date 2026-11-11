@@ -84,6 +84,7 @@ pub enum Command {
     Recheck(Vec<String>),
     CronJobs {
         json: bool,
+        fleet: bool,
     },
     LaunchDirectories {
         json: bool,
@@ -826,11 +827,16 @@ pub fn parse(args: &[String]) -> Result<Command> {
             });
         }
         Some("cronjobs") => {
-            return match &args[1..] {
-                [] => Ok(Command::CronJobs { json: false }),
-                [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
-                _ => bail!("usage: thirdshift cronjobs [--json]"),
-            };
+            let mut json = false;
+            let mut fleet = false;
+            for flag in &args[1..] {
+                match flag.as_str() {
+                    "--json" if !json => json = true,
+                    "--fleet" if !fleet => fleet = true,
+                    _ => bail!("usage: thirdshift cronjobs [--fleet] [--json]"),
+                }
+            }
+            return Ok(Command::CronJobs { json, fleet });
         }
         Some("launch-directories") => {
             return match &args[1..] {

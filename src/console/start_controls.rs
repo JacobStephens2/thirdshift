@@ -24,8 +24,47 @@ pub(super) struct Form {
     pub error: Option<String>,
 }
 
+pub(super) struct Fix {
+    pub request: String,
+    pub machine: String,
+}
+
 impl Form {
+    /// The existing row eligibility and current destination choices both apply.
+    pub fn fix(&self, row: &crate::logs::status::Row) -> Option<Fix> {
+        if row.fix_command.is_none() || row.account.is_some() || row.stale {
+            return None;
+        }
+        let pr = crate::review::PullRequestUrl::parse(&row.pull_request).ok()?;
+        let repository = pr.issue.repo().slug();
+        let machine = if row.console.is_empty() {
+            ""
+        } else {
+            &row.machine
+        };
+        self.repositories
+            .iter()
+            .any(|choice| {
+                choice.repository.eq_ignore_ascii_case(&repository) && choice.machine == machine
+            })
+            .then(|| Fix {
+                request: json!({"command":"fix", "repository":repository, "pull_request":pr.url})
+                    .to_string(),
+                machine: machine.into(),
+            })
+    }
+
     pub fn load(config: &UserConfig) -> Self {
+        match crate::launch_directories::Captured::capture(config) {
+            Ok(captured) => Self::from_directories(config, captured.directories()),
+            Err(error) => Self::from_directories(config, Err(error)),
+        }
+    }
+
+    fn from_directories(
+        config: &UserConfig,
+        directories: Result<&crate::launch_directories::Inventory>,
+    ) -> Self {
         let mut form = Self {
             repositories: Vec::new(),
             harness: config
@@ -40,12 +79,12 @@ impl Form {
                 .collect(),
             error: None,
         };
-        match crate::launch_directories::load() {
+        match directories {
             Ok(inventory) => {
                 let mut repositories: Vec<_> = inventory
                     .directories
-                    .into_iter()
-                    .map(|d| d.repository)
+                    .iter()
+                    .map(|d| d.repository.clone())
                     .collect();
                 repositories.sort();
                 repositories.dedup();
@@ -120,20 +159,10 @@ pub(super) struct Options {
 
 impl Options {
     pub fn load(config: &UserConfig) -> Result<Self> {
-        let jobs = match crate::cronjobs::jobs() {
-            Ok(jobs) => jobs,
-            Err(error)
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                Vec::new()
-            }
-            Err(error) => return Err(error),
-        };
+        let captured = crate::launch_directories::Captured::capture(config)?;
         Ok(Self {
-            form: Form::load(config),
-            passes: passes(config, &jobs)?,
+            form: Form::from_directories(config, captured.directories()),
+            passes: passes(config, &captured)?,
         })
     }
 }
@@ -147,18 +176,41 @@ pub(super) async fn options() -> axum::response::Response {
 }
 
 /// Preserve the cron Pass's CLI options, while the API still decides admission.
-pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> Result<Vec<Pass>> {
-    let directories = crate::launch_directories::load()?;
+pub(super) fn passes(
+    config: &UserConfig,
+    captured: &crate::launch_directories::Captured,
+) -> Result<Vec<Pass>> {
+    Ok(pass_choices(config, captured)?
+        .into_iter()
+        .map(|(_, pass)| pass)
+        .collect())
+}
+
+/// The local Cron jobs page has always presented controls in repository order.
+pub(super) fn cron_passes(
+    config: &UserConfig,
+    captured: &crate::launch_directories::Captured,
+) -> Result<Vec<Pass>> {
+    let mut choices = pass_choices(config, captured)?;
+    choices.sort_by_key(|(repository, _)| *repository);
+    Ok(choices.into_iter().map(|(_, pass)| pass).collect())
+}
+
+fn pass_choices<'a>(
+    config: &UserConfig,
+    captured: &'a crate::launch_directories::Captured,
+) -> Result<Vec<(&'a str, Pass)>> {
+    captured.directories()?;
     let mut passes = Vec::new();
-    for job in jobs {
-        let Some((path, arguments)) = crate::launch_directories::cron_arguments(&job.command)
+    for entry in captured.entries()? {
+        let Some(directory) = &entry.directory else {
+            continue;
+        };
+        let Some(parsed) = entry
+            .launch
+            .as_ref()
+            .and_then(|launch| launch.command.as_ref())
         else {
-            continue;
-        };
-        let Some(directory) = directories.directories.iter().find(|d| d.path == path) else {
-            continue;
-        };
-        let Ok(parsed) = args::parse(&arguments) else {
             continue;
         };
         let (mut request, flags, security) = match parsed {
@@ -167,36 +219,36 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
                     crate::ready::PickupOrder::LowestFirst => "lowest-first",
                     crate::ready::PickupOrder::HighestFirst => "highest-first",
                 })}),
-                pass.flags,
+                pass.flags.clone(),
                 false,
             ),
             args::Command::Secure(pass) => (
                 json!({"command":"secure", "base":pass.base}),
-                pass.flags,
+                pass.flags.clone(),
                 true,
             ),
             args::Command::Architect(pass) => (
                 json!({"command":"architect", "base":pass.base, "focus":pass.focus, "plan_only":pass.plan_only}),
-                pass.flags,
+                pass.flags.clone(),
                 false,
             ),
             args::Command::Review(review) => {
-                let crate::review::Target::Author(author) = review.target else {
+                let crate::review::Target::Author(author) = &review.target else {
                     continue;
                 };
                 (
                     json!({"command":"review", "author":author, "recommend_only":review.mode == crate::review::Mode::RecommendOnly}),
-                    review.flags,
+                    review.flags.clone(),
                     false,
                 )
             }
             args::Command::Fix(fix) => {
-                let crate::fix::Target::Pass { base, author } = fix.target else {
+                let crate::fix::Target::Pass { base, author } = &fix.target else {
                     continue;
                 };
                 (
                     json!({"command":"fix", "base":base, "author":author}),
-                    fix.flags,
+                    fix.flags.clone(),
                     false,
                 )
             }
@@ -207,8 +259,8 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
                     json!({"command":"process", "name":process.name, "plan_only":process.plan_only}),
                     Flags {
                         goal: process.goal,
-                        email: process.email,
-                        harness: process.asked,
+                        email: process.email.clone(),
+                        harness: process.asked.clone(),
                         security_review: process.security_review,
                         security_fix: process.security_fix,
                         security_close: process.security_close,
@@ -282,11 +334,14 @@ pub(super) fn passes(config: &UserConfig, jobs: &[crate::cronjobs::CronJob]) -> 
         } else {
             flags.harness(config)
         };
-        passes.push(Pass {
-            command: job.command.clone(),
-            request: serde_json::to_string(&request)?,
-            harness: harness.harness.name().into(),
-        });
+        passes.push((
+            directory.repository.as_str(),
+            Pass {
+                command: entry.job.command.clone(),
+                request: serde_json::to_string(&request)?,
+                harness: harness.harness.name().into(),
+            },
+        ));
     }
     Ok(passes)
 }

@@ -41,7 +41,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ] ||
             git diff --name-only HEAD^1 HEAD |
-              grep -qxE '\.github/workflows/release.*\.yml|dist-workspace\.toml|rust-toolchain\.toml|Cargo\.(toml|lock)'
+              grep -qxE '\.github/workflows/release.*\.yml|scripts/release-dns\.sh|dist-workspace\.toml|rust-toolchain\.toml|Cargo\.(toml|lock)'
           then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -110,6 +110,28 @@ jobs:
       # Passes these variables from Windows into WSL.
       WSLENV: ARCHIVE:EXPECTED
     steps:
+      - name: Resolve Ubuntu download and package hosts
+        shell: pwsh
+        run: |
+          $ubuntuHosts = @('releases.ubuntu.com', 'archive.ubuntu.com', 'security.ubuntu.com')
+          try {
+            foreach ($hostname in $ubuntuHosts) {
+              $addresses = [System.Net.Dns]::GetHostAddresses($hostname)
+              if ($addresses.Count -eq 0) { throw "No addresses for $hostname" }
+            }
+            Write-Host 'Ubuntu hosts resolve through runner DNS'
+          } catch {
+            Write-Host 'Runner DNS failed for Ubuntu; using public DNS on this disposable runner'
+            $interfaces = Get-NetIPConfiguration | Where-Object { $null -ne $_.IPv4DefaultGateway }
+            if (-not $interfaces) { throw 'No network interface with an IPv4 default gateway' }
+            foreach ($interface in $interfaces) {
+              Set-DnsClientServerAddress -InterfaceIndex $interface.InterfaceIndex -ServerAddresses @('1.1.1.1', '8.8.8.8')
+            }
+            Clear-DnsClientCache
+            foreach ($hostname in $ubuntuHosts) {
+              [System.Net.Dns]::GetHostAddresses($hostname) | Out-Null
+            }
+          }
       - uses: Vampire/setup-wsl@v7
         with:
           distribution: Ubuntu-24.04

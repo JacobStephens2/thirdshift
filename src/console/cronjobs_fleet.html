@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fleet schedules · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main class="fleet-machines"><div class="page-title"><h1>Fleet schedules</h1><code>thirdshift cronjobs --fleet --json</code></div>
+<p><a href="/cronjobs">This machine's Cron jobs</a> · <a href="/cronjobs?fleet=true" aria-current="page">Fleet schedules</a></p>
+<p>Configured thirdshift entries in the serving account's crontab on each Fleet machine. Schedules keep each machine's cron time zone; no conversion is applied. Reload to see changes.</p>
+<p>Other accounts, system crontabs and other schedulers are outside this view. Use each machine's Cron jobs for Run now and observed Pass starts.</p>
+<section aria-label="Fleet inventory status"><h2>Machines</h2>
+<ul>{% for machine in inventory.machines %}<li><strong>{{ machine.name }}</strong>: {{ machine.status }}{% if let Some(address) = machine.address %} · <a href="{{ address }}">Open Console</a>{% endif %}{% if machine.empty %} · No thirdshift cron jobs in this account's crontab.{% endif %}{% if let Some(error) = machine.error %}<p>{{ error }}</p>{% endif %}</li>{% endfor %}</ul>
+</section>
+{% for repository in inventory.repositories %}<section class="cron-repository" aria-label="{{ repository.heading() }} Fleet schedules">
+<h2>{{ repository.heading() }}</h2>
+{% for machine in repository.machines %}<h3>{{ machine.name }}</h3>
+{% for job in machine.jobs %}<p>{% if let Some(kind) = job.command_kind %}{{ kind }}{% else %}Unknown Command kind{% endif %}</p>
+<pre class="crontab" tabindex="0" role="region" aria-label="{{ repository.heading() }} on {{ machine.name }} crontab entry"><code><bdi class="cron-schedule">{{ job.schedule }}</bdi>  <bdi class="cron-command">{{ job.command|one_line }}</bdi></code></pre>
+{% endfor %}{% endfor %}</section>{% endfor %}
+</main>{% include "console/chrome.html" %}</body></html>

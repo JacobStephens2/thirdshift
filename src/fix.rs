@@ -50,10 +50,16 @@ pub(crate) fn run(
             };
             let github = GitHub::new();
             let base = launch.base.name();
-            if author.is_none()
-                && let Some(ending) = base_ci::run(&launch, command, config, harness)?
-            {
-                return Ok(ending);
+            if author.is_none() {
+                match base_ci::run(&launch, command, config, harness)? {
+                    base_ci::Outcome::Clear => {}
+                    base_ci::Outcome::Skipped(reason) => {
+                        logs::base_ci_skipped(&launch.repo, &reason);
+                    }
+                    base_ci::Outcome::Run(ended) => {
+                        return Ok(crate::command::Ending::Run(ended));
+                    }
+                }
             }
             for pr in github.fix_candidates(&launch.repo, base, author.as_deref())? {
                 if !github.needs_fix(&pr, base, author.as_deref(), false)? {

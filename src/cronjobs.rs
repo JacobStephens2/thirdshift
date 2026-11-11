@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::config::UserConfig;
 use crate::logs::pass_starts::{self, PassStart};
 
-#[derive(Serialize, Deserialize)]
+mod command;
+pub(crate) mod fleet;
+pub(crate) use command::{Interpretation, LaunchFacts};
+
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct CronJobs {
     pub jobs: Vec<CronJob>,
     pub pass_starts: Vec<PassStart>,
@@ -31,7 +35,7 @@ impl CronJobs {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
@@ -40,6 +44,65 @@ pub struct CronJob {
     /// heading would add a line to the schedule listing.
     #[serde(default, deserialize_with = "deserialize_repository")]
     pub repository: Option<String>,
+    /// Owning-machine recognition only; absent on older inventories.
+    #[serde(default, deserialize_with = "deserialize_command_kind")]
+    pub command_kind: Option<CommandKind>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum CommandKind {
+    #[serde(rename = "Pickup run")]
+    Pickup,
+    #[serde(rename = "Security run")]
+    Security,
+    #[serde(rename = "Architect run")]
+    Architect,
+    #[serde(rename = "Triage run")]
+    Triage,
+    #[serde(rename = "Fix run")]
+    Fix,
+    #[serde(rename = "Review run")]
+    Review,
+    #[serde(rename = "Custom process")]
+    Process,
+}
+
+impl std::fmt::Display for CommandKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Pickup => "Pickup run",
+            Self::Security => "Security run",
+            Self::Architect => "Architect run",
+            Self::Triage => "Triage run",
+            Self::Fix => "Fix run",
+            Self::Review => "Review run",
+            Self::Process => "Custom process",
+        };
+        f.write_str(name)
+    }
+}
+
+fn deserialize_command_kind<'de, D>(deserializer: D) -> Result<Option<CommandKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // A future owner's Command kind must not hide an otherwise readable entry.
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or(None))
+}
+
+/// One Fleet report field. A control character or Unicode line separator would
+/// start another line or a terminal control sequence, so one machine's schedule
+/// or error could look like another machine's entry. JSON keeps the original text.
+pub(crate) fn report_line(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\n' | '\u{2028}' | '\u{2029}' => '\u{240A}',
+            '\r' => '\u{240D}',
+            character if character.is_control() => '\u{FFFD}',
+            character => character,
+        })
+        .collect()
 }
 
 fn repository_label(repository: Option<String>) -> Option<String> {
@@ -61,13 +124,14 @@ where
 
 pub(crate) fn load() -> Result<CronJobs> {
     let config = UserConfig::load()?;
-    let home = crate::config::home()?;
-    let mut jobs = jobs()?;
+    Ok(crate::launch_directories::Captured::capture(&config)?
+        .cronjobs()?
+        .clone())
+}
+
+pub(crate) fn inventory(mut jobs: Vec<CronJob>, logs_dir: &std::path::Path) -> Result<CronJobs> {
     for job in &mut jobs {
-        job.repository = repository_label(
-            crate::launch_directories::from_cron(&job.command, &home)
-                .map(|directory| directory.repository),
-        );
+        job.repository = repository_label(job.repository.take());
     }
     // Stable sorting retains crontab order and duplicates within each repository.
     jobs.sort_by(|a, b| {
@@ -75,11 +139,16 @@ pub(crate) fn load() -> Result<CronJobs> {
     });
     Ok(CronJobs {
         jobs,
-        pass_starts: pass_starts::load(&config.logs_dir)?,
+        pass_starts: pass_starts::load(logs_dir)?,
     })
 }
 
-pub(crate) fn jobs() -> Result<Vec<CronJob>> {
+pub(crate) struct InterpretedEntry {
+    pub job: CronJob,
+    pub interpretation: Interpretation,
+}
+
+pub(crate) fn entries() -> Result<Vec<InterpretedEntry>> {
     let output = Command::new("crontab")
         .arg("-l")
         .env("LC_ALL", "C")
@@ -101,7 +170,11 @@ pub(crate) fn jobs() -> Result<Vec<CronJob>> {
         );
     }
     let crontab = String::from_utf8(output.stdout).context("crontab is not UTF-8")?;
-    Ok(crontab.lines().filter_map(entry).collect())
+    Ok(parse(&crontab))
+}
+
+pub(crate) fn parse(crontab: &str) -> Vec<InterpretedEntry> {
+    crontab.lines().filter_map(entry).collect()
 }
 
 pub fn show(json: bool) -> Result<String> {
@@ -129,7 +202,7 @@ pub fn show(json: bool) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn entry(line: &str) -> Option<CronJob> {
+fn entry(line: &str) -> Option<InterpretedEntry> {
     let mut command = line.trim();
     // User crontabs have five schedule fields, or one @-schedule field.
     // Requiring a schedule excludes comments and environment assignments.
@@ -146,29 +219,16 @@ fn entry(line: &str) -> Option<CronJob> {
         schedule.push(&command[..end]);
         command = command[end..].trim_start();
     }
-    // Keep stdin text for display, but don't match it as a command.
-    let mentions_thirdshift = shell_command(command)
-        .split(|c: char| c.is_whitespace() || "'\";&|()<>".contains(c))
-        .any(|word| word.rsplit('/').next() == Some("thirdshift"));
-    mentions_thirdshift.then(|| CronJob {
-        schedule: schedule.join(" "),
-        command: command.into(),
-        repository: None,
+    let interpreted = Interpretation::new(command);
+    interpreted.recognized().then(|| InterpretedEntry {
+        job: CronJob {
+            schedule: schedule.join(" "),
+            command: command.into(),
+            repository: None,
+            command_kind: interpreted.command_kind(),
+        },
+        interpretation: interpreted,
     })
-}
-
-/// Cron sends everything after its first unescaped % to stdin, even in quotes.
-pub(crate) fn shell_command(command: &str) -> &str {
-    let mut escaped = false;
-    let command_end = command
-        .char_indices()
-        .find_map(|(index, character)| {
-            let separator = character == '%' && !escaped;
-            escaped = character == '\\' && !escaped;
-            separator.then_some(index)
-        })
-        .unwrap_or(command.len());
-    &command[..command_end]
 }
 
 #[cfg(test)]

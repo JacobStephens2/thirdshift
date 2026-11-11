@@ -39,6 +39,466 @@ fn checkout(home: &Path, name: &str, origin: &str) -> std::path::PathBuf {
     path
 }
 
+fn changing_crontab(home: &Path) {
+    checkout(home, "first", "https://github.com/acme/first.git");
+    checkout(home, "second", "https://github.com/acme/second.git");
+    support::write_executable(
+        &home.join("bin/crontab"),
+        "#!/bin/sh\nn=0\n[ ! -f \"$HOME/reads\" ] || n=$(cat \"$HOME/reads\")\nn=$((n+1))\necho $n > \"$HOME/reads\"\nif [ $n = 1 ]; then repo=first; else repo=second; fi\necho \"@daily cd ~/$repo && thirdshift pickup\"\n",
+    );
+}
+
+#[test]
+fn start_options_share_one_crontab_capture_and_refresh_on_the_next_request() {
+    let home = fixture();
+    changing_crontab(home.path());
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (read, repo) in [(1, "first"), (2, "second")] {
+        let options = api::json(console.get("/api/v1/start-options"));
+        assert_eq!(
+            fs::read_to_string(home.path().join("reads"))
+                .unwrap()
+                .trim(),
+            read.to_string()
+        );
+        assert_eq!(
+            options["form"]["repositories"][0]["repository"],
+            format!("acme/{repo}")
+        );
+        let request: Value =
+            serde_json::from_str(options["passes"][0]["request"].as_str().unwrap()).unwrap();
+        assert_eq!(request["repository"], format!("acme/{repo}"));
+    }
+}
+
+#[test]
+fn local_cron_page_shares_its_capture_with_run_now() {
+    let home = fixture();
+    changing_crontab(home.path());
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (read, repo) in [(1, "first"), (2, "second")] {
+        let html = console.get("/cronjobs").text().unwrap();
+        let document = scraper::Html::parse_document(&html);
+        let commands = scraper::Selector::parse(".cron-command").unwrap();
+        let buttons = scraper::Selector::parse("[data-start-request]").unwrap();
+        assert_eq!(
+            document
+                .select(&commands)
+                .next()
+                .unwrap()
+                .text()
+                .collect::<String>(),
+            format!("cd ~/{repo} && thirdshift pickup")
+        );
+        let request: Value = serde_json::from_str(
+            document
+                .select(&buttons)
+                .next()
+                .unwrap()
+                .attr("data-start-request")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request["repository"], format!("acme/{repo}"));
+        assert_eq!(
+            fs::read_to_string(home.path().join("reads"))
+                .unwrap()
+                .trim(),
+            read.to_string()
+        );
+    }
+}
+
+#[test]
+fn cron_page_keeps_repository_order_while_start_options_keep_crontab_order() {
+    let home = fixture();
+    checkout(home.path(), "a", "https://github.com/acme/a.git");
+    checkout(home.path(), "b", "https://github.com/acme/b.git");
+    fs::write(home.path().join("crontab"), "@daily cd ~/b && thirdshift pickup\n@hourly cd ~/a && thirdshift architect\n@daily cd ~/b && thirdshift secure\n").unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(
+        options["passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pass| pass["command"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "cd ~/b && thirdshift pickup",
+            "cd ~/a && thirdshift architect",
+            "cd ~/b && thirdshift secure"
+        ]
+    );
+    let html = console.get("/cronjobs").text().unwrap();
+    let document = scraper::Html::parse_document(&html);
+    let buttons = scraper::Selector::parse("[data-start-request]").unwrap();
+    let commands: Vec<_> = document
+        .select(&buttons)
+        .map(|button| {
+            let request: Value =
+                serde_json::from_str(button.attr("data-start-request").unwrap()).unwrap();
+            request["command"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(commands, ["architect", "pickup", "secure"]);
+}
+
+#[test]
+fn aliases_and_duplicate_entries_share_successful_and_failed_origin_observations() {
+    let home = fixture();
+    let valid = checkout(home.path(), "valid", "https://github.com/acme/widgets.git");
+    let invalid = checkout(
+        home.path(),
+        "invalid",
+        "https://gitlab.com/acme/widgets.git",
+    );
+    std::os::unix::fs::symlink(&valid, home.path().join("alias")).unwrap();
+    std::os::unix::fs::symlink(&invalid, home.path().join("bad-alias")).unwrap();
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/alias', '~/valid']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    fs::write(home.path().join("crontab"), "@daily cd ~/alias && thirdshift pickup\n@daily cd ~/valid && thirdshift pickup\n@hourly cd ~/alias && thirdshift secure\n@daily cd ~/invalid && thirdshift pickup\n@daily cd ~/bad-alias && thirdshift pickup\n").unwrap();
+    support::write_executable(
+        &home.path().join("bin/git"),
+        "#!/bin/sh\nif [ \"$1 $2 $3\" = 'config --get remote.origin.url' ]; then echo \"$PWD\" >> \"$HOME/origin-reads\"; fi\nexec /usr/bin/git \"$@\"\n",
+    );
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    let options = api::json(console.get("/api/v1/start-options"));
+    assert_eq!(options["form"]["repositories"].as_array().unwrap().len(), 1);
+    assert_eq!(options["passes"].as_array().unwrap().len(), 3);
+    let reads = fs::read_to_string(home.path().join("origin-reads")).unwrap();
+    assert_eq!(
+        reads.lines().collect::<Vec<_>>(),
+        [valid.to_str().unwrap(), invalid.to_str().unwrap()]
+    );
+}
+
+#[test]
+fn invalid_configured_directory_keeps_cron_inventory_and_reports_start_error() {
+    let home = fixture();
+    checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    fs::write(
+        home.path().join("crontab"),
+        "@daily cd ~/repo && thirdshift pickup\n",
+    )
+    .unwrap();
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/missing']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    assert_eq!(
+        api::json(console.get("/api/v1/cronjobs"))["jobs"][0]["repository"],
+        "acme/widgets"
+    );
+    assert_eq!(console.get("/api/v1/launch-directories").status(), 422);
+    assert_eq!(console.get("/api/v1/start-options").status(), 422);
+    let page = console.get("/cronjobs");
+    assert_eq!(page.status(), 200);
+    let html = page.text().unwrap();
+    assert!(html.contains("acme/widgets"), "{html}");
+    assert!(
+        html.contains("Could not load startable Passes: invalid configured Launch directory"),
+        "{html}"
+    );
+    assert!(
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("invalid configured Launch directory")
+    );
+}
+
+#[test]
+fn owning_machine_projections_keep_crontab_error_rules() {
+    let home = fixture();
+    checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "launch_directories = ['~/repo']\n[console]\nport = 0\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/usr/bin/git", home.path().join("bin/git")).unwrap();
+    let mut start = command(home.path());
+    start
+        .env("PATH", home.path().join("bin"))
+        .args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (script, strict, discovery) in [
+        (Some("#!/bin/sh\nexit 0\n"), 200, 200),
+        (
+            Some("#!/bin/sh\necho 'crontab: no crontab for owner' >&2\nexit 1\n"),
+            200,
+            200,
+        ),
+        (None, 422, 200),
+        (
+            Some("#!/bin/sh\necho 'crontab: permission denied' >&2\nexit 1\n"),
+            422,
+            422,
+        ),
+        (Some("#!/bin/sh\nprintf '\\377'\n"), 422, 422),
+    ] {
+        let executable = home.path().join("bin/crontab");
+        if let Some(script) = script {
+            support::write_executable(&executable, script);
+        } else {
+            fs::remove_file(&executable).unwrap();
+        }
+        for path in ["/api/v1/cronjobs", "/cronjobs"] {
+            let status = if path == "/cronjobs" && strict == 422 {
+                500
+            } else {
+                strict
+            };
+            assert_eq!(console.get(path).status(), status, "{script:?}: {path}");
+        }
+        for path in ["/api/v1/launch-directories", "/api/v1/start-options"] {
+            let response = console.get(path);
+            assert_eq!(response.status(), discovery, "{script:?}: {path}");
+            if discovery == 200 {
+                let value = api::json(response);
+                if path.ends_with("start-options") {
+                    assert_eq!(
+                        value["form"]["repositories"][0]["repository"],
+                        "acme/widgets"
+                    );
+                    assert!(value["passes"].as_array().unwrap().is_empty());
+                } else {
+                    assert_eq!(value["directories"][0]["repository"], "acme/widgets");
+                }
+            }
+        }
+        for (args, expected) in [
+            (vec!["cronjobs", "--json"], strict),
+            (vec!["launch-directories", "--json"], discovery),
+        ] {
+            let output = command(home.path())
+                .env("PATH", home.path().join("bin"))
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.success(),
+                expected == 200,
+                "{script:?}: {output:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cron_job_projections_agree_without_conflating_kind_directory_and_start() {
+    let home = fixture();
+    let repo = checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    checkout(
+        home.path(),
+        "elsewhere",
+        "https://gitlab.com/acme/widgets.git",
+    );
+    fs::write(home.path().join("crontab"), "").unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (text, kind, resolved, offered) in [
+        ("thirdshift pickup", Some("Pickup run"), false, false),
+        (
+            "cd ~/repo && thirdshift pickup",
+            Some("Pickup run"),
+            true,
+            true,
+        ),
+        ("cd ~/repo && env X=1 thirdshift pickup", None, true, false),
+        (
+            "cd ~/repo && /usr/bin/env X=1 thirdshift pickup",
+            None,
+            true,
+            false,
+        ),
+        ("cd ~/repo && thirdshift status --json", None, true, false),
+        (
+            "cd ~/repo && thirdshift pickup --unknown",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup base '$BASE'",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup base '`branch`'",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/missing && thirdshift pickup",
+            Some("Pickup run"),
+            false,
+            false,
+        ),
+        (
+            "cd ~/elsewhere && thirdshift pickup",
+            Some("Pickup run"),
+            false,
+            false,
+        ),
+        (
+            "cd ~/repo && command -p -- cd /elsewhere && thirdshift pickup",
+            None,
+            false,
+            false,
+        ),
+        (
+            "cd ~/repo && echo ready && thirdshift pickup && echo done",
+            None,
+            true,
+            true,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup && echo done",
+            None,
+            true,
+            true,
+        ),
+        (
+            "cd ~/repo && thirdshift fix https://github.com/acme/widgets/pull/7",
+            Some("Fix run"),
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift review https://github.com/acme/widgets/pull/7",
+            Some("Review run"),
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift triage",
+            Some("Triage run"),
+            true,
+            false,
+        ),
+        ("cd '~/repo && thirdshift pickup", None, false, false),
+    ] {
+        fs::write(home.path().join("crontab"), format!("@daily {text}\n")).unwrap();
+        let inventory = command(home.path())
+            .args(["cronjobs", "--json"])
+            .output()
+            .unwrap();
+        assert!(inventory.status.success(), "{inventory:?}");
+        let inventory: Value = serde_json::from_slice(&inventory.stdout).unwrap();
+        assert_eq!(
+            inventory["jobs"],
+            json!([{
+                "schedule": "@daily", "command": text, "command_kind": kind,
+                "repository": resolved.then_some("acme/widgets"),
+            }]),
+            "{text}"
+        );
+        assert_eq!(
+            api::json(console.get("/api/v1/cronjobs")),
+            inventory,
+            "{text}"
+        );
+        let directories = command(home.path())
+            .args(["launch-directories", "--json"])
+            .output()
+            .unwrap();
+        assert!(directories.status.success(), "{directories:?}");
+        let directories: Value = serde_json::from_slice(&directories.stdout).unwrap();
+        let expected = if resolved {
+            json!({"directories": [{"repository": "acme/widgets", "path": repo}]})
+        } else {
+            json!({"directories": []})
+        };
+        assert_eq!(directories, expected, "{text}");
+        assert_eq!(
+            api::json(console.get("/api/v1/launch-directories")),
+            expected,
+            "{text}"
+        );
+        let options = api::json(console.get("/api/v1/start-options"));
+        let passes = options["passes"].as_array().unwrap();
+        assert_eq!(passes.len(), usize::from(offered), "{text}: {options}");
+        if offered {
+            assert_eq!(passes[0]["command"], text);
+            let request: Value =
+                serde_json::from_str(passes[0]["request"].as_str().unwrap()).unwrap();
+            assert_eq!(request["command"], "pickup");
+            assert_eq!(request["repository"], "acme/widgets");
+        }
+    }
+}
+
+#[test]
+fn cronjobs_classifies_literal_commands_without_executing_them() {
+    let home = fixture();
+    let repo = checkout(
+        home.path(),
+        "widgets",
+        "https://github.com/acme/widgets.git",
+    );
+    let examples = [
+        ("pickup base main", Some("Pickup run")),
+        ("secure base main", Some("Security run")),
+        ("architect base main", Some("Architect run")),
+        ("triage", Some("Triage run")),
+        ("fix", Some("Fix run")),
+        ("review --author acme", Some("Review run")),
+        ("process inspect", Some("Custom process")),
+        ("https://github.com/acme/widgets/issues/7", None),
+        ("pickup > cron.log && thirdshift secure", None),
+        ("status --json", None),
+        ("pickup base \"$BASE\"", None),
+        ("unknown-command", None),
+    ];
+    fs::write(
+        home.path().join("crontab"),
+        examples
+            .iter()
+            .map(|(args, _)| {
+                format!(
+                    "@daily cd '{}' && thirdshift {args} >> cron.log 2>&1\n",
+                    repo.display()
+                )
+            })
+            .collect::<String>(),
+    )
+    .unwrap();
+    let output = command(home.path())
+        .args(["cronjobs", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let inventory: Value = serde_json::from_slice(&output.stdout).unwrap();
+    for (job, (_, expected)) in inventory["jobs"].as_array().unwrap().iter().zip(examples) {
+        assert_eq!(job.get("command_kind"), Some(&json!(expected)), "{job}");
+    }
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    assert_eq!(api::json(console.get("/api/v1/cronjobs")), inventory);
+}
+
 #[test]
 fn cronjobs_groups_repositories_stably_in_cli_and_api() {
     let home = fixture();
@@ -68,11 +528,11 @@ fn cronjobs_groups_repositories_stably_in_cli_and_api() {
     assert_eq!(
         inventory,
         json!({"jobs": [
-        {"repository": "acme/widgets", "schedule": "0 2 * * *", "command": alpha_command},
-        {"repository": "acme/widgets", "schedule": "*/10 * * * *", "command": another_alpha},
-        {"repository": "zeta/widgets", "schedule": "*/5 * * * *", "command": zulu_command},
-        {"repository": "zeta/widgets", "schedule": "*/5 * * * *", "command": zulu_command},
-        {"repository": null, "schedule": "@reboot", "command": "thirdshift secure base main"}
+        {"repository": "acme/widgets", "command_kind":"Architect run", "schedule": "0 2 * * *", "command": alpha_command},
+        {"repository": "acme/widgets", "command_kind":null, "schedule": "*/10 * * * *", "command": another_alpha},
+        {"repository": "zeta/widgets", "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": zulu_command},
+        {"repository": "zeta/widgets", "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": zulu_command},
+        {"repository": null, "command_kind":"Security run", "schedule": "@reboot", "command": "thirdshift secure base main"}
     ], "pass_starts": []})
     );
     let text = command(home.path()).arg("cronjobs").output().unwrap();
@@ -96,6 +556,21 @@ fn cronjobs_remote_and_legacy_inventories_use_the_owning_machines_metadata() {
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/console/cronjobs_remote.py"
+            ),
+            env!("CARGO_BIN_EXE_thirdshift"),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn cronjobs_fleet_combines_inventories_and_isolates_failures() {
+    let output = Command::new("python3")
+        .args([
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/console/cronjobs_fleet.py"
             ),
             env!("CARGO_BIN_EXE_thirdshift"),
         ])
@@ -150,7 +625,7 @@ fn cronjobs_keeps_directory_changing_compounds_under_other() {
     for (job, expected) in jobs.iter().zip(commands) {
         assert_eq!(
             job,
-            &json!({"repository": null, "schedule": "@daily", "command": expected})
+            &json!({"repository": null, "command_kind":null, "schedule": "@daily", "command": expected})
         );
     }
     let mut start = command(home.path());
@@ -211,16 +686,24 @@ fn cronjobs_keeps_unresolved_entries_and_never_evaluates_shell_text() {
     assert_eq!(jobs.len(), 8, "{inventory}");
     assert_eq!(
         jobs[0],
-        json!({"repository":"acme/widgets", "schedule":"@daily", "command":literal})
+        json!({"repository":"acme/widgets", "command_kind":null, "schedule":"@daily", "command":literal})
     );
     assert_eq!(
         jobs[1],
-        json!({"repository":"acme/widgets", "schedule":"@hourly", "command":display_only})
+        json!({"repository":"acme/widgets", "command_kind":null, "schedule":"@hourly", "command":display_only})
     );
-    for (job, expected) in jobs[2..].iter().zip(unresolved) {
+    let kinds = [
+        Some("Pickup run"),
+        Some("Pickup run"),
+        Some("Pickup run"),
+        None,
+        None,
+        None,
+    ];
+    for ((job, expected), kind) in jobs[2..].iter().zip(unresolved).zip(kinds) {
         assert_eq!(
             job,
-            &json!({"repository":null, "schedule":"@reboot", "command":expected})
+            &json!({"repository":null, "command_kind":kind, "schedule":"@reboot", "command":expected})
         );
     }
     let mut start = command(home.path());
@@ -288,8 +771,8 @@ fn cronjobs_pairs_cli_and_console_without_running_scheduled_commands() {
     assert_eq!(
         jobs,
         json!({"jobs": [
-            {"repository": null, "schedule": "*/5 * * * *", "command": "cd /srv/repo && /home/me/.cargo/bin/thirdshift pickup base main >> /tmp/cron.log 2>&1"},
-            {"repository": null, "schedule": "@reboot", "command": "thirdshift secure base main # <script>alert(1)</script>"}
+            {"repository": null, "command_kind":"Pickup run", "schedule": "*/5 * * * *", "command": "cd /srv/repo && /home/me/.cargo/bin/thirdshift pickup base main >> /tmp/cron.log 2>&1"},
+            {"repository": null, "command_kind":"Security run", "schedule": "@reboot", "command": "thirdshift secure base main # <script>alert(1)</script>"}
         ], "pass_starts": []})
     );
     let mut start = command(home.path());
@@ -456,7 +939,7 @@ fn cronjobs_respects_crons_command_and_stdin_separator() {
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
         json!({"jobs": [
-            {"repository": null, "schedule": "* * * * *", "command": "/usr/local/bin/thirdshift%stdin"}
+            {"repository": null, "command_kind":null, "schedule": "* * * * *", "command": "/usr/local/bin/thirdshift%stdin"}
         ], "pass_starts": []})
     );
 }
