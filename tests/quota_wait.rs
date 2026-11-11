@@ -340,3 +340,30 @@ fn preflight_quota_wait_is_visible_and_can_be_stopped() {
     assert!(!child.wait().success());
     assert!(scenario.claude_calls().is_empty());
 }
+
+#[test]
+fn a_pass_that_waited_before_skipping_finishes_its_command_record() {
+    let scenario = Scenario::new();
+    let reset = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 2;
+    let mut state = scenario.gh_state();
+    state["fail_next"] = json!({"call":"api --paginate --jq", "times":1,
+        "error":"API rate limit exceeded (HTTP 403)"});
+    state["rate_limits"] = json!({"core":{"remaining":0,"reset":reset}});
+    scenario.write_gh_state(&state);
+    let result = scenario.run_with_env(&["pickup"], &[("THIRDSHIFT_QUOTA_MINUTE_MS", "1")]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Quota wait until"),
+        "{}",
+        result.stderr
+    );
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/pickup");
+    assert_eq!(record["outcome"], "skipped", "{record}");
+    assert!(record["ended_at"].is_string(), "{record}");
+    let shown = scenario.run(&["status"]);
+    assert!(!shown.stdout.contains("Died"), "{}", shown.stdout);
+}

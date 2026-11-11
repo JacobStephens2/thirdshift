@@ -415,6 +415,9 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn skipped(&mut self, pass: Pass, repo: &Repo, reason: impl Display) {
+        if self.quota_record {
+            self.outcome("skipped", Some(&reason.to_string()));
+        }
         let kind = Kind::Pass(pass);
         self.activity_write(
             &self.root(repo),
