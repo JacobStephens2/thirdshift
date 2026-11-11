@@ -1,5 +1,4 @@
-//! Shared machine-local Quota waits. Observing a wait does not yet change how
-//! Passes or running Commands execute.
+//! Shared machine-local Quota waits and Pass admission.
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -76,6 +75,20 @@ impl Quota {
 }
 
 impl QuotaWait {
+    /// One stable reason, held until the last depleted resource resets.
+    pub fn pass_reason(waits: &[Self]) -> Option<String> {
+        let wait = waits
+            .iter()
+            .filter(|wait| wait.reset_at() > Utc::now())
+            .max_by_key(|wait| wait.reset_at())?;
+        Some(format!(
+            "GitHub Quota wait until {} ({}: {} left)",
+            wait.reset_at().to_rfc3339_opts(SecondsFormat::Secs, true),
+            wait.resource.name(),
+            wait.remaining(),
+        ))
+    }
+
     pub fn reset_at(&self) -> DateTime<Utc> {
         self.quota.reset_at
     }
@@ -110,6 +123,18 @@ impl QuotaWait {
 }
 
 impl GitHub {
+    /// A known wait needs no probe. Non-quota probe failures fail open;
+    /// exhaustion recorded by a failed probe still skips this Pass.
+    pub(crate) fn pass_quota_wait(&self) -> Option<String> {
+        if let Some(reason) = QuotaWait::pass_reason(&self.quota_waits().unwrap_or_default()) {
+            return Some(reason);
+        }
+        let waits = self
+            .inbox_quotas()
+            .unwrap_or_else(|_| self.quota_waits().unwrap_or_default());
+        QuotaWait::pass_reason(&waits)
+    }
+
     // Quota probes deliberately bypass failure recording: learning a reset or
     // identity must never recursively probe another failure.
     fn quota_json(&self, args: &[&str]) -> Result<Value> {

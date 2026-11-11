@@ -44,7 +44,7 @@ pub fn run(
         base,
     } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit)? {
         Start::Clear(launch) => launch,
-        Start::AlreadyRunning(running) => return Ok(skipped(&running.repo, &running)),
+        Start::NotAdmitted(running) => return Ok(skipped(&running.repo, &running)),
     };
     let failed = crate::pickup::failures(&mut LaunchAndGitHub {
         launch: directory.git(),

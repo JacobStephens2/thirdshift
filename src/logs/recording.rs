@@ -69,6 +69,11 @@ struct Started {
     process: Option<String>,
 }
 
+enum History<'a> {
+    Kind(Kind),
+    ProcessSkip(&'a str),
+}
+
 impl Started {
     fn subject(&self) -> String {
         if let Some(name) = &self.process {
@@ -190,7 +195,7 @@ impl<O: Outside> Record<O> {
             self.activity_write(
                 root,
                 &format!("{} warning: {warning}", Kind::UserConfig),
-                Some(Kind::UserConfig),
+                Some(History::Kind(Kind::UserConfig)),
             );
         }
     }
@@ -388,7 +393,7 @@ impl<O: Outside> Record<O> {
         self.activity_write(
             &self.root(repo),
             &format!("{kind} skipped: {reason}"),
-            Some(kind),
+            Some(History::Kind(kind)),
         );
     }
 
@@ -400,21 +405,28 @@ impl<O: Outside> Record<O> {
         repo: &Repo,
         name: &str,
         harness: &Choice,
-        reason: &str,
+        reason: &crate::command_limit::NotAdmitted,
     ) {
         let root = self.root(repo);
         self.record_config_warnings(&root);
+        // Quota waits compare this named Process's last reason even when
+        // another Custom process fires between its Passes.
+        let history = if reason.is_quota_wait() {
+            History::ProcessSkip(name)
+        } else {
+            History::Kind(Kind::Process)
+        };
         self.activity_write(
             &root,
             &format!("Process {name} skipped: {reason}"),
-            Some(Kind::Process),
+            Some(history),
         );
         let stamp = self.stamp();
         // Leave held lines unshown, so a quiet skip prints nothing. They are
         // still the Command log.
         self.retain(&root, Work::Process { repo, name }, &stamp, false);
         self.start_record(Work::Process { repo, name }, harness);
-        self.outcome("skipped", Some(reason));
+        self.outcome("skipped", Some(&reason.to_string()));
     }
 
     pub(super) fn activity(&mut self, message: impl Display) {
@@ -810,7 +822,7 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<Kind>) {
+    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<History<'_>>) {
         let appended = self.activity_append(&root.join(activity::FILE), line, unless_last_of);
         if let Err(error) = appended
             && !self.activity_warned
@@ -827,9 +839,9 @@ impl<O: Outside> Record<O> {
         &mut self,
         path: &Path,
         line: &str,
-        unless_last_of: Option<Kind>,
+        unless_last_of: Option<History<'_>>,
     ) -> Result<()> {
-        if let Some(kind) = unless_last_of {
+        if let Some(history) = unless_last_of {
             let tail = self.outside.activity_tail(path, activity::TAIL)?;
             let text = String::from_utf8_lossy(&tail.bytes);
             let whole = if tail.from > 0 {
@@ -837,7 +849,11 @@ impl<O: Outside> Record<O> {
             } else {
                 &text
             };
-            if activity::last_of(whole, kind).map(|(_, text)| text) == Some(line) {
+            let last = match history {
+                History::Kind(kind) => activity::last_of(whole, kind),
+                History::ProcessSkip(name) => activity::last_process_skip(whole, name),
+            };
+            if last.map(|(_, text)| text) == Some(line) {
                 return Ok(());
             }
         }

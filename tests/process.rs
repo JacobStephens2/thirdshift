@@ -3246,7 +3246,10 @@ fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
     );
     assert!(scenario.claude_calls().is_empty(), "a session started");
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+    );
     assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
     release(&scenario);
     let process = process.finish();
