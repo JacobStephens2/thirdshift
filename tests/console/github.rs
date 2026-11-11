@@ -677,3 +677,42 @@ fn inbox_shows_a_pass_quota_wait_and_updates_when_the_machine_record_expires() {
     drop(stream);
     drop(console);
 }
+
+#[test]
+fn relearning_quota_identity_without_a_wait_keeps_the_inbox_idle() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("failed"), 10);
+    scenario.issue_is(81, "OPEN");
+    let console = start(&scenario);
+    let mut first = events(&console);
+    wait_for(&console, &mut first, "needs you");
+    assert_idle_events(&console, Duration::from_secs(1));
+    // Keep the first subscription alive so this one does not restart the observer.
+    let mut stream = events(&console);
+    assert!(sse_event(&mut stream).contains("event: commands"));
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    assert!(path.exists());
+    fs::remove_file(&path).unwrap();
+    let began = std::time::Instant::now();
+    loop {
+        let mut line = String::new();
+        match stream.read_line(&mut line) {
+            Ok(0) => panic!("Inbox stream closed"),
+            Ok(_) => assert!(
+                !line.starts_with("event: commands"),
+                "identity bookkeeping woke the Inbox: {line}"
+            ),
+            Err(_) => {
+                assert!(began.elapsed() >= Duration::from_secs(2));
+                break;
+            }
+        }
+    }
+    assert!(path.exists(), "the quota identity was not relearned");
+    assert!(scenario.gh_calls_of("api", "user").len() >= 2);
+    drop(stream);
+    drop(first);
+    drop(console);
+}

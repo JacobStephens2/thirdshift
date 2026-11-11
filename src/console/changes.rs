@@ -10,6 +10,8 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::watch;
 
+use crate::github::{GitHub, QuotaWait};
+
 #[derive(Clone, Copy, Default, PartialEq)]
 pub(super) struct Revision {
     pub commands: u64,
@@ -70,6 +72,7 @@ struct Paths {
     other_logs: Vec<PathBuf>,
     executable: PathBuf,
     assets: Option<PathBuf>,
+    quota_warning: Mutex<Option<String>>,
 }
 
 impl Paths {
@@ -80,6 +83,7 @@ impl Paths {
             other_logs: Vec::new(),
             executable: observed_path(&executable),
             assets: None,
+            quota_warning: Mutex::new(None),
         }
     }
 
@@ -141,7 +145,14 @@ impl Paths {
                 revision.accounts += 1;
             }
             if path == self.root.join("github-quota.json") {
-                revision.commands += 1;
+                // Identity-cache bookkeeping shares this file with waits.
+                // Wake readers only when their displayed quota state changes.
+                let current = quota_warning();
+                let mut previous = self.quota_warning.lock().unwrap();
+                if *previous != current {
+                    *previous = current;
+                    revision.commands += 1;
+                }
             }
             if path.starts_with(&self.logs)
                 || self.logs.starts_with(&path)
@@ -210,6 +221,10 @@ impl Paths {
     }
 }
 
+fn quota_warning() -> Option<String> {
+    QuotaWait::warning(&GitHub::new().quota_waits().unwrap_or_default())
+}
+
 // Native backends may report canonical paths.
 // Resolve the existing ancestor so roots created later use the same spelling.
 pub(super) fn observed_path(path: &std::path::Path) -> PathBuf {
@@ -231,6 +246,7 @@ pub(super) fn observe(
         config.logs_dir.clone(),
         executable.path.clone(),
     );
+    paths.quota_warning = Mutex::new(quota_warning());
     paths.assets = assets.directory().map(PathBuf::from);
     paths.other_logs = crate::logs::accounts::discover(config)
         .logs
@@ -301,6 +317,10 @@ pub(super) fn observe(
             }
             reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
             reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
+            if revision.commands != previous.commands {
+                // Clock-driven notices also advance the displayed quota state.
+                *paths.read().unwrap().quota_warning.lock().unwrap() = quota_warning();
+            }
             sender.send_if_modified(|current| {
                 let before = *current;
                 if revision.commands != previous.commands {
