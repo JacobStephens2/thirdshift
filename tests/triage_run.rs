@@ -24,12 +24,15 @@ fn recommendation_script(recommendation: &str) -> String {
     )
 }
 
-fn assert_notification_links(scenario: &Scenario, notification: &str, numbers: &[u32]) {
+fn assert_notification_links_once(scenario: &Scenario, notification: &str, numbers: &[u32]) {
     for &number in numbers {
-        assert!(
+        let issue_line = format!("Issue: {}", scenario.issue_url(number));
+        assert_eq!(
             notification
                 .lines()
-                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
+                .filter(|line| *line == issue_line)
+                .count(),
+            1,
             "{notification}"
         );
     }
@@ -73,15 +76,7 @@ fn a_successful_triage_notification_lists_a_filed_issue_once() {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1);
     let notification = requests[0].body["text"].as_str().unwrap();
-    let issue_line = format!("Issue: {}", scenario.issue_url(8));
-    assert_eq!(
-        notification
-            .lines()
-            .filter(|line| *line == issue_line)
-            .count(),
-        1,
-        "{notification}"
-    );
+    assert_notification_links_once(&scenario, notification, &[8]);
     support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
 }
 
@@ -109,17 +104,7 @@ fn partial_publication_notification_lists_each_filed_issue_once() {
     let result = scenario.run_with_input(&["triage"], REPORT);
     assert_ne!(result.code, Some(0), "cross-link publication should fail");
     let (_, notification) = saved_notification(&scenario, "triage");
-    for number in [8, 9] {
-        let issue_line = format!("Issue: {}", scenario.issue_url(number));
-        assert_eq!(
-            notification
-                .lines()
-                .filter(|line| *line == issue_line)
-                .count(),
-            1,
-            "{notification}"
-        );
-    }
+    assert_notification_links_once(&scenario, &notification, &[8, 9]);
 }
 
 #[test]
@@ -140,15 +125,7 @@ fn successful_questionnaire_notification_lists_its_filed_issue_once() {
     let result = scenario.run_with_input(&["triage"], REPORT);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let (_, notification) = saved_notification(&scenario, "triage");
-    let issue_line = format!("Issue: {}", scenario.issue_url(8));
-    assert_eq!(
-        notification
-            .lines()
-            .filter(|line| *line == issue_line)
-            .count(),
-        1,
-        "{notification}"
-    );
+    assert_notification_links_once(&scenario, &notification, &[8]);
 }
 
 #[test]
@@ -196,7 +173,7 @@ fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1);
     let notification = requests[0].body["text"].as_str().unwrap();
-    assert_notification_links(&scenario, notification, &[8, 9]);
+    assert_notification_links_once(&scenario, notification, &[8, 9]);
     assert!(
         notification.contains("- Handle an empty cache (bug, needs-triage)\n"),
         "{notification}"
@@ -264,7 +241,7 @@ fn partial_publication_keeps_created_issue_links_in_the_last_lines() {
         );
     }
     let (_, notification) = saved_notification(&scenario, "triage");
-    assert_notification_links(&scenario, &notification, &[8, 9]);
+    assert_notification_links_once(&scenario, &notification, &[8, 9]);
     assert!(
         notification.contains("Investigation:\n  Two separate problems need issues.\n"),
         "{notification}"
