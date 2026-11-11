@@ -1,10 +1,11 @@
 const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
+const { replaceRecord } = require('./records.cjs');
 
 async function startFixture(extraEnv = {}) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-start-page-'));
@@ -65,6 +66,29 @@ else:
     finally { lines.close(); }
     browser = await chromium.launch({ headless: true });
     return { home, repo, browser, origin, close,
+      async readyPullRequest(number = 42, changes = {}, github = {}) {
+        const logs = join(home, '.thirdshift/logs');
+        const directory = join(logs, 'acme/widgets/commands/review');
+        await mkdir(directory, { recursive: true });
+        const pull_request = changes.pull_request ?? `https://github.com/acme/widgets/pull/${number}`;
+        const now = new Date().toISOString();
+        const path = join(directory, `${number}-fixture.command.json`);
+        await replaceRecord(path, JSON.stringify({
+          version: 1, kind: 'Review run', repository: 'acme/widgets', hostname: 'fixture',
+          issue: null, process_id: 0, process_start: 'gone', harness: 'claude', model: 'old-model', effort: 'high',
+          started_at: now, ended_at: now, stages: [], outcome: 'ready for review', pull_request,
+          ...changes
+        }));
+        const cache = join(logs, 'github-inbox.json');
+        const kept = JSON.parse(await readFile(cache, 'utf8').catch(error => {
+          if (error.code !== 'ENOENT') throw error;
+          return '{"version":1,"subjects":{}}';
+        }));
+        kept.subjects[pull_request] = { state: 'Open', ci: 'red', mergeable: 'mergeable', title: 'Repair these widgets', ...github };
+        await replaceRecord(cache, JSON.stringify(kept));
+        await writeFile(join(logs, 'github-inbox.changed'), `${number}:${JSON.stringify(github)}`);
+        return path;
+      },
       cli(args, input) { return execFileSync(binary, args, { env, input, encoding: 'utf8' }); },
       scopes(value) { execFileSync(binary, ['console', 'scopes', '--scopes', value], { env }); },
       async page(options) {
