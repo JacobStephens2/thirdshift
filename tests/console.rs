@@ -601,6 +601,61 @@ fn stages_groups_exact_spec_attempts_by_owner_start_and_keeps_dispatches() {
 }
 
 #[test]
+fn time_pages_and_command_details_explain_suspended_wall_clock_stage_times() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let began = chrono::Local::now() - chrono::Duration::hours(12);
+    let middle = began + chrono::Duration::seconds(36360);
+    let ended = middle + chrono::Duration::minutes(1);
+    for number in 1..=2 {
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["kind"] = json!("Run");
+        value["started_at"] = json!(began.to_rfc3339());
+        value["ended_at"] = json!(ended.to_rfc3339());
+        value["stages"] = json!([
+            {"name": "implement", "began_at": began.to_rfc3339()},
+            {"name": "pull request", "began_at": middle.to_rfc3339(), "suspended_seconds": 0}
+        ]);
+        if number == 1 {
+            value["stages"][0]["suspended_seconds"] = json!(34800);
+        }
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/stages", "/lanes?hours=24"] {
+        let html = console.get(page).text().unwrap();
+        assert_eq!(
+            html.matches("Complete · 10 hr 6 min · 9 hr 40 min suspended")
+                .count(),
+            1,
+            "{page}: {html}"
+        );
+        assert_eq!(html.matches("suspended").count(), 1, "{page}: {html}");
+        assert_eq!(
+            html.matches("Complete · 1 min").count(),
+            2,
+            "{page}: {html}"
+        );
+        if page.starts_with("/lanes") {
+            assert_eq!(html.matches("data-seconds=\"36360\"").count(), 2, "{html}");
+        }
+    }
+    for (number, expected) in [
+        (1, "10 hr 6 min · 9 hr 40 min suspended"),
+        (2, "10 hr 6 min"),
+    ] {
+        let html = console
+            .get(&format!("/peek?command=widgets%23{number}"))
+            .text()
+            .unwrap();
+        assert!(html.contains(expected), "{html}");
+        if number == 2 {
+            assert!(!html.contains("suspended"), "{html}");
+        }
+    }
+}
+
+#[test]
 fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

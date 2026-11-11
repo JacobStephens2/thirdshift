@@ -211,7 +211,7 @@ fn print_details(command: &Command, indent: &str, now: DateTime<Local>) -> Resul
             "{indent}  {} · {} · {}{usual}",
             crate::logs::display_name(&stage.name),
             stage.began_at,
-            stage_time(&timing),
+            super::stage_time(timing.seconds(), stage.suspended_seconds),
         );
     }
     for path in command.sessions()? {
@@ -280,20 +280,6 @@ pub(in crate::logs) fn details(
     Ok(value)
 }
 
-fn stage_time(timing: &crate::logs::command_record::StageTime<'_>) -> String {
-    let mut time = timing
-        .seconds()
-        .map(|seconds| super::age(seconds as i64))
-        .unwrap_or_else(|| "time unknown".into());
-    if timing.stage.suspended_seconds > 0 {
-        time.push_str(&format!(
-            " · {} suspended",
-            super::age(timing.stage.suspended_seconds as i64)
-        ));
-    }
-    time
-}
-
 fn add_stage_times(value: &mut serde_json::Value, command: &Command, now: DateTime<Local>) {
     for (index, timing) in command
         .record
@@ -301,7 +287,10 @@ fn add_stage_times(value: &mut serde_json::Value, command: &Command, now: DateTi
         .enumerate()
     {
         value["stages"][index]["seconds"] = serde_json::json!(timing.seconds());
-        value["stages"][index]["time"] = serde_json::json!(stage_time(&timing));
+        value["stages"][index]["time"] = serde_json::json!(super::stage_time(
+            timing.seconds(),
+            timing.stage.suspended_seconds
+        ));
     }
     for (field, children) in [
         ("children", &command.children),

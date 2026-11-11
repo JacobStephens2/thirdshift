@@ -81,7 +81,10 @@ impl UsualRanges {
 fn collect_times(record: &CommandRecord, samples: &mut BTreeMap<(String, String), Vec<f64>>) {
     for timing in record.stage_times(None) {
         let stage = timing.stage;
-        if !StageName::known(&stage.name) || StageName::is_dispatch(&stage.name) {
+        if stage.suspended_seconds > 0
+            || !StageName::known(&stage.name)
+            || StageName::is_dispatch(&stage.name)
+        {
             continue;
         }
         if let Some(seconds) = timing.seconds() {
