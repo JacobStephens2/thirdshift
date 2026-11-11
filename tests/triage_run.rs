@@ -86,6 +86,72 @@ fn a_successful_triage_notification_lists_a_filed_issue_once() {
 }
 
 #[test]
+fn partial_publication_notification_lists_each_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.gh_fails("issue comment");
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-triage",
+        "issues": [
+            {
+                "title": "Handle an empty cache",
+                "body": "Reproduce with an empty cache."
+            },
+            {
+                "title": "Handle a stale cache",
+                "body": "Reproduce with a stale cache."
+            }
+        ],
+        "investigation": "Two separate problems need issues."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    let (_, notification) = saved_notification(&scenario, "triage");
+    for number in [8, 9] {
+        let issue_line = format!("Issue: {}", scenario.issue_url(number));
+        assert_eq!(
+            notification
+                .lines()
+                .filter(|line| *line == issue_line)
+                .count(),
+            1,
+            "{notification}"
+        );
+    }
+}
+
+#[test]
+fn successful_questionnaire_notification_lists_its_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-info",
+        "issues": [{
+            "title": "Identify the failing canary",
+            "body": "The affected deployment is unknown.",
+            "questionnaire": "For the deploy operator:\n\n1. Which canary failed?"
+        }],
+        "investigation": "The repository cannot identify the affected deployment."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, notification) = saved_notification(&scenario, "triage");
+    let issue_line = format!("Issue: {}", scenario.issue_url(8));
+    assert_eq!(
+        notification
+            .lines()
+            .filter(|line| *line == issue_line)
+            .count(),
+        1,
+        "{notification}"
+    );
+}
+
+#[test]
 fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);

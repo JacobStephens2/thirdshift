@@ -2,6 +2,7 @@
 //! run, a Pass or a Process ends, unless the Pass or Process was skipped,
 //! and optionally emailed through the same checks and the same send as `email-test`.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -504,7 +505,19 @@ fn body(
             text += &format!("{line}\n");
         }
     }
-    text
+    // Questionnaires and retained failure analyses can repeat publication
+    // records. Keep the first record for each published issue in this body.
+    let published = account.triage_publication_lines().collect::<HashSet<_>>();
+    if published.is_empty() {
+        return text;
+    }
+    let mut shown = HashSet::new();
+    text.split_inclusive('\n')
+        .filter(|line| {
+            let record = line.trim_end_matches('\n');
+            !published.contains(record) || shown.insert(record)
+        })
+        .collect()
 }
 
 /// Promote usage exhaustion out of a Spec's Ticket details without replacing
