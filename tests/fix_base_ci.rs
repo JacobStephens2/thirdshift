@@ -97,7 +97,14 @@ fn held_ci_reservation_still_repairs_a_conflicting_pr() {
     assert_repaired(&scenario, &result, &url);
     assert_maintenance_skipped(&scenario, &result, "Base branch CI is reserved on origin");
     assert_eq!(scenario.origin_git(&["rev-parse", CI_RESERVATION]), owner);
-    assert!(scenario.gh_calls_of("run", "list").is_empty());
+    assert!(
+        scenario
+            .gh_calls_of(
+                "api",
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1"
+            )
+            .is_empty()
+    );
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
     assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
 }
@@ -340,7 +347,14 @@ fn author_scoped_pass_leaves_base_ci_alone() {
     let result = scenario.run(&args);
     assert_repaired(&scenario, &result, &url);
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
-    assert!(scenario.gh_calls_of("run", "list").is_empty());
+    assert!(
+        scenario
+            .gh_calls_of(
+                "api",
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1"
+            )
+            .is_empty()
+    );
     assert!(
         !result.stderr.contains("Base branch CI step skipped"),
         "{}",
