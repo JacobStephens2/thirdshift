@@ -42,7 +42,9 @@ jobs:
         if: ${{ inputs.probe != 'none' }}
         env:
           PROBE: ${{ inputs.probe }}
-        run: test "$PROBE" = success
+        run: |
+          printf 'Deliberate gate probe: %s\n' "$PROBE"
+          exit 1
       - name: Install toolchain
         if: ${{ inputs.probe == 'none' }}
         run: |

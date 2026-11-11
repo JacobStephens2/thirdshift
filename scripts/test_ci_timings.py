@@ -13,6 +13,22 @@ SCRIPT = Path(__file__).with_name("ci-timings.py")
 
 
 class CiTimings(unittest.TestCase):
+    def test_diagnostic_probe_can_never_report_green_without_tests(self):
+        from test_workflow_timeouts import ROOT, job_blocks
+
+        job = job_blocks(ROOT / ".github/workflows/rust-tests.yml")["run"]
+        probe = re.search(r"      - name: Gate probe\n(.*?)(?=\n      - )", job, re.S)[1]
+        script = probe.split("        run: ", 1)[1]
+        if script.startswith("|"):
+            script = textwrap.dedent(script.split("\n", 1)[1])
+        for value in ["success", "failure", "skipped", "unexpected"]:
+            with self.subTest(probe=value):
+                result = subprocess.run(["bash", "-e", "-c", script],
+                                        env=dict(os.environ, PROBE=value),
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0,
+                                    "a probe must never claim successful test coverage")
+
     def test_benchmark_separates_start_delay_and_billed_work_from_critical_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -242,6 +242,99 @@ to report green coverage. The default `probe=none` executes all required work.
 The workflow's normal PR, main and nightly policies and Release dependencies
 are unchanged.
 
+### Measured selection: four partitions (2026-11-11)
+
+The controlled samples are [cold run 43059270501](https://github.com/JacobStephens2/thirdshift/actions/runs/43059270501)
+and [warm run 43060539830](https://github.com/JacobStephens2/thirdshift/actions/runs/43060539830).
+Every variant checked out **`deb46450b2ce95acd3225327bd4262850ba308ae`**,
+using nextest 0.9.151 and the pinned Rust toolchain. Both use the hosted Linux
+runner classes named below. All fourteen cold workers reported cache misses
+(the inspected cache log says “No cache found”); all fourteen warm workers
+reported cache hits. Workspace tests still compile on each worker. All six
+variants in each run passed their exact inventory/execution coverage check:
+4,233 selected tests on x86_64, 4,232 on ARM, and 97 ignored on each. The
+architecture difference is preserved, rather than imposing x86's count on ARM.
+
+Elapsed seconds include start delay through the variant's coverage gate;
+runner minutes include its workers and coverage gate. These benchmark paths
+exclude normal CI's clippy, Python, formatting and Release-generator checks.
+The normal configuration is measured separately below.
+
+| Runner class | Partitions | Cold elapsed s | Cold runner min | Warm elapsed s | Warm runner min |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ubuntu-24.04 | 1 | 1418 | 23.48 | 1608 | 26.68 |
+| ubuntu-24.04 | 2 | 915 | 28.93 | 851 | 27.52 |
+| ubuntu-24.04 | 4 | 514 | 31.53 | 514 | 31.05 |
+| ubuntu-24.04-arm | 1 | 1349 | 22.30 | 1342 | 22.22 |
+| ubuntu-24.04-arm | 2 | 861 | 25.67 | 761 | 24.50 |
+| ubuntu-24.04-arm | 4 | 514 | 29.88 | 490 | 28.65 |
+
+Four partitions shorten the measured critical path by **62–68% versus one**
+and **36–44% versus two**, at **16–34% more runner minutes than one** or
+**9–17% more than two**. We select four for non-nightly runs on both
+architectures. Nightly remains one `cargo test` suite. The elapsed improvement
+is much larger than the observed sample variation (about 14% for the x86
+baseline and 12% for two-way ARM). Four-way x86 elapsed was unchanged; ARM
+varied by under 5%. Two samples do not establish a typical production saving,
+and the small cold/warm difference is not evidence of a cache-induced speedup.
+
+The following per-worker ranges separate phases in seconds. They are ranges
+across a variant's workers, not additive pieces of one critical-path worker.
+Start delay is workflow creation to worker start, including queue delay;
+coverage-gate dependency delay is included in the elapsed table above.
+Setup excludes cache transfer; report transfer means timing artifacts, not
+compiled-build distribution. Cleanup and gaps between steps remain included
+in runner minutes and elapsed time. Both whole-run jobs APIs retain the
+individual step timestamps; `ci-timings.py benchmark` exposes them and their
+phase totals in `benchmark.json`.
+
+| Arch | Cache | Parts | Start delay | Setup | Cache transfer | Compile | Inventory | Tests | Report transfer |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| x86 | cold | 1 | 5 | 14 | 1 | 141 | 2 | 1238 | 1 |
+| x86 | cold | 2 | 5–6 | 13–18 | 1–3 | 152 | 1–2 | 660–708 | 1–2 |
+| x86 | cold | 4 | 5–9 | 11–14 | 0–1 | 113–152 | 1–2 | 268–344 | 1 |
+| ARM | cold | 1 | 8 | 10 | 2 | 126 | 1 | 1183 | 2 |
+| ARM | cold | 2 | 7–8 | 9–10 | 1–2 | 144–150 | 1 | 592–610 | 1 |
+| ARM | cold | 4 | 7–8 | 8–10 | 0–4 | 121–134 | 1 | 278–320 | 1–2 |
+| x86 | warm | 1 | 4 | 14 | 5 | 85 | 2 | 1481 | 1 |
+| x86 | warm | 2 | 4–5 | 13–14 | 4–7 | 80–97 | 2 | 706–713 | 1 |
+| x86 | warm | 4 | 4–5 | 12–13 | 4–7 | 69–96 | 1–2 | 309–382 | 1–2 |
+| ARM | warm | 1 | 6 | 9 | 4 | 97 | 1 | 1208 | 2 |
+| ARM | warm | 2 | 6–7 | 9 | 4–5 | 74–103 | 1 | 622–627 | 1 |
+| ARM | warm | 4 | 7–39 | 10–12 | 4–6 | 76–110 | 1–2 | 285–336 | 1–2 |
+
+Four-way work totals and balance are retained in each worker's `summary.json`
+and its job summary, including all binary totals and the slowest twenty tests.
+Partition values and totals below are rounded independently.
+Cold x86 partitions used 1,062.9 / 1,276.3 / 1,285.7 / 1,361.9 test-seconds
+(4,986.7 total); warm used 1,414.2 / 1,454.6 / 1,515.7 / 1,223.6 (5,608.1).
+Cold ARM used 1,103.7 / 1,151.8 / 1,217.6 / 1,265.2 (4,738.4); warm used
+1,132.8 / 1,174.9 / 1,302.1 / 1,330.8 (4,940.6). Hash membership is stable;
+timings vary with runner load. This is measured balance, not ideal linear
+speedup. Each report retains timings without successful-test output.
+
+The delivered four-worker configuration also passed [normal PR CI 43060775809](https://github.com/JacobStephens2/thirdshift/actions/runs/43060775809)
+on PR head `206261e4`, checkout merge `811e37d6`, with ARM opted in. Including
+each architecture's coverage and stable gate, x86 took **827 s / 36.37 runner
+minutes** and ARM **712 s / 30.75 runner minutes**. This includes normal
+tooling and clippy, and overlap with the benchmark runs; it is validation of
+the delivered workflow, not another controlled sample at the benchmark SHA.
+Browser checks and PR Release builds also passed and are outside those
+Rust-path totals.
+More workers can queue behind an account's other work: the warm benchmark's
+ARM worker start delays reached 39 seconds; normal CI workers started
+20–226 seconds after workflow creation. Re-measure under different concurrency
+limits rather than assuming that four runners will always start together. Build archives were not
+introduced or benchmarked, and no archive-based saving is claimed.
+
+The actual workflow's [deliberate partition-failure probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43059533495)
+and [skipped-work probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43059538541)
+made both stable architecture gates fail. Local tests execute those gate
+commands for success, failure, cancellation, skipped and missing results, and
+reject missing artifacts, duplicate membership, differing revisions and
+incomplete execution. Every enabled diagnostic probe exits unsuccessfully,
+even if a caller supplies an arbitrary value such as `success`.
+
 Nextest reports at 30 seconds, half the retrospective's 60-second long-tail
 boundary, so a growing test appears before joining that tail. The
 [nextest slow-test contract](https://nexte.st/docs/features/slow-tests/) treats
