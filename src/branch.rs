@@ -89,6 +89,17 @@ pub fn started(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<Option
     started_through(&GitHubAndOrigin { launch, github }, issue)
 }
 
+/// Whether ADR-0002 allows continuing the latest Issue branch: it is on
+/// origin and its newest PR is open, or it has no PR. Unlike `select`, this
+/// readiness read neither checks local branches nor acquires a Worktree.
+pub fn can_continue(launch: &Git, github: &GitHub, issue: &IssueUrl) -> Result<bool> {
+    Ok(
+        latest(&GitHubAndOrigin { launch, github }, issue)?.is_some_and(|latest| {
+            latest.origin_sha.is_some() && latest.pr.is_none_or(|pr| pr.state == PrState::Open)
+        }),
+    )
+}
+
 /// What selection reads of origin, GitHub and the Launch directory. Each
 /// listing is by prefix, as git and GitHub answer it, so it can hold another
 /// issue's Issue branches.
@@ -151,14 +162,12 @@ impl Reads for GitHubAndOrigin<'_> {
 /// [`select`], reading through `reads`.
 fn select_through(reads: &impl Reads, issue: &IssueUrl) -> Result<Selection> {
     let first_branch = branch_name(issue, 1);
-    let Used { on_origin, prs } = used(reads, issue)?;
-
-    let highest = on_origin
-        .iter()
-        .map(|(number, _)| *number)
-        .chain(prs.iter().map(|(number, _)| *number))
-        .max();
-    let Some(highest) = highest else {
+    let Some(Latest {
+        number: highest,
+        origin_sha,
+        pr,
+    }) = latest(reads, issue)?
+    else {
         worktree::check_local_branch(
             &first_branch,
             reads.local_head(&first_branch)?.as_deref(),
@@ -169,14 +178,6 @@ fn select_through(reads: &impl Reads, issue: &IssueUrl) -> Result<Selection> {
         });
     };
     let branch = branch_name(issue, highest);
-    // A branch can have had several PRs; the newest one decides.
-    let pr = prs
-        .into_iter()
-        .filter_map(|(number, pr)| (number == highest).then_some(pr))
-        .max_by_key(|pr| pr.number);
-    let origin_sha = on_origin
-        .into_iter()
-        .find_map(|(number, sha)| (number == highest).then_some(sha));
     match (origin_sha, pr) {
         // A merged or closed PR uses its number up, even if its branch was deleted.
         (_, Some(pr)) if pr.state != PrState::Open => {
@@ -194,6 +195,37 @@ fn select_through(reads: &impl Reads, issue: &IssueUrl) -> Result<Selection> {
         }
         (None, _) => bail!("{branch} has an open PR but is gone from origin"),
     }
+}
+
+/// The highest-numbered Issue branch ever used, with its current origin
+/// head and newest PR. Readiness and selection use the same remote facts.
+struct Latest {
+    number: u64,
+    origin_sha: Option<String>,
+    pr: Option<PullRequest>,
+}
+
+fn latest(reads: &impl Reads, issue: &IssueUrl) -> Result<Option<Latest>> {
+    let Used { on_origin, prs } = used(reads, issue)?;
+    let Some(highest) = on_origin
+        .iter()
+        .map(|(number, _)| *number)
+        .chain(prs.iter().map(|(number, _)| *number))
+        .max()
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Latest {
+        number: highest,
+        origin_sha: on_origin
+            .into_iter()
+            .find_map(|(number, sha)| (number == highest).then_some(sha)),
+        // A branch can have had several PRs; the newest one decides.
+        pr: prs
+            .into_iter()
+            .filter_map(|(number, pr)| (number == highest).then_some(pr))
+            .max_by_key(|pr| pr.number),
+    }))
 }
 
 /// [`started`], reading through `reads`.
