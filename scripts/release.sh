@@ -716,13 +716,19 @@ release_stopped() {
 
 # merge_bump_pr
 # The tag is already public. A failed merge leaves the release standing and
-# names the PR for the Day shift; publication has already succeeded.
+# names the PR for the Day shift; publication has already succeeded. A PR
+# made draft after its last validation names the ready step it needs.
 merge_bump_pr() {
+	local action="merge $url"
 	if gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null; then
 		progress "merged $url"
-	else
-		progress "warning: $tag is left in place and the release still stands; the Day shift must merge $url"
+		return
 	fi
+	if gh pr view "$url" --json isDraft 2>/dev/null |
+		python3 -c 'import json, sys; sys.exit(not json.load(sys.stdin)["isDraft"])' 2>/dev/null; then
+		action="merge $url; $url is a draft, so first mark it ready with gh pr ready $url"
+	fi
+	progress "warning: $tag is left in place and the release still stands, but the bump PR is not merged; the Day shift must $action"
 }
 
 # wait_for_release

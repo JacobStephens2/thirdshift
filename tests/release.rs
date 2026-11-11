@@ -936,6 +936,37 @@ fn a_failed_bump_merge_keeps_the_tag_and_finishes_publishing() {
     assert!(err.contains(&release_url()), "{err}");
 }
 
+/// The 0.29.0 recovery: the PR turned draft after its head was validated,
+/// so the merge after publication failed. The warning names that blocker.
+#[test]
+fn a_draft_bump_pr_after_publication_names_the_ready_step() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    release.gh(&[
+        "fake",
+        "on-merge",
+        "1",
+        "gh fake pr release-0.2.0 isDraft true",
+    ]);
+    release.gh(&[
+        "fake",
+        "refuse-merges",
+        "1",
+        "GraphQL: Pull Request is still a draft (mergePullRequest)",
+    ]);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let pr = release.pr("release-0.2.0");
+    assert_eq!(pr["state"], "OPEN");
+    let url = pr["url"].as_str().unwrap();
+    let err = stderr(&output);
+    assert!(err.contains("release still stands"), "{err}");
+    assert!(err.contains(&format!("{url} is a draft")), "{err}");
+    assert!(err.contains(&format!("gh pr ready {url}")), "{err}");
+}
+
 #[test]
 fn main_moving_during_bump_checks_does_not_change_the_tagged_content() {
     let release = Release::new();
