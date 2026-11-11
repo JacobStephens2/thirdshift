@@ -240,7 +240,7 @@ fn paired_ratios_are_medians_of_matched_trials_and_exclude_void_pairs() {
     let shown = fixture.experiment();
     assert_eq!(
         shown["accounting"]["paired_median_ratios"],
-        json!({"cost":2.0,"time":2.0,"pairs":3})
+        json!({"cost":2.0,"time":2.0,"pairs":3,"time_pairs":3})
     );
     for entry in fs::read_dir(&results).unwrap() {
         let path = entry.unwrap().path();
@@ -252,7 +252,7 @@ fn paired_ratios_are_medians_of_matched_trials_and_exclude_void_pairs() {
     }
     assert_eq!(
         fixture.experiment()["accounting"]["paired_median_ratios"],
-        json!({"cost":2.0,"time":2.0,"pairs":2})
+        json!({"cost":2.0,"time":2.0,"pairs":2,"time_pairs":2})
     );
 }
 
