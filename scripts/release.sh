@@ -82,13 +82,13 @@
 # Exits 0 once the release workflow run for the tag has succeeded: the GitHub
 # Release is published with its final body and the crate is on crates.io. It
 # exits 1 with nothing more pushed if it refuses or the review says no, exits
-# 1 leaving the PR open if automatic CI recovery fails, and exits 1 leaving the tag in
-# place and the PR open if the release workflow run fails, naming its failed
+# 1 leaving the PR open if automatic CI recovery fails, and exits 1 leaving
+# the tag in place and the PR open if the release workflow run fails, naming its failed
 # jobs and run URL. Recovery is only attempted on a subsequent invocation.
 # A failed merge after publication leaves the release standing, names
 # the PR for the Day shift and still exits 0.
-# Running CI and publication wait with no overall timeout, so Ctrl-C and running it again
-# with the same version carries on waiting.
+# Running CI and publication wait with no overall timeout, so Ctrl-C and
+# running it again with the same version carries on waiting.
 set -euo pipefail
 
 # The prompt the summary agent gets ahead of the release's input.
@@ -500,6 +500,7 @@ experiment_status() {
 write_summary() {
 	local base
 	base=$(git merge-base "$head" origin/main)
+	summary_base=$base
 	progress "writing the summary with the configured Harness"
 	diff=$(version_diff "$base" "$head")
 	summary=$(release_summary "$base" "$tag" "$diff")
@@ -531,14 +532,24 @@ edit_pr() (
 # budget; a second blockage or continued head churn returns to the operator.
 wait_for_pr_checks() {
 	local runs failed content_base next_base startup=$SECONDS
+	local notes_ref=refs/thirdshift/release-notes/$version
 	[[ "$workflow_startup_seconds" =~ ^[0-9]+$ ]] || refuse "RELEASE_WORKFLOW_STARTUP_SECONDS must be a nonnegative integer"
-	content_base=$(git merge-base "$head" origin/main)
+	observe_release_pr
+	content_base=$observed_notes_base
+	if [ "$content_base" = - ]; then
+		# Older PR bodies lack the marker. Remember their starting content
+		# before Fix can push and then fail, so rerunning still detects it.
+		content_base=$(git rev-parse --quiet --verify "$notes_ref^{commit}" || release_content_base)
+	fi
+	git update-ref "$notes_ref" "$content_base"
 	progress "waiting for CI on $url"
 	while :; do
 		observe_release_pr
-		if [ "$observed_head" != "$head" ]; then
-			head_updates=$((head_updates + 1))
-			[ "$head_updates" -le 5 ] || release_blocked "the PR head changed more than five times"
+		if [ "$observed_head" != "$head" ] || [ "$(release_content_base)" != "$content_base" ]; then
+			if [ "$observed_head" != "$head" ]; then
+				head_updates=$((head_updates + 1))
+				[ "$head_updates" -le 5 ] || release_blocked "the PR head changed more than five times"
+			fi
 			head=$observed_head
 			fetch_main
 			validate_bump_pr
@@ -553,6 +564,7 @@ wait_for_pr_checks() {
 				edit_pr
 			fi
 			content_base=$next_base
+			git update-ref "$notes_ref" "$content_base"
 			startup=$SECONDS
 			progress "adopted $url at ${head:0:7}"
 		fi
@@ -595,19 +607,20 @@ wait_for_pr_checks() {
 observe_release_pr() {
 	local observation origin_head
 	[ "$(git remote get-url origin)" = "$release_origin" ] || release_blocked "origin changed"
-	if ! observation=$(gh pr view "$url" --json url,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable |
+	if ! observation=$(gh pr view "$url" --json url,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,body |
 		python3 -c '
-import json, sys
+import json, re, sys
 pr = json.load(sys.stdin)
 url, branch = sys.argv[1:]
 if (pr["url"] != url or pr["state"] != "OPEN" or pr["headRefName"] != branch
         or pr["baseRefName"] != "main" or pr["isCrossRepository"] or pr["isDraft"]):
     sys.exit("release PR identity/state/branch changed or PR is draft")
-print(pr["headRefOid"], pr["mergeable"])
+notes = re.search(r"^<!-- release-content-base: ([0-9a-f]{40}) -->$", pr["body"], re.M)
+print(pr["headRefOid"], pr["mergeable"], notes[1] if notes else "-")
 ' "$url" "$branch"); then
 		release_blocked "could not validate the release PR identity/state/branch"
 	fi
-	read -r observed_head observed_mergeable <<<"$observation"
+	read -r observed_head observed_mergeable observed_notes_base <<<"$observation"
 	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 	[ -n "$origin_head" ] && [ "$observed_head" = "$origin_head" ] || release_blocked "PR head does not match refs/heads/$branch on origin"
 }
@@ -823,6 +836,8 @@ pr_body() {
 		<!-- release-summary:end -->
 
 		$2
+
+		<!-- release-content-base: $summary_base -->
 	EOF
 }
 

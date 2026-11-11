@@ -1,15 +1,7 @@
 use super::*;
 
 fn set_pr(release: &Release, field: &str, value: Value) {
-    let mut state = release.gh_state();
-    let pr = state["prs"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .find(|pr| pr["head"] == "release-0.2.0")
-        .unwrap();
-    pr[field] = value;
-    fs::write(release.root().join("gh-state.json"), state.to_string()).unwrap();
+    release.gh(&["fake", "pr", "release-0.2.0", field, &value.to_string()]);
 }
 
 fn fix_runs(release: &Release, script: &str) {
@@ -25,17 +17,10 @@ fn fix_calls(release: &Release) -> Vec<String> {
 }
 
 fn run(release: &Release, args: &[&str], env: &[(&str, &str)]) -> Output {
-    // This bounds a broken orchestration loop too. The guardian also owns any
-    // fake Fix children; no real agent or publication can run in this fixture.
-    with_input(
-        release
-            .command(Path::new("timeout"), &release.maintainer())
-            .arg("10s")
-            .arg(manifest_dir().join("scripts/release.sh"))
-            .args(args)
-            .envs(env.iter().copied()),
-        "",
-    )
+    // Ten seconds covers script startup, Git/GitHub reads, fake Fix/summary/
+    // Experiment work, publication/merge and output collection. Fixture setup
+    // happens before this bound; the guardian owns all fake Fix children too.
+    release.run_script_with_bound(args, "", env, std::time::Duration::from_secs(10))
 }
 
 /// Prepare the exact reported pattern: a bump based on older main, followed
@@ -82,14 +67,7 @@ fn adopt_script(repaired: &str) -> String {
     format!(
         r#"set -euo pipefail
 git --git-dir="${{FAKE_GH_STATE%/*}}/origin.git" update-ref refs/heads/release-0.2.0 {repaired}
-python3 - <<'PY'
-import json, os, pathlib
-path = pathlib.Path(os.environ['FAKE_GH_STATE'])
-state = json.loads(path.read_text())
-for pr in state['prs']:
-    if pr['head'] == 'release-0.2.0': pr['mergeable'] = 'MERGEABLE'
-path.write_text(json.dumps(state))
-PY
+gh fake pr release-0.2.0 mergeable '"MERGEABLE"'
 gh fake checks {repaired} '{GREEN}'
 "#
     )
@@ -421,4 +399,67 @@ fn continued_external_head_churn_is_bounded_without_starting_fix_runs() {
     assert!(stderr(&output).contains("head changed more than five times"));
     assert_eq!(release.origin_tag("v0.2.0"), None);
     assert!(fix_calls(&release).is_empty());
+}
+
+#[test]
+fn spec_resume_after_interrupted_fix_refreshes_release_notes() {
+    let release = Release::new();
+    let (_, repaired) = conflicted_bump(&release);
+    set_pr(
+        &release,
+        "body",
+        json!("Old release notes: version diff starts at 0.1.0"),
+    );
+    fix_runs(&release, &(adopt_script(&repaired) + "\nexit 130\n"));
+    let interrupted = run(&release, &["0.2.0"], &[]);
+    assert_eq!(
+        interrupted.status.code(),
+        Some(1),
+        "{}",
+        stderr(&interrupted)
+    );
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+    assert_eq!(
+        release.pr_body("release-0.2.0"),
+        "Old release notes: version diff starts at 0.1.0"
+    );
+
+    let resumed = run(&release, &["0.2.0"], &[]);
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
+    assert!(
+        release
+            .pr_body("release-0.2.0")
+            .contains("-version = \"0.1.1\""),
+        "Published repaired content with stale release notes: {}",
+        release.pr_body("release-0.2.0")
+    );
+}
+
+#[test]
+fn a_notes_marker_detects_an_external_repair_from_another_checkout() {
+    let release = Release::new();
+    let (old, repaired) = conflicted_bump(&release);
+    let old_base = release.origin(&["rev-parse", &format!("{old}^")]);
+    set_pr(
+        &release,
+        "body",
+        json!(format!(
+            "Old release notes\n<!-- release-content-base: {old_base} -->"
+        )),
+    );
+    release.origin(&["update-ref", "refs/heads/release-0.2.0", &repaired]);
+    set_pr(&release, "mergeable", json!("MERGEABLE"));
+    release.ci_reports(GREEN);
+
+    let output = run(&release, &["0.2.0"], &[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
+    assert!(fix_calls(&release).is_empty());
+    assert!(
+        release
+            .pr_body("release-0.2.0")
+            .contains("-version = \"0.1.1\"")
+    );
 }

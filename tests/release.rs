@@ -562,7 +562,17 @@ fi
     /// Runs the script with `args`, with `stdin` on its standard input and
     /// `env` added to its environment.
     fn run_script_with(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
-        with_input(
+        self.run_script_with_bound(args, stdin, env, support::WAIT_BOUND)
+    }
+
+    fn run_script_with_bound(
+        &self,
+        args: &[&str],
+        stdin: &str,
+        env: &[(&str, &str)],
+        bound: std::time::Duration,
+    ) -> Output {
+        support::child_lifetime::FixtureChild::spawn(
             self.command(
                 &manifest_dir().join("scripts/release.sh"),
                 &self.maintainer(),
@@ -571,6 +581,7 @@ fi
             .envs(env.iter().copied()),
             stdin,
         )
+        .wait(bound)
     }
 
     /// Sources the script in the maintainer's clone, with what `run_script`
