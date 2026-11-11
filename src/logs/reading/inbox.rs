@@ -926,7 +926,7 @@ pub(super) fn active_runs(entries: &[Entry]) -> usize {
         .count()
 }
 
-fn active(command: &Command) -> bool {
+pub(super) fn active(command: &Command) -> bool {
     command.state == "live"
         || command
             .dispatched

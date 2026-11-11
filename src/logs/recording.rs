@@ -176,6 +176,10 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn logs_directory(&self) -> Option<PathBuf> {
+        self.logs_dir.clone()
+    }
+
     pub(super) fn preflight_repo(&mut self, repo: Option<Repo>) {
         if self.preflight_repo.is_none() {
             self.preflight_repo = repo;
@@ -594,6 +598,13 @@ impl<O: Outside> Record<O> {
     pub(super) fn experiment(&mut self, description: &crate::evals::experiment::Description) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.experiment = Some(description.clone());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn waiting_for(&mut self, commands: &[String]) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.waiting_for = commands.to_vec();
             self.write_record();
         }
     }

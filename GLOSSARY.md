@@ -49,6 +49,7 @@ _Avoid_: Claim limit (former name), WIP limit, concurrency (it counts issues wai
 
 **Command limit**:
 The number of live **Commands** on one repository on one machine at which a **Pass** there is skipped, set in the **User config**, one by default. Every live Command counts, a Ticket run started by hand on an **Issue URL** included, together with the Spec run or Ticket run each Pass dispatched, but only a Pass is ever skipped for it: a Command a person types always runs. Passes of different kinds may run side by side up to the limit, but never two **Architect runs** or two **Security runs** on one repository at once. It counts no other repository; load across a machine is the **User config**'s memory and load waits.
+An Experiment independently holds back every Pass of its OS account across the machine's repositories, including while it waits for live Runs to end.
 _Avoid_: Pass lock (former, one-wide form), concurrency limit, parallel
 
 **Sweep**:
@@ -147,7 +148,8 @@ One **Command** that investigates a **Report** or an existing open issue by a **
 _Avoid_: intake
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass. Every Pass is skipped while an **Experiment** is live on its machine, including one still waiting for live Runs to end.
+An **Architect run**, a **Pickup run**, a **Security run**, a **Review run** started with `--author`, a **Fix run** started with no pull request, a **Triage run** started with neither a **Report** nor an **Issue URL**, or a **Custom process** started with no issue and neither an Issue-branch nor a Spec-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. Such a Custom process is skipped when the repository is at its **Command limit** on the machine, and it does not take an Architect run's Ready-issue or Architect-idea gates; a file declaring either branch worktree needs an issue, and a Custom process started with an issue is not a Pass.
+Every Pass is skipped while an **Experiment** is live on its machine for the same OS account, including one still waiting for live Runs to end. A Command started on an Issue URL still runs, with a warning that it competes with the Experiment's Trials.
 _Avoid_: tick, cycle
 
 **Process**:
@@ -432,7 +434,7 @@ What a **Grader** decides about one **Trial** against its **Eval task**'s succes
 _Avoid_: grade, rating, feedback
 
 **Experiment**:
-The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It shows whether the change makes the agents better or worse before it reaches production.
+The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It waits for the same OS account's other live Commands on its machine before starting Trials, including on resume; the Day shift can bypass the wait, with the number of competing Commands recorded beside the Verdict.
 _Avoid_: replay, eval run, benchmark run, A/B test
 
 **Bar**:
