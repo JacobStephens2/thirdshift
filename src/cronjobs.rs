@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::UserConfig;
 use crate::logs::pass_starts::{self, PassStart};
 
+pub(crate) mod fleet;
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct CronJobs {
     pub jobs: Vec<CronJob>,
@@ -40,6 +42,107 @@ pub struct CronJob {
     /// heading would add a line to the schedule listing.
     #[serde(default, deserialize_with = "deserialize_repository")]
     pub repository: Option<String>,
+    /// Owning-machine recognition only; absent on older inventories.
+    #[serde(default, deserialize_with = "deserialize_command_kind")]
+    pub command_kind: Option<CommandKind>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum CommandKind {
+    #[serde(rename = "Pickup run")]
+    Pickup,
+    #[serde(rename = "Security run")]
+    Security,
+    #[serde(rename = "Architect run")]
+    Architect,
+    #[serde(rename = "Triage run")]
+    Triage,
+    #[serde(rename = "Fix run")]
+    Fix,
+    #[serde(rename = "Review run")]
+    Review,
+    #[serde(rename = "Custom process")]
+    Process,
+}
+
+impl std::fmt::Display for CommandKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Pickup => "Pickup run",
+            Self::Security => "Security run",
+            Self::Architect => "Architect run",
+            Self::Triage => "Triage run",
+            Self::Fix => "Fix run",
+            Self::Review => "Review run",
+            Self::Process => "Custom process",
+        };
+        f.write_str(name)
+    }
+}
+
+fn deserialize_command_kind<'de, D>(deserializer: D) -> Result<Option<CommandKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // A future owner's Command kind must not hide an otherwise readable entry.
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or(None))
+}
+
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "inventory recognizes work Commands only; inspection and administration commands have unknown kind"
+)]
+fn command_kind(command: &str) -> Option<CommandKind> {
+    use crate::args::{self, Command as Parsed};
+    let words = crate::launch_directories::shell_words(shell_command(command))?;
+    let invocation = match words.as_slice() {
+        [cd, path, and, rest @ ..] if cd == "cd" && and == "&&" && !path.contains(['$', '`']) => {
+            rest
+        }
+        rest => rest,
+    };
+    let (executable, arguments) = invocation.split_first()?;
+    if executable.contains(['$', '`'])
+        || std::path::Path::new(executable).file_name()? != "thirdshift"
+    {
+        return None;
+    }
+    if arguments
+        .iter()
+        .any(|word| matches!(word.as_str(), "&&" | "||" | ";" | "|" | "&"))
+    {
+        return None;
+    }
+    let arguments = crate::launch_directories::literal_cli_arguments(arguments)?;
+    if arguments.is_empty() {
+        return None;
+    }
+    Some(match args::parse(&arguments).ok()? {
+        Parsed::Pickup(_) => CommandKind::Pickup,
+        Parsed::Secure(_) => CommandKind::Security,
+        Parsed::Architect(_) => CommandKind::Architect,
+        Parsed::Triage(_) => CommandKind::Triage,
+        Parsed::Fix(_) => CommandKind::Fix,
+        Parsed::Review(_) => CommandKind::Review,
+        Parsed::Process(args::ProcessAction::Run(_)) => CommandKind::Process,
+        // An Issue URL can select a Spec run or Ticket run; labels are not read here.
+        _ => return None,
+    })
+}
+
+/// One Fleet report field. A control character or Unicode line separator would
+/// start another line or a terminal control sequence, so one machine's schedule
+/// or error could look like another machine's entry. JSON keeps the original text.
+pub(crate) fn report_line(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\n' | '\u{2028}' | '\u{2029}' => '\u{240A}',
+            '\r' => '\u{240D}',
+            character if character.is_control() => '\u{FFFD}',
+            character => character,
+        })
+        .collect()
 }
 
 fn repository_label(repository: Option<String>) -> Option<String> {
@@ -154,6 +257,7 @@ fn entry(line: &str) -> Option<CronJob> {
         schedule: schedule.join(" "),
         command: command.into(),
         repository: None,
+        command_kind: command_kind(command),
     })
 }
 

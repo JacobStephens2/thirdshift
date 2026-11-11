@@ -170,7 +170,11 @@ When no Commands are running, each bullet in the Inbox's **Last recorded skipped
 
 `thirdshift cronjobs` and the Console's Cron jobs page group this account's thirdshift crontab entries alphabetically by full `owner/repo`, preserving crontab order and duplicate jobs within each group. A literal `cd <directory> && ... thirdshift ...` command is associated through that directory's GitHub `origin` remote on the owning machine, using the same quoted and home paths as Launch directory discovery. Unresolved entries stay visible in a trailing **Other** group. Cron command text is never executed. The page gives each group its own terminal-style block, with **Run Passes now** and **Last fired by repository** kept separately below.
 
-`cronjobs --json` and `/api/v1/cronjobs` retain the object with a flat `jobs` array in group order (each entry's `schedule`, `command` and nullable `repository`) and independent `pass_starts`. A selected Fleet machine supplies its own repository associations; older inventories without that metadata display under **Other**. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Both this inventory and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+`cronjobs --json` and `/api/v1/cronjobs` retain the object with a flat `jobs` array in group order (each entry's `schedule`, `command`, nullable `repository` and nullable `command_kind`) and independent `pass_starts`. Command kinds are recognized conservatively from literal CLI arguments; unknown or shell-dependent invocations remain visible. A selected Fleet machine supplies its own repository associations; older inventories without that metadata display under **Other**. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Both this inventory and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+
+Choose **Fleet schedules** on Cron jobs (`/cronjobs?fleet=true`), or run `thirdshift cronjobs --fleet [--json]`, to inspect this account's configured schedules on every Fleet machine. The overview groups repositories alphabetically, then machines, with **Other** last; it keeps each machine's entry order and duplicate jobs. Each entry shows its machine, recognized Command kind (or **Unknown Command kind**), original schedule and command. Repository metadata comes from the owning machine; remote checkout paths are never resolved locally. Schedules retain their owning cron time zones without conversion.
+
+The Fleet result's `repositories` contain `repository` and `machines` (each with `name` and `jobs`); its separate `machines` inventory lists `name`, Console `address`, `status` and nullable `error`. Successful empty inventories say so. Unavailable, refused, incompatible and link-only machines stay visible alongside healthy results. Link-only entries receive no requests. The overview inspects configured schedules only; use each machine's local view for separate **Run Passes now** controls and **Last fired** observations. Reads use the owning machine's effective `read` authorization and forward the signed-in person; CLI reads use the token holder. `/api/v1/cronjobs` stays local and refuses Fleet or remote-machine selection, so API callers cannot borrow saved Fleet credentials.
 
 `thirdshift status --json` is the versioned API for agents. It runs outside a repository too. Version 2 adds each Command's `machine` (the owning machine's hostname) and `machine_name` (its Fleet entry name, or the local hostname), including nested and collapsed Commands, and a `machines` section. The Command's recorded `hostname` remains unchanged. The Console combines those same Fleet groups in its Inbox. Its `/api/v1/status` is the twin of `status --local --json`, which reads only this machine and never traverses its Fleet. Version 2 has this shape:
 
@@ -2551,7 +2555,7 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
-waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
+waiting_line_minutes = 5  # repeat unchanged CI watch, Self-merge and Trial waiting lines
 
 [otlp]
 endpoint = "http://localhost:4318/v1/traces"   # also send ended spans to a local viewer
@@ -2618,7 +2622,7 @@ commands_by_repo = {}   # extra validation commands for each "owner/repo" in eve
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
-waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+waiting_line_minutes = 5   # repeat unchanged CI watch, Self-merge and Trial waiting lines; default 5 minutes
 
 [otlp]
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security and Scoring runs never export
@@ -2735,7 +2739,7 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Ticket run before any work, since the directory a Ticket run is launched from is no base for a setting that holds for every Ticket run.
 
-`logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+`logs.waiting_line_minutes` sets how often CI watch, Self-merge and an Experiment's running Trials repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability; each running Trial writes one saying it is still running, so a long Trial does not make its Experiment Silent.
 
 `inbox.days` defaults to 7 and must be a positive whole number of days. It bounds ended problems GitHub can't speak for in Needs you, and older completions in Resolved: Resolved runs to `inbox.days` after a Command ended, after the later Command started for a row one took up, after a ready row's pull request merged or closed on GitHub, or after the dismissal for a dismissed row. Done always covers one day. A ready Command whose pull request GitHub shows as open stays in Ready for review however old it is; only a row GitHub can't speak for still ages out of Ready for review after `inbox.days`. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
 
