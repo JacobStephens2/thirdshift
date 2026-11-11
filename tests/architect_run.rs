@@ -2055,7 +2055,10 @@ fn a_second_architect_run_on_the_repository_is_skipped_while_the_first_is_mid_re
     );
     assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+    );
 
     release(&scenario);
     let first = first.finish();

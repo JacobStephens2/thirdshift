@@ -1785,12 +1785,21 @@ fn base_makes_the_named_branch_the_dispatched_spec_runs_base_branch() {
 }
 
 /// Assert the Pickup run was stopped by a preflight check with `message`,
-/// exit 1, before any work: no session, and no call to GitHub, so no label
-/// was read or changed.
+/// exit 1, before any work: no session or issue read/change. Quota admission
+/// may have checked the resource and authenticated account first.
 fn assert_stopped_by_preflight(scenario: &Scenario, result: &RunResult, message: &str) {
     scenario.assert_rejected_before_any_work(result, message);
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
-    assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    let calls = scenario.gh_calls();
+    assert!(
+        calls.is_empty()
+            || calls
+                == [
+                    vec!["api", "rate_limit"],
+                    vec!["api", "user", "--hostname", "github.com"]
+                ],
+        "GitHub work beyond quota admission: {calls:?}"
+    );
     assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
@@ -1896,7 +1905,10 @@ fn a_pickup_run_is_skipped_while_an_architect_run_on_the_repository_is_still_run
     assert_eq!(result.stdout, "");
     assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+    );
     assert_eq!(scenario.entries("work"), [REPO, "widgets-architect"]);
     release(&scenario);
     architect.finish();
@@ -1929,7 +1941,10 @@ fn a_pickup_run_or_an_architect_run_is_skipped_while_a_pickup_runs_dispatched_ru
         assert_eq!(skipped.stdout, "");
         assert_eq!(scenario.claude_calls().len(), 1, "a session was started");
         assert_eq!(scenario.gh_state(), github);
-        assert_eq!(scenario.gh_calls(), gh_calls);
+        assert_eq!(
+            scenario.gh_calls(),
+            [gh_calls, vec![vec!["api".into(), "rate_limit".into()]]].concat()
+        );
         release(&scenario);
         let first = first.finish();
         assert_ended_with_pr(&first, &pr_from(&scenario, "issue-7"), "ready for review");
@@ -2000,7 +2015,10 @@ fn at_a_command_limit_of_2_two_pickup_runs_run_at_once_and_a_third_is_skipped_na
         assert_eq!(skipped.stdout, "");
     }
     assert_eq!(scenario.gh_state(), github);
-    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(
+        scenario.gh_calls(),
+        [gh_calls, vec![vec!["api".into(), "rate_limit".into()]; 2]].concat()
+    );
     let reason = "Pickup run skipped: at the Command limit on acme/widgets: \
                   2 Commands are running, pass.command_limit is 2";
     assert_eq!(
@@ -2795,6 +2813,13 @@ fn a_failure_limit_skip_names_every_failure_lowest_first_without_extra_github_re
     assert_eq!(
         scenario.gh_calls(),
         [
+            vec!["api".to_string(), "rate_limit".into()],
+            vec![
+                "api".to_string(),
+                "user".into(),
+                "--hostname".into(),
+                "github.com".into()
+            ],
             vec![
                 "api".to_string(),
                 "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
