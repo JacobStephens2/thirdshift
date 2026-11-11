@@ -187,6 +187,54 @@ fn failed_interrupted_or_ineffective_fixes_leave_no_tag_and_are_not_retried() {
 }
 
 #[test]
+fn a_signal_interrupted_fix_reports_recovery_without_tagging() {
+    let release = Release::new();
+    let (head, _) = conflicted_bump(&release);
+    // Signal the release shell while its foreground Fix also dies by signal,
+    // as Ctrl-C can do during Cargo startup before thirdshift's handler runs.
+    // Name only these two fixture processes, keeping the guardian alive.
+    simulate_fix(&release, "kill -INT \"$PPID\"\nkill -INT \"$$\"\n");
+
+    let output = run(&release, &["0.2.0"], &[]);
+
+    let err = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{err}");
+    assert!(err.contains(&head), "{err}");
+    assert!(err.contains("Recover with thirdshift fix"), "{err}");
+    assert!(err.contains("scripts/release.sh 0.2.0"), "{err}");
+    assert_eq!(fix_calls(&release).len(), 1);
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+#[test]
+fn a_published_draft_pr_explains_how_to_finish_merging_without_moving_the_tag() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.origin(&["tag", "v0.2.0", &head]);
+    set_pr(&release, "isDraft", json!(true));
+    release.gh(&["fake", "fails", "pr merge"]);
+    let refs = release.origin_refs();
+
+    let output = run(&release, &["0.2.0"], &[]);
+
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("release still stands"), "{err}");
+    assert!(err.contains("draft"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "gh pr ready {}",
+            release.pr("release-0.2.0")["url"].as_str().unwrap()
+        )),
+        "{err}"
+    );
+    assert_eq!(release.origin_refs(), refs);
+    assert_eq!(release.pr("release-0.2.0")["state"], "OPEN");
+    assert!(fix_calls(&release).is_empty());
+}
+
+#[test]
 fn a_second_ci_failure_after_a_successful_fix_stops_without_another_fix() {
     let release = Release::new();
     let (_, repaired) = conflicted_bump(&release);
@@ -497,10 +545,10 @@ fn recovery_after_a_repaired_tag_resumes_between_branch_and_tag_pushes() {
 /// an exact bump of newer main and rewrites the notes marker to that base
 /// before the script observes the pull request again.
 fn forge_new_base_during_experiment(release: &Release, repaired: &str, new_base: &str) {
-    let driver = release.bin().join("cargo-driver");
-    if !driver.exists() {
-        fs::copy(release.bin().join("cargo"), &driver).unwrap();
-    }
+    experiments::cargo_reports(
+        release,
+        &[experiments::verdict("pass"), experiments::verdict("pass")],
+    );
     let body = format!("Old release notes\n<!-- release-content-base: {new_base} -->");
     fs::write(
         release.root().join("during-experiment.sh"),
@@ -514,36 +562,6 @@ gh fake checks {repaired} '[{{"name": "test", "conclusion": "success"}}]'
             repaired = repaired,
             body = serde_json::to_string(&body).unwrap(),
         ),
-    )
-    .unwrap();
-    fs::write(
-        release.root().join("experiment-views.json"),
-        json!([experiments::verdict("pass"), experiments::verdict("pass")]).to_string(),
-    )
-    .unwrap();
-    fs::write(
-        release.bin().join("cargo"),
-        r#"#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys
-args = sys.argv[sys.argv.index('--') + 1:]
-root = pathlib.Path(os.environ['FAKE_GH_STATE']).parent
-if args == ['--release-summary'] or args[:1] == ['fix']:
-    driver = str(root / 'bin/cargo-driver')
-    os.execv(driver, [driver, *sys.argv[1:]])
-branch = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/release-0.2.0'], text=True).strip()
-with (root / 'experiment-calls.jsonl').open('a') as calls:
-    calls.write(json.dumps(dict(args=args, branch=branch)) + '\n')
-marker = root / 'experiment-mutated'
-if not marker.exists():
-    marker.write_text('1')
-    subprocess.check_call(['bash', str(root / 'during-experiment.sh')])
-views = root / 'experiment-views.json'
-remaining = json.loads(views.read_text())
-assert remaining, 'unexpected Experiment call'
-view = remaining.pop(0)
-views.write_text(json.dumps(remaining))
-print(json.dumps(view))
-"#,
     )
     .unwrap();
 }
