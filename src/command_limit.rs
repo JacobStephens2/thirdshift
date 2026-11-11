@@ -13,8 +13,9 @@
 //! one repository at once. A Pickup run or an issue-less Custom process
 //! takes no lock of a kind.
 //!
-//! Quota admission comes before remote preparation and slot acquisition.
-//! A Quota wait skips every Pass without holding any of these locks.
+//! A live Experiment, then quota admission, comes before any GitHub call,
+//! remote preparation and slot acquisition. Either skips every Pass without
+//! holding any of these locks.
 //!
 //! A Pass also tries a shared lock on the file a thirdshift from before the
 //! Command limit locks exclusively. Every overlapping newer Pass keeps its
@@ -85,6 +86,7 @@ impl NotAdmitted {
 
 #[derive(Debug)]
 enum Why {
+    Experiment(String),
     QuotaWait(String),
     /// `running` Commands are running, at or over the limit.
     AtLimit {
@@ -100,12 +102,13 @@ enum Why {
 impl fmt::Display for NotAdmitted {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (repo, limit) = (self.repo.slug(), self.limit);
-        match self.why {
-            Why::QuotaWait(ref reason) => f.write_str(reason),
+        match &self.why {
+            Why::Experiment(id) => write!(f, "Experiment {id} is live on this machine"),
+            Why::QuotaWait(reason) => f.write_str(reason),
             Why::AtLimit { running } => write!(
                 f,
                 "at the Command limit on {repo}: {}, pass.command_limit is {limit}",
-                commands_running(running)
+                commands_running(*running)
             ),
             Why::SameKind(kind) => write!(f, "{} is already running on {repo}", kind.name()),
             Why::Older => write!(f, "an older thirdshift's Pass is running on {repo}"),
@@ -113,14 +116,26 @@ impl fmt::Display for NotAdmitted {
     }
 }
 
-/// Check quota before any remote preparation or Command-limit slot. Probe
-/// failures other than exhaustion preserve the existing admission behavior.
-pub fn quota_wait(repo: &Repo, limit: NonZeroUsize) -> Option<NotAdmitted> {
+/// Check for a live Experiment, then quota, before any GitHub call, remote
+/// preparation or Command-limit slot. A failed Experiment read is left to
+/// [`hold_pass`]; probe failures other than exhaustion preserve the existing
+/// admission behavior.
+pub fn early_skip(repo: &Repo, limit: NonZeroUsize) -> Option<NotAdmitted> {
+    let why = match live_experiment().ok().flatten() {
+        Some(id) => Why::Experiment(id),
+        None => Why::QuotaWait(crate::github::GitHub::new().pass_quota_wait()?),
+    };
     Some(NotAdmitted {
         repo: repo.clone(),
         limit,
-        why: Why::QuotaWait(crate::github::GitHub::new().pass_quota_wait()?),
+        why,
     })
+}
+
+fn live_experiment() -> Result<Option<String>> {
+    Ok(crate::logs::live_commands()?
+        .into_iter()
+        .find_map(|command| command.experiment))
 }
 
 /// "1 Command is running", or "`n` Commands are running".
@@ -137,6 +152,12 @@ fn commands_running(n: usize) -> String {
 /// Command runs all the same, only Passes don't count it.
 pub fn hold_slot(repo: &Repo) {
     let taken = (|| {
+        hold(crate::host_work::hold_command()?);
+        if let Some(id) = live_experiment()? {
+            crate::progress::step(format!(
+                "warning: Experiment {id} is live on this machine; this Command will compete with its Trials"
+            ));
+        }
         let slots = Slots::of(repo)?;
         let _counting = slots.counting()?;
         let free = slots.count()?.free;
@@ -160,6 +181,14 @@ pub fn hold_pass(
     limit: NonZeroUsize,
     sharing: Sharing,
 ) -> Result<Option<NotAdmitted>> {
+    let work = crate::host_work::hold_command()?;
+    if let Some(id) = live_experiment()? {
+        return Ok(Some(NotAdmitted {
+            repo: repo.clone(),
+            limit,
+            why: Why::Experiment(id),
+        }));
+    }
     let slots = Slots::of(repo)?;
     let _counting = slots.counting()?;
     let skipped = |why| {
@@ -195,6 +224,7 @@ pub fn hold_pass(
         hold(lock);
     }
     hold(legacy);
+    hold(work);
     Ok(None)
 }
 

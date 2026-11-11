@@ -71,6 +71,14 @@
 <li><strong><a href="#triage-runs">Triage run</a></strong>, <code>thirdshift triage</code>: investigates a <strong>Report</strong> and files shaped issues, or recommends them with <code>--recommend-only</code>.</li>
 </ul>
 <p>Architect, Pickup and Security runs, <code>review --author &lt;login&gt;</code>, and <code>fix</code> with no PR target are <strong>Passes</strong>, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system&#39;s scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See <a href="#a-pickup-run-on-a-schedule">A Pickup run on a schedule</a>, <a href="#architect-runs-every-few-minutes">Architect runs every few minutes</a> for Architect runs, and <a href="#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a> for Security runs.</p>
+<p>Every Pass, including Triage with no Report or Issue URL and a Custom process
+started with no issue, skips before work while an Experiment of the same OS
+account is live on this machine, across all repositories. A waiting Experiment
+counts too. The Activity log names the Experiment, once per change of reason,
+and the Pass exits successfully. This includes the nightly Security run.
+Commands started on an Issue or pull request URL still run, with a warning on
+stderr that they will compete with the Experiment&#39;s Trials. Existing Runs keep
+running; Passes on other machines carry on.</p>
 <p>Every session runs on the <strong>Harness</strong> you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code, OpenCode or Kimi Code. See <a href="#harness-model-and-effort">Harness, Model and Effort</a>.</p>
 </div></details>
 <details class="fold"><summary><h2>What a Ticket run does</h2></summary>
@@ -1315,6 +1323,19 @@ declarations; repeat <code>--suite &lt;name&gt;</code> to select them explicitly
 Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a <code>[trial]</code> table. This check also precedes the release Baseline probe.</p>
+<p>At startup and on resume, an Experiment becomes live, so every Pass of the same
+OS account on this machine skips. Before starting Trials, it waits for that
+account&#39;s other live Commands across repositories to end. Its Command log,
+<code>status</code> and the Console name the Commands it waits on and refresh the list as
+they end. Stop or interrupt during the wait ends the Experiment cleanly as
+interrupted; resuming waits again. Multiple waiting Experiments take turns once
+the other Commands have ended.</p>
+<p>Use <code>thirdshift experiment &lt;candidate&gt; --no-wait</code> to start immediately. Results
+record <code>no_wait: true</code> and <code>commands_at_start</code>, the number of other live Commands
+at this invocation&#39;s start, displayed beside the Verdict in text and the Console.
+A normal invocation records <code>no_wait: false</code> and zero. <code>waiting_for</code> names the
+current blockers and is empty after the wait. These fields do not change the Bar
+or Experiment identity. The structured Console API option is <code>no_wait: true</code>.</p>
 <p>For an <strong>A/A Experiment</strong>, use one commit and the same flags in both Arms.
 This measures how often the Arms disagree when nothing differs, so you can
 assess ordinary Trial variation before weighing a change. For example:</p>
@@ -1844,7 +1865,7 @@ reports its saved results. A changed Bar is refused after the first Trial.
 That includes a changed discriminating list or any changed Difficulty reading
 for its retained Eval tasks, even when the new reading stays inside the band.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. Both use the versioned
-<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 10</code>.
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/experiment-results.md">Experiment results format</a>, identified by <code>format: 11</code>.
 The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
 minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost
@@ -1899,7 +1920,7 @@ versions or end times where those facts were not retained.</p>
 <p>Each invocation that does work keeps a Command record, Command log and Activity
 log lines under <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/experiment/</code>
 (the Activity log is at the repository level). The record names both Arms and
-the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+the Bar and moves through Waiting for Commands when needed, Arm builds, Eval tasks and Trials. A waiting Command record includes <code>waiting_for</code>, an array of Command names; it is omitted when empty. It appears in the
 Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
 go in Needs you. Rechecking a Score updates the latest invocation&#39;s Command
 outcome and Inbox group alongside the saved Verdict, keeping its completion time.
