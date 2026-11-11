@@ -779,7 +779,7 @@ fn launch<S: AsRef<std::ffi::OsStr>>(
     }
     let mut command = scope_base(&unit, Some(caps));
     command
-        .arg(current_exe()?)
+        .arg(own_executable())
         .arg("--oom-exec")
         .arg(program)
         .args(args);
@@ -794,8 +794,12 @@ fn launch<S: AsRef<std::ffi::OsStr>>(
     })
 }
 
-fn current_exe() -> Result<PathBuf> {
-    std::env::current_exe().context("could not find the running thirdshift binary")
+/// Keep the running wrapper version after an update replaces or removes its
+/// install path (#1498). Another process executes this path, so `self` would
+/// name that process instead. Preserve the owning PID's proc link without
+/// resolving it to the possibly deleted install path.
+fn own_executable() -> PathBuf {
+    PathBuf::from(format!("/proc/{}/exe", std::process::id()))
 }
 
 /// Raise this process's own `oom_score_adj` to [`OOM_SCORE_ADJ`], best
