@@ -237,28 +237,10 @@ fn unchanged_running_checks_keep_writing_waiting_lines_to_the_command_log() {
             args.push("merge".to_string());
         }
 
-        let result = scenario.run_with_env(
+        assert_ci_waiting_lines(
+            &scenario,
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            &[("THIRDSHIFT_WAITING_MINUTE_MS", "150")],
-        );
-
-        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-        let waiting = "1 still running out of 1 checks listed so far";
-        assert!(
-            result.stderr.matches(waiting).count() >= 3,
-            "{}",
-            result.stderr
-        );
-        let logs = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
-        let log = std::fs::read_dir(logs)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| path.extension().is_some_and(|ext| ext == "log"))
-            .unwrap();
-        let log = std::fs::read_to_string(log).unwrap();
-        assert_eq!(
-            log.matches(waiting).count(),
-            result.stderr.matches(waiting).count()
+            "issue",
         );
         if merge {
             assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
