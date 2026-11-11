@@ -41,7 +41,7 @@ This repository-owned procedure overrides the imported Day shift `to-spec` and `
 2. With `to-tickets`, ensure the Spec is labelled `ready-for-human`, with `ready-for-agent` and `needs-triage` absent, before publishing its approved Tickets. Publish the Tickets, attach each as a sub-issue of the Spec, and create every blocking link. Keep the Spec `ready-for-human` while publication is incomplete, including after a partial failure.
 3. Read back the published Tickets, sub-issue relationships and blocking links. Once every approved Ticket and edge is present, replace the Spec's `ready-for-human` with `ready-for-agent` as the final publication step. Preserve its other labels, body and open state. This label change is the exception to `to-tickets`' parent-modification restriction.
 
-Factory skills named `thirdshift-to-spec` and `thirdshift-to-tickets` follow their Session prompt instead: thirdshift owns the top issue's readiness after validating the published plan. They still publish a plan as `needs-triage` (#1965). A Spec that thirdshift hands back to `needs-triage` after a waiting Spec run already has its Tickets attached, so a Triage Pass passes over it.
+Factory skills named `thirdshift-to-spec` and `thirdshift-to-tickets` follow their Session prompt instead: thirdshift owns the top issue's readiness after validating the published plan. They still publish a plan as `needs-triage`, so a scheduled Triage Pass can take a Spec they publish before its first Ticket is attached (#1965). A Spec that thirdshift hands back to `needs-triage` after a waiting Spec run already has its Tickets attached, so a Triage Pass passes over it.
 
 ### Split a Spec at a release
 
