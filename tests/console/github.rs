@@ -611,15 +611,13 @@ fn console_and_status_share_both_quota_reserves_and_resume_at_reset() {
         );
         gh["rate_limits"][resource]["remaining"] = json!(5000);
         scenario.write_gh_state(&gh);
+        pr_is(&scenario, "MERGED");
         let mut stream = events(&console);
-        loop {
-            assert!(sse_event(&mut stream).contains("event: commands"));
-            if !console.get("/").text().unwrap().contains(description) {
-                break;
-            }
-        }
-        // Expiry can clear the warning before the background read starts.
-        wait_until(|| scenario.gh_calls_of("api", "graphql").len() >= 2);
+        // The warning expires with the clock; the row moves only after the
+        // background read resumes and observes the merged pull request.
+        wait_for(&console, &mut stream, "resolved");
+        assert!(!console.get("/").text().unwrap().contains(description));
+        assert!(scenario.gh_calls_of("api", "graphql").len() >= 2);
         drop(stream);
         drop(console);
         assert!(!scenario.run(&["status"]).stdout.contains("Warning:"));
