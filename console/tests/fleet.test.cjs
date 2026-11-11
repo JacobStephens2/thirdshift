@@ -50,6 +50,10 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
       issue: null, process_id: 0, process_start: 'gone', harness: 'codex',
       started_at: now, ended_at: now, stages: [], session_log: null,
       outcome: 'failed', cause: index ? 'Remote fixture needs your attention' : 'Local fixture needs your attention',
+      tickets: index ? ['merged', 'waiting'].map((state, i) => ({
+        issue: { number: 10 + i, url: `https://github.com/acme/widgets/issues/${10 + i}`, title: `Ticket ${i}` },
+        state, blockers: [],
+      })) : [],
     }));
   }
   const cli = (home, args, input) => execFileSync(binary, args, { env: { ...process.env, HOME: home }, input, encoding: 'utf8' });
@@ -97,6 +101,8 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   assert.equal(await page.locator('.command').count(), 2);
   await remoteRows.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   assert.match(await remoteRows.locator('.machine-tag').textContent(), /remote-workstation/);
+  await remoteRows.locator(':scope > .row-head > .ticket-progress').getByText('1 / 2 Tickets complete', { exact: true }).waitFor();
+  assert.equal(await page.locator('.command[data-console=""] .ticket-progress').count(), 0, 'local records supply no progress');
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   if (process.env.AFTER_DESKTOP) {
     for (const [width, height, path] of [[1440, 900, process.env.AFTER_DESKTOP], [390, 844, process.env.AFTER_MOBILE]]) {
@@ -124,9 +130,11 @@ test('Fleet Inbox polls with page subscriptions, retains rows, and fits a phone'
   await page.waitForFunction(() => localStorage.getItem('thirdshift:console:notification-count'));
   const remotePath = join(homes[1], '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const added = JSON.parse(await readFile(remotePath, 'utf8'));
+  added.tickets[1].state = 'merged';
   added.kind = 'Process'; added.process_name = 'custom-build';
   await writeFile(remotePath, JSON.stringify(added));
   await remoteRows.locator('.subject[title="Process custom-build on acme/widgets"]').waitFor();
+  await remoteRows.locator(':scope > .row-head > .ticket-progress').getByText('2 / 2 Tickets complete', { exact: true }).waitFor();
   added.name = 'another-remote-command'; added.cause = 'Another remote problem';
   await writeFile(remotePath.replace('1-fixture', '2-fixture'), JSON.stringify(added));
   await page.waitForFunction(() => notices.length === 1);
