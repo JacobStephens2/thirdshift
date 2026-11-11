@@ -3894,6 +3894,8 @@ When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](htt
 
 ## Triage runs
 
+When a completed investigation returns an invalid recommendation, thirdshift gives it one correction turn in the same worktree and launch policy, including the `--read-machine` sandbox. That turn receives the original instructions, rejected output and exact validation error, and returns the complete recommendation without repeating the investigation. Both Session traces and their Model evidence are retained separately. All recommendation and publication checks still apply before GitHub writes; a second invalid recommendation fails with diagnostics pointing to the retained analysis. Harness execution failures and GitHub or publication failures do not start a correction turn.
+
 With no issue or `--file`, `thirdshift triage [base <branch>]` is an unattended **Pass** when stdin is a terminal or reaches EOF without non-whitespace text. This includes `/dev/null` under cron. Non-empty piped stdin remains a Report, read before command startup. An explicitly named empty Report file is an error.
 
 ```sh
