@@ -354,15 +354,19 @@ The **Inbox**'s first group: what won't come right unless the **Day shift** acts
 _Avoid_: alerts, attention, triage queue
 
 **Silent**:
-A live **Ticket run** whose **Session trace** and **Command log** have both stopped growing for longer than the silent time the **User config** sets, 10 minutes unless set: it may be stuck. Stages that wait on something else, such as CI watch, write a line at intervals while they wait, so silence means the same thing in every stage. A stall is silence, not a long stage: a Ticket run that is past its **Usual range** but still logging is **Slow**.
+A live **Ticket run** whose **Session trace** and **Command log** have both stopped growing for longer than the silent time the **User config** sets, 10 minutes unless set, not counting **Suspended time**: it may be stuck. Stages that wait on something else, such as CI watch, write a line at intervals while they wait, so silence means the same thing in every stage. A stall is silence, not a long stage: a Ticket run that is past its **Usual range** but still logging is **Slow**.
 _Avoid_: stalled, stuck, hung
 
 **Slow**:
-A live **Ticket run** whose stage has gone past the top of that stage's **Usual range** while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
+A live **Ticket run** whose stage has gone past the top of that stage's **Usual range**, not counting **Suspended time**, while its logs keep growing. It is still working; it only needs a look, unlike a **Silent** one.
 _Avoid_: late, overdue, stalled
 
+**Suspended time**:
+Time during a **Command** when its host was not running at all, such as a laptop asleep or a VM paused while its own host slept. The Command measures it itself, and its **Command record** keeps it per stage. A stage's time still counts it, and shows it alongside. Unlike **Silent**, nothing ran, so nothing could log.
+_Avoid_: asleep, paused, downtime, host sleep
+
 **Usual range**:
-How long a stage usually takes in a repository: the middle half of that stage's times over the repository's recent **Command records** on the machine, shown only once there are enough of them. It is what makes a Ticket run **Slow**.
+How long a stage usually takes in a repository: the middle half of that stage's times over the repository's recent **Command records** on the machine, shown only once there are enough of them. A stage with **Suspended time** is left out, since its time no longer says how long the stage takes. It is what makes a Ticket run **Slow**.
 _Avoid_: average, baseline, estimate
 
 **Dismissal**:
