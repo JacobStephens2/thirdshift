@@ -22,7 +22,7 @@ on:
       probe:
         description: Exercise the stable gates without running the suite (manual diagnostics only)
         type: choice
-        options: [none, success, failure, skipped]
+        options: [none, failure, skipped]
         default: none
 
 # PR numbers distinguish fork branches. Unique non-PR groups also preserve
@@ -135,3 +135,29 @@ jobs:
       partitions: ${{ matrix.partitions }}
       artifact: benchmark-${{ matrix.runner }}-${{ strategy.job-index }}
       clippy: false
+
+  benchmark-report:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    needs: benchmark
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.benchmark }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect job and step timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir benchmark-report
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > benchmark-report/run.json
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '[.[].jobs[]]' > benchmark-report/jobs.json
+          python3 scripts/ci-timings.py benchmark benchmark-report >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: benchmark-report
+          path: benchmark-report/
+          retention-days: 14
+          overwrite: true

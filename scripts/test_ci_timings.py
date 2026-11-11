@@ -13,6 +13,32 @@ SCRIPT = Path(__file__).with_name("ci-timings.py")
 
 
 class CiTimings(unittest.TestCase):
+    def test_benchmark_separates_start_delay_and_billed_work_from_critical_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "run.json").write_text(json.dumps({
+                "head_sha": "same-revision", "created_at": "2026-11-11T00:00:00Z"}))
+            jobs = []
+            for partition, start, end in [(1, "00:00:10", "00:01:10"), (2, "00:00:20", "00:02:20")]:
+                jobs.append({
+                    "name": f"benchmark (ubuntu-24.04, [1,2]) / run ({partition})",
+                    "conclusion": "success", "runner_name": "Hosted Agent",
+                    "started_at": f"2026-11-11T{start}Z",
+                    "completed_at": f"2026-11-11T{end}Z",
+                    "steps": [{"name": "Nextest execution", "started_at": f"2026-11-11T{start}Z",
+                               "completed_at": f"2026-11-11T{end}Z"}],
+                })
+            (root / "jobs.json").write_text(json.dumps(jobs))
+            result = subprocess.run(["python3", str(SCRIPT), "benchmark", str(root)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            measured = json.loads((root / "benchmark.json").read_text())
+            group = measured["groups"]["benchmark (ubuntu-24.04, [1,2])"]
+            self.assertEqual(measured["revision"], "same-revision")
+            self.assertEqual(group["runner_minutes"], 3)
+            self.assertEqual(group["critical_path_seconds"], 140)
+            self.assertEqual([job["start_delay_seconds"] for job in group["jobs"]], [10, 20])
+
     def test_actual_workflow_gates_reject_failed_cancelled_skipped_or_missing_work(self):
         from test_workflow_timeouts import ROOT, job_blocks
 
@@ -40,6 +66,7 @@ class CiTimings(unittest.TestCase):
             shards = [root / "1", root / "2"]
             for shard, name in zip(shards, ["unit", "integration"]):
                 shard.mkdir()
+                (shard / "revision.txt").write_text("same-revision\n")
                 (shard / "full.json").write_text(json.dumps(
                     listing(["unit", "integration", "ignored"], ["unit", "integration"])))
                 (shard / "partition.json").write_text(json.dumps(
@@ -56,9 +83,15 @@ class CiTimings(unittest.TestCase):
             self.assertEqual(run().returncode, 0, run().stderr)
             self.assertNotEqual(run(shards[:1]).returncode, 0)
             (shards[1] / "partition.json").write_text((shards[0] / "partition.json").read_text())
+            original_junit = (shards[1] / "junit.xml").read_text()
+            (shards[1] / "junit.xml").write_text((shards[0] / "junit.xml").read_text())
             self.assertNotEqual(run().returncode, 0, "duplicate assignment must fail")
             (shards[1] / "partition.json").write_text(json.dumps(
                 listing(["unit", "integration", "ignored"], ["integration"])))
+            (shards[1] / "junit.xml").write_text(original_junit)
+            (shards[1] / "revision.txt").write_text("different-revision\n")
+            self.assertNotEqual(run().returncode, 0, "different revisions must fail")
+            (shards[1] / "revision.txt").write_text("same-revision\n")
             (shards[1] / "junit.xml").unlink()
             self.assertNotEqual(run().returncode, 0, "missing execution must fail")
 

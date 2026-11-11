@@ -104,16 +104,19 @@ Issue [#1317](https://github.com/JacobStephens2/thirdshift/issues/1317) moves
 the full Linux Rust suite to `cargo nextest run` on PRs, pushes to `main` and
 manual runs. The nightly Linux run keeps `cargo test`, so CI still exercises
 the runner contributors use without installing nextest. Formatting, clippy,
-Python tooling and Release regeneration still run in the same `test` job on
-every event; its check name stays `test`.
+Python tooling and Release regeneration still run for every event, behind the
+same stable `test` gate.
 
 Both runners cover every unit and integration test in this binary-only crate;
-there is no library target or doctest coverage to lose. No filter, shard, retry
-or timeout is added. Nextest can schedule tests from different binaries at the
+there is no library target or doctest coverage to lose. No test exclusion, retry
+or test timeout is added. Nextest can schedule tests from different binaries at the
 same time, while `cargo test` runs each binary in turn
 ([nextest's execution model](https://nexte.st/docs/design/how-it-works/)). The
 existing default profile reports slow tests without terminating them. Both
-Linux architectures run the full suite without partitions.
+Linux architectures use `rust-tests.yml`, with partition counts selected in
+`ci.yml`. Nightly retains one full `cargo test` suite. The stable `test` and
+`test-linux-arm` gates require all partitions and their coverage check to
+succeed, using `always()` and accepting only `success`.
 
 The successful [PR CI run 40191701060](https://github.com/JacobStephens2/thirdshift/actions/runs/40191701060)
 on 2026-10-25 spent **692 seconds** in `cargo test`, out of **744 seconds**
@@ -144,9 +147,8 @@ pushes also run the full ARM suite.
 The job runs the same clippy command and test runner as x86_64 Linux:
 `cargo clippy --all-targets -- -D warnings`, then `cargo nextest run`, or
 `cargo test` on the nightly schedule. It has the same 60-minute bound and a
-separate architecture-specific Rust cache. It starts as one job on the same
-4-vCPU runner class as x86_64 Linux; shard it if hosted measurements show it
-extends the existing longest job noticeably.
+separate architecture-specific Rust cache. The runner class stays
+`ubuntu-24.04-arm`; x86_64 uses `ubuntu-24.04`.
 
 Releases also build `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm` and
 run its static-link/version smoke check before publication. That five-minute
@@ -184,6 +186,61 @@ would skip generation too. A changed upstream workflow shape fails generation
 rather than silently dropping the policy. Do not edit release.yml by hand.
 
 ## Slow-test reporting and coverage
+
+### Retained timings and partition benchmarks (#2031)
+
+Non-nightly Rust jobs use `cargo nextest run --profile ci`, with the same
+selection, ignored-test policy, deadlines and failure semantics as the default
+profile. The CI profile writes JUnit for every executed test, retaining output
+only for failures. Each partition uploads its JUnit, current unsharded and
+partition JSON inventories, source revision, cache-hit result and summary for
+14 days, including after test failure. Setup failures may leave no report;
+they still fail the architecture gate. Nightly keeps the normal `cargo test`
+runner and does not run a second suite just to generate JUnit.
+
+`scripts/ci-timings.py summary <report-directory>` emits total test-seconds,
+per-binary totals and the twenty slowest tests, plus `summary.json`. Test-seconds
+sum individual test durations, including overlapping tests; they are work,
+not elapsed time. `verify --count N <partition-directories...>` requires the
+current unsharded inventories to agree, each selected test to belong to exactly
+one partition, and each partition's JUnit execution to match its selection.
+It reports partition balance in test-seconds. Counts come from the current
+inventory, including unit and integration binaries, rather than a fixed count
+from a historical run. Ignored tests remain in the inventories and remain
+unselected.
+
+Run a controlled benchmark from a branch containing the workflow:
+
+```sh
+gh workflow run ci.yml --ref <branch> -f benchmark=true
+```
+
+This opt-in dispatch runs one, two and four `hash:m/n` partitions on each Linux
+runner class at the dispatch's exact revision. Normal CI and its architecture
+gates also run. Independent cached builds retain the existing Rust compilation
+model: no build-once archive/distribution approach is proposed or installed.
+Thus build-artifact size and transfer cost are zero; Rust cache transfer and
+timing-report upload remain visible in the step timings. Do not infer that an
+archive would be faster without separately measuring its size, upload,
+download, extraction, dependency delay and relocatability on this suite.
+
+The `benchmark-report` artifact contains the Actions run and jobs API records
+and a machine-readable comparison. Its unattended table reports elapsed
+critical path from workflow creation through each variant's coverage check,
+and runner minutes summed over that variant's workers and coverage check.
+These are actual allocated runner durations, not billing-rounded minutes;
+the report job and normal CI jobs are shared overhead outside each variant.
+Per-job records separate start delay (including queue and dependency delay),
+setup/toolchain/cache steps, test compilation, inventory, execution and report
+transfer. API timestamps have one-second resolution. Repeat the dispatch at
+the same revision to observe variance and distinguish cache-hit/miss reports;
+one sample, especially a small difference, cannot establish an improvement.
+
+The manual `probe=failure` and `probe=skipped` inputs deliberately produce red
+architecture gates without running tests. They are diagnostics, never a way
+to report green coverage. The default `probe=none` executes all required work.
+The workflow's normal PR, main and nightly policies and Release dependencies
+are unchanged.
 
 Nextest reports at 30 seconds, half the retrospective's 60-second long-tail
 boundary, so a growing test appears before joining that tail. The

@@ -103,6 +103,7 @@ jobs:
           path: target/ci-report/${{ inputs.artifact }}-${{ matrix.partition }}/
           retention-days: 14
           if-no-files-found: error
+          overwrite: true
 
   complete:
     timeout-minutes: 5

@@ -2,6 +2,7 @@
 """Retain nextest timings and prove partition coverage from nextest's inventory."""
 import argparse
 from collections import Counter
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -62,11 +63,14 @@ def verify(directories, count):
     if len(directories) != count:
         raise ValueError(f"expected {count} partitions, found {len(directories)}")
     full = selected(directories[0] / "full.json")
+    revision = (directories[0] / "revision.txt").read_text().strip()
     if not full:
         raise ValueError("empty unsharded inventory")
     assigned = Counter()
     work = []
     for directory in directories:
+        if not revision or (directory / "revision.txt").read_text().strip() != revision:
+            raise ValueError(f"source revisions differ: {directory}")
         if selected(directory / "full.json") != full:
             raise ValueError(f"unsharded inventories differ: {directory}")
         partition = selected(directory / "partition.json")
@@ -81,11 +85,45 @@ def verify(directories, count):
     print("Partition test-seconds: " + ", ".join(f"{seconds:.3f}" for seconds in work))
 
 
+def benchmark(directory):
+    run = json.loads((directory / "run.json").read_text())
+    jobs = json.loads((directory / "jobs.json").read_text())
+    created = datetime.fromisoformat(run["created_at"])
+    groups = {}
+    for job in jobs:
+        if not job["name"].startswith("benchmark ("):
+            continue
+        group = groups.setdefault(job["name"].split(" / ")[0], {"jobs": []})
+        start = datetime.fromisoformat(job["started_at"])
+        end = datetime.fromisoformat(job["completed_at"])
+        steps = {step["name"]: (datetime.fromisoformat(step["completed_at"]) -
+                                datetime.fromisoformat(step["started_at"])).total_seconds()
+                 for step in job["steps"]
+                 if step.get("started_at") and step.get("completed_at")}
+        group["jobs"].append({
+            "name": job["name"], "conclusion": job["conclusion"],
+            "runner": job["runner_name"],
+            "start_delay_seconds": (start - created).total_seconds(),
+            "execution_seconds": (end - start).total_seconds(),
+            "end_to_end_seconds": (end - created).total_seconds(), "steps": steps,
+        })
+    print("| Runner / partitions | Elapsed seconds incl. start delay | Runner minutes | Results |")
+    print("| --- | ---: | ---: | --- |")
+    for name, group in groups.items():
+        group["runner_minutes"] = sum(job["execution_seconds"] for job in group["jobs"]) / 60
+        group["critical_path_seconds"] = max(job["end_to_end_seconds"] for job in group["jobs"])
+        results = ", ".join(sorted({job["conclusion"] for job in group["jobs"]}))
+        print(f'| {name} | {group["critical_path_seconds"]:.1f} | {group["runner_minutes"]:.2f} | {results} |')
+    write_json(directory / "benchmark.json", {"revision": run["head_sha"], "groups": groups})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     report = commands.add_parser("summary")
     report.add_argument("directory", type=Path)
+    measured = commands.add_parser("benchmark")
+    measured.add_argument("directory", type=Path)
     listing = commands.add_parser("inventory")
     listing.add_argument("directory", type=Path)
     listing.add_argument("--partition", required=True)
@@ -96,6 +134,8 @@ def main():
     try:
         if args.command == "summary":
             summary(args.directory)
+        elif args.command == "benchmark":
+            benchmark(args.directory)
         elif args.command == "inventory":
             inventory(args.directory, args.partition)
         else:
