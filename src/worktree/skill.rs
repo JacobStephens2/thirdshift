@@ -1,5 +1,6 @@
 //! Standalone skill checkouts start at the Launch directory's committed HEAD.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use anyhow::Result;
@@ -44,13 +45,9 @@ impl SkillWorktree {
         let recovered = retained.is_some();
         let checkout = match retained {
             Some(checkout) => checkout,
-            None => {
-                let path = tempfile::Builder::new()
-                    .prefix("thirdshift-review-")
-                    .tempdir()?
-                    .keep();
-                acquisition::add_review(launch, branch, &path, commit)?
-            }
+            None => acquire_in_temp("thirdshift-review-", |path| {
+                acquisition::add_review(launch, branch, path, commit)
+            })?,
         };
         Ok(Self {
             launch: Git::new(root),
@@ -62,16 +59,13 @@ impl SkillWorktree {
 
     fn checkout(launch: &Git, commit: &str) -> Result<Self> {
         let root = launch.run(&["rev-parse", "--show-toplevel"])?;
-        // Cleanup belongs to the captured checkout, never TempDir's recursive Drop.
-        let path = tempfile::Builder::new()
-            .prefix("thirdshift-skill-")
-            .tempdir()?
-            .keep();
-        progress::step(format_args!(
-            "creating skill worktree {} at {commit}",
-            path.display()
-        ));
-        let checkout = acquisition::add(launch, None, &path, commit)?;
+        let checkout = acquire_in_temp("thirdshift-skill-", |path| {
+            progress::step(format_args!(
+                "creating skill worktree {} at {commit}",
+                path.display()
+            ));
+            acquisition::add(launch, None, path, commit)
+        })?;
         Ok(Self {
             launch: Git::new(root),
             checkout,
@@ -128,6 +122,26 @@ impl SkillWorktree {
             operation.run(&["merge-base", base_commit, "HEAD"])
         })
     }
+}
+
+/// Cleanup belongs to the captured checkout, never TempDir's recursive Drop:
+/// a failed acquisition can retain work there. Failure removes only the
+/// allocated directory itself, still empty, and keeps acquisition's error.
+fn acquire_in_temp(
+    prefix: &str,
+    acquire: impl FnOnce(&Path) -> Result<ownership::Checkout>,
+) -> Result<ownership::Checkout> {
+    let directory = tempfile::Builder::new().prefix(prefix).tempdir()?;
+    let allocated = std::fs::symlink_metadata(directory.path())?;
+    let path = directory.keep();
+    acquire(&path).inspect_err(|_| {
+        // remove_dir refuses a directory with contents, such as a retained checkout.
+        if std::fs::symlink_metadata(&path).is_ok_and(|current| {
+            current.is_dir() && current.dev() == allocated.dev() && current.ino() == allocated.ino()
+        }) {
+            let _ = std::fs::remove_dir(&path);
+        }
+    })
 }
 
 impl Drop for SkillWorktree {
