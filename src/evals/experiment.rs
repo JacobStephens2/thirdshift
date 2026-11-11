@@ -406,7 +406,6 @@ pub fn run(options: Options) -> Result<()> {
     );
     logs::begin(logs::Begin::Experiment);
     logs::configured(&config);
-    crate::poll::configure_waiting_lines(config.effective_waiting_line_interval());
     let repo = Repo {
         owner: "JacobStephens2".into(),
         name: "thirdshift".into(),
