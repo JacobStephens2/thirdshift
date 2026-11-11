@@ -164,6 +164,8 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
+      - name: Resolve Ubuntu package hosts
+        run: bash scripts/release-dns.sh
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}

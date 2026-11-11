@@ -110,31 +110,27 @@ jobs:
       # Passes these variables from Windows into WSL.
       WSLENV: ARCHIVE:EXPECTED
     steps:
-      - name: Resolve the Ubuntu download host
+      - name: Resolve Ubuntu download and package hosts
         shell: pwsh
         run: |
-          $downloadHost = 'releases.ubuntu.com'
+          $ubuntuHosts = @('releases.ubuntu.com', 'archive.ubuntu.com', 'security.ubuntu.com')
           try {
-            $addresses = [System.Net.Dns]::GetHostAddresses($downloadHost)
-            if ($addresses.Count -eq 0) { throw 'No addresses returned' }
-            Write-Host "$downloadHost resolves through the runner's DNS"
-          } catch {
-            Write-Host "Runner DNS failed for ${downloadHost}; trying public DNS"
-            $addresses = Resolve-DnsName -Name $downloadHost -Type A -Server 1.1.1.1 -DnsOnly -ErrorAction Stop |
-              Where-Object Type -eq 'A' | Select-Object -ExpandProperty IPAddress -Unique
-            $resolved = $false
-            foreach ($address in $addresses) {
-              # Check HTTPS before using an address; some mirrors may be down.
-              & curl.exe --fail --silent --show-error --head --connect-timeout 5 --max-time 10 `
-                --resolve "${downloadHost}:443:${address}" "https://${downloadHost}/24.04/" --output NUL
-              if ($LASTEXITCODE -ne 0) { continue }
-              Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value "`n$address`t$downloadHost"
-              Clear-DnsClientCache
-              Write-Host "Using verified address $address for $downloadHost"
-              $resolved = $true
-              break
+            foreach ($hostname in $ubuntuHosts) {
+              $addresses = [System.Net.Dns]::GetHostAddresses($hostname)
+              if ($addresses.Count -eq 0) { throw "No addresses for $hostname" }
             }
-            if (-not $resolved) { throw "No reachable HTTPS address for $downloadHost" }
+            Write-Host 'Ubuntu hosts resolve through runner DNS'
+          } catch {
+            Write-Host 'Runner DNS failed for Ubuntu; using public DNS on this disposable runner'
+            $interfaces = Get-NetIPConfiguration | Where-Object { $null -ne $_.IPv4DefaultGateway }
+            if (-not $interfaces) { throw 'No network interface with an IPv4 default gateway' }
+            foreach ($interface in $interfaces) {
+              Set-DnsClientServerAddress -InterfaceIndex $interface.InterfaceIndex -ServerAddresses @('1.1.1.1', '8.8.8.8')
+            }
+            Clear-DnsClientCache
+            foreach ($hostname in $ubuntuHosts) {
+              [System.Net.Dns]::GetHostAddresses($hostname) | Out-Null
+            }
           }
       - uses: Vampire/setup-wsl@v7
         with:
