@@ -24,6 +24,13 @@ struct Status {
 }
 
 fn status(view: &View) -> Status {
+    if active(view) && !view.details.waiting_for.is_empty() {
+        return Status {
+            label: "Waiting for Commands",
+            tone: "working",
+            group: 0,
+        };
+    }
     match view.verdict.as_ref().map(|v| &v.verdict) {
         Some(Conclusion::WaitingOnLeaks) => Status {
             label: "Waiting on leak decisions",
@@ -87,6 +94,12 @@ fn total(view: &View) -> usize {
         .sum()
 }
 fn now(view: &View) -> String {
+    if active(view) && !view.details.waiting_for.is_empty() {
+        return format!(
+            "Waiting for Commands: {}",
+            view.details.waiting_for.join(", ")
+        );
+    }
     let Some(verdict) = &view.verdict else {
         return format!(
             "Trials {} of {}, {} running{}",
@@ -199,11 +212,17 @@ pub(super) fn list(views: &[View]) -> String {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&view.name), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
+            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&view.name), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), contention(view), list_intervals(view), builds(view), command_links(view)));
         }
         html.push_str("</ul></details>");
     }
     html
+}
+
+fn contention(view: &View) -> String {
+    view.details.contention().map_or_else(String::new, |line| {
+        format!("<p class=\"experiment-contention\">{}</p>", esc(&line))
+    })
 }
 
 /// What the Experiment asks, in words: the change between its arms, the suites
@@ -298,6 +317,7 @@ pub(super) fn detail(view: &View, csrf: &str, can_act: bool) -> String {
         }
     }
     html.push_str(&leaks(view, csrf, can_act));
+    html.push_str(&contention(view));
     html.push_str(&verdict(view));
     html.push_str(&people(view));
     if view.description.baseline.process.is_some() || view.description.candidate.process.is_some() {
