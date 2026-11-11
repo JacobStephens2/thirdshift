@@ -74,7 +74,9 @@
 # changed content base refreshes the requested Experiment, summary and diff.
 # More than five head changes, an unsuccessful Fix, or another blockage stops
 # before tagging with recovery instructions. Workflows have 300 seconds to
-# appear (RELEASE_WORKFLOW_STARTUP_SECONDS); queued/running CI has no deadline.
+# appear (RELEASE_WORKFLOW_STARTUP_SECONDS), and the same grace bounds GitHub
+# reporting green checks as mergeable; queued/running CI has no deadline. A
+# draft PR stops before tagging, naming gh pr ready.
 #
 # Prints a progress line on stderr for each step, stamped with the local time
 # as HH:MM:SS, with the release workflow run's URL once it waits for that run,
@@ -676,7 +678,7 @@ wait_for_pr_checks() {
 # Re-read the captured PR, never search for a replacement. Refuse identity,
 # state, origin or branch changes before adopting a head or publishing a tag.
 observe_release_pr() {
-	local observation origin_head
+	local observation origin_head draft
 	[ "$(git remote get-url origin)" = "$release_origin" ] || release_stopped "origin changed"
 	if ! observation=$(gh pr view "$url" --json url,state,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,body |
 		python3 -c '
@@ -684,14 +686,17 @@ import json, re, sys
 pr = json.load(sys.stdin)
 url, branch = sys.argv[1:]
 if (pr["url"] != url or pr["state"] != "OPEN" or pr["headRefName"] != branch
-        or pr["baseRefName"] != "main" or pr["isCrossRepository"] or pr["isDraft"]):
-    sys.exit("release PR identity/state/branch changed or PR is draft")
+        or pr["baseRefName"] != "main" or pr["isCrossRepository"]):
+    sys.exit("release PR identity/state/branch changed")
 notes = re.search(r"^<!-- release-content-base: ([0-9a-f]{40}) -->$", pr["body"], re.M)
-print(pr["headRefOid"], pr["mergeable"], notes[1] if notes else "-")
+print(pr["headRefOid"], pr["mergeable"], notes[1] if notes else "-", pr["isDraft"])
 ' "$url" "$branch"); then
 		release_stopped "could not validate the release PR identity/state/branch"
 	fi
-	read -r observed_head observed_mergeable observed_notes_base <<<"$observation"
+	read -r observed_head observed_mergeable observed_notes_base draft <<<"$observation"
+	# A failed or interrupted Fix run drafts the PR; publishing it would leave
+	# the merge blocked, so a human reviews it and marks it ready first.
+	[ "$draft" = False ] || release_stopped "the PR is a draft, as a failed or interrupted Fix run leaves it; review it and mark it ready with gh pr ready $url"
 	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 	[ -n "$origin_head" ] && [ "$observed_head" = "$origin_head" ] || release_stopped "PR head does not match refs/heads/$branch on origin"
 }

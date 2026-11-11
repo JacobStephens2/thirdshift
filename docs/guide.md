@@ -4259,6 +4259,8 @@ head updates, a failed or interrupted Fix, or another conflict or CI failure
 after the automatic Fix stops with recovery instructions and no new tag pushed.
 A closed, retargeted or draft PR, a changed origin, or a content base older than
 the latest release stops without suggesting a Fix run: inspect the PR, then rerun.
+A failed or interrupted Fix run leaves the PR draft, so the rerun names
+`gh pr ready <url>`: mark it ready after review, then rerun.
 Ctrl-C and rerunning the same version use the usual resume behavior. The PR body
 records the content base its notes describe; a resumed PR from before that marker
 has its summary and version diff regenerated once, honoring `--review`.

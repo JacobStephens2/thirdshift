@@ -254,8 +254,14 @@ fn identity_mutations_after_fix_or_external_updates_refuse_publication() {
                 stderr(&output)
             );
             assert_eq!(release.origin_tag("v0.2.0"), None, "{field}");
+            // A draft names the ready step instead of a changed identity.
+            let refusal = if field == "isDraft" {
+                "the PR is a draft"
+            } else {
+                "identity/state/branch"
+            };
             assert!(
-                stderr(&output).contains("identity/state/branch"),
+                stderr(&output).contains(refusal),
                 "{field}: {}",
                 stderr(&output)
             );
@@ -675,4 +681,34 @@ fn a_pr_closed_during_ci_does_not_recommend_a_fix_run() {
         stderr(&output)
     );
     assert_eq!(release.origin_tag("v0.2.0"), None);
+}
+
+/// A real Fix run drafts the PR when it fails or is interrupted. The rerun
+/// names that blocker and resumes once the PR is marked ready.
+#[test]
+fn a_rerun_after_an_interrupted_fix_that_drafted_the_pr_names_the_ready_step() {
+    let release = Release::new();
+    let (_, repaired) = conflicted_bump(&release);
+    simulate_fix(
+        &release,
+        &(adopt_script(&repaired) + "\ngh fake pr release-0.2.0 isDraft true\nexit 130\n"),
+    );
+    let interrupted = run(&release, &["0.2.0"], &[]);
+    assert_eq!(
+        interrupted.status.code(),
+        Some(1),
+        "{}",
+        stderr(&interrupted)
+    );
+
+    let resumed = run(&release, &["0.2.0"], &[]);
+    let err = stderr(&resumed);
+    assert_eq!(resumed.status.code(), Some(1), "{err}");
+    assert!(err.contains("the PR is a draft"), "{err}");
+    assert!(err.contains("gh pr ready https://"), "{err}");
+    assert_eq!(release.origin_tag("v0.2.0"), None);
+    release.gh(&["pr", "ready", "release-0.2.0"]);
+    let ready = run(&release, &["0.2.0"], &[]);
+    assert!(ready.status.success(), "{}", stderr(&ready));
+    assert_eq!(release.origin_tag("v0.2.0"), Some(repaired));
 }
