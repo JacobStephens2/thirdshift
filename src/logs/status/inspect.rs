@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
-use chrono::Local;
+use chrono::{DateTime, Local};
 
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
@@ -166,9 +166,9 @@ fn is_uint(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn print(command: Observation<'_>) -> Result<()> {
+fn print(command: Observation<'_>, now: DateTime<Local>) -> Result<()> {
     match command {
-        Observation::Record(command) => print_details(command, "")?,
+        Observation::Record(command) => print_details(command, "", now)?,
         Observation::History(command) => super::print_history(command),
     }
     if let Some(path) = command.command_log() {
@@ -182,7 +182,7 @@ fn print(command: Observation<'_>) -> Result<()> {
     Ok(())
 }
 
-fn print_details(command: &Command, indent: &str) -> Result<()> {
+fn print_details(command: &Command, indent: &str, now: DateTime<Local>) -> Result<()> {
     if let Some(account) = &command.account {
         println!("{indent}[{account}]");
     }
@@ -197,16 +197,21 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
             issue.title.as_deref().unwrap_or("(title unavailable)")
         );
     }
-    for stage in &command.record.stages {
+    for timing in command
+        .record
+        .stage_times((command.state == "live").then_some(now.fixed_offset()))
+    {
+        let stage = timing.stage;
         let usual = command
             .usual_ranges
             .get(&stage.name)
             .map(|range| format!(" · usual {}", range.text()))
             .unwrap_or_default();
         println!(
-            "{indent}  {} · {}{usual}",
+            "{indent}  {} · {} · {}{usual}",
             crate::logs::display_name(&stage.name),
-            stage.began_at
+            stage.began_at,
+            stage_time(&timing),
         );
     }
     for path in command.sessions()? {
@@ -219,7 +224,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
     super::print_pause(&command.record, indent);
     super::print_tickets(&command.record, &format!("{indent}  "));
     for child in command.dispatched.iter().chain(&command.children) {
-        print_details(child, &format!("{indent}  "))?;
+        print_details(child, &format!("{indent}  "), now)?;
     }
     Ok(())
 }
@@ -234,7 +239,7 @@ pub fn show(input: &str, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&envelope(details(&config, &snapshot, command)?))?
         );
     } else {
-        print(command)?;
+        print(command, snapshot.observed_at())?;
     }
     Ok(())
 }
@@ -260,6 +265,9 @@ pub(in crate::logs) fn details(
         Default::default()
     };
     let mut value = crate::logs::metrics::details(snapshot, command)?;
+    if let Observation::Record(command) = command {
+        add_stage_times(&mut value, command, snapshot.observed_at());
+    }
     value
         .as_object_mut()
         .expect("Command details object")
@@ -270,6 +278,39 @@ pub(in crate::logs) fn details(
                 .clone(),
         );
     Ok(value)
+}
+
+fn stage_time(timing: &crate::logs::command_record::StageTime<'_>) -> String {
+    let mut time = timing
+        .seconds()
+        .map(|seconds| super::age(seconds as i64))
+        .unwrap_or_else(|| "time unknown".into());
+    if timing.stage.suspended_seconds > 0 {
+        time.push_str(&format!(
+            " · {} suspended",
+            super::age(timing.stage.suspended_seconds as i64)
+        ));
+    }
+    time
+}
+
+fn add_stage_times(value: &mut serde_json::Value, command: &Command, now: DateTime<Local>) {
+    for (index, timing) in command
+        .record
+        .stage_times((command.state == "live").then_some(now.fixed_offset()))
+        .enumerate()
+    {
+        value["stages"][index]["seconds"] = serde_json::json!(timing.seconds());
+        value["stages"][index]["time"] = serde_json::json!(stage_time(&timing));
+    }
+    for (field, children) in [
+        ("children", &command.children),
+        ("dispatched", &command.dispatched),
+    ] {
+        for (index, child) in children.iter().enumerate() {
+            add_stage_times(&mut value[field][index], child, now);
+        }
+    }
 }
 
 pub(crate) fn envelope(command: serde_json::Value) -> serde_json::Value {

@@ -42,7 +42,7 @@ mod usual_range;
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard, Once, PoisonError};
 
 use crate::config::UserConfig;
 use crate::github::ListedIssue;
@@ -277,6 +277,15 @@ const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
+    static SAMPLER: Once = Once::new();
+    SAMPLER.call_once(|| {
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                drop(record());
+            }
+        });
+    });
     let mut record = record();
     if matches!(begin, Begin::ChildRun(..)) {
         record.inherit_owner(owner::Owner::inherited());
@@ -672,5 +681,7 @@ impl<'a> Work<'a> {
 
 /// The [`Record`], locked, even if a thread panicked holding it.
 fn record() -> MutexGuard<'static, Record<OnMachine>> {
-    RECORD.lock().unwrap_or_else(PoisonError::into_inner)
+    let mut record = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
+    record.check_suspension();
+    record
 }
