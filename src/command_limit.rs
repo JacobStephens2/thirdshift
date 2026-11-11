@@ -77,6 +77,12 @@ pub struct NotAdmitted {
     why: Why,
 }
 
+impl NotAdmitted {
+    pub fn is_quota_wait(&self) -> bool {
+        matches!(self.why, Why::QuotaWait(_))
+    }
+}
+
 #[derive(Debug)]
 enum Why {
     QuotaWait(String),

@@ -216,6 +216,44 @@ fn unchanged_quota_wait_deduplicates_alternating_custom_processes() {
 }
 
 #[test]
+fn unchanged_quota_wait_deduplicates_process_names_with_spaces() {
+    let scenario = Scenario::new();
+    setup(&scenario);
+    std::fs::copy(
+        scenario.path("home/.thirdshift/processes/notes.toml"),
+        scenario.path("home/.thirdshift/processes/notes daily.toml"),
+    )
+    .unwrap();
+    let mut gh = scenario.gh_state();
+    gh["rate_limits"]["core"] = json!({
+        "remaining": 499,
+        "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+    });
+    scenario.write_gh_state(&gh);
+    for _ in 0..3 {
+        for name in ["notes", "notes daily"] {
+            let output = scenario.run(&["process", name]);
+            assert_eq!(output.code, Some(0), "{name}: {}", output.stderr);
+            assert!(output.stdout.is_empty(), "{name}: {}", output.stdout);
+        }
+    }
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    for name in ["notes", "notes daily"] {
+        let prefix = format!("Process {name} skipped: GitHub Quota wait until");
+        assert_eq!(
+            activity
+                .lines()
+                .filter(|line| line.contains(&prefix))
+                .count(),
+            1,
+            "unchanged quota reason repeated for {name}:\n{activity}"
+        );
+    }
+}
+
+#[test]
 fn every_pass_skips_below_either_reserve_and_reuses_the_wait_without_notifications() {
     for resource in ["core", "graphql"] {
         let scenario = Scenario::new();

@@ -652,11 +652,10 @@ fn run(command: &ProcessRun) -> Result<String> {
             Ok(repo) => repo,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
-        let skip = |reason: &dyn std::fmt::Display| {
-            let reason = reason.to_string();
+        let skip = |reason: &command_limit::NotAdmitted| {
             let choice = Choice::of(&command.asked, &config.harness);
-            progress::step(&reason);
-            logs::skipped_process(&repo, name, &choice, &reason);
+            progress::step(reason);
+            logs::skipped_process(&repo, name, &choice, reason);
             String::new()
         };
         if let Some(skipped) = command_limit::quota_wait(&repo, config.command_limit) {
