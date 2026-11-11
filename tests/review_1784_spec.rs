@@ -52,7 +52,7 @@ fn failed_opening_base_repair_is_not_repeated_by_the_next_pass() {
 }
 
 #[test]
-fn pending_base_checks_hold_an_unscoped_pass_before_pr_selection() {
+fn pending_base_checks_allow_a_pr_ci_repair_and_preserve_its_failure() {
     let scenario = Scenario::new();
     scenario.origin_has_branch("waiting", "main", &["Feature"]);
     scenario.github_has_pr("waiting", "main", "OPEN");
@@ -67,12 +67,21 @@ fn pending_base_checks_hold_an_unscoped_pass_before_pr_selection() {
     scenario.agent_does("exit 1\n");
 
     let result = scenario.run(&["fix", "no-base-fix", "no-email"]);
-    assert!(
-        scenario.claude_calls().is_empty(),
-        "unscoped Pass selected PR work before Base CI became green:\n{}",
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "unscoped Pass did not repair PR CI while Base CI was pending:\n{}",
         result.stderr
     );
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Base branch CI step skipped: CI on main is pending or re-running"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
 
 #[test]

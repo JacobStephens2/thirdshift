@@ -353,6 +353,11 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
 }
 
+/// Record a skipped Base branch CI step before the Fix Pass starts a Run.
+pub(crate) fn base_ci_skipped(repo: &Repo, reason: &str) {
+    record().base_ci_skipped(repo, reason);
+}
+
 /// Record that the Custom process `name`, started with no issue, was skipped
 /// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
 /// <reason>` unless that is already its last Process line. Unlike the other

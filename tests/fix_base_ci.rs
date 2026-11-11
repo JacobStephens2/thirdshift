@@ -4,6 +4,163 @@ mod support;
 use serde_json::json;
 use support::Scenario;
 
+const CI_RESERVATION: &str = "refs/heads/thirdshift/pickup/ci-red";
+const PASS: &[&str] = &["fix", "base", "main", "no-merge", "no-base-fix", "no-email"];
+
+fn conflicting_pr(scenario: &Scenario) -> String {
+    scenario.origin_has_branch("conflict", "main", &["Feature"]);
+    scenario.origin_has_commit("conflict", "shared.txt", "feature", "Feature content");
+    scenario.origin_has_commit("main", "shared.txt", "base", "Base content");
+    let url = scenario.github_has_pr("conflict", "main", "OPEN");
+    let mut state = scenario.gh_state();
+    state["prs"][0]["mergeable"] = "CONFLICTING".into();
+    scenario.write_gh_state(&state);
+    scenario.agent_does(
+        r#"
+test -n "$(git ls-remote origin refs/thirdshift/reservations/1)"
+case "$(gh api --paginate 'repos/acme/widgets/issues/1/labels?per_page=100')" in
+  *in-progress*) ;;
+  *) exit 1 ;;
+esac
+echo resolved > shared.txt
+git add shared.txt
+git commit -qm 'Resolve base conflict'
+gh fake pr conflict mergeable '"MERGEABLE"'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+    );
+    url
+}
+
+fn assert_repaired(scenario: &Scenario, result: &support::RunResult, url: &str) {
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains(&format!("PR {url} is ready for review")),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_file("conflict", "shared.txt").as_deref(),
+        Some("resolved\n")
+    );
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["isDraft"], false, "{state}");
+    assert!(
+        state["prs"][0]["labels"].as_array().unwrap().is_empty(),
+        "{state}"
+    );
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", "refs/thirdshift/reservations/*"])
+            .is_empty()
+    );
+}
+
+fn assert_maintenance_skipped(scenario: &Scenario, result: &support::RunResult, reason: &str) {
+    let message = format!("Base branch CI step skipped: {reason}");
+    assert!(result.stderr.contains(&message), "{}", result.stderr);
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert!(activity.contains(&message), "{activity}");
+    assert!(
+        !activity.contains(&format!("Fix run skipped: {reason}")),
+        "{activity}"
+    );
+    assert!(
+        !result
+            .stderr
+            .contains(&format!("Fix run skipped: {reason}")),
+        "{}",
+        result.stderr
+    );
+}
+
+fn assert_ci_reservation_released(scenario: &Scenario) {
+    assert!(
+        scenario
+            .launch_git(&["ls-remote", "origin", CI_RESERVATION])
+            .is_empty()
+    );
+}
+
+#[test]
+fn held_ci_reservation_still_repairs_a_conflicting_pr() {
+    let scenario = Scenario::new();
+    let url = conflicting_pr(&scenario);
+    let owner = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.origin_git(&["update-ref", CI_RESERVATION, owner.trim()]);
+    let result = scenario.run(PASS);
+    assert_repaired(&scenario, &result, &url);
+    assert_maintenance_skipped(&scenario, &result, "Base branch CI is reserved on origin");
+    assert_eq!(scenario.origin_git(&["rev-parse", CI_RESERVATION]), owner);
+    assert!(
+        scenario
+            .gh_calls_of(
+                "api",
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1"
+            )
+            .is_empty()
+    );
+    assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn held_ci_reservation_records_maintenance_skip_even_without_an_eligible_pr() {
+    let scenario = Scenario::new();
+    let owner = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.origin_git(&["update-ref", CI_RESERVATION, owner.trim()]);
+    for _ in 0..2 {
+        let result = scenario.run(PASS);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("no eligible pull request"),
+            "{}",
+            result.stderr
+        );
+        assert_maintenance_skipped(&scenario, &result, "Base branch CI is reserved on origin");
+    }
+    let activity =
+        std::fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert_eq!(activity.lines().count(), 2, "{activity}");
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["rev-parse", CI_RESERVATION]), owner);
+}
+
+#[test]
+fn pending_base_ci_still_repairs_a_conflicting_pr() {
+    for workflow in [false, true] {
+        let scenario = Scenario::new();
+        let url = conflicting_pr(&scenario);
+        let tip = scenario.origin_git(&["rev-parse", "main"]);
+        let mut state = scenario.gh_state();
+        if workflow {
+            state["runs"] = json!([{
+                "id":900,"head_branch":"main","event":"push","head_sha":tip.trim(),
+                "html_url":"https://github.com/acme/widgets/actions/runs/900",
+                "status":"in_progress","run_attempt":2,"conclusion":null,
+                "updated_at":"2020-01-01T00:00:00Z"
+            }]);
+        } else {
+            state["checks"][tip.trim()] = json!([{
+                "name":"external","conclusion":"success","pending_polls":1000
+            }]);
+        }
+        scenario.write_gh_state(&state);
+        let result = scenario.run(PASS);
+        assert_repaired(&scenario, &result, &url);
+        assert_maintenance_skipped(&scenario, &result, "CI on main is pending or re-running");
+        assert_ci_reservation_released(&scenario);
+        assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+        assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    }
+}
+
 fn failed_base(scenario: &Scenario, attempt: u64) -> String {
     let head = scenario
         .origin_git(&["rev-parse", "main"])
@@ -24,11 +181,12 @@ fn failed_base(scenario: &Scenario, attempt: u64) -> String {
 }
 
 #[test]
-fn first_failed_base_attempt_is_rerun_and_the_pass_skips_before_pr_selection() {
+fn first_failed_base_attempt_is_rerun_and_the_pass_repairs_a_conflicting_pr() {
     let scenario = Scenario::new();
+    let url = conflicting_pr(&scenario);
     failed_base(&scenario, 1);
-    let result = scenario.run(&["fix", "no-email"]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let result = scenario.run(PASS);
+    assert_repaired(&scenario, &result, &url);
     assert_eq!(
         scenario.gh_calls_of("run", "rerun").len(),
         1,
@@ -36,11 +194,14 @@ fn first_failed_base_attempt_is_rerun_and_the_pass_skips_before_pr_selection() {
         result.stderr
     );
     assert!(result.stderr.contains("re-running"), "{}", result.stderr);
-    assert!(scenario.gh_calls_of("pr", "list").is_empty());
-    assert!(scenario.claude_calls().is_empty());
-    let again = scenario.run(&["fix", "no-email"]);
+    assert_maintenance_skipped(&scenario, &result, "CI on main is pending or re-running");
+    assert_ci_reservation_released(&scenario);
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    let again = scenario.run(PASS);
     assert_eq!(again.code, Some(0), "{}", again.stderr);
     assert_eq!(scenario.gh_calls_of("run", "rerun").len(), 1);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_maintenance_skipped(&scenario, &again, "CI on main is pending or re-running");
 }
 
 const FIX: &str = r#"
@@ -119,7 +280,7 @@ fn delivery_repairs_checks_also_red_on_base_and_self_merges_with_issue_cleanup()
 }
 
 #[test]
-fn existing_repair_prs_in_all_states_suppress_another_session() {
+fn existing_repair_prs_in_all_states_allow_other_pr_repairs() {
     for (status, draft, labels) in [
         ("OPEN", false, json!([])),
         ("OPEN", true, json!([])),
@@ -128,34 +289,124 @@ fn existing_repair_prs_in_all_states_suppress_another_session() {
         ("MERGED", false, json!([])),
     ] {
         let scenario = Scenario::new();
+        let url = conflicting_pr(&scenario);
         let head = failed_base(&scenario, 2);
         let branch = format!("fix-main-{}", &head[..7]);
         scenario.origin_has_branch(&branch, "main", &["Attempted CI fix"]);
         scenario.github_has_pr(&branch, "main", status);
         let mut state = scenario.gh_state();
-        state["prs"][0]["isDraft"] = draft.into();
-        state["prs"][0]["labels"] = labels;
+        state["prs"][1]["isDraft"] = draft.into();
+        state["prs"][1]["labels"] = labels;
         scenario.write_gh_state(&state);
-        let result = scenario.run(&["fix", "no-email"]);
-        assert_eq!(result.code, Some(0), "{}", result.stderr);
-        assert!(
-            result.stderr.contains("already exists"),
-            "{}",
-            result.stderr
+        let result = scenario.run(PASS);
+        assert_repaired(&scenario, &result, &url);
+        assert_maintenance_skipped(
+            &scenario,
+            &result,
+            &format!("a repair branch or pull request from {branch} already exists"),
         );
-        assert!(scenario.claude_calls().is_empty());
-        assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+        assert_ci_reservation_released(&scenario);
+        assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+        assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 2);
     }
+}
+
+#[test]
+fn existing_repair_branch_without_a_pr_still_allows_a_conflicting_pr() {
+    let scenario = Scenario::new();
+    let url = conflicting_pr(&scenario);
+    let head = failed_base(&scenario, 2);
+    let branch = format!("fix-main-{}", &head[..7]);
+    scenario.origin_has_branch(&branch, "main", &["Attempted CI fix"]);
+    let owner = scenario.origin_git(&["rev-parse", &branch]);
+    let result = scenario.run(PASS);
+    assert_repaired(&scenario, &result, &url);
+    assert_maintenance_skipped(
+        &scenario,
+        &result,
+        &format!("a repair branch or pull request from {branch} already exists"),
+    );
+    assert_ci_reservation_released(&scenario);
+    assert_eq!(scenario.origin_git(&["rev-parse", &branch]), owner);
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    assert!(scenario.gh_calls_of("run", "rerun").is_empty());
 }
 
 #[test]
 fn author_scoped_pass_leaves_base_ci_alone() {
     let scenario = Scenario::new();
+    let url = conflicting_pr(&scenario);
     failed_base(&scenario, 1);
-    let result = scenario.run(&["fix", "--author", "acme", "no-email"]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["author"] = "acme".into();
+    scenario.write_gh_state(&state);
+    let owner = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.origin_git(&["update-ref", CI_RESERVATION, owner.trim()]);
+    let mut args = PASS.to_vec();
+    args.extend(["--author", "acme"]);
+    let result = scenario.run(&args);
+    assert_repaired(&scenario, &result, &url);
     assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    assert!(
+        scenario
+            .gh_calls_of(
+                "api",
+                "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1"
+            )
+            .is_empty()
+    );
+    assert!(
+        !result.stderr.contains("Base branch CI step skipped"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.origin_git(&["rev-parse", CI_RESERVATION]), owner);
+}
+
+#[test]
+fn persistent_red_ci_repairs_base_before_a_conflicting_pr() {
+    let scenario = Scenario::new();
+    conflicting_pr(&scenario);
+    let tip = failed_base(&scenario, 2);
+    scenario.agent_does(FIX);
+    let result = scenario.run(PASS);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"].as_array().unwrap().len(), 2, "{state}");
+    assert_eq!(state["prs"][1]["head"], format!("fix-main-{}", &tip[..7]));
+    assert_eq!(state["prs"][1]["isDraft"], false, "{state}");
+    assert_eq!(
+        scenario.origin_file("conflict", "shared.txt").as_deref(),
+        Some("feature")
+    );
+    assert_ci_reservation_released(&scenario);
+}
+
+#[test]
+fn base_ci_read_errors_still_fail_before_pr_selection() {
+    let scenario = Scenario::new();
+    conflicting_pr(&scenario);
+    let mut state = scenario.gh_state();
+    state["failing"] =
+        json!(["api repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1"]);
+    state["failing_stderr"] = "Base CI evidence unavailable".into();
+    scenario.write_gh_state(&state);
+    let result = scenario.run(PASS);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Base CI evidence unavailable"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Base branch CI step skipped"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "list").is_empty());
     assert!(scenario.claude_calls().is_empty());
+    assert_ci_reservation_released(&scenario);
 }
 
 #[test]
