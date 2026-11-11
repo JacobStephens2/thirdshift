@@ -195,7 +195,7 @@ impl<O: Outside> Record<O> {
             self.activity_write(
                 root,
                 &format!("{} warning: {warning}", Kind::UserConfig),
-                Some(History::Kind(Kind::UserConfig)),
+                Some(Kind::UserConfig),
             );
         }
     }
@@ -393,7 +393,7 @@ impl<O: Outside> Record<O> {
         self.activity_write(
             &self.root(repo),
             &format!("{kind} skipped: {reason}"),
-            Some(History::Kind(kind)),
+            Some(kind),
         );
     }
 
@@ -416,7 +416,7 @@ impl<O: Outside> Record<O> {
         } else {
             History::Kind(Kind::Process)
         };
-        self.activity_write(
+        self.activity_write_with_history(
             &root,
             &format!("Process {name} skipped: {reason}"),
             Some(history),
@@ -822,7 +822,16 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<History<'_>>) {
+    fn activity_write(&mut self, root: &Path, line: &str, unless_last_of: Option<Kind>) {
+        self.activity_write_with_history(root, line, unless_last_of.map(History::Kind));
+    }
+
+    fn activity_write_with_history(
+        &mut self,
+        root: &Path,
+        line: &str,
+        unless_last_of: Option<History<'_>>,
+    ) {
         let appended = self.activity_append(&root.join(activity::FILE), line, unless_last_of);
         if let Err(error) = appended
             && !self.activity_warned
