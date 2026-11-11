@@ -668,10 +668,22 @@ impl Scenario {
         args: &[&str],
         replace: impl FnOnce(&Path),
     ) -> RunResult {
+        self.run_copy_replaced_midway_with_env(args, &[], replace)
+    }
+
+    /// [`Scenario::run_copy_replaced_midway`] with child-only environment overrides.
+    pub fn run_copy_replaced_midway_with_env(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        replace: impl FnOnce(&Path),
+    ) -> RunResult {
         let copy = self.path("installed/thirdshift");
         fs::create_dir_all(copy.parent().unwrap()).unwrap();
         copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &copy);
-        let held = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
+        let mut command = self.command_running(&copy, args);
+        command.envs(env.iter().copied());
+        let held = self.spawn_until_started(command, COPY_IN_USE);
         replace(&copy);
         fs::write(self.path(COPY_REPLACED), "").unwrap();
         held.finish()
