@@ -300,6 +300,7 @@ fn quota_wait_restores_the_previous_stage_without_restarting_its_clock() {
     record.configured(&config(false));
     record.started(Work::Run(&issue()), &harness());
     record.stage(StageName::CiWatch, None);
+    let stages_before = memory.command_record().stages.len();
     let began = memory
         .command_record()
         .current_stage()
@@ -318,7 +319,7 @@ fn quota_wait_restores_the_previous_stage_without_restarting_its_clock() {
     assert!(resumed.quota_wait_until.is_none());
     assert_eq!(resumed.current_stage().unwrap().name, "CI watch");
     assert_eq!(resumed.current_stage().unwrap().began_at, began);
-    assert_eq!(resumed.stages.len(), 1);
+    assert_eq!(resumed.stages.len(), stages_before);
 }
 
 #[test]
