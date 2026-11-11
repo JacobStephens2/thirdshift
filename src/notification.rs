@@ -349,9 +349,10 @@ fn body(
     }
     if let Some(recommendation) = account.triage {
         text += &recommendation.notification;
-    }
-    for line in account.triage_publication_lines() {
-        text += &format!("{line}\n");
+    } else {
+        for line in account.triage_publication_lines() {
+            text += &format!("{line}\n");
+        }
     }
     if let Err(cause) = &account.ended
         && let Some(notification) = cause.private_triage_notification()

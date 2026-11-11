@@ -49,6 +49,43 @@ fn bwrap_starts_or_skip(reason: &str) -> bool {
 }
 
 #[test]
+fn a_successful_triage_notification_lists_a_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.agent_does(&recommendation_script(RECOMMENDATION));
+    let resend = ResendStandIn::replying(200, r#"{"id":"triage-one-issue"}"#);
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let result = scenario.run_with_env(
+        &[
+            "triage",
+            "--file",
+            report.to_str().unwrap(),
+            "email",
+            "day-shift@example.com",
+        ],
+        &[
+            ("RESEND_API_KEY", "test-key"),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    let issue_line = format!("Issue: {}", scenario.issue_url(8));
+    assert_eq!(
+        notification
+            .lines()
+            .filter(|line| *line == issue_line)
+            .count(),
+        1,
+        "{notification}"
+    );
+    support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
+}
+
+#[test]
 fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
