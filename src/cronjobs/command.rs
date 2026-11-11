@@ -286,7 +286,7 @@ mod tests {
             (
                 "cd /repo&&thirdshift pickup parallel 2>>cron.log 2>&1",
                 Some("/repo"),
-                Some("/repo/cron.log"),
+                None,
                 None,
                 false,
             ),
