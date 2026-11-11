@@ -2555,7 +2555,7 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
-waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
+waiting_line_minutes = 5  # repeat unchanged CI watch, Self-merge and Trial waiting lines
 
 [otlp]
 endpoint = "http://localhost:4318/v1/traces"   # also send ended spans to a local viewer
@@ -2622,7 +2622,7 @@ commands_by_repo = {}   # extra validation commands for each "owner/repo" in eve
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
-waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+waiting_line_minutes = 5   # repeat unchanged CI watch, Self-merge and Trial waiting lines; default 5 minutes
 
 [otlp]
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security and Scoring runs never export
@@ -2739,7 +2739,7 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Ticket run before any work, since the directory a Ticket run is launched from is no base for a setting that holds for every Ticket run.
 
-`logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+`logs.waiting_line_minutes` sets how often CI watch, Self-merge and an Experiment's running Trials repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability; each running Trial writes one saying it is still running, so a long Trial does not make its Experiment Silent.
 
 `inbox.days` defaults to 7 and must be a positive whole number of days. It bounds ended problems GitHub can't speak for in Needs you, and older completions in Resolved: Resolved runs to `inbox.days` after a Command ended, after the later Command started for a row one took up, after a ready row's pull request merged or closed on GitHub, or after the dismissal for a dismissed row. Done always covers one day. A ready Command whose pull request GitHub shows as open stays in Ready for review however old it is; only a row GitHub can't speak for still ages out of Ready for review after `inbox.days`. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
 

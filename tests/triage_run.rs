@@ -24,12 +24,15 @@ fn recommendation_script(recommendation: &str) -> String {
     )
 }
 
-fn assert_notification_links(scenario: &Scenario, notification: &str, numbers: &[u32]) {
+fn assert_notification_links_once(scenario: &Scenario, notification: &str, numbers: &[u32]) {
     for &number in numbers {
-        assert!(
+        let issue_line = format!("Issue: {}", scenario.issue_url(number));
+        assert_eq!(
             notification
                 .lines()
-                .any(|line| line == format!("Issue: {}", scenario.issue_url(number))),
+                .filter(|line| *line == issue_line)
+                .count(),
+            1,
             "{notification}"
         );
     }
@@ -46,6 +49,83 @@ fn bwrap_starts_or_skip(reason: &str) -> bool {
         eprintln!("SKIPPED ({reason}): bwrap cannot start");
     }
     starts
+}
+
+#[test]
+fn a_successful_triage_notification_lists_a_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.agent_does(&recommendation_script(RECOMMENDATION));
+    let resend = ResendStandIn::replying(200, r#"{"id":"triage-one-issue"}"#);
+    let report = scenario.path("report.txt");
+    fs::write(&report, REPORT).unwrap();
+    let result = scenario.run_with_env(
+        &[
+            "triage",
+            "--file",
+            report.to_str().unwrap(),
+            "email",
+            "day-shift@example.com",
+        ],
+        &[
+            ("RESEND_API_KEY", "test-key"),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    assert_notification_links_once(&scenario, notification, &[8]);
+    support::resend::assert_saved_notification(&scenario, "triage", &requests[0]);
+}
+
+#[test]
+fn partial_publication_notification_lists_each_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    scenario.gh_fails("issue comment");
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-triage",
+        "issues": [
+            {
+                "title": "Handle an empty cache",
+                "body": "Reproduce with an empty cache."
+            },
+            {
+                "title": "Handle a stale cache",
+                "body": "Reproduce with a stale cache."
+            }
+        ],
+        "investigation": "Two separate problems need issues."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_ne!(result.code, Some(0), "cross-link publication should fail");
+    let (_, notification) = saved_notification(&scenario, "triage");
+    assert_notification_links_once(&scenario, &notification, &[8, 9]);
+}
+
+#[test]
+fn successful_questionnaire_notification_lists_its_filed_issue_once() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["bug"]);
+    let recommendation = serde_json::json!({
+        "category": "bug",
+        "state": "needs-info",
+        "issues": [{
+            "title": "Identify the failing canary",
+            "body": "The affected deployment is unknown.",
+            "questionnaire": "For the deploy operator:\n\n1. Which canary failed?"
+        }],
+        "investigation": "The repository cannot identify the affected deployment."
+    });
+    scenario.agent_does(&recommendation_script(&recommendation.to_string()));
+    let result = scenario.run_with_input(&["triage"], REPORT);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, notification) = saved_notification(&scenario, "triage");
+    assert_notification_links_once(&scenario, &notification, &[8]);
 }
 
 #[test]
@@ -93,7 +173,7 @@ fn filed_issue_links_end_the_output_and_are_readable_in_the_email() {
     let requests = resend.requests();
     assert_eq!(requests.len(), 1);
     let notification = requests[0].body["text"].as_str().unwrap();
-    assert_notification_links(&scenario, notification, &[8, 9]);
+    assert_notification_links_once(&scenario, notification, &[8, 9]);
     assert!(
         notification.contains("- Handle an empty cache (bug, needs-triage)\n"),
         "{notification}"
@@ -161,7 +241,7 @@ fn partial_publication_keeps_created_issue_links_in_the_last_lines() {
         );
     }
     let (_, notification) = saved_notification(&scenario, "triage");
-    assert_notification_links(&scenario, &notification, &[8, 9]);
+    assert_notification_links_once(&scenario, &notification, &[8, 9]);
     assert!(
         notification.contains("Investigation:\n  Two separate problems need issues.\n"),
         "{notification}"
