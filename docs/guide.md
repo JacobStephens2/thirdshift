@@ -405,6 +405,8 @@ Open the localhost address it prints. The Console shows the same Inbox as `third
 
 Click the serving machine's name in the Console header to return to Overview (`/?section=overview`) from another page or section, clearing any machine filter.
 
+Live Fix runs and Review runs show a clickable **PR #number** beside their repository and run type in compact Working rows, including Overview, on desktop and phone. Explicit targets and Pass-selected targets use the same presentation for local and Fleet Commands. A Fix Pass repairing Base branch CI shows the exact selected **Base branch** before a PR exists, and keeps that branch visible alongside the PR link once published. Older records without a recorded target keep their repository and Command label.
+
 Specs with recorded Tickets show a count such as **2 / 5 Tickets complete** on their Inbox row, including on phones and when a Pass dispatched the Spec. It counts merged Tickets, including those closed before the run, from the owning machine's last recorded accounting. Record updates refresh the count, and ended runs retain it. Missing or empty accounting shows no counter. All Tickets complete can still leave Spec review or Delivery running; the row keeps its state, stage and health information.
 
 Every Inbox group starts open. Click its heading, or focus it and press Enter or Space, to fold its rows while keeping its heading and count visible. Each browser remembers its group choices through live updates, folder changes and reloads when storage is available. Folding still works through live updates without storage, and native disclosures work without JavaScript. Counts and active-run totals include folded rows; keyboard row navigation skips them. This works in every Theme and on phones.
@@ -3245,8 +3247,12 @@ restricts selection to that account, which must itself be trusted. Neither
 
 Without `--author`, the Pass first checks the selected Base branch's tip on
 `origin`. A failed first push-workflow attempt with failed jobs gets one
-failed-jobs re-run; the Pass logs it on stderr and skips while CI runs. Pending
-Base branch checks, including external checks, also skip before PR selection.
+failed-jobs re-run; the Pass logs it on stderr and continues to PR selection
+without waiting. Pending Base branch checks, including external checks, skip
+only this maintenance step, as does an occupied Base branch CI reservation.
+An existing repair branch or PR also skips only this step. Each maintenance
+skip and its reason appear on stderr and in the repository Activity log,
+including when no eligible PR is found.
 Persistent red CI, or a failure that cannot be re-run, starts a CI-fix session
 in a Worktree on `fix-<base>-<short-sha>`, from that origin tip. Delivery opens
 `Fix CI on <base>: <check>[, <check>…]` targeting the Base branch, treats every
@@ -3256,7 +3262,9 @@ or failed draft PR, prevents another repair for that commit. An existing repair
 branch also prevents another attempt if PR creation failed. When the opening
 session fails after leaving work, preservation publishes it as a draft repair
 PR and offers its Fix Recovery command. Overlapping hosts
-share the Base branch CI reservation. A successful Self-merge closes open
+share the Base branch CI reservation without holding back unrelated PR fixes.
+A Pass that starts a Base branch CI repair ends with that Run's outcome.
+A successful Self-merge closes open
 `CI red on <base>` reports and Base fix issues naming that Base branch.
 
 The Pass selects the first PR with a Merge conflict or CI red on its current
