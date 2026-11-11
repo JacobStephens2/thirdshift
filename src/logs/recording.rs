@@ -460,6 +460,13 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn base_branch(&mut self, branch: &str) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().base_branch = Some(branch.into());
+            self.write_record();
+        }
+    }
+
     pub(super) fn pull_request(&mut self, url: &str) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.active().pull_request = Some(url.into());

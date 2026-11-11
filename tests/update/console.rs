@@ -34,7 +34,7 @@ fn update(fleet: bool) {
     let install = scenario.path("installed");
     fs::create_dir(&install).unwrap();
     let binary = install.join("thirdshift");
-    fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+    support::copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &binary);
     write_install_receipt(&scenario, &install);
     let token = Command::new(&binary)
         .env("HOME", &home)

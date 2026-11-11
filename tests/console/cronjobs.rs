@@ -40,6 +40,153 @@ fn checkout(home: &Path, name: &str, origin: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn cron_job_projections_agree_without_conflating_kind_directory_and_start() {
+    let home = fixture();
+    let repo = checkout(home.path(), "repo", "https://github.com/acme/widgets.git");
+    checkout(
+        home.path(),
+        "elsewhere",
+        "https://gitlab.com/acme/widgets.git",
+    );
+    fs::write(home.path().join("crontab"), "").unwrap();
+    let mut start = command(home.path());
+    start.args(["console", "--no-sign-in"]);
+    let console = Console::start_command(start);
+    for (text, kind, resolved, offered) in [
+        ("thirdshift pickup", Some("Pickup run"), false, false),
+        (
+            "cd ~/repo && thirdshift pickup",
+            Some("Pickup run"),
+            true,
+            true,
+        ),
+        ("cd ~/repo && env X=1 thirdshift pickup", None, true, false),
+        (
+            "cd ~/repo && /usr/bin/env X=1 thirdshift pickup",
+            None,
+            true,
+            false,
+        ),
+        ("cd ~/repo && thirdshift status --json", None, true, false),
+        (
+            "cd ~/repo && thirdshift pickup --unknown",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup base '$BASE'",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup base '`branch`'",
+            None,
+            true,
+            false,
+        ),
+        (
+            "cd ~/missing && thirdshift pickup",
+            Some("Pickup run"),
+            false,
+            false,
+        ),
+        (
+            "cd ~/elsewhere && thirdshift pickup",
+            Some("Pickup run"),
+            false,
+            false,
+        ),
+        (
+            "cd ~/repo && command -p -- cd /elsewhere && thirdshift pickup",
+            None,
+            false,
+            false,
+        ),
+        (
+            "cd ~/repo && echo ready && thirdshift pickup && echo done",
+            None,
+            true,
+            true,
+        ),
+        (
+            "cd ~/repo && thirdshift pickup && echo done",
+            None,
+            true,
+            true,
+        ),
+        (
+            "cd ~/repo && thirdshift fix https://github.com/acme/widgets/pull/7",
+            Some("Fix run"),
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift review https://github.com/acme/widgets/pull/7",
+            Some("Review run"),
+            true,
+            false,
+        ),
+        (
+            "cd ~/repo && thirdshift triage",
+            Some("Triage run"),
+            true,
+            false,
+        ),
+        ("cd '~/repo && thirdshift pickup", None, false, false),
+    ] {
+        fs::write(home.path().join("crontab"), format!("@daily {text}\n")).unwrap();
+        let inventory = command(home.path())
+            .args(["cronjobs", "--json"])
+            .output()
+            .unwrap();
+        assert!(inventory.status.success(), "{inventory:?}");
+        let inventory: Value = serde_json::from_slice(&inventory.stdout).unwrap();
+        assert_eq!(
+            inventory["jobs"],
+            json!([{
+                "schedule": "@daily", "command": text, "command_kind": kind,
+                "repository": resolved.then_some("acme/widgets"),
+            }]),
+            "{text}"
+        );
+        assert_eq!(
+            api::json(console.get("/api/v1/cronjobs")),
+            inventory,
+            "{text}"
+        );
+        let directories = command(home.path())
+            .args(["launch-directories", "--json"])
+            .output()
+            .unwrap();
+        assert!(directories.status.success(), "{directories:?}");
+        let directories: Value = serde_json::from_slice(&directories.stdout).unwrap();
+        let expected = if resolved {
+            json!({"directories": [{"repository": "acme/widgets", "path": repo}]})
+        } else {
+            json!({"directories": []})
+        };
+        assert_eq!(directories, expected, "{text}");
+        assert_eq!(
+            api::json(console.get("/api/v1/launch-directories")),
+            expected,
+            "{text}"
+        );
+        let options = api::json(console.get("/api/v1/start-options"));
+        let passes = options["passes"].as_array().unwrap();
+        assert_eq!(passes.len(), usize::from(offered), "{text}: {options}");
+        if offered {
+            assert_eq!(passes[0]["command"], text);
+            let request: Value =
+                serde_json::from_str(passes[0]["request"].as_str().unwrap()).unwrap();
+            assert_eq!(request["command"], "pickup");
+            assert_eq!(request["repository"], "acme/widgets");
+        }
+    }
+}
+
+#[test]
 fn cronjobs_classifies_literal_commands_without_executing_them() {
     let home = fixture();
     let repo = checkout(

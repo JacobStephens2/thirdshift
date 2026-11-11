@@ -79,7 +79,7 @@ pub struct ReadyIssue {
 pub enum PriorityIssue {
     Ready(ReadyIssue),
     /// Every other Ready issue condition holds, including a Spec having a
-    /// Startable Ticket. Pickup still cannot take it.
+    /// Startable Ticket or an all-closed continuation. Pickup still waits.
     Settling(ListedIssue),
 }
 
@@ -191,6 +191,8 @@ trait Reads {
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate>;
     /// What shows `issue` was ever started, if it was.
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>>;
+    /// Whether the latest Issue branch can be continued under ADR-0002.
+    fn can_continue(&self, issue: &IssueUrl) -> Result<bool>;
     /// The Tickets of `spec`, an issue with sub-issues, as a Spec run reads
     /// them.
     fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>>;
@@ -214,6 +216,10 @@ impl Reads for GitHubAndOrigin<'_> {
 
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>> {
         branch::started(self.launch, &self.github, issue)
+    }
+
+    fn can_continue(&self, issue: &IssueUrl) -> Result<bool> {
+        branch::can_continue(self.launch, &self.github, issue)
     }
 
     fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>> {
@@ -495,10 +501,10 @@ fn why_none_can_start(spec: &IssueUrl, tickets: &[Ticket]) -> String {
 /// Trusted accounts, it has no label that makes an Unready Ticket and no
 /// Claim, is not a sub-issue, has no `base-fix` or `security-fix` label and no
 /// open blocker, was never started or has a recorded ready-for-agent
-/// hand-back after its last Claim ended, is not a Spec whose Tickets are all
-/// closed, is settled: `wait` has passed since it was last labelled
-/// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
-/// last added or removed, and, if it is a Spec, has a startable Ticket. Its
+/// hand-back after its last Claim ended, is settled: `wait` has passed since
+/// it was last labelled `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
+/// last added or removed, and, if it is a Spec, has a Startable Ticket or
+/// every Ticket closed with a Spec branch that can be continued. Its
 /// Tickets are read only for that last check.
 fn standing_of(
     reads: &impl Reads,
@@ -538,9 +544,14 @@ fn standing_of(
     if read.claimed {
         return passed_over(Reason::Claimed);
     }
-    if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
-        return passed_over(Reason::TicketsClosed);
-    }
+    let continuing_closed_spec = if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
+        if !reads.can_continue(&candidate.issue)? {
+            return passed_over(Reason::TicketsClosed);
+        }
+        true
+    } else {
+        false
+    };
     let unsettled = read
         .last_shaped
         .filter(|shaped| wait > TimeDelta::zero() && now - shaped.at < wait);
@@ -557,9 +568,12 @@ fn standing_of(
         let tickets = reads.tickets(&candidate.issue)?;
         // Read after the candidate: its Tickets may have closed since.
         if !tickets.iter().any(|ticket| ticket.is_open) {
-            return passed_over(Reason::TicketsClosed);
-        }
-        if tickets
+            if tickets.is_empty()
+                || !(continuing_closed_spec || reads.can_continue(&candidate.issue)?)
+            {
+                return passed_over(Reason::TicketsClosed);
+            }
+        } else if tickets
             .iter()
             .all(|ticket| spec_run::unstartable(&candidate.issue, ticket).is_some())
         {
@@ -662,6 +676,10 @@ mod tests {
                 .borrow_mut()
                 .push(Seen::StartedCheck(issue.number));
             Ok(self.facts(issue).and_then(|facts| facts.started.clone()))
+        }
+
+        fn can_continue(&self, _issue: &IssueUrl) -> Result<bool> {
+            Ok(false)
         }
 
         fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>> {

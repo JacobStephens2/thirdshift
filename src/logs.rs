@@ -309,8 +309,10 @@ pub(crate) fn tickets(tickets: Vec<TicketRecord>) {
 /// `activity.quiet_skips` is set, show the lines a pass held from the
 /// terminal and every line from here on. With it set, a pass's lines stay
 /// held until it starts work, ends or fails, so a skipped pass prints
-/// nothing.
+/// nothing. Capture the Command's effective waiting-line interval before
+/// any waiting stages begin.
 pub fn configured(config: &UserConfig) {
+    crate::poll::configure_waiting_lines(config.effective_waiting_line_interval());
     record().configured(config);
 }
 
@@ -410,6 +412,11 @@ pub fn issue_branch(branch: Option<&str>) {
 /// The target pull request, available while the Command is still running.
 pub(crate) fn pull_request(url: &str) {
     record().pull_request(url);
+}
+
+/// The selected Base branch of a Fix Pass's CI repair, before a PR exists.
+pub(crate) fn base_branch(branch: &str) {
+    record().base_branch(branch);
 }
 
 /// Retain Delivery's final counts for the active Run's completion metrics.

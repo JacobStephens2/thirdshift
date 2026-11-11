@@ -40,6 +40,12 @@ Command name, including Security runs, Triage runs and Custom processes.
 Long repository names wrap on desktop and phone; the full Command subject
 remains available on hover and in Command details.
 
+Live Fix runs and Review runs also show a clickable **PR #number** in the compact
+Working row, including Overview, for explicit and Pass-selected targets, locally
+and across the Fleet. Base branch CI repairs show their recorded **Base branch**
+before PR publication and retain it alongside the PR link afterwards. Older
+records without a target keep their repository and Command label.
+
 For Console CSS and JavaScript development, serve the assets from this checkout:
 
 ```sh
