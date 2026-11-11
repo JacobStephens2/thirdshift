@@ -624,12 +624,14 @@ fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
     assert_eq!(commands[0]["issue"]["number"], 12);
     assert_eq!(commands[0]["group"], "needs you");
     assert_eq!(graphql_calls(&scenario).len(), 1);
-    assert!(
-        scenario
-            .gh_calls()
-            .iter()
-            .all(|call| call[0] == "api" && matches!(call[1].as_str(), "graphql" | "rate_limit"))
-    );
+    assert!(scenario.gh_calls().iter().all(|call| {
+        call[0] == "api"
+            && (matches!(call[1].as_str(), "graphql" | "rate_limit")
+                || call
+                    .iter()
+                    .map(String::as_str)
+                    .eq(["api", "user", "--hostname", "github.com"]))
+    }));
 }
 
 #[test]
@@ -2931,10 +2933,14 @@ fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
         "{calls:?}"
     );
     assert!(
-        scenario
-            .gh_calls()
-            .iter()
-            .all(|call| call[0] == "api" && matches!(call[1].as_str(), "graphql" | "rate_limit")),
+        scenario.gh_calls().iter().all(|call| call[0] == "api"
+            && (matches!(call[1].as_str(), "graphql" | "rate_limit")
+                || call.iter().map(String::as_str).eq([
+                    "api",
+                    "user",
+                    "--hostname",
+                    "github.com"
+                ]))),
         "{:?}",
         scenario.gh_calls()
     );

@@ -8,22 +8,36 @@ use super::store::{Account, Store};
 use crate::github::GitHub;
 
 pub(super) fn host(args: &[&str]) -> String {
-    for arg in args {
-        if let Some(host) = arg.strip_prefix("--hostname=") {
-            return host.to_ascii_lowercase();
-        }
-        if let Some(host) = url_host(arg) {
-            return host;
+    let mut hostname = None;
+    let mut repository = None;
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg {
+            "--hostname" | "-h" => hostname = args.next(),
+            "--repo" | "-R" => repository = args.next(),
+            // Text and API field values are payload, even when they look
+            // like URLs or selector flags.
+            "--body" | "--title" | "-b" | "-t" | "-f" | "-F" => {
+                args.next();
+            }
+            _ => {
+                if let Some(value) = arg.strip_prefix("--hostname=") {
+                    hostname = Some(value);
+                } else if let Some(value) = arg.strip_prefix("--repo=") {
+                    repository = Some(value);
+                }
+            }
         }
     }
-    for pair in args.windows(2) {
-        if matches!(pair[0], "--hostname" | "-h") {
-            return pair[1].to_ascii_lowercase();
+    if let Some(hostname) = hostname {
+        return hostname.to_ascii_lowercase();
+    }
+    if let Some(repository) = repository {
+        if let Some(host) = url_host(repository) {
+            return host;
         }
-        if matches!(pair[0], "--repo" | "-R")
-            && let [hostname, _, _] = pair[1].split('/').collect::<Vec<_>>().as_slice()
-        {
-            return hostname.to_ascii_lowercase();
+        if let [host, _, _] = repository.split('/').collect::<Vec<_>>().as_slice() {
+            return host.to_ascii_lowercase();
         }
     }
     std::env::var("GH_HOST")

@@ -177,6 +177,36 @@ esac"#,
     );
 }
 
+#[test]
+fn quota_failure_uses_repository_host_instead_of_comment_url() {
+    with_recorded_signal(
+        "github::execution_tests::quota_failure_uses_repository_host_instead_of_comment_url",
+        |_| {
+            let fixture = Fixture::new("");
+            fixture.script(
+                r#"case "$1 $2" in
+  'api user') echo '{"login":"octocat"}' ;;
+  'api rate_limit')
+    echo '{"resources":{"core":{"remaining":0,"reset":4102444800}}}' ;;
+  *) echo 'API rate limit exceeded for user ID 123. (HTTP 403)' >&2; exit 1 ;;
+esac"#,
+            );
+            assert!(
+                GitHub::new()
+                    .comment_issue(&issue(), "https://docs.example.net/")
+                    .is_err()
+            );
+            let record: Value = serde_json::from_slice(
+                &fs::read(fixture.path(".thirdshift/github-quota.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record["waits"][0]["host"], "github.com");
+            assert_eq!(record["waits"][0]["login"], "octocat");
+            assert_eq!(record["waits"][0]["resource"], "core");
+        },
+    );
+}
+
 /// PATH changes happen only in the isolated process. Cleanup uses the
 /// executable's recorded PID, including after a failed assertion.
 struct Fixture {

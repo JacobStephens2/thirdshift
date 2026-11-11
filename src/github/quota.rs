@@ -76,26 +76,32 @@ impl Quota {
 }
 
 impl QuotaWait {
+    pub fn reset_at(&self) -> DateTime<Utc> {
+        self.quota.reset_at
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.quota.remaining
+    }
+
     pub fn warning(waits: &[Self]) -> Option<String> {
         let reasons: Vec<_> = waits
             .iter()
-            .filter(|wait| wait.quota.reset_at > Utc::now())
+            .filter(|wait| wait.reset_at() > Utc::now())
             .map(|wait| {
                 let name = match wait.resource {
                     Resource::Graphql => "GraphQL points",
                     Resource::Core => "REST requests",
                 };
-                let reserve = if wait.quota.remaining < 500 {
+                let reserve = if wait.remaining() < 500 {
                     " (fewer than 500)"
                 } else {
                     ""
                 };
                 format!(
                     "{} {name} remaining{reserve}; Inbox reads paused until {}",
-                    wait.quota.remaining,
-                    wait.quota
-                        .reset_at
-                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                    wait.remaining(),
+                    wait.reset_at().to_rfc3339_opts(SecondsFormat::Secs, true),
                 )
             })
             .collect();

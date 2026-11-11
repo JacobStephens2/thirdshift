@@ -37,7 +37,8 @@ fn waits_are_isolated_by_host_user_and_resource_and_expire_at_reset() {
         .unwrap();
     assert_eq!(waits.len(), 1);
     assert_eq!(waits[0].resource, Resource::Core);
-    assert_eq!(waits[0].quota.remaining, 499);
+    assert_eq!(waits[0].remaining(), 499);
+    assert_eq!(waits[0].reset_at(), now() + chrono::Duration::hours(1));
     assert_eq!(
         store.waiting(&bob, now()).unwrap()[0].resource,
         Resource::Graphql
