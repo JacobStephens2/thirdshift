@@ -4,6 +4,66 @@ use std::path::Path;
 use std::{fs, process::Command};
 
 #[test]
+fn overview_ticket_progress_counts_recorded_states_and_omits_missing_accounting() {
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 1, Some("failed"), 0);
+    fixture["tickets"] = ["merged", "merged", "running", "failed", "waiting", "not started"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, state)| json!({
+            "issue": {"number": index + 10, "url": format!("https://github.com/acme/widgets/issues/{}", index + 10), "title": "Ticket"},
+            "state": state, "blockers": []
+        }))
+        .collect();
+    // Merged accounting includes Tickets closed before any child Run existed.
+    super::write_record(home.path(), 1, &fixture);
+    for attempt in [20, 21] {
+        let mut child = record(home.path(), attempt, Some("merged"), 0);
+        child["kind"] = json!("Run");
+        child["issue"]["number"] = json!(12);
+        child["issue"]["url"] = json!("https://github.com/acme/widgets/issues/12");
+        child["tickets"] = json!([]);
+        child["parent_record"] = json!(
+            home.path()
+                .join(".thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json")
+        );
+        super::write_record(home.path(), attempt, &child);
+    }
+    let mut empty = record(home.path(), 2, Some("failed"), 0);
+    empty["tickets"] = json!([]);
+    super::write_record(home.path(), 2, &empty);
+    let mut legacy = record(home.path(), 3, Some("failed"), 0);
+    legacy.as_object_mut().unwrap().remove("tickets");
+    super::write_record(home.path(), 3, &legacy);
+    let mut ticket = record(home.path(), 4, Some("failed"), 0);
+    ticket["kind"] = json!("Run");
+    ticket["tickets"] = json!([]);
+    super::write_record(home.path(), 4, &ticket);
+
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/?section=overview").text().unwrap();
+    let heads: Vec<_> = section(&html, "needs you")
+        .split("<div class=\"row-head\">")
+        .skip(1)
+        .map(|head| head.split("</div>").next().unwrap())
+        .collect();
+    let spec = heads
+        .iter()
+        .find(|head| head.contains("issues/1\""))
+        .unwrap();
+    assert!(spec.contains("2 / 6 Tickets complete"), "{spec}");
+    assert_eq!(
+        html.matches("class=\"ticket-progress\"").count(),
+        1,
+        "{html}"
+    );
+    assert!(!html.contains("0 / 0"), "{html}");
+}
+
+#[test]
 fn ready_rows_prefer_pull_request_subjects_and_keep_issue_and_command_fallbacks() {
     use serde_json::json;
 
