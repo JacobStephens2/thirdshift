@@ -10,7 +10,9 @@ fn start_binary(scenario: &Scenario, binary: &Path) -> Console {
     let mut command = Command::new(binary);
     command
         .args(["console", "--no-sign-in"])
+        .env_clear()
         .env("HOME", scenario.path("home"))
+        .env("XDG_CONFIG_HOME", scenario.path("home/.config"))
         .env(
             "PATH",
             format!(
