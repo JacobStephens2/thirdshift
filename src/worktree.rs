@@ -29,6 +29,8 @@ mod preservation_tests;
 #[cfg(test)]
 mod review_recovery_tests;
 #[cfg(test)]
+mod skill_tests;
+#[cfg(test)]
 mod synchronization_tests;
 
 #[derive(Clone, Copy)]
