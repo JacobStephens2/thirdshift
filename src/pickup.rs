@@ -19,7 +19,7 @@ use anyhow::Result;
 
 use crate::asks::Flags;
 use crate::claim;
-use crate::command_limit::{AlreadyRunning, Sharing};
+use crate::command_limit::{NotAdmitted, Sharing};
 use crate::config::UserConfig;
 use crate::github::{GitHub, ListedIssue};
 use crate::harness::Choice;
@@ -54,9 +54,10 @@ pub struct Took {
 /// Why a Pickup run was skipped. Its `Display` is the reason, as the skipped
 /// run's one line gives it.
 pub enum Skipped {
-    /// The repository is at its Command limit on this machine, each Pass's
+    /// GitHub is in a Quota wait, or the repository is at its Command limit
+    /// on this machine, each Pass's
     /// dispatched Spec run or Run counted as part of it.
-    AlreadyRunning(AlreadyRunning),
+    NotAdmitted(NotAdmitted),
     /// The repository is at its Failure limit: `failed` lists the open
     /// issues labelled `agent-failed` that still wait for the Day shift,
     /// lowest number first, and `limit` or more stop a Pickup run from
@@ -77,7 +78,7 @@ pub enum Skipped {
 impl fmt::Display for Skipped {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::AlreadyRunning(running) => running.fmt(f),
+            Self::NotAdmitted(running) => running.fmt(f),
             Self::AtFailureLimit {
                 repo,
                 failed,
@@ -172,9 +173,9 @@ pub fn run(
         base,
     } = match launch::start(base, config.command_limit, Sharing::UpToTheLimit)? {
         Start::Clear(launch) => launch,
-        Start::AlreadyRunning(running) => {
+        Start::NotAdmitted(running) => {
             logs::skipped(Pass::Pickup, &running.repo, &running);
-            return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
+            return Ok(Outcome::Skipped(Skipped::NotAdmitted(running)));
         }
     };
     // Only Pickup handles Base branch CI reporting. A CI or publication failure
