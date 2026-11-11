@@ -21,6 +21,9 @@ mod recovery;
 #[path = "release/ancestry.rs"]
 mod ancestry;
 
+#[path = "release/checks.rs"]
+mod checks;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -230,7 +233,19 @@ impl Release {
         let cargo = release.bin().join("cargo");
         write_executable(
             &cargo,
-            "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$THIRDSHIFT_TEST_BINARY\" \"$@\"\n",
+            r#"#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+if [ "$1" = fix ]; then
+    printf '%s\n' "$*" >> "$FAKE_GH_STATE.fix-calls"
+    if [ -f "$FAKE_GH_STATE.fix" ]; then
+        exec bash "$FAKE_GH_STATE.fix" "$@"
+    fi
+    echo 'No simulated Fix repair configured' >&2
+    exit 1
+fi
+exec "$THIRDSHIFT_TEST_BINARY" "$@"
+"#,
         );
         fs::create_dir(root.join("home")).unwrap();
         fs::write(
