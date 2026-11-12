@@ -8,6 +8,7 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const { replaceRecord } = require('./records.cjs');
+const { liveRunWithUsualRange } = require('./fixtures/run-health.cjs');
 
 let home, records, server, exited, browser, origin;
 before(async () => {
@@ -83,22 +84,10 @@ test('only step-2 Slow notifies and uses the urgent favicon', { skip: process.pl
     await item(1);
   });
   await rm(paths[0]);
-  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
-  const start = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
-    + ':' + stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
   const live = {
-    version: 1, kind: 'Run', name: 'widgets#7', repository: 'acme/widgets', hostname: 'fixture',
-    issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Slow work' },
-    process_id: process.pid, process_start: start, harness: 'codex', ended_at: null, outcome: null
+    ...await liveRunWithUsualRange(records), name: 'widgets#7',
+    issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Slow work' }
   };
-  for (const [number, minutes] of [[10, 10], [11, 14], [12, 20]]) {
-    const ended = new Date(Date.now() - 7200000).toISOString();
-    const began = new Date(Date.parse(ended) - minutes * 60000).toISOString();
-    await replaceRecord(join(records, `${number}.command.json`), JSON.stringify({
-      ...live, name: `widgets#${number}`, issue: { ...live.issue, number, title: 'History' }, started_at: began, ended_at: ended,
-      outcome: 'merged', stages: [{ name: 'implement', began_at: began, session_log: null }]
-    }));
-  }
   const stageAge = async minutes => {
     const began = new Date(Date.now() - minutes * 60000).toISOString();
     await writeFile(join(records, '7.log'), 'still working\n');

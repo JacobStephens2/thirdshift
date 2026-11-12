@@ -2,12 +2,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
+const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const { replaceRecord } = require('./records.cjs');
+const { liveRunWithUsualRange } = require('./fixtures/run-health.cjs');
 
 test('compact Spec and Pass rows keep step-1 Slow child text visible', { skip: process.platform !== 'linux' }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift-child-slow-'));
@@ -18,19 +19,7 @@ test('compact Spec and Pass rows keep step-1 Slow child text visible', { skip: p
     await mkdir(join(home, 'bin'));
     await writeFile(join(home, 'bin/gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
-    const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
-    const start = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
-      + ':' + stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
-    const base = { version: 1, kind: 'Run', repository: 'acme/widgets', hostname: 'fixture',
-      process_id: process.pid, process_start: start, harness: 'codex', ended_at: null, outcome: null };
-    for (const [number, minutes] of [[1, 10], [2, 14], [3, 20]]) {
-      const ended = new Date(Date.now() - 7200000).toISOString();
-      const began = new Date(Date.parse(ended) - minutes * 60000).toISOString();
-      await writeFile(join(records, `${number}.command.json`), JSON.stringify({ ...base,
-        name: `widgets#${number}`, issue: { number, title: 'History', url: `https://github.com/acme/widgets/issues/${number}` },
-        started_at: began, ended_at: ended, outcome: 'merged',
-        stages: [{ name: 'implement', began_at: began, session_log: null }] }));
-    }
+    const base = await liveRunWithUsualRange(records);
     const began = new Date(Date.now() - 1200000).toISOString();
     const parentPath = join(records, '20-parent.command.json');
     const childPath = join(records, '20-parent.command.issue-21.child.json');
