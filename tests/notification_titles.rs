@@ -295,6 +295,46 @@ fn unreadable_pr_metadata_keeps_the_existing_subject_and_url() {
     }
 }
 
+/// A pull-request author chooses the title. A line break in it must not start
+/// another notification field or another subject line.
+#[test]
+fn a_captured_title_cannot_forge_another_notification_field() {
+    let scenario = Scenario::new();
+    let url = pull_request(&scenario);
+    let mut state = scenario.gh_state();
+    state["prs"][0]["title"] =
+        json!("Export widgets\r\nInjected: forged-field\u{2028}Hidden: line");
+    scenario.write_gh_state(&state);
+    scenario
+        .agent_does("printf 'No findings. Validation passed.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let (result, resend) = run_emailed(&scenario, &["review", &url, "--recommend-only"], false);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let request = one_request(&resend);
+    let subject = request.body["subject"].as_str().unwrap();
+    let text = request.body["text"].as_str().unwrap();
+    assert!(
+        !subject
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')),
+        "{subject:?}"
+    );
+    assert!(
+        !text.chars().any(|character| character != '\n'
+            && (character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))),
+        "{text:?}"
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Injected:") || line.starts_with("Hidden:"))
+            .count(),
+        0,
+        "{text}"
+    );
+    assert!(text.contains(&format!("Pull request: {url}\n")), "{text}");
+    assert_saved_notification(&scenario, "review", &request);
+}
+
 #[test]
 fn author_review_conflict_notification_includes_the_snapshot_title() {
     let scenario = Scenario::new();

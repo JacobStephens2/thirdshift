@@ -329,11 +329,30 @@ fn subject_line(subject: &Subject, input: Option<&CapturedInput>, outcome: &str)
                 input
                     .title
                     .as_ref()
-                    .map(|title| format!(" #{} {title}", input.number))
+                    .map(|title| format!(" #{} {}", input.number, notification_field(title)))
             })
             .unwrap_or_default();
         command_subject(&format!("{command}{input}"), repo, outcome)
     })
+}
+
+/// One notification field. A captured issue or pull request title is chosen
+/// by its author. A line break, another control, or a Unicode line separator
+/// would start another subject line or another field, so each becomes a space.
+fn notification_field(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control()
+                || character == '\u{00a0}'
+                || character == '\u{2028}'
+                || character == '\u{2029}'
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 /// `[thirdshift] <owner>/<repo>#<n> <title>: <outcome>`, without the title
@@ -401,6 +420,7 @@ fn body(
     if let Some(input) = input {
         text += &format!("{:<14}{}\n", format!("{}:", input.label), input.url);
         if let Some(title) = &input.title {
+            let title = notification_field(title);
             text += &format!("Title:        {title}\n");
         }
     }
