@@ -18,6 +18,8 @@ mod activity;
 mod command_record;
 pub mod dismiss;
 mod effects;
+mod live;
+pub(crate) use live::Command as LiveCommand;
 pub mod export;
 pub(crate) mod github;
 pub mod metrics;
@@ -55,6 +57,17 @@ pub use command_record::StageName as Stage;
 pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
+
+/// Live Commands of this OS account, across repositories, excluding this process.
+pub(crate) fn live_commands() -> anyhow::Result<Vec<LiveCommand>> {
+    // An issue-targeted Custom process takes its slot before recording begins.
+    let configured = record().logs_directory();
+    let root = match configured {
+        Some(root) => root,
+        None => UserConfig::load()?.logs_dir,
+    };
+    live::read(&root)
+}
 
 /// Find only a retained record owned by the process this Console just spawned.
 pub(crate) fn command_for_process(
@@ -184,6 +197,12 @@ pub enum Begin<'a> {
 /// The work a command starts.
 #[derive(Clone, Copy)]
 pub enum Work<'a> {
+    /// A Command still in preflight, retained only because it hit a Quota wait.
+    Starting {
+        repo: &'a Repo,
+        command: CommandKind,
+        issue: Option<&'a IssueUrl>,
+    },
     /// A Run on its issue.
     Run(&'a IssueUrl),
     /// A Base fix, a child Run into the Run's Base branch.
@@ -199,7 +218,11 @@ pub enum Work<'a> {
     ScoringRun(&'a Repo),
     ReviewRun(&'a Repo),
     FixRun(&'a Repo),
-    TriageRun(&'a Repo),
+    /// Triage on a Report, or on the retained explicit or Pass-selected issue.
+    TriageRun {
+        repo: &'a Repo,
+        issue: Option<&'a IssueUrl>,
+    },
     Experiment(&'a Repo),
     /// A Custom process, named by its file.
     Process {
@@ -277,6 +300,7 @@ const PARENT_DISPATCH: &str = "THIRDSHIFT_PARENT_DISPATCH";
 /// shows them, so a skipped pass may print nothing. A child Run prints no
 /// such line, and takes the stamp it was given.
 pub fn begin(begin: Begin) {
+    crate::github::quota::command::begin();
     let mut record = record();
     if matches!(begin, Begin::ChildRun(..)) {
         record.inherit_owner(owner::Owner::inherited());
@@ -284,6 +308,19 @@ pub fn begin(begin: Begin) {
         record.child_dispatch(std::env::var(PARENT_DISPATCH).ok());
     }
     record.begin(begin);
+    drop(record);
+    attach_quota_budget();
+}
+
+fn attach_quota_budget() {
+    if let Ok(owner) = captured_owner()
+        && let Some(path) = owner.log_path()
+        && let Err(error) = crate::github::quota::command::attach(path.into())
+    {
+        crate::progress::step(format!(
+            "warning: could not attach Command quota budget: {error:#}"
+        ));
+    }
 }
 
 /// Give a child Run its exact parent, independently of second-resolution stamps.
@@ -316,6 +353,10 @@ pub fn configured(config: &UserConfig) {
     record().configured(config);
 }
 
+pub(crate) fn preflight_issue(issue: &IssueUrl) {
+    record().preflight_issue(issue.clone());
+}
+
 /// Keep the Pass's latest start once its repository is known, before gates.
 pub(crate) fn pass_fired(repo: &Repo) {
     record().pass_fired(repo);
@@ -330,6 +371,7 @@ pub(crate) fn pass_fired(repo: &Repo) {
 /// immediate parent, with no Command log of its own.
 pub fn started(work: Work, harness: &Choice) {
     record().started(work, harness);
+    attach_quota_budget();
 }
 
 /// Capture the Custom process's loaded source before recording its start or skip.
@@ -362,7 +404,8 @@ pub(crate) fn base_ci_skipped(repo: &Repo, reason: &str) {
 
 /// Record that the Custom process `name`, started with no issue, was skipped
 /// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
-/// <reason>` unless that is already its last Process line. Unlike the other
+/// <reason>` unless that is already its last Process line (its own named
+/// Process's last skip during a Quota wait). Unlike the other
 /// Passes, it also keeps a Command record whose outcome is `skipped`: the
 /// Process's record shows that ending. `harness` is the choice it would have
 /// run on; the skip does not check that it can run.
@@ -370,9 +413,9 @@ pub fn skipped_process(
     repo: &Repo,
     name: &str,
     harness: &crate::harness::Choice,
-    reason: impl Display,
+    reason: &crate::command_limit::NotAdmitted,
 ) {
-    record().skipped_process(repo, name, harness, &reason.to_string());
+    record().skipped_process(repo, name, harness, reason);
 }
 
 /// Add an observation to the running command's repository Activity log.
@@ -396,6 +439,22 @@ pub fn issue_title(title: Option<String>) {
 /// Begin a stage, retaining its start time until the next transition.
 pub fn stage(stage: Stage) {
     record().stage(stage, None);
+}
+
+pub(crate) fn waiting_for(commands: &[String]) {
+    record().waiting_for(commands);
+}
+
+/// Temporarily overlay the active stage without resetting its timing.
+pub(crate) fn quota_wait(until: Option<&str>) {
+    if until.is_some() && record().needs_quota_repo() {
+        let repo = crate::launch::repo().ok();
+        record().preflight_repo(repo);
+    }
+    record().quota_wait(until);
+    if until.is_some() {
+        attach_quota_budget();
+    }
 }
 
 /// Keep the current Session trace, including a Resume's own log, as
@@ -586,6 +645,7 @@ impl<'a> Work<'a> {
     fn process(self) -> crate::processes::Identity {
         use crate::processes::Identity;
         let file = match self {
+            Self::Starting { .. } => return Identity::default(),
             Self::Run(_) | Self::BaseFix(_) => "ticket-run",
             Self::SpecRun(_) => "spec-run",
             Self::ArchitectRun(_) => "architect-run",
@@ -594,7 +654,7 @@ impl<'a> Work<'a> {
             Self::ScoringRun(_) => "scoring-run",
             Self::ReviewRun(_) => "review-run",
             Self::FixRun(_) => "fix-run",
-            Self::TriageRun(_) => "triage-run",
+            Self::TriageRun { .. } => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
         };
@@ -603,13 +663,14 @@ impl<'a> Work<'a> {
 
     fn initial_stage(self) -> Option<Stage> {
         match self {
+            Work::Starting { .. } => None,
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
             Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::ReviewRun(_) => Some(Stage::CodeReview),
             Work::FixRun(_) => Some(Stage::PullRequest),
-            Work::TriageRun(_) => Some(Stage::Triage),
+            Work::TriageRun { .. } => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
@@ -618,6 +679,7 @@ impl<'a> Work<'a> {
     /// The repository whose work it records.
     fn repo(self) -> Repo {
         match self {
+            Work::Starting { repo, .. } => repo.clone(),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
             Work::ArchitectRun(repo)
@@ -625,7 +687,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(repo)
             | Work::ReviewRun(repo)
             | Work::FixRun(repo)
-            | Work::TriageRun(repo)
+            | Work::TriageRun { repo, .. }
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
         }
@@ -634,6 +696,18 @@ impl<'a> Work<'a> {
     /// Its kind, in the Activity log.
     fn kind(self) -> Kind {
         match self {
+            Work::Starting { command, .. } => match command {
+                CommandKind::Issue => Kind::Run,
+                CommandKind::Architect => Kind::Pass(Pass::Architect),
+                CommandKind::Pickup => Kind::Pass(Pass::Pickup),
+                CommandKind::Secure => Kind::Pass(Pass::Security),
+                CommandKind::Scoring => Kind::ScoringRun,
+                CommandKind::Review => Kind::ReviewRun,
+                CommandKind::Fix => Kind::FixRun,
+                CommandKind::Triage => Kind::TriageRun,
+                CommandKind::Experiment => Kind::Experiment,
+                CommandKind::Process => Kind::Process,
+            },
             Work::Run(_) | Work::BaseFix(_) => Kind::Run,
             Work::SpecRun(_) => Kind::SpecRun,
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
@@ -642,7 +716,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::ReviewRun(_) => Kind::ReviewRun,
             Work::FixRun(_) => Kind::FixRun,
-            Work::TriageRun(_) => Kind::TriageRun,
+            Work::TriageRun { .. } => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
         }
@@ -651,6 +725,7 @@ impl<'a> Work<'a> {
     /// Its issue, if it has one.
     pub(crate) fn issue_url(self) -> Option<&'a IssueUrl> {
         match self {
+            Work::Starting { issue, .. } | Work::TriageRun { issue, .. } => issue,
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
             Work::ArchitectRun(_)
@@ -658,7 +733,6 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
-            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

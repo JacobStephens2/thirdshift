@@ -9,6 +9,25 @@ const LOGS: &str = "home/.thirdshift/logs/acme/widgets";
 const RECOMMEND: &str = r###"printf '%s\n' 'Triage recommendation: {"category":"bug","state":"ready-for-agent","issues":[{"title":"Handle an empty cache","body":"## Agent Brief\n\nReproduce with an empty cache."}],"investigation":"The cache read assumes an entry exists."}' > "$FAKE_CLAUDE_FINAL_MESSAGE""###;
 
 #[test]
+fn failed_triage_pass_retains_the_issue_it_selected_in_status() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-human"]);
+    scenario.issue_is(8, "OPEN");
+    scenario.issue_labelled(8, &["needs-triage"]);
+    scenario.agent_does("exit 1");
+    let result = scenario.run(&["triage"]);
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Triage run");
+    assert_eq!(command["issue"]["number"], 8, "{command}");
+    assert_eq!(command["issue"]["url"], scenario.issue_url(8));
+    assert_eq!(command["outcome"], "failed");
+}
+
+#[test]
 fn recommendation_only_pass_reserves_without_claiming_or_publishing_and_notifies() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug"]);
@@ -165,8 +184,8 @@ fn eof_selects_an_issue_and_triages_it_on_the_selected_base() {
         "{notification}"
     );
     let activity = std::fs::read_to_string(scenario.path(&format!("{LOGS}/activity.log"))).unwrap();
-    assert!(activity.contains("Triage run started"), "{activity}");
-    assert!(activity.contains("Triage run ended"), "{activity}");
+    assert!(activity.contains("Triage run #7 started"), "{activity}");
+    assert!(activity.contains("Triage run #7 ended"), "{activity}");
     assert!(
         !scenario
             .log_files(&format!("{LOGS}/commands/triage"), "log")

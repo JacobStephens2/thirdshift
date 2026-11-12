@@ -136,6 +136,12 @@ pub(super) fn allocate<F: Files>(
     stamp: &str,
 ) -> Result<Allocation<F::CommandLog>> {
     let (kind, subject) = match work {
+        Work::Starting { command, issue, .. } => (
+            command,
+            issue
+                .map(|issue| format!("{}-", issue.number))
+                .unwrap_or_default(),
+        ),
         Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
             (CommandKind::Issue, format!("{}-", issue.number))
         }
@@ -145,7 +151,7 @@ pub(super) fn allocate<F: Files>(
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
         Work::ReviewRun(_) => (CommandKind::Review, String::new()),
         Work::FixRun(_) => (CommandKind::Fix, String::new()),
-        Work::TriageRun(_) => (CommandKind::Triage, String::new()),
+        Work::TriageRun { .. } => (CommandKind::Triage, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
         Work::Process { .. } => (CommandKind::Process, String::new()),
     };

@@ -236,6 +236,13 @@ impl RunNotification {
             host.as_deref().unwrap_or("unknown host"),
             self.started.elapsed(),
         );
+        match crate::github::quota::command::notification_line() {
+            Ok(Some(line)) => text += &format!("\n{line}\n"),
+            Ok(None) => {}
+            Err(error) => progress::step(format!(
+                "warning: could not read Command quota waits: {error:#}"
+            )),
+        }
         if account.pre_audit_failure.is_some() {
             text += &format!(
                 "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",
@@ -481,7 +488,11 @@ fn body(
     if let Some(log) = account.log {
         text += &format!("Session trace:  {}\n", log.display());
     }
-    if let Some(log) = command_log {
+    // A pre-audit notification uses the fixed cause. The Command log path
+    // stays on this machine: the email goes through a third party.
+    if account.pre_audit_failure.is_none()
+        && let Some(log) = command_log
+    {
         text += &format!("Command log:  {}\n", log.display());
     }
     if let Some(configured) = configured {
