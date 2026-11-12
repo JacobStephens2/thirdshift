@@ -249,6 +249,39 @@ fn unchanged_base_ci_fix_publishes_nothing_and_is_not_repeated() {
 }
 
 #[test]
+fn unchanged_base_attempt_does_not_rerun_after_refusal() {
+    let scenario = Scenario::new();
+    let head = failed_base(&scenario, 1);
+    scenario.gh_fails("run rerun");
+    scenario.agent_does("true");
+    let first = scenario.run(PASS);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    assert!(
+        first
+            .stderr
+            .contains(&format!("CI-fix found nothing to change on main at {head}")),
+        "{}",
+        first.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(scenario.gh_calls_of("run", "rerun").len(), 1);
+    assert!(scenario.gh_calls_of("pr", "create").is_empty());
+
+    let mut state = scenario.gh_state();
+    state["failing"] = json!([]);
+    scenario.write_gh_state(&state);
+    let second = scenario.run(PASS);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(
+        scenario.gh_calls_of("run", "rerun").len(),
+        1,
+        "A later Pass re-ran checks after the unchanged repair: {}",
+        second.stderr
+    );
+}
+
+#[test]
 fn unchanged_base_attempt_is_scoped_to_the_base_and_full_commit() {
     let scenario = Scenario::new();
     let head = failed_base(&scenario, 2);
