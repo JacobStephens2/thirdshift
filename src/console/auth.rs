@@ -57,7 +57,7 @@ impl Viewer {
     pub(super) fn local_cli() -> Self {
         Self {
             caller_label: "local CLI".into(),
-            scopes: Scope::ALL.to_vec(),
+            scopes: Scope::PERSON.to_vec(),
             identity: Identity::local(),
             token: None,
             csrf: String::new(),
@@ -235,7 +235,7 @@ pub(super) async fn guard(State(access): State<Access>, request: Request, next: 
     } else if access.no_sign_in {
         Viewer {
             caller_label: "localhost (no sign-in)".into(),
-            scopes: Scope::ALL.to_vec(),
+            scopes: Scope::PERSON.to_vec(),
             identity: Identity::local(),
             token: None,
             csrf: access.local_csrf,

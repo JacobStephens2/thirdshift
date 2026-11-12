@@ -35,6 +35,7 @@ pub(crate) fn run(
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
+    started: &mut crate::command::Started,
 ) -> crate::command::Ending {
     let result = (|| -> anyhow::Result<_> {
         if let Target::Pass { base, author } = &command.target {
@@ -51,7 +52,7 @@ pub(crate) fn run(
             let github = GitHub::new();
             let base = launch.base.name();
             if author.is_none() {
-                match base_ci::run(&launch, command, config, harness)? {
+                match base_ci::run(&launch, command, config, harness, started)? {
                     base_ci::Outcome::Clear => {}
                     base_ci::Outcome::Skipped(reason) => {
                         logs::base_ci_skipped(&launch.repo, &reason);
@@ -96,6 +97,7 @@ pub(crate) fn run(
                     &selected,
                     config,
                     harness,
+                    started,
                     Some(held),
                 )));
             }
@@ -109,7 +111,7 @@ pub(crate) fn run(
             return Ok(skipped(&launch.repo, reason));
         }
         Ok(crate::command::Ending::Run(targeted(
-            command, config, harness, None,
+            command, config, harness, started, None,
         )))
     })();
     result.unwrap_or_else(|error| {
@@ -133,6 +135,7 @@ fn targeted(
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
+    started_command: &mut crate::command::Started,
     reservation: Option<Reservation>,
 ) -> Ended {
     let started = Utc::now() - crate::run::STARTED_MARGIN;
@@ -149,7 +152,8 @@ fn targeted(
             return Err(anyhow::anyhow!("origin mismatch: {} is not in {origin}", pr.url).into());
         }
         let github = GitHub::new();
-        github.fix_pull_request(&pr)?;
+        let snapshot = github.fix_pull_request(&pr)?;
+        started_command.pull_request(&pr, &snapshot.title);
         let pass = reservation.is_some();
         let _reservation = match reservation {
             Some(held) => held,
@@ -157,6 +161,7 @@ fn targeted(
                 .context("pull request is already reserved or labelled in-progress")?,
         };
         let snapshot = github.fix_pull_request(&pr)?;
+        started_command.pull_request(&pr, &snapshot.title);
         if !pass {
             crate::command_limit::hold_slot(&repo);
         }

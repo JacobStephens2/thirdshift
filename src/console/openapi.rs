@@ -152,7 +152,10 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 object(json!({"kind": {"const": "session"}, "address": text})),
                 object(json!({"kind": {"const": "local"}, "uid": integer}))
             ]},
-            "scopes": array(json!({"type": "string", "enum": super::Scope::ALL}))
+            "scopes": array(json!({"type": "string", "enum": super::Scope::TOKEN}))
+        })),
+        View::ReportMetrics => object(json!({
+            "machine": text, "pushed_at": {"type": "string", "format": "date-time"}
         })),
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
@@ -207,13 +210,66 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
             })))
         })),
         View::Metrics => {
-            for name in ["command", "from", "through"] {
-                query(name, false, text.clone());
+            query("command", false, text.clone());
+            query(
+                "window",
+                false,
+                json!({"enum": ["7d", "30d", "12w", "all"], "description": "A preset ending today: 7d and 30d by day, 12w and all by week. Not with grain, from or through."}),
+            );
+            query(
+                "grain",
+                false,
+                json!({"enum": ["day", "week"], "default": "week"}),
+            );
+            for name in ["from", "through"] {
+                query(
+                    name,
+                    false,
+                    json!({"type": "string", "format": "date", "description": "A Monday unless grain is day. Both bound the window and add a comparison with the preceding one."}),
+                );
             }
-            query("repo", false, array(text.clone()));
+            for name in ["repo", "kind", "harness", "model", "version", "account"] {
+                query(name, false, array(text.clone()));
+            }
+            let nullable = json!({"type": ["string", "null"]});
+            let window = object(json!({
+                "preset": nullable, "grain": {"enum": ["day", "week"]},
+                "from": nullable, "through": nullable,
+                "prior": {"oneOf": [{"type": "null"}, object(json!({"from": text, "through": text}))]}
+            }));
+            let tally = json!({"type": "object", "description": "Succeeded, Failed (Died included), Paused, Stopped and Live counts; n is Succeeded + Failed; success_rate is Succeeded / n. An outcomes bucket also lists its Failed Commands' selectors as failed_commands."});
             json!({"oneOf": [
                 object(json!({"version": version, "hostname": text, "command": record})),
-                object(json!({"version": version, "hostname": text, "weeks": array(record)}))
+                {
+                    "type": "object",
+                    "description": "Signal rows are weeks by week grain, days by day grain; their repairs, ci_rounds and total_minutes cover Succeeded Commands. Each group holds an axis of shown buckets and lines, each with its key, window totals, per-bucket values and, for a bounded window, a comparison with current, prior and delta.",
+                    "properties": {
+                        "version": version, "hostname": text, "window": window, "filters": record,
+                        "unavailable_accounts": array(text.clone()), "outcomes": array(tally.clone()),
+                        "comparison": {"oneOf": [{"type": "null"}, object(json!({
+                            "current": record, "prior": record, "rows": array(record.clone())
+                        }))]},
+                        "where_runs_failed": {
+                            "type": "object",
+                            "description": "Failed Commands, died ones included, as rows by stopped_at and category, each listing its Commands' selectors; observed recorded both, missing fell back to the last stage and died or failed.",
+                            "properties": {"failed": integer, "observed": integer, "missing": integer, "rows": array(record.clone())}
+                        },
+                        "versions": object(json!({
+                            "rows": array(tally),
+                            "transitions": array(object(json!({
+                                "bucket": text, "dimension": {"enum": ["thirdshift_version", "harness", "model"]},
+                                "from": array(text.clone()), "to": array(text.clone())
+                            })))
+                        })),
+                        "groups": object(json!({
+                            "yield": object(json!({"pull_requests": record})),
+                            "quality": object(json!({"bug_origins": record, "scores": record, "interventions": record})),
+                            "efficiency": record, "friction": record
+                        })),
+                        "weeks": array(record.clone()), "days": array(record)
+                    },
+                    "required": ["version", "hostname", "window", "filters", "unavailable_accounts", "outcomes", "comparison", "where_runs_failed", "versions", "groups"]
+                }
             ]})
         }
         View::BugOrigins => array(object(json!({
@@ -393,6 +449,19 @@ fn action_body(view: View) -> Value {
             }
             return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
                 "type":"object", "properties":properties,"required":required
+            }}}});
+        }
+        View::ReportMetrics => {
+            let record = json!({"type": "object"});
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["version", "machine", "view", "summary"],
+                "properties": {
+                    "version": {"type": "integer", "const": 1},
+                    "machine": {"type": "string", "description": "The report token's holder; any other name is refused with 403."},
+                    "view": {"type": "string", "description": "The summarized view's metrics query: window and filter keys only."},
+                    "summary": object(json!({"outcomes": array(record.clone()), "comparison": {"oneOf": [{"type": "null"}, record.clone()]}, "where_runs_failed": record}))
+                }
             }}}});
         }
         View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),

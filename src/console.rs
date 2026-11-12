@@ -23,6 +23,7 @@ pub use identity::whoami;
 mod live;
 mod logs;
 mod look;
+mod metrics;
 pub use look::{export_theme, import_theme, sections, theme};
 mod openapi;
 pub use openapi::print as openapi;
@@ -33,6 +34,7 @@ mod evals;
 #[cfg(test)]
 mod parity;
 mod peek;
+pub(crate) mod report;
 mod resources;
 mod restart;
 mod scoring;
@@ -124,15 +126,29 @@ pub(crate) enum Scope {
     Act,
     Run,
     Admin,
+    /// Upload only the token holder's own Run metrics summary; never a
+    /// person's scope (ADR 0026, #2036 Q4.2).
+    Report,
 }
 
 impl Scope {
-    pub(crate) const ALL: [Self; 5] = [
+    /// The five scopes a person on the sign-in list can hold.
+    pub(crate) const PERSON: [Self; 5] = [
         Self::Read,
         Self::Security,
         Self::Act,
         Self::Run,
         Self::Admin,
+    ];
+
+    /// Every scope a token can carry: a person's five and `report`.
+    pub(crate) const TOKEN: [Self; 6] = [
+        Self::Read,
+        Self::Security,
+        Self::Act,
+        Self::Run,
+        Self::Admin,
+        Self::Report,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -142,18 +158,38 @@ impl Scope {
             Self::Act => "act",
             Self::Run => "run",
             Self::Admin => "admin",
+            Self::Report => "report",
         }
     }
 
+    /// A person's scopes, from a comma-separated list.
     pub(crate) fn parse(value: &str) -> Result<Vec<Self>> {
+        Self::parse_from(value, &Self::PERSON)
+    }
+
+    /// A token's scopes: a person's, or `report` alone.
+    pub(crate) fn parse_token(value: &str) -> Result<Vec<Self>> {
+        let scopes = Self::parse_from(value, &Self::TOKEN)?;
+        ensure!(
+            !scopes.contains(&Self::Report) || scopes.len() == 1,
+            "the report scope cannot be combined with other scopes"
+        );
+        Ok(scopes)
+    }
+
+    fn parse_from(value: &str, known: &[Self]) -> Result<Vec<Self>> {
+        let expected = known
+            .iter()
+            .map(|scope| scope.name())
+            .collect::<Vec<_>>()
+            .join(",");
         let mut scopes = Vec::new();
         for name in value.split(',').filter(|_| !value.is_empty()) {
-            let scope = Self::ALL
-                .into_iter()
+            let scope = known
+                .iter()
+                .copied()
                 .find(|scope| scope.name() == name)
-                .with_context(|| {
-                    format!("unknown scope {name:?}; expected read,security,act,run,admin")
-                })?;
+                .with_context(|| format!("unknown scope {name:?}; expected {expected}"))?;
             if !scopes.contains(&scope) {
                 scopes.push(scope);
             }
@@ -208,6 +244,7 @@ enum View {
     Resources,
     ResourceStatus,
     Metrics,
+    ReportMetrics,
     Inbox,
     Inspect,
     Spans,
@@ -282,6 +319,7 @@ impl PageRoute {
                 | View::Resources
                 | View::ResourceStatus
                 | View::Metrics
+                | View::ReportMetrics
                 | View::Inbox
                 | View::Inspect
                 | View::Spans
@@ -561,6 +599,16 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift metrics --json"],
         method: Method::GET,
         view: View::Metrics,
+    },
+    // The receiving end of `metrics --push`: a `report` token uploads its
+    // holder's own summary, and nothing else (ADR 0026, #2036 Q4.2).
+    PageRoute {
+        path: "/api/v1/metrics/report",
+        api: "/api/v1/metrics/report",
+        scope: Some(Scope::Report),
+        cli: &["thirdshift metrics --push"],
+        method: Method::POST,
+        view: View::ReportMetrics,
     },
     PageRoute {
         path: "/bug-origins",
@@ -1092,7 +1140,11 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
             (View::ResourceStatus, Method::GET) => get(resources::status),
-            (View::Metrics, Method::GET) => get(metrics),
+            (View::Metrics, Method::GET) => get(metrics::show),
+            // A summary outgrows the Console's 16 KiB form limit.
+            (View::ReportMetrics, Method::POST) => {
+                post(metrics::receive).layer(DefaultBodyLimit::max(metrics::REPORT_LIMIT))
+            }
             (View::Inbox, Method::GET) => {
                 get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }
@@ -1200,6 +1252,10 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
+    /// How many Failed Commands a Metrics failure link chose, if it chose any.
+    chosen: Option<usize>,
+    /// That link's query pairs, kept when History's own filters change.
+    drilldown: Vec<(String, String)>,
     /// The `section` the URL asked for, as its slug.
     section: String,
     machine: String,
@@ -1267,10 +1323,7 @@ impl InboxPage {
     }
 
     fn urgent(&self) -> bool {
-        self.inbox.sections[0]
-            .rows
-            .iter()
-            .any(|row| row.state != "Slow")
+        !self.inbox.sections[0].rows.is_empty()
     }
 
     fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
@@ -1403,6 +1456,7 @@ async fn render_page(
         let all = archive_page.is_some() || query_value(&query, "all") == "true";
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
+        let chosen = metrics::chosen(&config, &query)?;
         let (title, cli) = match archive_page {
             Some(status::ArchivePage::History) => {
                 ("History", "thirdshift status --local --all --json")
@@ -1436,52 +1490,20 @@ async fn render_page(
                 inbox,
                 title,
                 archive: archive_page
-                    .map(|page| read.archive(&config, page, &outcome, &repository))
+                    .map(|page| {
+                        read.archive(&config, page, &outcome, &repository, chosen.as_deref())
+                    })
                     .transpose()?,
                 outcome,
                 repository,
+                chosen: chosen.map(|commands| commands.len()),
+                drilldown: metrics::drilldown(&query)?,
                 section: query_value(&query, "section"),
                 machine,
                 machines,
             }
             .render()?)
         })
-    })
-    .await
-}
-
-async fn metrics(
-    axum::Extension(format): axum::Extension<api::Format>,
-    RawQuery(query): RawQuery,
-) -> Response {
-    api::read(format, move || {
-        let mut arguments = vec!["metrics".to_owned(), "--json".to_owned()];
-        if let Some(query) = &query {
-            for (key, value) in
-                reqwest::Url::parse(&format!("http://localhost/?{query}"))?.query_pairs()
-            {
-                match key.as_ref() {
-                    "command" => arguments.push(value.into_owned()),
-                    "from" | "through" | "repo" => {
-                        arguments.push(format!("--{key}"));
-                        arguments.push(value.into_owned());
-                    }
-                    _ => anyhow::bail!("unknown metrics argument: {key}"),
-                }
-            }
-        }
-        let crate::args::Command::Metrics(asked) = crate::args::parse(&arguments)? else {
-            unreachable!("fixed metrics command")
-        };
-        format.render(
-            crate::logs::metrics::read(&UserConfig::load()?, &asked)?,
-            |value| {
-                Ok(format!(
-                    "<pre>{}</pre>",
-                    filters::escaped(&serde_json::to_string_pretty(&value)?)
-                ))
-            },
-        )
     })
     .await
 }

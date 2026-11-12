@@ -68,6 +68,9 @@ mod spans;
 #[path = "console/metrics.rs"]
 mod metrics;
 
+#[path = "console/metrics_report.rs"]
+mod metrics_report;
+
 #[path = "console/idle.rs"]
 mod idle;
 

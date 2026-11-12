@@ -92,6 +92,7 @@ impl PullRequestAttribution {
     }
 }
 
-fn identity(url: &str) -> String {
+/// A pull request URL compared without ASCII case or a trailing slash.
+pub(in crate::logs) fn identity(url: &str) -> String {
     url.trim_end_matches('/').to_ascii_lowercase()
 }

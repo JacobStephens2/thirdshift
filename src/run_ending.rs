@@ -301,6 +301,7 @@ pub struct Review<'a> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Cause {
     full: String,
+    category: crate::logs::FailureCategory,
     safeguard_refusal: Option<crate::harness::interpretation::SafeguardRefusal>,
     /// Completed Triage writes, retained separately from verbose failure diagnostics.
     triage_publication: Vec<crate::issue::IssueUrl>,
@@ -313,6 +314,7 @@ impl Cause {
     pub fn of(error: &anyhow::Error) -> Self {
         Self {
             full: format!("{error:#}"),
+            category: crate::failed_run::category(error),
             safeguard_refusal: error.downcast_ref().copied(),
             triage_publication: error
                 .downcast_ref::<crate::triage::IncompletePublication>()
@@ -321,6 +323,18 @@ impl Cause {
             private_triage_notification: error
                 .downcast_ref::<crate::triage::PrivateFindingTriage>()
                 .map(|triage| triage.notification.clone()),
+        }
+    }
+
+    /// Its failure category. An interrupted Spec run did not end only waiting.
+    pub fn category(&self, interrupted: bool) -> crate::logs::FailureCategory {
+        use crate::logs::FailureCategory;
+        match self.category {
+            FailureCategory::Waiting if interrupted => FailureCategory::StageFailed,
+            category @ (FailureCategory::Held
+            | FailureCategory::Waiting
+            | FailureCategory::Crashed
+            | FailureCategory::StageFailed) => category,
         }
     }
 
@@ -357,7 +371,8 @@ impl<'a> Account<'a> {
                     .unwrap_or(match &reached.resolution {
                         crate::run::Resolution::NotReproduced { .. } => "bug not reproduced",
                         crate::run::Resolution::PullRequest { .. }
-                        | crate::run::Resolution::ArchitectureReview { .. } => "succeeded",
+                        | crate::run::Resolution::ArchitectureReview { .. }
+                        | crate::run::Resolution::BaseCiUnchanged { .. } => "succeeded",
                     }),
                 ended: Ok(match &reached.resolution {
                     crate::run::Resolution::PullRequest { url, goal } => {
@@ -368,6 +383,9 @@ impl<'a> Account<'a> {
                     }
                     crate::run::Resolution::ArchitectureReview { reason, .. } => {
                         format!("Architecture review ended: {reason}")
+                    }
+                    crate::run::Resolution::BaseCiUnchanged { base, commit, .. } => {
+                        format!("CI-fix found nothing to change on {base} at {commit}")
                     }
                 }),
                 interrupted: false,
@@ -385,7 +403,8 @@ impl<'a> Account<'a> {
                         dispatched: None,
                     }),
                     crate::run::Resolution::PullRequest { .. }
-                    | crate::run::Resolution::NotReproduced { .. } => None,
+                    | crate::run::Resolution::NotReproduced { .. }
+                    | crate::run::Resolution::BaseCiUnchanged { .. } => None,
                 },
                 security_findings: None,
                 security_findings_waiting: false,

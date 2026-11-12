@@ -9,6 +9,7 @@ use crate::args::ReviewArgs;
 use crate::github::review::ReviewPullRequest;
 use crate::review::{Mode, PullRequestUrl, Reservation};
 
+mod admission;
 mod conflicts;
 mod delivery;
 
@@ -43,10 +44,14 @@ pub(crate) fn run(command: ReviewArgs) -> Result<String> {
             let github = GitHub::new();
             let mut selected = None;
             for pr in github.waiting_review_pull_requests(&repo, &author, None)? {
+                if !admission::eligible(&launch, &github, &pr)? {
+                    continue;
+                }
                 if let Some(held) = Reservation::take(&launch, &github, &pr)?
                     && github
                         .waiting_review_pull_requests(&repo, &author, Some(pr.issue.number))?
                         .contains(&pr)
+                    && admission::eligible(&launch, &github, &pr)?
                     && conflicts::eligible(&launch, &github, &pr, &command.flags, &config)?
                 {
                     selected = Some((pr, Some(held)));
@@ -226,13 +231,15 @@ impl ReviewProcess {
             let github = GitHub::new();
             // Validate before reserving, so an ineligible explicit PR changes
             // no label. Capture again after reservation for the actual run.
-            github.review_pull_request(pr)?;
+            let snapshot = github.review_pull_request(pr)?;
+            notification.pull_request(pr, &snapshot.title);
             let _reservation = match reservation {
                 Some(held) => held,
                 None => Reservation::take(&launch, &github, pr)?
                     .context("pull request is already reserved or labelled in-progress")?,
             };
             let snapshot = github.review_pull_request(pr)?;
+            notification.pull_request(pr, &snapshot.title);
             logs::issue_branch(Some(&snapshot.branch));
             logs::pull_request(&pr.url);
             progress::step(format_args!("working on pull request {}", pr.url));
@@ -690,8 +697,8 @@ fn unchanged(github: &GitHub, pr: &PullRequestUrl, snapshot: &ReviewPullRequest)
     Ok(())
 }
 
-/// Delivery may report a moved head, but never publish to a changed base,
-/// branch or an ineligible pull request.
+/// Delivery may report a moved head and the Base branch tip may advance,
+/// but never publish to changed branch names or an ineligible pull request.
 fn compatible(
     github: &GitHub,
     pr: &PullRequestUrl,
@@ -699,9 +706,7 @@ fn compatible(
 ) -> Result<ReviewPullRequest> {
     let current = github.review_pull_request(pr)?;
     ensure!(
-        current.base_head == snapshot.base_head
-            && current.base == snapshot.base
-            && current.branch == snapshot.branch,
+        current.base == snapshot.base && current.branch == snapshot.branch,
         "pull request changed during Review run"
     );
     Ok(current)

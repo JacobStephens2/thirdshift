@@ -66,6 +66,53 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Needs you Review and Triage headers prefer PR links and keep issue and Command fallbacks', async t => {
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const paths = [1, 2, 3, 4, 5].map(number => join(directory, `${number}-fixture.command.json`));
+  const originals = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const base = JSON.parse(originals[0]);
+  const cases = [
+    ['Review run', null, 301, '/pull/301'],
+    ['Review run', 302, 402, '/pull/402'],
+    ['Triage run', 303, null, '/issues/303'],
+    ['Triage run', 304, 404, '/pull/404'],
+    ['Triage run', null, null, null],
+  ];
+  try {
+    for (const [index, [kind, issue, pr]] of cases.entries()) {
+      await replaceRecord(paths[index], JSON.stringify({ ...base, kind,
+        name: `target-fixture-${index}`, tickets: [], cause: `Target failure ${index}`,
+        issue: issue ? { number: issue, url: `https://github.com/acme/widgets/issues/${issue}`, title: 'Investigate cache misses' } : null,
+        pull_request: pr ? `https://github.com/acme/widgets/pull/${pr}` : null,
+      }));
+    }
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const page = await pageFor(t, { viewport });
+      await page.route('https://github.com/**', route => route.fulfill({ body: 'GitHub target' }));
+      for (const section of ['overview', 'needs-you']) {
+        for (const [index, [, issue, pr, suffix]] of cases.entries()) {
+          await page.goto(`${origin}/?section=${section}`);
+          const head = page.locator(`#inbox .command[data-command*="${index + 1}-fixture.command.json"] > .row-head`);
+          if (!suffix) {
+            await head.getByText('target-fixture-4', { exact: true }).waitFor();
+            assert.equal(await head.getByRole('link').count(), 0);
+            continue;
+          }
+          const url = `https://github.com/acme/widgets${suffix}`;
+          const link = head.locator(`.subject > a[href="${url}"]`);
+          await link.waitFor({ state: 'visible' });
+          assert.equal(await link.textContent(), `acme/widgets#${pr ?? issue}`);
+          if (pr && issue) assert.equal(await head.locator(`a[href$="/issues/${issue}"]`).count(), 0);
+          await link.click();
+          await page.waitForURL(url);
+        }
+      }
+    }
+  } finally {
+    await Promise.all(paths.map((path, index) => replaceRecord(path, originals[index])));
+  }
+});
+
 test('Ticket progress stays visible with stage and health, updates, and follows a dispatched Spec', { skip: process.platform !== 'linux' }, async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const original = await readFile(path, 'utf8');

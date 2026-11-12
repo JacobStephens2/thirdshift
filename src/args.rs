@@ -108,6 +108,7 @@ pub enum Command {
     },
     ConsoleToken(crate::console::tokens::Action),
     ConsoleFleet(crate::console::fleet::Action),
+    ConsoleReport(crate::console::report::Action),
     ConsoleScopes(crate::console::Scopes),
     ConsoleWhoami {
         json: bool,
@@ -210,9 +211,68 @@ pub enum Command {
 pub struct MetricsArgs {
     pub command: Option<String>,
     pub json: bool,
+    pub window: Option<MetricsWindow>,
+    pub grain: Option<MetricsGrain>,
     pub from: Option<chrono::NaiveDate>,
     pub through: Option<chrono::NaiveDate>,
     pub repositories: Vec<String>,
+    pub kinds: Vec<String>,
+    pub harnesses: Vec<String>,
+    pub models: Vec<String>,
+    pub versions: Vec<String>,
+    pub accounts: Vec<String>,
+    /// `--fleet`: merge every Fleet machine's trends with this machine's.
+    pub fleet: bool,
+    /// `--machine <name>`: one Fleet machine's trends, or this machine's.
+    pub machine: Option<String>,
+    /// `--push [<destination>]`: send this machine's trends to its report
+    /// destinations, or the one named.
+    pub push: bool,
+    /// The one report destination `--push` names, if it names one.
+    pub push_to: Option<String>,
+}
+
+/// A `metrics --window` preset: its length, ending today, and its grain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetricsWindow {
+    Days7,
+    Days30,
+    Weeks12,
+    All,
+}
+
+impl MetricsWindow {
+    pub const NAMES: [(&'static str, Self); 4] = [
+        ("7d", Self::Days7),
+        ("30d", Self::Days30),
+        ("12w", Self::Weeks12),
+        ("all", Self::All),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(_, window)| *window == self)
+            .map(|(name, _)| *name)
+            .expect("every window is named")
+    }
+}
+
+/// The span of one `metrics` bucket: a UTC day, or a week from Monday.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MetricsGrain {
+    Day,
+    #[default]
+    Week,
+}
+
+impl MetricsGrain {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Week => "week",
+        }
+    }
 }
 
 /// The flag that stops an Architect run once its plan is published and
@@ -491,6 +551,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("console") => {
             if args.get(1).is_some_and(|action| action == "fleet") {
                 return crate::console::fleet::Action::parse(&args[2..]).map(Command::ConsoleFleet);
+            }
+            if args.get(1).is_some_and(|action| action == "report") {
+                return crate::console::report::Action::parse(&args[2..])
+                    .map(Command::ConsoleReport);
             }
             if args.get(1).is_some_and(|action| action == "scopes") {
                 return crate::console::Scopes::parse(&args[2..]).map(Command::ConsoleScopes);
@@ -972,23 +1036,45 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {
     use chrono::Datelike;
-    let usage = "usage: thirdshift metrics [<command>] [--json] [--from <Monday>] [--through <Monday>] [--repo <owner/repository>]";
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--fleet | --machine <name> | --push [<destination>]] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
     let mut asked = MetricsArgs::default();
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             "--json" if !asked.json => asked.json = true,
+            "--fleet" if !asked.fleet => asked.fleet = true,
+            "--push" if !asked.push => asked.push = true,
+            "--machine" => {
+                let name = words.next().context("--machine needs a Fleet name")?;
+                crate::config::console::fleet::validate_name(name)?;
+                anyhow::ensure!(asked.machine.is_none(), "repeated argument: --machine");
+                asked.machine = Some(name.clone());
+            }
+            "--window" => {
+                let value = words.next().context(usage)?;
+                let window = MetricsWindow::NAMES
+                    .iter()
+                    .find(|(name, _)| name == value)
+                    .map(|(_, window)| *window)
+                    .context("--window needs 7d, 30d, 12w or all")?;
+                anyhow::ensure!(asked.window.is_none(), "repeated argument: --window");
+                asked.window = Some(window);
+            }
+            "--grain" => {
+                let grain = match words.next().context(usage)?.as_str() {
+                    "day" => MetricsGrain::Day,
+                    "week" => MetricsGrain::Week,
+                    _ => bail!("--grain needs day or week"),
+                };
+                anyhow::ensure!(asked.grain.is_none(), "repeated argument: --grain");
+                asked.grain = Some(grain);
+            }
             "--from" | "--through" => {
                 let value = words.next().context(usage)?;
-                let date =
-                    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").with_context(|| {
-                        format!("{word} needs a Monday week-start date (YYYY-MM-DD)")
-                    })?;
-                anyhow::ensure!(
-                    date.format("%Y-%m-%d").to_string() == *value
-                        && date.weekday() == chrono::Weekday::Mon,
-                    "{word} needs a Monday week-start date (YYYY-MM-DD)"
-                );
+                let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                    .ok()
+                    .filter(|date| date.format("%Y-%m-%d").to_string() == *value)
+                    .with_context(|| format!("{word} needs a date (YYYY-MM-DD)"))?;
                 let slot = if word == "--from" {
                     &mut asked.from
                 } else {
@@ -1011,10 +1097,46 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
                 );
                 asked.repositories.push(value.clone());
             }
+            "--kind" | "--harness" | "--model" | "--version" | "--account" => {
+                let value = words.next().context(usage)?;
+                anyhow::ensure!(!value.trim().is_empty(), "{word} needs a value");
+                match word.as_str() {
+                    "--kind" => &mut asked.kinds,
+                    "--harness" => &mut asked.harnesses,
+                    "--model" => &mut asked.models,
+                    "--version" => &mut asked.versions,
+                    _ => &mut asked.accounts,
+                }
+                .push(value.clone());
+            }
             word if !word.starts_with('-') && asked.command.is_none() => {
                 asked.command = Some(word.into())
             }
             _ => bail!(usage),
+        }
+    }
+    if asked.push {
+        anyhow::ensure!(
+            !asked.fleet && asked.machine.is_none() && !asked.json,
+            "--push sends this machine's own trends; give no --fleet, --machine or --json"
+        );
+        // With --push, the one name given is the report destination.
+        if let Some(name) = asked.command.take() {
+            crate::config::console::fleet::validate_name(&name)?;
+            asked.push_to = Some(name);
+        }
+    }
+    anyhow::ensure!(
+        asked.window.is_none()
+            || (asked.grain.is_none() && asked.from.is_none() && asked.through.is_none()),
+        "--window sets its own grain and dates; give --window or --grain, --from and --through"
+    );
+    if asked.grain.unwrap_or_default() == MetricsGrain::Week {
+        for (flag, date) in [("--from", asked.from), ("--through", asked.through)] {
+            anyhow::ensure!(
+                date.is_none_or(|date| date.weekday() == chrono::Weekday::Mon),
+                "{flag} needs a Monday week-start date (YYYY-MM-DD) unless --grain day"
+            );
         }
     }
     anyhow::ensure!(
@@ -1026,8 +1148,25 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     );
     anyhow::ensure!(
         asked.command.is_none()
-            || (asked.from.is_none() && asked.through.is_none() && asked.repositories.is_empty()),
-        "week and repository filters apply only to metrics trends"
+            || (asked.window.is_none()
+                && asked.grain.is_none()
+                && asked.from.is_none()
+                && asked.through.is_none()
+                && asked.repositories.is_empty()
+                && asked.kinds.is_empty()
+                && asked.harnesses.is_empty()
+                && asked.models.is_empty()
+                && asked.versions.is_empty()
+                && asked.accounts.is_empty()),
+        "window and filters apply only to metrics trends"
+    );
+    anyhow::ensure!(
+        !(asked.fleet && asked.machine.is_some()),
+        "give --fleet or --machine, not both"
+    );
+    anyhow::ensure!(
+        asked.command.is_none() || !(asked.fleet || asked.machine.is_some()),
+        "--fleet and --machine apply only to metrics trends; use show <command> --machine <name>"
     );
     Ok(asked)
 }

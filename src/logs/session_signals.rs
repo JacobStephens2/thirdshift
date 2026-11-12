@@ -36,6 +36,9 @@ pub(crate) struct ModelTokens {
 pub(crate) struct SessionSignals {
     pub harness: Option<String>,
     pub harness_version: Option<String>,
+    /// The `thirdshift` release that recorded the trace: its OTLP `service.version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_version: Option<String>,
     pub signals: Signals,
 }
 
@@ -131,6 +134,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     };
     let mut harness = None;
     let mut harness_version = None;
+    let mut service_version = None;
     let mut directory = None;
     let mut events = Vec::new();
     let mut work_aliases = BTreeMap::new();
@@ -142,6 +146,9 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                     text(&resource.attributes, "thirdshift.harness.version").or(harness_version);
                 directory =
                     text(&resource.attributes, "thirdshift.harness.directory").or(directory);
+                // The release that began the trace, not one that amended it later.
+                service_version =
+                    service_version.or_else(|| text(&resource.attributes, "service.version"));
             }
             for record in resource
                 .scope_logs
@@ -244,6 +251,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     Ok(Some(SessionSignals {
         harness,
         harness_version,
+        service_version,
         signals,
     }))
 }

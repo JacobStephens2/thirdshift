@@ -54,6 +54,9 @@ fn restriction(key: &str) -> Option<&'static str> {
         "console.fleet" => {
             Some("Fleet destinations control access; use thirdshift console fleet on the machine")
         }
+        "console.report" => Some(
+            "report destinations carry this machine's metrics; use thirdshift console report on the machine",
+        ),
         _ => None,
     }
 }

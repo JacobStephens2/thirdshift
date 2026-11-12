@@ -54,7 +54,9 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
+pub(crate) use command_record::{
+    FailureCategory, Issue, TicketRecord, TicketState, experiment_rechecked,
+};
 use effects::OnMachine;
 use recording::Record;
 
@@ -218,7 +220,11 @@ pub enum Work<'a> {
     ScoringRun(&'a Repo),
     ReviewRun(&'a Repo),
     FixRun(&'a Repo),
-    TriageRun(&'a Repo),
+    /// Triage on a Report, or on the retained explicit or Pass-selected issue.
+    TriageRun {
+        repo: &'a Repo,
+        issue: Option<&'a IssueUrl>,
+    },
     Experiment(&'a Repo),
     /// A Custom process, named by its file.
     Process {
@@ -650,7 +656,7 @@ impl<'a> Work<'a> {
             Self::ScoringRun(_) => "scoring-run",
             Self::ReviewRun(_) => "review-run",
             Self::FixRun(_) => "fix-run",
-            Self::TriageRun(_) => "triage-run",
+            Self::TriageRun { .. } => "triage-run",
             Self::Experiment(_) => "experiment",
             Self::Process { name, .. } => return Identity::custom(name, None),
         };
@@ -666,7 +672,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::ReviewRun(_) => Some(Stage::CodeReview),
             Work::FixRun(_) => Some(Stage::PullRequest),
-            Work::TriageRun(_) => Some(Stage::Triage),
+            Work::TriageRun { .. } => Some(Stage::Triage),
             Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
@@ -683,7 +689,7 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(repo)
             | Work::ReviewRun(repo)
             | Work::FixRun(repo)
-            | Work::TriageRun(repo)
+            | Work::TriageRun { repo, .. }
             | Work::Experiment(repo)
             | Work::Process { repo, .. } => repo.clone(),
         }
@@ -712,7 +718,7 @@ impl<'a> Work<'a> {
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::ReviewRun(_) => Kind::ReviewRun,
             Work::FixRun(_) => Kind::FixRun,
-            Work::TriageRun(_) => Kind::TriageRun,
+            Work::TriageRun { .. } => Kind::TriageRun,
             Work::Experiment(_) => Kind::Experiment,
             Work::Process { .. } => Kind::Process,
         }
@@ -721,7 +727,7 @@ impl<'a> Work<'a> {
     /// Its issue, if it has one.
     pub(crate) fn issue_url(self) -> Option<&'a IssueUrl> {
         match self {
-            Work::Starting { issue, .. } => issue,
+            Work::Starting { issue, .. } | Work::TriageRun { issue, .. } => issue,
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
             Work::ArchitectRun(_)
@@ -729,7 +735,6 @@ impl<'a> Work<'a> {
             | Work::ScoringRun(_)
             | Work::ReviewRun(_)
             | Work::FixRun(_)
-            | Work::TriageRun(_)
             | Work::Experiment(_)
             | Work::Process { .. } => None,
         }

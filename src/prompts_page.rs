@@ -67,9 +67,10 @@ const PROCESS: &str = "<process>";
 const STEP: &str = "<step>";
 const SKILL_NAME: &str = "<skill>";
 const SKILL_PATH: &str = "<skill path>";
+const CATEGORY: &str = "<repository category>";
 const EARLIER_STEP: &str = "<earlier step>";
 const EARLIER_RESULT: &str = "<earlier step result>";
-const PLACEHOLDERS: [&str; 26] = [
+const PLACEHOLDERS: [&str; 27] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -94,6 +95,7 @@ const PLACEHOLDERS: [&str; 26] = [
     STEP,
     SKILL_NAME,
     SKILL_PATH,
+    CATEGORY,
     EARLIER_STEP,
     EARLIER_RESULT,
 ];
@@ -279,7 +281,12 @@ fn prompts() -> Vec<Prompt> {
             title: "Existing-issue Triage run",
             when: "Investigates one existing open issue against the selected Base branch. thirdshift supplies the issue file, owns the reservation and Claim, and publishes the recommendation in place unless --recommend-only is given.",
             sender: TriageRun,
-            text: prompt::triage_issue(std::path::Path::new(SKILL_PATH), &issue, false),
+            text: prompt::triage_issue(
+                std::path::Path::new(SKILL_PATH),
+                &issue,
+                &[CATEGORY.into()],
+                false,
+            ),
         },
         Prompt {
             id: "prompt-security-review",

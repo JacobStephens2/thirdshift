@@ -77,30 +77,36 @@ pub(crate) struct State {
 pub(crate) type Calibration = BTreeMap<Criterion, State>;
 
 pub(super) fn measure(weeks: &[Week]) -> Calibration {
-    let mut paired: Vec<_> = weeks
-        .iter()
-        .flat_map(|week| &week.sample)
-        .filter_map(|pr| Some((pr, pr.mine.as_ref()?, pr.assessment.as_ref()?)))
-        .collect();
-    paired.sort_by_key(|(pr, mine, _)| (std::cmp::Reverse(mine.scored_at), &pr.url));
+    measure_pairs(weeks.iter().flat_map(|week| &week.sample).filter_map(|pr| {
+        Some((
+            pr.url.as_str(),
+            pr.mine.as_ref()?,
+            pr.assessment.as_ref()?.scores.as_slice(),
+        ))
+    }))
+}
+
+/// Each pair is a pull request's URL, your Scores and the model's Scores.
+pub(super) fn measure_pairs<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a HumanScores, &'a [Score])>,
+) -> Calibration {
+    let mut paired: Vec<_> = pairs.collect();
+    paired.sort_by_key(|(url, mine, _)| (std::cmp::Reverse(mine.scored_at), *url));
     Criterion::ALL
         .into_iter()
         .map(|criterion| {
             let mut seen = BTreeSet::new();
             let agreements: Vec<_> = paired
                 .iter()
-                .filter_map(|(pr, mine, model)| {
-                    if !seen.insert(&pr.url) {
+                .filter_map(|(url, mine, model)| {
+                    if !seen.insert(*url) {
                         return None;
                     }
                     let human = mine
                         .scores
                         .iter()
                         .find(|score| score.criterion == criterion)?;
-                    let model = model
-                        .scores
-                        .iter()
-                        .find(|score| score.criterion == criterion)?;
+                    let model = model.iter().find(|score| score.criterion == criterion)?;
                     Some(human.passed == model.passed)
                 })
                 .take(20)

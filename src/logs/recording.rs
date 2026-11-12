@@ -316,7 +316,7 @@ impl<O: Outside> Record<O> {
                 | Work::ScoringRun(_)
                 | Work::ReviewRun(_)
                 | Work::FixRun(_)
-                | Work::TriageRun(_)
+                | Work::TriageRun { .. }
                 | Work::Experiment(_) => None,
             },
         };
