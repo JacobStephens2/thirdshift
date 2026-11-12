@@ -129,6 +129,16 @@ pub(crate) struct Fleet {
     pub(crate) where_runs_failed: WhereRunsFailed,
 }
 
+impl Fleet {
+    /// The same report, with each machine's diagnostics kept on its own line.
+    pub(super) fn text(&self) -> Result<Value> {
+        let mut report = serde_json::to_value(self)?;
+        report["machines"] =
+            serde_json::to_value(self.machines.iter().map(Machine::text).collect::<Vec<_>>())?;
+        Ok(report)
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct Machine {
     pub(crate) name: String,
@@ -146,6 +156,37 @@ pub(crate) struct Machine {
 }
 
 impl Machine {
+    fn text(&self) -> String {
+        let mut line = format!(
+            "{}{} · status: {}",
+            self.name,
+            if self.local { " (this machine)" } else { "" },
+            self.status
+        );
+        for (label, at) in [("last_seen", self.last_seen), ("pushed_at", self.pushed_at)] {
+            if let Some(at) = at {
+                line.push_str(&format!(" · {label}: {}", at.to_rfc3339()));
+            }
+        }
+        if let Some(address) = &self.address {
+            line.push_str(&format!(" · address: {address}"));
+        }
+        if !self.unavailable_accounts.is_empty() {
+            line.push_str(&format!(
+                " · unreadable accounts: {}",
+                self.unavailable_accounts
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(error) = &self.error {
+            line.push_str(&format!(" · error: {error}"));
+        }
+        line
+    }
+
     /// Show `saved` in place of a live read: reported when the machine
     /// pushed it, else cached.
     fn stands_in(&mut self, saved: &Saved) {

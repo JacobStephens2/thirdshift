@@ -888,9 +888,12 @@ fn fleet_metrics_keep_unreadable_accounts_per_machine() {
         let text = metrics(local_home.path(), &["--fleet"]);
         assert!(text.status.success(), "{text:?}");
         let text = String::from_utf8_lossy(&text.stdout);
-        assert!(text.contains("unavailable_accounts:"), "{text}");
-        assert!(text.contains("thirdshift-missing-a"), "{text}");
-        assert!(text.contains("thirdshift-missing-b"), "{text}");
+        let line = text.lines().find(|line| line.contains("remote")).unwrap();
+        assert!(line.contains(&format!("status: {status}")), "{text}");
+        assert!(
+            line.contains("unreadable accounts: thirdshift-missing-a, thirdshift-missing-b"),
+            "{text}"
+        );
         let html = local.get("/metrics").text().unwrap();
         let machines = html
             .split("class=\"metrics-machines\"")

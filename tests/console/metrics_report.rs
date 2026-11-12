@@ -262,9 +262,12 @@ fn metrics_push_shows_the_worker_read_only_on_the_receiving_fleet() {
     let text = thirdshift(hub_home.path(), &["metrics", "--machine", HOLDER]);
     assert!(text.status.success(), "{text:?}");
     let text = String::from_utf8_lossy(&text.stdout);
-    assert!(text.contains("unavailable_accounts:"), "{text}");
-    assert!(text.contains("thirdshift-missing-a"), "{text}");
-    assert!(text.contains("thirdshift-missing-b"), "{text}");
+    assert!(
+        text.lines().any(|line| line.contains(HOLDER)
+            && line.contains("status: reported")
+            && line.contains("unreadable accounts: thirdshift-missing-a, thirdshift-missing-b")),
+        "{text}"
+    );
 
     // The page shows it read-only with its age, its failures without links.
     for route in [
