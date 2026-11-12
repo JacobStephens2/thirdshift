@@ -321,7 +321,9 @@ pub const REVIEW_REPORTS_DIRECTORY: &str = "<review reports directory>";
 pub const REVIEW_REPORTS: &str = "Write the reviewers' reports, with each axis's final files-read list, \
     to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
     Write `<review reports directory>/summary.json` beside them with the finding counts, \
-    following the `thirdshift-code-review` skill's summary format.";
+    following the `thirdshift-code-review` skill's summary format. Each count is the number of actionable findings \
+    in that axis's report; use `0` when no change or human follow-up is needed. \
+    Exclude declined or accepted observations that require no change.";
 
 /// The shared review instruction, with each Session prompt's variations.
 enum ReviewInstruction {
@@ -1064,6 +1066,35 @@ pub fn scoring_grader() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_reports_count_only_actionable_findings() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let pr =
+            crate::review::PullRequestUrl::parse("https://github.com/acme/widgets/pull/8").unwrap();
+        for prompt in [
+            fresh(&issue, "main", "issue-7"),
+            code_review(&issue, "main", "issue-7"),
+            pull_request_review(
+                &pr,
+                "main",
+                crate::review::Mode::RecommendOnly,
+                &[],
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+            ),
+        ] {
+            for rule in [
+                "number of actionable findings",
+                "`0` when no change or human follow-up is needed",
+                "Exclude declined or accepted observations that require no change",
+            ] {
+                assert!(prompt.contains(rule), "missing {rule:?}:\n{prompt}");
+            }
+        }
+    }
 
     /// Refs the code-review skill and the prompt's own git commands treat as
     /// the Base branch fixed point. Repair prompts name a commit, not a base.
