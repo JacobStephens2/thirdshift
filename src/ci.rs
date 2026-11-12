@@ -439,9 +439,10 @@ fn request_reruns<'a>(
     })
 }
 
-/// Wait up to the grace period for the new attempts of `rerun_checks` to be
-/// listed on `sha`, then watch CI there to the end: `None`, told in a
-/// progress line, if none appeared.
+/// Wait up to the grace period for a new attempt in each requested workflow
+/// run on `sha`, then watch CI there to the end. Dependent jobs may get their
+/// new attempts later. Return `None`, told in a progress line, if a workflow
+/// run never starts.
 fn watch_new_attempts(
     outside: &mut impl Outside,
     sha: &str,
@@ -481,16 +482,35 @@ impl RerunChecks<'_> {
     }
 
     fn new_attempts_listed(&self, checks: &[Check]) -> bool {
-        self.checks
-            .iter()
-            .filter(|check| self.is_requested(check))
-            .all(|check| self.check_is_listed(check, checks))
+        self.requested.iter().all(|run| {
+            self.checks.iter().any(|check| {
+                scoped_workflow_run(check) == Some(*run) && self.check_is_listed(check, checks)
+            })
+        })
     }
 
     fn listed_in(&self, checks: &[Check]) -> bool {
-        self.checks
-            .iter()
-            .all(|check| self.check_is_listed(check, checks))
+        self.checks.iter().all(|expected| {
+            self.check_is_listed(expected, checks)
+                || checks.iter().any(|check| {
+                    check.name == expected.name
+                        && scoped_workflow_run(check) == scoped_workflow_run(expected)
+                        && self.awaiting_attempt(check)
+                })
+        })
+    }
+
+    /// A requested failed job's old attempt remains pending until GitHub
+    /// lists its replacement, even after its dependencies have finished.
+    fn awaiting_attempt(&self, check: &Check) -> bool {
+        self.is_requested(check)
+            && check
+                .job
+                .is_some_and(|job| self.previous_attempt.contains(&job.check_run))
+            && self.checks.iter().any(|expected| {
+                check.name == expected.name
+                    && scoped_workflow_run(check) == scoped_workflow_run(expected)
+            })
     }
 
     fn check_is_listed(&self, expected: &Check, checks: &[Check]) -> bool {
@@ -532,7 +552,13 @@ fn watch_to_end(
             !checks.is_empty() && rerun_checks.is_none_or(|rerun| rerun.listed_in(&checks)),
             "CI checks disappeared on {short}; cannot verify CI"
         );
-        let pending = count(&checks, Reading::Pending);
+        let pending = checks
+            .iter()
+            .filter(|check| {
+                reading(check) == Reading::Pending
+                    || rerun_checks.is_some_and(|rerun| rerun.awaiting_attempt(check))
+            })
+            .count();
         if pending == 0 {
             return Ok(Some(checks));
         }
@@ -895,13 +921,6 @@ fn is_failed(check: &Check) -> bool {
     reading(check) == Reading::Failed
 }
 
-fn count(checks: &[Check], wanted: Reading) -> usize {
-    checks
-        .iter()
-        .filter(|check| reading(check) == wanted)
-        .count()
-}
-
 #[cfg(test)]
 mod in_memory {
     use std::time::Duration;
@@ -1103,6 +1122,58 @@ mod tests {
 
     const HEAD: &str = "abcdef0123456789";
     const BASE: &str = "0123456789abcdef";
+
+    #[test]
+    fn a_check_rerun_waits_for_a_dependent_job_beyond_the_start_grace() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let before = vec![job(red("editors"), 11, 900), job(red("verified"), 12, 900)];
+        let running = vec![
+            job(pending("editors"), 21, 900),
+            job(red("verified"), 12, 900),
+        ];
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                before.clone(),
+                running.clone(),
+                running.clone(),
+                running.clone(),
+                running.clone(),
+                running,
+                vec![
+                    job(green("editors"), 21, 900),
+                    job(red("verified"), 12, 900),
+                ],
+                vec![
+                    job(green("editors"), 21, 900),
+                    job(pending("verified"), 22, 900),
+                ],
+                vec![
+                    job(green("editors"), 21, 900),
+                    job(green("verified"), 22, 900),
+                ],
+            ],
+        );
+        let mut watch = Watch::new(&issue);
+        watch.after_repair(
+            HEAD.to_string(),
+            FailedChecks {
+                own: before,
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            },
+        );
+
+        let ci = watch.assess_through(&mut github, HEAD, None);
+
+        assert!(
+            matches!(ci, Ok(Ci::Passed)),
+            "the dependent job's delayed attempt must not abandon the re-run: {:?}; steps: {:?}",
+            ci.err(),
+            github.steps
+        );
+        assert_eq!(github.reruns, [900]);
+    }
 
     #[test]
     fn spec_regression_queued_replacement_workflow_outlives_check_rerun_grace() {
@@ -2615,8 +2686,8 @@ mod tests {
 
         let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
 
-        // Had the watch not waited for lint's old check run to go, it would
-        // have watched the listing after as the new attempt, still running.
+        // The watch starts with test's new attempt and still waits for
+        // lint's new result, classifying its failure as inherited.
         let failed = failed_of(ci.expect("a re-run to watch"));
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["lint: https://head/lint"]);
@@ -2625,6 +2696,7 @@ mod tests {
             github.steps,
             [
                 "re-running the failed checks on abcdef0: test",
+                "CI on abcdef0: 2 still running out of 2 checks listed so far",
                 "CI failed on abcdef0: lint",
             ]
         );

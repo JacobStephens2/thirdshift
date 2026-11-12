@@ -1046,6 +1046,60 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
 }
 
 #[test]
+fn a_check_re_run_watches_dependent_jobs_to_their_new_result() {
+    for conclusion in ["success", "failure"] {
+        let scenario = Scenario::new();
+        // verified needs editors. Only editors has a new attempt during
+        // the start grace; verified's appears after editors passes.
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(&format!(
+                "[{}, {}]",
+                actions_failure(
+                    "editors",
+                    900,
+                    1,
+                    r#"{"conclusion": "success", "pending_polls": 6}"#
+                ),
+                actions_failure(
+                    "verified",
+                    900,
+                    2,
+                    &format!(
+                        r#"{{"conclusion": "{conclusion}", "stale_polls": 8, "pending_polls": 1}}"#
+                    )
+                )
+            )),
+            scoped_runs_on("HEAD", &[900])
+        ));
+        scenario.agent_does_in_session(2, "true\n");
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        if conclusion == "success" {
+            assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+            assert_one_repair(&scenario, &result);
+            assert_eq!(rerun_requests(&scenario), ["900"]);
+            assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+        } else {
+            let watched = assert_declined_ci_fix(&scenario, &result, &["900"]);
+            assert!(
+                result
+                    .stderr
+                    .contains(&format!("CI failed on {}: verified\n", &watched[..7])),
+                "stderr: {}",
+                result.stderr
+            );
+        }
+        assert!(
+            !result.stderr.contains("no re-run appeared"),
+            "stderr: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn a_check_re_run_that_never_appears_is_a_declined_ci_fix() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
