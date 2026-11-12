@@ -277,7 +277,10 @@ fn collect(
     let Some(bucket) = scope.window.bucket(command) else {
         return;
     };
-    if !scope.window.shows(bucket) || !scope.filters.admit(command, account) {
+    if !scope.window.shows(bucket)
+        || !scope.filters.admit(command, account)
+        || super::outcomes::idle_or_pass_through(command)
+    {
         return;
     }
     let bucket = Some(bucket.to_string());
@@ -300,8 +303,13 @@ fn collect(
     };
     let row = weeks.entry(group.clone()).or_default();
     row.runs += 1;
-    if let Some(outcome) = &record.outcome {
-        *row.outcomes.entry(outcome.clone()).or_default() += 1;
+    // A crashed record has an outcome of its own; only a live one has none yet.
+    let outcome = match command.state {
+        "died" => Some("died"),
+        _ => record.outcome.as_deref(),
+    };
+    if let Some(outcome) = outcome {
+        *row.outcomes.entry(outcome.to_owned()).or_default() += 1;
     } else {
         row.missing_outcomes += 1;
     }

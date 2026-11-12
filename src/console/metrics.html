@@ -10,11 +10,11 @@
 <label>Grain <select name="grain"><option value=""{% if form.grain.is_empty() %} selected{% endif %}>Default</option><option value="day"{% if form.grain == "day" %} selected{% endif %}>day</option><option value="week"{% if form.grain == "week" %} selected{% endif %}>week</option></select></label>
 <label>From <input type="date" name="from" value="{{ form.from }}"></label>
 <label>Through <input type="date" name="through" value="{{ form.through }}"></label>
-<label>Repository <input name="repo" value="{{ form.repo }}" placeholder="owner/repository"></label>
-<label>Kind <select name="kind"><option value=""{% if form.kind.is_empty() %} selected{% endif %}>Any</option>{% for kind in kinds %}<option{% if form.kind == **kind %} selected{% endif %}>{{ kind }}</option>{% endfor %}</select></label>
-<label>Harness <input name="harness" value="{{ form.harness }}"></label>
-<label>Model <input name="model" value="{{ form.model }}"></label>
-<label>Account <input name="account" value="{{ form.account }}" placeholder="OS account"></label>
+{% for value in form.repo %}<label>Repository <input name="repo" value="{{ value }}" placeholder="owner/repository"></label>{% endfor %}
+{% for value in form.kind %}<label>Kind <select name="kind"><option value=""{% if value.is_empty() %} selected{% endif %}>Any</option>{% for kind in kinds %}<option{% if value == kind %} selected{% endif %}>{{ kind }}</option>{% endfor %}</select></label>{% endfor %}
+{% for value in form.harness %}<label>Harness <input name="harness" value="{{ value }}"></label>{% endfor %}
+{% for value in form.model %}<label>Model <input name="model" value="{{ value }}"></label>{% endfor %}
+{% for value in form.account %}<label>Account <input name="account" value="{{ value }}" placeholder="OS account"></label>{% endfor %}
 <button>Show</button></form>
 <p>Window: {% if let Some(preset) = trends.window.preset %}{{ preset }}, {% endif %}{{ trends.window.grain }} buckets{% if let Some(from) = trends.window.from %} from {{ from }}{% endif %}{% if let Some(through) = trends.window.through %} through {{ through }}{% endif %}. <code>thirdshift metrics{% if let Some(preset) = trends.window.preset %} --window {{ preset }}{% else %} --grain {{ trends.window.grain }}{% if let Some(from) = trends.window.from %} --from {{ from }}{% endif %}{% if let Some(through) = trends.window.through %} --through {{ through }}{% endif %}{% endif %}{% for repo in trends.filters.repo %} --repo {{ repo }}{% endfor %}{% for kind in trends.filters.kind %} --kind '{{ kind }}'{% endfor %}{% for harness in trends.filters.harness %} --harness {{ harness }}{% endfor %}{% for model in trends.filters.model %} --model {{ model }}{% endfor %}{% for account in trends.filters.account %} --account {{ account }}{% endfor %} --json</code></p>
 {% if !trends.unavailable_accounts.is_empty() %}<p>Unreadable OS accounts: {% for account in trends.unavailable_accounts %}{% if !loop.first %}, {% endif %}{{ account }}{% endfor %}</p>{% endif %}

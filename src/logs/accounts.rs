@@ -141,6 +141,7 @@ pub(crate) fn discover(config: &UserConfig) -> Sources {
 
 /// The serving OS account's name, as `account` filters and tags name it.
 pub(crate) fn serving_name() -> Option<String> {
+    // SAFETY: geteuid takes no arguments, cannot fail and touches no memory.
     let uid = unsafe { libc::geteuid() };
     local_accounts()
         .into_iter()

@@ -18,7 +18,7 @@ use crate::args::MetricsArgs;
 use crate::config::UserConfig;
 
 use bug_origins::ConfirmedCounts;
-pub(crate) use outcomes::{Bucket, Class, Comparison};
+pub(crate) use outcomes::{Bucket, COUNTED, Class, Comparison};
 pub(crate) use scope::{Filters, Window};
 pub(crate) use trends::Row;
 

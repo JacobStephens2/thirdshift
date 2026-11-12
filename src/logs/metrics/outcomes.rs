@@ -58,11 +58,18 @@ impl Class {
 
 /// The class and exact sub-outcome of one Command, or `None` when it is out
 /// of every denominator. `stopped` says a Stop was asked of it or its owner.
+/// A Pickup run that dispatched work, or a skipped Pass: neither did work of
+/// its own, so no trend counts it. A Pickup run's dispatch is counted instead.
+pub(super) fn idle_or_pass_through(command: &Command) -> bool {
+    command.record.outcome.as_deref() == Some("skipped")
+        || (command.record.kind == "Pickup run"
+            && !(command.dispatched.is_empty() && command.children.is_empty()))
+}
+
 fn classify(command: &Command, stopped: bool) -> Option<(Class, String)> {
     let kind = command.record.kind.as_str();
     let pickup = kind == "Pickup run";
-    if pickup && !(command.dispatched.is_empty() && command.children.is_empty()) {
-        // A pass-through: the Command it dispatched is counted instead.
+    if idle_or_pass_through(command) {
         return None;
     }
     if !pickup && !WORK.contains(&kind) {
@@ -72,7 +79,7 @@ fn classify(command: &Command, stopped: bool) -> Option<(Class, String)> {
     let class = match (command.state, outcome) {
         ("live", _) => Class::Live,
         ("died", _) => Class::Failed,
-        (_, None | Some("skipped")) => return None,
+        (_, None) => return None,
         (_, Some("paused")) => Class::Paused,
         (_, Some("interrupted")) if stopped => Class::Stopped,
         (_, Some(outcome))
@@ -372,15 +379,25 @@ fn visit(
     });
 }
 
+/// The stored kinds an outcome row can have: the work Commands, then Pickup runs.
+pub(crate) const COUNTED: [&str; 9] = [
+    WORK[0],
+    WORK[1],
+    WORK[2],
+    WORK[3],
+    WORK[4],
+    WORK[5],
+    WORK[6],
+    WORK[7],
+    "Pickup run",
+];
+
 fn kind_name(stored: &str) -> &'static str {
-    match stored {
-        "Run" => "Ticket run",
-        "Pickup run" => "Pickup run",
-        other => WORK
-            .into_iter()
-            .find(|kind| *kind == other)
-            .expect("only work kinds and Pickup runs are counted"),
-    }
+    COUNTED
+        .into_iter()
+        .find(|kind| *kind == stored)
+        .map(crate::logs::display_name)
+        .expect("only work kinds and Pickup runs are counted")
 }
 
 #[cfg(test)]

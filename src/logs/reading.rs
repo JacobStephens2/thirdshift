@@ -74,16 +74,16 @@ impl Snapshot {
         now: DateTime<Local>,
         input: &str,
     ) -> Result<Self> {
-        Self::user_capture(config, now, Some(input), false)
+        Self::user_capture(config, now, Some(input), true)
     }
 
     fn user_capture(
         config: &crate::config::UserConfig,
         now: DateTime<Local>,
         input: Option<&str>,
-        metrics: bool,
+        // Reconstruct metrics for past records that never saved theirs.
+        past_metrics: bool,
     ) -> Result<Self> {
-        let past_metrics = metrics || input.is_some();
         let mut snapshot = Self::capture_records(
             Arc::new(inventory::Native),
             &config.logs_dir,

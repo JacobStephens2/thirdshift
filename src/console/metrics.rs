@@ -10,19 +10,6 @@ use crate::args::{MetricsArgs, MetricsWindow};
 use crate::config::UserConfig;
 use crate::logs::metrics::{Class, Trends};
 
-/// Kinds the Kind filter offers: the work Commands, then Pickup runs.
-const KINDS: [&str; 9] = [
-    "Ticket run",
-    "Spec run",
-    "Base fix",
-    "Review run",
-    "Fix run",
-    "Triage run",
-    "Architect run",
-    "Security run",
-    "Pickup run",
-];
-
 #[derive(Template)]
 #[template(path = "console/metrics.html")]
 struct MetricsPage {
@@ -35,23 +22,30 @@ struct MetricsPage {
     classes: [Class; 4],
 }
 
-/// The filters as asked, to fill the form again. Each shows its first value.
+/// The filters as asked, to fill the form again. A repeated filter shows one
+/// field per value, so Show keeps them all; an unused one shows one empty field.
 #[derive(Default)]
 struct Form {
     window: String,
     grain: String,
     from: String,
     through: String,
-    repo: String,
-    kind: String,
-    harness: String,
-    model: String,
-    account: String,
+    repo: Vec<String>,
+    kind: Vec<String>,
+    harness: Vec<String>,
+    model: Vec<String>,
+    account: Vec<String>,
 }
 
 impl Form {
     fn of(asked: &MetricsArgs) -> Self {
-        let first = |values: &[String]| values.first().cloned().unwrap_or_default();
+        let fields = |values: &[String]| {
+            if values.is_empty() {
+                vec![String::new()]
+            } else {
+                values.to_vec()
+            }
+        };
         let date =
             |date: Option<chrono::NaiveDate>| date.map(|d| d.to_string()).unwrap_or_default();
         Self {
@@ -65,11 +59,11 @@ impl Form {
                 .unwrap_or_default(),
             from: date(asked.from),
             through: date(asked.through),
-            repo: first(&asked.repositories),
-            kind: first(&asked.kinds),
-            harness: first(&asked.harnesses),
-            model: first(&asked.models),
-            account: first(&asked.accounts),
+            repo: fields(&asked.repositories),
+            kind: fields(&asked.kinds),
+            harness: fields(&asked.harnesses),
+            model: fields(&asked.models),
+            account: fields(&asked.accounts),
         }
     }
 }
@@ -131,7 +125,7 @@ pub(super) async fn show(
                 trends,
                 error,
                 form: Form::of(&asked),
-                kinds: KINDS,
+                kinds: crate::logs::metrics::COUNTED.map(crate::logs::display_name),
                 windows: MetricsWindow::NAMES,
                 classes: Class::ENDED,
             }

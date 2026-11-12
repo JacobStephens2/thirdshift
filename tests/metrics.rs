@@ -1352,7 +1352,9 @@ fn absent_completion_times_and_live_metrics_stay_missing() {
         row["repairs"],
         json!({"observed": 1, "missing": 1, "sum": 0.0, "mean": 0.0})
     );
-    assert_eq!(row["missing_outcomes"], 1);
+    // Its writer is gone: a crash, not a live run with no outcome yet.
+    assert_eq!(row["missing_outcomes"], 0);
+    assert_eq!(row["outcomes"]["died"], 1);
 }
 
 #[test]
@@ -1672,4 +1674,32 @@ fn kind_harness_and_model_filters_narrow_outcomes_and_signals() {
             report["weeks"]
         );
     }
+}
+
+#[test]
+fn signal_rows_keep_died_apart_from_live_and_drop_pass_through_pickups() {
+    let scenario = Scenario::new();
+    let mut pickup = dated(1, "Pickup run", Some("merged"), 0);
+    pickup["dispatched"] = json!([dated(2, "Run", Some("merged"), 0)]);
+    write(&scenario, "1-fixture.command.json", &pickup);
+    write(
+        &scenario,
+        "3-fixture.command.json",
+        &dated(3, "Run", None, 0),
+    ); // died
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let totals: Vec<_> = report["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["session_kind"].is_null())
+        .collect();
+    assert!(
+        totals.iter().all(|row| row["kind"] != "Pickup run"),
+        "{report:#}"
+    );
+    assert!(
+        totals.iter().all(|row| row["missing_outcomes"] == 0),
+        "{report:#}"
+    );
 }

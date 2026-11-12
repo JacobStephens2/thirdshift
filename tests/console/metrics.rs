@@ -212,3 +212,20 @@ fn metrics_page_shows_outcome_stacks_and_tables_and_keeps_single_command_inspect
         assert!(!line.contains('#'), "Theme tokens only: {line}");
     }
 }
+
+#[test]
+fn metrics_form_keeps_every_repeated_filter_value() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("merged"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console
+        .get("/metrics?repo=acme/widgets&repo=acme/gadgets")
+        .text()
+        .unwrap();
+    assert!(html.contains("--repo acme/gadgets"), "{html}");
+    assert!(
+        html.contains("value=\"acme/gadgets\""),
+        "form lost the second repo: {html}"
+    );
+}
