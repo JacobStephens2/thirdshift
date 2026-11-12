@@ -4275,11 +4275,16 @@ fn within_cap_quota_wait_keeps_pre_audit_github_diagnostics_local() {
         "error": format!("GraphQL: API rate limit already exceeded {private}")
     });
     github["failing_stderr"] = json!(format!("API rate limit exceeded {private}"));
-    // Both reserves admit the Pass. GraphQL exhaustion waits within the cap;
-    // the retry exhausts REST past the cap and keeps its original diagnostic.
+    // Both reserves admit the Pass; later probes see them spent. GraphQL
+    // exhaustion waits within the cap; the retry exhausts REST past the cap
+    // and keeps its original diagnostic.
     github["rate_limits"] = json!({
         "core": {"remaining": 5000, "reset": 4102444800u64},
         "graphql": {"remaining": 5000, "reset": reset}
+    });
+    github["next_rate_limits"] = json!({
+        "core": {"remaining": 0, "reset": 4102444800u64},
+        "graphql": {"remaining": 0, "reset": reset}
     });
     scenario.write_gh_state(&github);
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);

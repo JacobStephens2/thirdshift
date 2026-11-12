@@ -3446,6 +3446,14 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
         let mut gh = scenario.gh_state();
         gh["failing"] = serde_json::json!(["api graphql"]);
         gh["failing_stderr"] = diagnostic.into();
+        if diagnostic.contains("API rate limit exceeded") {
+            // The Inbox's quota check admits its reads; the probe after the
+            // rate-limited read finds GraphQL spent.
+            gh["next_rate_limits"] = serde_json::json!({"graphql": {
+                "remaining": 0,
+                "reset": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+            }});
+        }
         scenario.write_gh_state(&gh);
         let output = scenario.run(&["status", "--all", "--json"]);
         assert_eq!(output.code, Some(0), "{}", output.stderr);
@@ -3490,7 +3498,12 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
             text.stdout
         );
         assert!(text.stdout.contains(diagnostic), "{}", text.stdout);
+        let mut gh = scenario.gh_state();
         gh["failing"] = serde_json::json!([]);
+        if let Some(gh) = gh.as_object_mut() {
+            gh.remove("rate_limits");
+            gh.remove("next_rate_limits");
+        }
         scenario.write_gh_state(&gh);
         if diagnostic.contains("API rate limit exceeded") {
             let before = scenario.gh_calls();
