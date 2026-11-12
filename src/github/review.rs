@@ -71,23 +71,24 @@ impl GitHub {
         Ok(candidates)
     }
 
-    /// Recheck admission both before reserving and while our label is held.
-    pub fn needs_fix(
+    /// Recheck admission both before reserving and while our label is held,
+    /// returning the eligible head branch from that same observation.
+    pub fn fix_candidate_branch(
         &self,
         pr: &PullRequestUrl,
         base: &str,
         author: Option<&str>,
         reserved: bool,
-    ) -> Result<bool> {
+    ) -> Result<Option<String>> {
         let node = self.gh_json(&[
             "api",
             &format!("repos/{}/pulls/{}", pr.issue.repo_slug(), pr.issue.number),
         ])?;
         if !fix_candidate(pr, &node, base, author, reserved)? {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(snapshot) = self.pr_snapshot(&pr.issue, &pr.issue.number.to_string())? else {
-            return Ok(false);
+            return Ok(None);
         };
         if snapshot.pr.state != super::PrState::Open
             || snapshot.pr.is_draft
@@ -95,14 +96,15 @@ impl GitHub {
             || snapshot.pr.base != base
             || node["head"]["sha"].as_str() != Some(&snapshot.head_commit)
         {
-            return Ok(false);
+            return Ok(None);
         }
         if snapshot.mergeable == super::Mergeable::No {
-            return Ok(true);
+            return Ok(Some(snapshot.pr.head));
         }
-        Ok(crate::ci::needs_repair(
-            &self.checks_on(&pr.issue, &snapshot.head_commit)?,
-        ))
+        Ok(
+            crate::ci::needs_repair(&self.checks_on(&pr.issue, &snapshot.head_commit)?)
+                .then_some(snapshot.pr.head),
+        )
     }
 
     pub fn review_labels(&self, pr: &PullRequestUrl) -> Result<crate::labels::Labels> {
@@ -341,17 +343,9 @@ impl GitHub {
         ])
     }
 
-    /// Closing issues are paged independently of comments. Never silently
-    /// fall back to the body when GitHub failed to supply the issue links.
-    pub fn review_input(
-        &self,
-        pr: &PullRequestUrl,
-        snapshot: &ReviewPullRequest,
-    ) -> Result<ReviewInput> {
-        let mut markdown = format!(
-            "# {}\n\n{}\n\n## Pull request body\n\n{}\n",
-            snapshot.title, pr.url, snapshot.body
-        );
+    /// Read every closing issue without fetching its contents or PR comments.
+    /// An incomplete observation must not authorize Review Pass admission.
+    pub fn closing_issues(&self, pr: &PullRequestUrl) -> Result<Vec<crate::issue::IssueUrl>> {
         let mut after = None;
         let mut issues = std::collections::BTreeSet::new();
         let mut closing_issues = Vec::new();
@@ -363,11 +357,9 @@ impl GitHub {
                 .context("closing issues have no nodes")?
             {
                 let url = node["url"].as_str().context("closing issue has no URL")?;
-                if issues.insert(url.to_owned()) {
-                    let issue = crate::issue::IssueUrl::parse(url)?;
-                    closing_issues.push(issue.clone());
-                    markdown.push_str("\n## Linked closing issue (Spec)\n\n");
-                    markdown.push_str(&self.issue_for_session(&issue)?);
+                let issue = crate::issue::IssueUrl::parse(url)?;
+                if issues.insert(issue.identity()) {
+                    closing_issues.push(issue);
                 }
             }
             let info = &page["pageInfo"];
@@ -385,6 +377,25 @@ impl GitHub {
                 "closing issues cursor did not advance"
             );
             after = Some(next.to_owned());
+        }
+        Ok(closing_issues)
+    }
+
+    /// Closing issues are paged independently of comments. Never silently
+    /// fall back to the body when GitHub failed to supply the issue links.
+    pub fn review_input(
+        &self,
+        pr: &PullRequestUrl,
+        snapshot: &ReviewPullRequest,
+    ) -> Result<ReviewInput> {
+        let mut markdown = format!(
+            "# {}\n\n{}\n\n## Pull request body\n\n{}\n",
+            snapshot.title, pr.url, snapshot.body
+        );
+        let closing_issues = self.closing_issues(pr)?;
+        for issue in &closing_issues {
+            markdown.push_str("\n## Linked closing issue (Spec)\n\n");
+            markdown.push_str(&self.issue_for_session(issue)?);
         }
         for (kind, suffix) in [
             ("issues", "comments"),
@@ -418,7 +429,7 @@ impl GitHub {
         }
         Ok(ReviewInput {
             markdown,
-            body_alone: issues.is_empty(),
+            body_alone: closing_issues.is_empty(),
             closing_issues,
         })
     }

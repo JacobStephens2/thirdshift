@@ -1167,6 +1167,7 @@ port = 8711          # localhost port for the Console; 0 chooses a free port; de
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 address_scopes = {}  # an address absent here has all five scopes; CLI-only; default {}
 fleet = []           # named Console addresses; tokens live in Credentials; default []
+report = []          # Consoles this machine pushes its Run metrics to; tokens live in Credentials; CLI-only; default []
 other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
@@ -1506,6 +1507,7 @@ mod tests {
                 "console.allowed_emails",
                 "console.address_scopes",
                 "console.fleet",
+                "console.report",
                 "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",

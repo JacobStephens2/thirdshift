@@ -8,6 +8,7 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const { replaceRecord } = require('./records.cjs');
+const { liveRunWithUsualRange } = require('./fixtures/run-health.cjs');
 
 let home, records, server, exited, browser, origin;
 before(async () => {
@@ -74,6 +75,50 @@ async function count(page, value) {
   const host = await page.locator('header h1').textContent();
   await page.waitForFunction(({ value, host }) => document.title === `${value} need you · ${host} · thirdshift Console`, { value, host });
 }
+
+test('only step-2 Slow notifies and uses the urgent favicon', { skip: process.platform !== 'linux' }, async t => {
+  const paths = [1, 7, 10, 11, 12].map(number => join(records, `${number}.command.json`));
+  t.after(async () => {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+    await rm(join(records, '7.log'), { force: true });
+    await item(1);
+  });
+  await rm(paths[0]);
+  const live = {
+    ...await liveRunWithUsualRange(records), name: 'widgets#7',
+    issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Slow work' }
+  };
+  const stageAge = async minutes => {
+    const began = new Date(Date.now() - minutes * 60000).toISOString();
+    await writeFile(join(records, '7.log'), 'still working\n');
+    await replaceRecord(paths[1], JSON.stringify({
+      ...live, started_at: began, stages: [{ name: 'implement', began_at: began, session_log: null }]
+    }));
+  };
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await rm(paths[1], { force: true });
+    const context = await contextFor(t);
+    const page = await context.newPage();
+    await page.setViewportSize(viewport);
+    await page.goto(origin);
+    await count(page, 0);
+    await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+    await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
+    await stageAge(20);
+    const row = page.locator('#inbox .command').filter({ has: page.getByText('Slow work', { exact: true }) });
+    await row.locator('.gist').getByText(/slower than usual \(12–17 min\), still working/).waitFor();
+    assert.equal(await row.evaluate(element => element.closest('.group').dataset.group), 'working');
+    await count(page, 0);
+    assert.equal(await page.evaluate(() => notices.length), 0);
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
+    await stageAge(34);
+    await count(page, 1);
+    await page.waitForFunction(() => notices.length === 1);
+    assert.equal(await row.evaluate(element => element.closest('.group').dataset.group), 'needs you');
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon-urgent.svg');
+    await context.close();
+  }
+});
 
 test('notifications ask on click, survive reload and open the Inbox for a rise', async t => {
   const context = await contextFor(t, 'prompt');

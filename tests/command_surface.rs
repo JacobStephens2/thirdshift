@@ -60,6 +60,22 @@ fn help_lists_every_form_of_the_command_on_stdout() {
 }
 
 #[test]
+fn help_says_what_metrics_push_sends() {
+    let scenario = Scenario::new();
+
+    let help = scenario.run(&["help"]).stdout;
+
+    let line = help
+        .lines()
+        .find(|line| line.contains("thirdshift metrics ["))
+        .expect("help lists metrics");
+    assert!(
+        line.trim_end().ends_with("to a report destination"),
+        "the metrics description stops mid-sentence: {line}"
+    );
+}
+
+#[test]
 fn help_does_not_mention_the_flag_aliases() {
     let scenario = Scenario::new();
 

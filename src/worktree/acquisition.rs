@@ -46,11 +46,7 @@ pub(super) fn recover_pull_request(
 
 /// Read-only admission and acquisition share exactly the same ownership checks.
 pub(super) fn inspect_review(launch: &Git, branch: &str, start: &str) -> Result<Option<Checkout>> {
-    let reference = format!("refs/heads/{branch}");
-    if let Some(entry) = registrations(launch)?
-        .into_iter()
-        .find(|entry| entry.branch.as_deref() == Some(&reference))
-    {
+    if let Some(entry) = registration_on(launch, branch)? {
         return super::ownership::retained_pull_request(launch, &entry.path, branch, start)
             .map(Some)
             .map_err(|error| {
@@ -556,6 +552,14 @@ pub(super) struct Registration {
     pub(super) branch: Option<String>,
     pub(super) detached: bool,
     pub(super) locked: bool,
+}
+
+/// The registration, main checkout included, that has `branch` checked out.
+pub(super) fn registration_on(launch: &Git, branch: &str) -> Result<Option<Registration>> {
+    let reference = format!("refs/heads/{branch}");
+    Ok(registrations(launch)?
+        .into_iter()
+        .find(|entry| entry.branch.as_deref() == Some(&reference)))
 }
 
 pub(super) fn registrations(launch: &Git) -> Result<Vec<Registration>> {

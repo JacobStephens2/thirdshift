@@ -62,15 +62,22 @@ pub fn triage(skill_path: &std::path::Path, report: &str, read_machine: bool) ->
 }
 
 /// Targeted triage uses the same investigation scope, with the supplied
-/// issue file as evidence and a single in-place recommendation.
-pub fn triage_issue(skill_path: &std::path::Path, issue: &IssueUrl, read_machine: bool) -> String {
+/// issue file as evidence and a single in-place recommendation, choosing
+/// from the supplied repository categories.
+pub fn triage_issue(
+    skill_path: &std::path::Path,
+    issue: &IssueUrl,
+    categories: &[String],
+    read_machine: bool,
+) -> String {
     format!(
         "{}\n{}\nInvestigate existing issue #{} in place against the selected Base branch. \
          This is existing-issue mode: recommendation.issues must have exactly one entry for this issue, \
          with a ## Agent Brief for ready-for-agent, an investigation summary and questionnaire for \
          needs-info or ready-for-human, or a wontfix explanation. Propose a split through a \
          ready-for-human questionnaire. For a duplicate, recommend wontfix here and optionally \
-         cross-reference the other open issue in recommendation.comments.\n",
+         cross-reference the other open issue in recommendation.comments.\n\
+         Available repository categories (JSON): {}\n",
         triage(
             skill_path,
             "Use the existing issue supplied below.",
@@ -78,6 +85,7 @@ pub fn triage_issue(skill_path: &std::path::Path, issue: &IssueUrl, read_machine
         ),
         issue_file_instruction(issue),
         issue.number,
+        serde_json::to_string(categories).expect("repository category names serialize"),
     )
 }
 

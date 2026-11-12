@@ -165,6 +165,13 @@ impl Worktree {
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
+    /// Observe branch occupancy without granting cleanup authority. Even a
+    /// missing checkout can retain work in its registration; leave it alone.
+    pub(crate) fn occupying_checkout(launch: &Git, branch: &str) -> Result<Option<PathBuf>> {
+        let _lock = lock_launch(launch)?;
+        Ok(acquisition::registration_on(launch, branch)?.map(|entry| entry.path))
+    }
+
     /// Check out the existing `branch` from origin in a new worktree next to
     /// the launch repository's root, named `<repo>-<branch>`. `origin/<base>`
     /// is fetched too, for the review fixed point. Under the worktree lock,

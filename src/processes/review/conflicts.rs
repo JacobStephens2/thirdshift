@@ -61,8 +61,9 @@ pub(super) fn eligible(
     if unchanged {
         return Ok(false);
     }
-    let notification =
+    let mut notification =
         RunNotification::new(flags.notification(config), &config.email, About::ReviewRun)?;
+    notification.pull_request(pr, &snapshot.title);
     fs::create_dir_all(&folder)?;
     let mut temporary = tempfile::NamedTempFile::new_in(&folder)?;
     serde_json::to_writer(

@@ -39,6 +39,7 @@ pub(crate) struct Row {
     pub occurred_ms: i64,
     pub live: bool,
     pub logging: bool,
+    pub slow: bool,
     pub log_growth: String,
     pub selector: String,
     pub can_dismiss: bool,
@@ -111,6 +112,22 @@ impl Timing {
 }
 
 impl Row {
+    fn present_needs_you_target(&mut self, kind: &str, repository: &str) {
+        if !matches!(kind, "Review run" | "Triage run") {
+            return;
+        }
+        let Ok(pr) = crate::review::PullRequestUrl::parse(&self.pull_request) else {
+            return;
+        };
+        if !pr.issue.repo_slug().eq_ignore_ascii_case(repository) {
+            return;
+        }
+        self.subject = format!("{repository}#{}", pr.issue.number);
+        self.subject_url = Some(pr.url);
+        // The subject now carries the PR, including for a live problem row.
+        self.target_pr = None;
+    }
+
     fn present_ready(
         &mut self,
         title: Option<&str>,
@@ -424,6 +441,7 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(facts.health, Some(Health::Silent { .. })),
+        slow: matches!(facts.health, Some(Health::Slow { .. })),
         log_growth: String::new(),
         selector,
         can_dismiss: facts.account.is_none()
@@ -517,6 +535,13 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
         findings: facts.security_findings,
         sessions: Vec::new(),
     };
+    // Compact Inbox rows hide nested runs. Keep each Slow descendant's
+    // stage and health visible on the row that represents its work.
+    for child in row.children.iter().filter(|child| child.slow) {
+        row.now_line
+            .push_str(&format!(" · {}: {}", child.subject, child.now_line));
+        row.slow = true;
+    }
     // Compact Inbox rows hide nested runs. Carry the dispatched Spec's
     // recorded accounting onto its Pass without counting child attempts.
     if row.ticket_progress.is_none() {
@@ -527,7 +552,12 @@ fn present(value: &serde_json::Value, now: DateTime<Local>) -> Result<Row> {
     }
     if ready {
         row.present_ready(ready_title, facts.github_ci, facts.github_mergeable);
+    } else if group == Some(Group::NeedsYou) {
+        row.present_needs_you_target(&facts.kind, &facts.repository);
     }
+    // A record can name one repository and carry another repository's issue
+    // URL. The visible subject stays; the href has to name that same record.
+    bind_subject_link(&mut row);
     Ok(row)
 }
 
@@ -543,14 +573,50 @@ pub(crate) enum ArchivePage {
     Security,
 }
 
+/// The History filters asked for. `commands` are selectors, as a Metrics
+/// failure cluster chooses them: a row shows when it or a Command it owns is one.
+pub(super) struct Chosen<'a> {
+    pub(super) outcome: &'a str,
+    pub(super) repository: &'a str,
+    pub(super) commands: Option<&'a [String]>,
+}
+
+impl Chosen<'_> {
+    fn names(&self, entry: &Entry) -> bool {
+        fn owns(command: &Command, commands: &[String]) -> bool {
+            Observation::Record(command)
+                .selector()
+                .is_some_and(|selector| commands.contains(&selector))
+                || command
+                    .children
+                    .iter()
+                    .chain(&command.dispatched)
+                    .any(|child| owns(child, commands))
+        }
+        let Some(commands) = self.commands else {
+            return true;
+        };
+        match entry {
+            Entry::Record(command) => owns(command, commands),
+            Entry::History(command) => Observation::History(command)
+                .selector()
+                .is_some_and(|selector| commands.contains(&selector)),
+        }
+    }
+}
+
 pub(super) fn archive_from_read(
     config: &UserConfig,
     page: ArchivePage,
-    outcome: &str,
-    repository: &str,
+    chosen: &Chosen<'_>,
     snapshot: &Snapshot,
     now: DateTime<Local>,
 ) -> Result<Archive> {
+    let Chosen {
+        outcome,
+        repository,
+        ..
+    } = *chosen;
     let mut entries: Vec<_> = snapshot
         .entries()
         .iter()
@@ -601,6 +667,7 @@ pub(super) fn archive_from_read(
             let (repo, result, _) = facts(entry);
             (repository.is_empty() || repository == repo)
                 && (outcome.is_empty() || outcome == outcome_kind(result) || outcome == result)
+                && chosen.names(entry)
         })
         .map(|entry| {
             entry_row(
@@ -630,7 +697,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 command.issue.as_ref(),
                 None,
             );
-            Ok(Row {
+            let mut row = Row {
                 order: Group::History.row_order(
                     None,
                     command.ended_at.as_deref().or(Some(&command.started_at)),
@@ -653,6 +720,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 occurred_ms: timestamp(command.ended_at.as_deref().unwrap_or(&command.started_at)),
                 live: false,
                 logging: false,
+                slow: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 can_dismiss: false,
@@ -688,7 +756,9 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 children: Vec::new(),
                 findings: Vec::new(),
                 sessions: Observation::History(command).sessions()?,
-            })
+            };
+            bind_subject_link(&mut row);
+            Ok(row)
         }
     }
 }
@@ -722,12 +792,23 @@ pub(super) fn from_read(
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
                     row.state = item.state_word().into();
+                    if group == Group::NeedsYou
+                        && let Observation::Record(command) = item.command
+                    {
+                        row.present_needs_you_target(
+                            &command.record.kind,
+                            &command.record.repository,
+                        );
+                    }
                     if group == Group::ReadyForReview && !row.pull_request.is_empty() {
                         let title = kept
                             .pull_request(&row.selector, &row.pull_request)
                             .and_then(|pr| pr.title.as_deref());
                         row.present_ready(title, item.github.ci, item.github.mergeable);
                     }
+                    // Needs you may replace the subject with its pull request
+                    // after `present` checked the recorded issue link.
+                    bind_subject_link(&mut row);
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);

@@ -28,6 +28,31 @@ impl std::fmt::Display for Refusal {
 }
 impl std::error::Error for Refusal {}
 
+/// Why a Fleet read failed, as a Fleet report names it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Failure {
+    Unavailable,
+    Refused,
+    Incompatible,
+}
+
+impl Failure {
+    pub(crate) fn of(error: &anyhow::Error) -> Self {
+        if let Some(refusal) = error.downcast_ref::<Refusal>() {
+            match refusal.status.as_u16() {
+                401 | 403 => Self::Refused,
+                404 => Self::Incompatible,
+                _ if refusal.message.contains("incompatible") => Self::Incompatible,
+                _ => Self::Unavailable,
+            }
+        } else if error.to_string().contains("incompatible") {
+            Self::Incompatible
+        } else {
+            Self::Unavailable
+        }
+    }
+}
+
 pub(crate) fn owning_url(entry: &Entry, route: &str) -> String {
     format!("{}{}", entry.address.trim_end_matches('/'), route)
 }

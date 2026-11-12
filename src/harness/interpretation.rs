@@ -261,6 +261,20 @@ impl SessionFailure {
     pub fn never_launched(&self) -> bool {
         self.before_first_turn && matches!(self.status.code(), Some(126 | 127))
     }
+
+    /// A session of `harness` that exited `code` after its first turn.
+    #[cfg(test)]
+    pub fn exited(harness: &'static str, code: i32) -> Self {
+        use std::os::unix::process::ExitStatusExt;
+        Self {
+            harness,
+            diagnostic: None,
+            before_first_turn: false,
+            session_id: None,
+            oom_killed: false,
+            status: ExitStatus::from_raw(code << 8),
+        }
+    }
 }
 
 impl Failure {

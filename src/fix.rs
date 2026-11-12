@@ -35,6 +35,7 @@ pub(crate) fn run(
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
+    started: &mut crate::command::Started,
 ) -> crate::command::Ending {
     let result = (|| -> anyhow::Result<_> {
         if let Target::Pass { base, author } = &command.target {
@@ -51,7 +52,7 @@ pub(crate) fn run(
             let github = GitHub::new();
             let base = launch.base.name();
             if author.is_none() {
-                match base_ci::run(&launch, command, config, harness)? {
+                match base_ci::run(&launch, command, config, harness, started)? {
                     base_ci::Outcome::Clear => {}
                     base_ci::Outcome::Skipped(reason) => {
                         logs::base_ci_skipped(&launch.repo, &reason);
@@ -61,14 +62,31 @@ pub(crate) fn run(
                     }
                 }
             }
+            let mut passed_over = Vec::new();
             for pr in github.fix_candidates(&launch.repo, base, author.as_deref())? {
-                if !github.needs_fix(&pr, base, author.as_deref(), false)? {
+                let Some(branch) =
+                    github.fix_candidate_branch(&pr, base, author.as_deref(), false)?
+                else {
+                    continue;
+                };
+                if let Some(path) = Worktree::occupying_checkout(launch.directory.git(), &branch)? {
+                    let reason = format!(
+                        "passed over {}: head branch {} is checked out at {}",
+                        pr.url,
+                        branch,
+                        path.display()
+                    );
+                    crate::progress::step(&reason);
+                    passed_over.push(reason);
                     continue;
                 }
                 let Some(held) = Reservation::take(launch.directory.git(), &github, &pr)? else {
                     continue;
                 };
-                if !github.needs_fix(&pr, base, author.as_deref(), true)? {
+                if github
+                    .fix_candidate_branch(&pr, base, author.as_deref(), true)?
+                    .is_none()
+                {
                     continue;
                 }
                 let selected = FixArgs {
@@ -79,19 +97,21 @@ pub(crate) fn run(
                     &selected,
                     config,
                     harness,
+                    started,
                     Some(held),
                 )));
             }
-            return Ok(skipped(
-                &launch.repo,
-                format!(
-                    "no eligible pull request targeting {base} on {}",
-                    launch.repo.slug()
-                ),
-            ));
+            let mut reason = format!(
+                "no eligible pull request targeting {base} on {}",
+                launch.repo.slug()
+            );
+            if !passed_over.is_empty() {
+                reason.push_str(&format!("; {}", passed_over.join("; ")));
+            }
+            return Ok(skipped(&launch.repo, reason));
         }
         Ok(crate::command::Ending::Run(targeted(
-            command, config, harness, None,
+            command, config, harness, started, None,
         )))
     })();
     result.unwrap_or_else(|error| {
@@ -115,6 +135,7 @@ fn targeted(
     command: &FixArgs,
     config: &UserConfig,
     harness: &mut Choice,
+    started_command: &mut crate::command::Started,
     reservation: Option<Reservation>,
 ) -> Ended {
     let started = Utc::now() - crate::run::STARTED_MARGIN;
@@ -131,7 +152,8 @@ fn targeted(
             return Err(anyhow::anyhow!("origin mismatch: {} is not in {origin}", pr.url).into());
         }
         let github = GitHub::new();
-        github.fix_pull_request(&pr)?;
+        let snapshot = github.fix_pull_request(&pr)?;
+        started_command.pull_request(&pr, &snapshot.title);
         let pass = reservation.is_some();
         let _reservation = match reservation {
             Some(held) => held,
@@ -139,6 +161,7 @@ fn targeted(
                 .context("pull request is already reserved or labelled in-progress")?,
         };
         let snapshot = github.fix_pull_request(&pr)?;
+        started_command.pull_request(&pr, &snapshot.title);
         if !pass {
             crate::command_limit::hold_slot(&repo);
         }

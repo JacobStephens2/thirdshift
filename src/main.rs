@@ -210,13 +210,13 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
-       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | scopes ...  Manage tokens, Fleet or address scopes; CLI-only
+       thirdshift console token <create|list|revoke> ... | fleet <add|list|remove> ... | report <add|list|remove> ... | scopes ...  Manage tokens, Fleet, report destinations or address scopes; CLI-only
        thirdshift console whoami [--json] | openapi   Identify caller or print the API's OpenAPI description
        thirdshift console theme <name|list|import|export> ...  Choose, list, import or export Console Themes
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift show <command> [--spans | --span <id>] [--json] [--machine <name>]  Show a Command, its tree or a span
-       thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
+       thirdshift metrics [<command>] [--fleet | --machine <name> | --push [<destination>]] [--window <7d|30d|12w|all>] [<filters>] [--json]  Show Run metrics here or across the Fleet; --push sends them to a report destination
        thirdshift stop <command> [--machine <name>] [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--machine <name>] [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
@@ -344,6 +344,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::ConsoleWhoami { json }) => return printed(console::whoami(json)),
         Ok(Command::ConsoleFleet(action)) => return printed(action.run()),
+        Ok(Command::ConsoleReport(action)) => return printed(action.run()),
         Ok(Command::ConsoleScopes(command)) => return printed(command.run()),
         Ok(Command::ConsoleOpenApi) => return printed(console::openapi()),
         Ok(Command::Console { no_sign_in }) => {
@@ -405,6 +406,9 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
+        }
+        Ok(Command::Metrics(asked)) if asked.push => {
+            return printed(console::report::push_by_hand(&asked));
         }
         Ok(Command::Metrics(asked)) => {
             return match logs::metrics::show(&asked) {
@@ -550,7 +554,7 @@ fn fix(args: args::FixArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let ended = fix::run(&args, &config, &mut harness);
+    let ended = fix::run(&args, &config, &mut harness, &mut started);
     started.built_with(&harness);
     started.finish(ended)
 }
