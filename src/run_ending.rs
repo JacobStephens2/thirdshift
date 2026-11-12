@@ -145,7 +145,10 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             let account = match &audited.outcome {
                 Ok(recorded) => Account {
                     outcome: "findings recorded",
-                    ended: Ok(recorded.to_string()),
+                    ended: Ok(match &audited.fixing_skipped {
+                        Some(reason) => format!("{recorded}; {reason}"),
+                        None => recorded.to_string(),
+                    }),
                     interrupted: false,
                     pr_url: None,
                     advice: &[],

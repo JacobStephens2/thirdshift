@@ -5,6 +5,7 @@
 //! ```text
 //! {"repo": "owner/repo",
 //!  "private"?: true,
+//!  "has_issues"?: false | <any other value, returned as is>,
 //!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
 //!  "issue_closed_at"?: {"<number>": "<ISO 8601 time>"},
@@ -1003,6 +1004,25 @@ fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
     println!("{}", json_fields(&fields, &wanted_fields(flags)));
 }
 
+/// Whether the repository accepts issues: false only when `has_issues` is.
+fn issues_enabled(state: &Json) -> bool {
+    !matches!(state.get("has_issues"), Some(Bool(false)))
+}
+
+/// `gh issue list` and `gh issue create` refuse a repository with issues
+/// turned off, as gh does.
+fn check_issues_enabled(state: &Json) {
+    if !issues_enabled(state) {
+        die(
+            &format!(
+                "the '{}' repository has disabled issues",
+                state.at("repo").str()
+            ),
+            1,
+        );
+    }
+}
+
 /// `gh issue list [--label <label>] --json <fields>`: the open issues with the
 /// label, whatever its case, newest first, or with `--state closed` the
 /// closed ones. Without `--label`, every issue in that state.
@@ -1504,6 +1524,11 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 (
                     "private",
                     Bool(state.get("private").is_some_and(Json::truthy))
+                ),
+                // A non-boolean stands for malformed metadata.
+                (
+                    "has_issues",
+                    state.get("has_issues").cloned().unwrap_or(Bool(true))
                 )
             ])
         );
@@ -3091,6 +3116,7 @@ pub fn main(args: Vec<String>) {
         }
         ["issue", "list", rest @ ..] => {
             let (_, flags) = parsed(rest);
+            check_issues_enabled(&state);
             issue_list(&state, &flags);
         }
         ["issue", "close", rest @ ..] => {
@@ -3103,6 +3129,7 @@ pub fn main(args: Vec<String>) {
         }
         ["issue", "create", rest @ ..] => {
             let (_, flags) = parsed(rest);
+            check_issues_enabled(&state);
             issue_create(&mut state, &flags);
         }
         ["label", "list", rest @ ..] => {
