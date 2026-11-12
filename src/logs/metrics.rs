@@ -1,6 +1,7 @@
 //! Local, read-only metrics views; every signal retains its own units.
 
 mod bug_origins;
+mod groups;
 mod outcomes;
 mod scope;
 mod trends;
@@ -18,6 +19,7 @@ use crate::args::MetricsArgs;
 use crate::config::UserConfig;
 
 use bug_origins::ConfirmedCounts;
+pub(crate) use groups::Groups;
 pub(crate) use outcomes::{Bucket, COUNTED, Class, Comparison};
 pub(crate) use scope::{Filters, Window};
 pub(crate) use trends::Row;
@@ -119,6 +121,7 @@ pub(crate) struct Trends {
     pub(crate) unavailable_accounts: BTreeSet<String>,
     pub(crate) outcomes: Vec<Bucket>,
     pub(crate) comparison: Option<Comparison>,
+    pub(crate) groups: Groups,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) weeks: Option<Vec<Row>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,7 +149,18 @@ pub(crate) fn trends(config: &UserConfig, asked: &MetricsArgs) -> Result<Trends>
     let window = Window::of(asked, now.with_timezone(&Utc).date_naive());
     let filters = Filters::of(asked);
     let serving = super::accounts::serving_name();
-    let outcomes = outcomes::read(&snapshot, &window, &filters, serving.as_deref());
+    let facts = outcomes::facts(&snapshot, &window, &filters, serving.as_deref());
+    let outcomes = outcomes::read(&facts, &window);
+    let groups = groups::read(
+        &facts,
+        &window,
+        &groups::Sources {
+            origins: &origins,
+            kept: &super::github::kept_pull_requests(&config.logs_dir),
+            scores: &crate::scoring::read_scores()?,
+            filters: &filters,
+        },
+    );
     let rows = trends::signals(
         &snapshot,
         &trends::Scope {
@@ -169,6 +183,7 @@ pub(crate) fn trends(config: &UserConfig, asked: &MetricsArgs) -> Result<Trends>
         unavailable_accounts: snapshot.unavailable_accounts.clone(),
         outcomes: outcomes.buckets,
         comparison: outcomes.comparison,
+        groups,
         weeks,
         days,
     })

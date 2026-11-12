@@ -100,12 +100,25 @@ fn classify(command: &Command, stopped: bool) -> Option<(Class, String)> {
     Some((class, sub.to_owned()))
 }
 
-struct Counted {
-    bucket: NaiveDate,
-    account: Option<String>,
-    kind: &'static str,
-    class: Class,
+pub(super) struct Counted {
+    pub(super) bucket: NaiveDate,
+    pub(super) account: Option<String>,
+    pub(super) kind: &'static str,
+    pub(super) class: Class,
     outcome: String,
+}
+
+/// One counted Command, kept with its record for the signal groups.
+pub(super) struct Fact<'a> {
+    pub(super) counted: Counted,
+    pub(super) command: &'a Command,
+    /// A Stop was asked of this Command itself, not only of its owner.
+    pub(super) stop_asked: bool,
+}
+
+/// Whether a Command is in the Succeeded stack. A Stop never makes one.
+pub(super) fn succeeded(command: &Command) -> bool {
+    classify(command, false).is_some_and(|(class, _)| class == Class::Succeeded)
 }
 
 /// Counts of one group. `n` is the rate's denominator: Succeeded and Failed.
@@ -286,18 +299,25 @@ pub(super) struct Outcomes {
     pub(super) comparison: Option<Comparison>,
 }
 
-pub(super) fn read(
-    snapshot: &Snapshot,
+/// Every counted Command the filters admit, in any bucket: the window and the
+/// one before it are chosen by each reader.
+pub(super) fn facts<'a>(
+    snapshot: &'a Snapshot,
     window: &Window,
     filters: &Filters,
     serving: Option<&str>,
-) -> Outcomes {
-    let mut counted = Vec::new();
+) -> Vec<Fact<'a>> {
+    let mut facts = Vec::new();
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            visit(command, false, window, filters, serving, &mut counted);
+            visit(command, false, window, filters, serving, &mut facts);
         }
     }
+    facts
+}
+
+pub(super) fn read(facts: &[Fact<'_>], window: &Window) -> Outcomes {
+    let counted: Vec<_> = facts.iter().map(|fact| &fact.counted).collect();
     let mut buckets = BTreeMap::<_, Tally>::new();
     for item in counted.iter().filter(|item| window.shows(item.bucket)) {
         buckets
@@ -322,7 +342,7 @@ pub(super) fn read(
     }
 }
 
-fn compare(counted: &[Counted], current: Span, prior: Span) -> Comparison {
+fn compare(counted: &[&Counted], current: Span, prior: Span) -> Comparison {
     let mut rows = BTreeMap::<_, (Tally, Tally)>::new();
     for item in counted {
         let key = (item.account.clone(), item.kind);
@@ -348,18 +368,21 @@ fn compare(counted: &[Counted], current: Span, prior: Span) -> Comparison {
     }
 }
 
-fn visit(
-    command: &Command,
-    stopped: bool,
+fn visit<'a>(
+    command: &'a Command,
+    owner_stopped: bool,
     window: &Window,
     filters: &Filters,
     serving: Option<&str>,
-    counted: &mut Vec<Counted>,
+    facts: &mut Vec<Fact<'a>>,
 ) {
-    // A Stop of a Spec run stops its Ticket runs; they share its request.
-    let stopped = stopped || super::super::stop::requested(&command.record_path).is_some();
+    // A Stop of a Spec run stops its Ticket runs; they share its request, as a
+    // dispatch shares its owner's record.
+    let stop_asked =
+        !owner_stopped && super::super::stop::requested(&command.record_path).is_some();
+    let stopped = owner_stopped || stop_asked;
     for child in command.dispatched.iter().chain(&command.children) {
-        visit(child, stopped, window, filters, serving, counted);
+        visit(child, stopped, window, filters, serving, facts);
     }
     let account = command.account.as_deref().or(serving);
     if !filters.admit(command, account) {
@@ -370,12 +393,16 @@ fn visit(
     else {
         return;
     };
-    counted.push(Counted {
-        bucket,
-        account: account.map(str::to_owned),
-        kind: kind_name(&command.record.kind),
-        class,
-        outcome,
+    facts.push(Fact {
+        counted: Counted {
+            bucket,
+            account: account.map(str::to_owned),
+            kind: kind_name(&command.record.kind),
+            class,
+            outcome,
+        },
+        command,
+        stop_asked,
     });
 }
 

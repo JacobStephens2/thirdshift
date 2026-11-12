@@ -331,6 +331,39 @@ pub fn load(logs_dir: &Path) -> Kept {
     }
 }
 
+/// The kept pull-request facts by URL, compared without ASCII case or a
+/// trailing slash. Unlike [`load`], this reads the file alone: no GitHub
+/// read and no quota check. A History row's frozen answer stands in only
+/// for a pull request with no current one.
+pub(super) fn kept_pull_requests(logs_dir: &Path) -> BTreeMap<String, PullRequestState> {
+    let Some(file) = std::fs::read(path(logs_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok())
+        .filter(|file| matches!(file.version, 1 | 2))
+    else {
+        return BTreeMap::new();
+    };
+    let mut kept = BTreeMap::new();
+    let frozen = file.history.into_iter().filter_map(|(key, state)| {
+        let url = key.rsplit_once("::").map_or(key.as_str(), |(_, url)| url);
+        Some((pull_request_key(url), state?))
+    });
+    let current = file
+        .subjects
+        .into_iter()
+        .filter_map(|(url, state)| Some((pull_request_key(&url), state?)));
+    for (url, state) in frozen.chain(current) {
+        if let InboxState::PullRequest(state) = state {
+            kept.insert(url, state);
+        }
+    }
+    kept
+}
+
+pub(super) fn pull_request_key(url: &str) -> String {
+    url.trim_end_matches('/').to_ascii_lowercase()
+}
+
 /// Refresh without an age gate, even when no page is open. All this work,
 /// including the blocking GitHub adapter, belongs off the Console's async thread.
 pub fn poll() -> Result<()> {

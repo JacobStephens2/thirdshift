@@ -229,3 +229,60 @@ fn metrics_form_keeps_every_repeated_filter_value() {
         "form lost the second repo: {html}"
     );
 }
+
+#[test]
+fn metrics_page_shows_the_four_signal_groups_as_the_api_reports_them() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, outcome, minutes, repairs) in [
+        (7, "merged", 30.0, 0),
+        (8, "merged", 50.0, 2),
+        (9, "failed", 0.5, 0),
+    ] {
+        let mut value = record(home.path(), number, Some(outcome), 1);
+        value["run_metrics"] = json!({
+            "outcome": outcome, "repairs": repairs, "ci_rounds": 1,
+            "unaddressed_findings": {"standards": 4, "spec": 2, "security": 0},
+            "total_minutes": minutes, "session_signals": {},
+            "stages": [{
+                "name": "implement", "seconds": minutes * 60.0, "minutes": minutes,
+                "usual_range": {"lower_seconds": 600.0, "upper_seconds": 1200.0},
+                "position": if minutes > 20.0 { "above" } else { "within" },
+                "review_findings": {"standards": 3, "spec": 1},
+                "session_signals": {"harness": "codex", "harness_version": "1.0", "signals": {
+                    "tokens_by_model": [], "cost_usd": minutes / 10.0, "tool_errors": 1,
+                    "permission_denials": 0, "killed_work": 0, "repeated_tool_calls": 2,
+                    "destructive_commands": []
+                }}
+            }]
+        });
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let api: Value = console.get("/api/v1/metrics?window=7d").json().unwrap();
+    let efficiency = &api["groups"]["efficiency"]["lines"][0];
+    let window = &efficiency["window"];
+    assert_eq!(window["first_pass_clean_rate"], 0.5, "{api:#}");
+    assert_eq!(window["minutes_per_success"], 40.25);
+    assert_eq!(window["cost_usd_per_success"], 4.025);
+    assert_eq!(efficiency["model"], "gpt-6");
+    let html = console.get("/metrics?window=7d").text().unwrap();
+    for expected in [
+        "<h2 id=\"metrics-yield\">Yield and pull-request survival</h2>",
+        "<h2 id=\"metrics-quality\">Post-merge quality and attention</h2>",
+        "<h2 id=\"metrics-efficiency\">Efficiency, wasted effort and Repair churn</h2>",
+        "<h2 id=\"metrics-friction\">Stage bottlenecks and session friction</h2>",
+        "<svg class=\"metrics-spark\"",
+        "<td>gpt-6</td>",
+        "<td>1/2 (50%)</td>",
+        "<td>40.2 (3 observed, 0 missing)</td>",
+        "<td>$4.03 (3 observed, 0 missing)</td>",
+        "<td>2/3 (67%)</td>",
+        "<th scope=\"col\">Change</th>",
+    ] {
+        assert!(html.contains(expected), "missing {expected}: {html}");
+    }
+    // Findings show only as Security holds, not as a quality score.
+    let groups = html.split_once("metrics-efficiency").unwrap().1;
+    assert!(!groups.contains("Standards findings") && !groups.contains("Spec findings"));
+}

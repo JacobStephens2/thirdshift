@@ -91,7 +91,12 @@ impl Window {
     /// The bucket holding a Command's start, by its UTC date.
     pub(super) fn bucket(&self, command: &Command) -> Option<NaiveDate> {
         let started = DateTime::parse_from_rfc3339(&command.record.started_at).ok()?;
-        Some(start(self.unit, started.with_timezone(&Utc).date_naive()))
+        Some(self.bucket_on(started.with_timezone(&Utc).date_naive()))
+    }
+
+    /// The bucket holding a UTC date, such as a merge or a Scoring week's start.
+    pub(super) fn bucket_on(&self, date: NaiveDate) -> NaiveDate {
+        start(self.unit, date)
     }
 
     pub(super) fn shows(&self, bucket: NaiveDate) -> bool {
@@ -144,6 +149,16 @@ impl Filters {
             && any(&self.harness, Some(&record.harness))
             && any(&self.model, record.model.as_deref())
             && any(&self.account, account)
+    }
+
+    /// A Scoring sample's pull request, by its repository and Built-with
+    /// Harness and Model. Kind and account name Commands, not samples, so
+    /// they leave Scores unfiltered.
+    pub(super) fn admit_scored(&self, repository: &str, harness: &str, model: &str) -> bool {
+        let any = |values: &[String], value: &str| {
+            values.is_empty() || values.iter().any(|v| v.eq_ignore_ascii_case(value))
+        };
+        any(&self.repo, repository) && any(&self.harness, harness) && any(&self.model, model)
     }
 }
 
