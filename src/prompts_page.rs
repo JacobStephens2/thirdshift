@@ -263,7 +263,12 @@ fn prompts() -> Vec<Prompt> {
             title: "Triage run",
             when: "Investigates a Report read-only in a throwaway worktree without waiting for a person. thirdshift files the recommended issues or comments on existing open issues unless --recommend-only is given, and retains the result for stdout and the Run notification.",
             sender: TriageRun,
-            text: prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
+            text: prompt::triage(
+                std::path::Path::new(SKILL_PATH),
+                "<Report>",
+                &[CATEGORY.into()],
+                false,
+            ),
         },
         Prompt {
             id: "prompt-triage-correction",
@@ -271,7 +276,12 @@ fn prompts() -> Vec<Prompt> {
             when: "After a completed Triage investigation returns invalid recommendation output, requests one complete correction in the same worktree and launch policy, without repeating the investigation. Both Session traces are retained separately.",
             sender: TriageRun,
             text: prompt::triage_correction(
-                &prompt::triage(std::path::Path::new(SKILL_PATH), "<Report>", false),
+                &prompt::triage(
+                    std::path::Path::new(SKILL_PATH),
+                    "<Report>",
+                    &[CATEGORY.into()],
+                    false,
+                ),
                 Some("Triage recommendation: <rejected JSON>"),
                 "the Triage questionnaire is required only for needs-info or ready-for-human issues: <issue title>",
             ),

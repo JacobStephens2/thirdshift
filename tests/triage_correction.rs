@@ -339,19 +339,11 @@ fn correction_execution_failure_stops_and_retains_the_original_analysis() {
 
 #[test]
 fn successful_recommendations_and_execution_or_github_failures_do_not_get_corrected() {
-    for outcome in [
-        "valid",
-        "harness",
-        "category",
-        "comment",
-        "github",
-        "publication",
-    ] {
+    for outcome in ["valid", "harness", "comment", "github", "publication"] {
         let scenario = Scenario::new();
         scenario.repo_has_labels(&["bug"]);
         let mut recommendation = complete(&scenario);
         match outcome {
-            "category" => recommendation["category"] = json!("agent-failed"),
             "comment" => {
                 recommendation["comments"][0]["url"] =
                     json!("https://github.com/other/repo/issues/7")
@@ -372,7 +364,9 @@ fn successful_recommendations_and_execution_or_github_failures_do_not_get_correc
             "{outcome}: {}",
             result.stderr
         );
-        assert_eq!(scenario.claude_calls().len(), 1, "{outcome}");
+        // Repository categories are read before the session starts.
+        let sessions = if outcome == "github" { 0 } else { 1 };
+        assert_eq!(scenario.claude_calls().len(), sessions, "{outcome}");
     }
 }
 
@@ -533,4 +527,47 @@ fi
     assert_eq!(scenario.log_files(LOGS, "jsonl").len(), 2);
     assert_eq!(fs::read_to_string(outside).unwrap(), "host evidence");
     assert!(!scenario.path("home/correction-evidence").exists());
+}
+
+#[test]
+fn a_factory_or_unknown_category_gets_one_correction_in_both_modes() {
+    for existing in [false, true] {
+        for invalid in ["security-finding", "not-a-label"] {
+            let scenario = Scenario::new();
+            scenario.repo_has_labels(&["bug", "security-finding"]);
+            scenario.issue_is(8, "OPEN");
+            let mut corrected = complete(&scenario);
+            corrected["comments"][0]["url"] = json!(scenario.issue_url(8));
+            let mut rejected = corrected.clone();
+            rejected["category"] = json!(invalid);
+            respond(&scenario, 1, &rejected);
+            respond(&scenario, 2, &corrected);
+            let flags = if existing {
+                vec!["triage", "7", "--recommend-only"]
+            } else {
+                vec!["triage", "--recommend-only"]
+            };
+            let result = scenario.run_with_input(&flags, REPORT);
+            assert_eq!(result.code, Some(0), "{invalid}: {}", result.stderr);
+            let calls = scenario.claude_calls();
+            assert_eq!(calls.len(), 2, "{invalid}");
+            assert!(
+                calls[0]["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Available repository categories (JSON): [\"bug\"]"),
+                "{invalid}"
+            );
+            let evidence: serde_json::Value =
+                serde_json::from_str(calls[1]["prompt"].as_str().unwrap().lines().last().unwrap())
+                    .unwrap();
+            assert_eq!(
+                evidence["validation_error"],
+                "the Triage category must be a repository category label, not a triage state or another factory label",
+                "{invalid}"
+            );
+            let output: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+            assert_eq!(output["category"], "bug", "{invalid}");
+        }
+    }
 }
