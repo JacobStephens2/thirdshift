@@ -2,7 +2,7 @@ name: Issue label to project status
 
 on:
   issues:
-    types: [labeled]
+    types: [labeled, unlabeled]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -17,14 +17,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  set-in-progress:
+  sync-status:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'in-progress'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # A user project requires a separate token; GITHUB_TOKEN cannot access it.
       # PROJECT_STATUS_TOKEN must be able to read issues and write Projects.
-      - name: Move labeled Todo issue to In Progress
+      - name: Match project status to the in-progress label
         env:
           GH_TOKEN: ${{ secrets.PROJECT_STATUS_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -33,6 +33,7 @@ jobs:
           STATUS_FIELD_ID: PVTSSF_lAHOAzaH4M4BmapYzhlDz3Y
           TODO_OPTION_ID: f75ad846
           IN_PROGRESS_OPTION_ID: 47fc9ee4
+          PR_OPEN_OPTION_ID: ca510e75
         shell: bash
         run: |
           set -euo pipefail
@@ -43,10 +44,11 @@ jobs:
 
           # Read the current issue rather than trusting a possibly stale event.
           issue=$(gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER")
-          if ! jq -e '.state == "open" and (.labels | any(.name == "in-progress"))' <<< "$issue" >/dev/null; then
-            echo 'Issue is closed or no longer labeled in-progress; no change.'
+          if ! jq -e '.state == "open"' <<< "$issue" >/dev/null; then
+            echo 'Issue is closed; no change.'
             exit 0
           fi
+          claimed=$(jq -r '.labels | any(.name == "in-progress")' <<< "$issue")
 
           issue_id=$(jq -r '.node_id' <<< "$issue")
           items=$(gh api graphql --paginate --slurp -f issue="$issue_id" -f query='
@@ -63,24 +65,44 @@ jobs:
                     }
                     pageInfo { hasNextPage endCursor }
                   }
+                  closedByPullRequestsReferences(first: 20) {
+                    nodes { state }
+                  }
                 }
               }
             }')
-          item_id=$(jq -r --arg project "$PROJECT_ID" --arg todo "$TODO_OPTION_ID" '
+          read -r item_id current < <(jq -r --arg project "$PROJECT_ID" '
             [.[].data.node.projectItems.nodes[]
-              | select(.project.id == $project and .fieldValueByName.optionId == $todo)
-              | .id] | first // empty' <<< "$items")
-          if [[ -z "$item_id" ]]; then
-            echo 'Issue is not in Todo in the thirdshift project; no change.'
+              | select(.project.id == $project)
+              | "\(.id) \(.fieldValueByName.optionId // "")"] | first // ""' <<< "$items")
+          if [[ -z "${item_id:-}" ]]; then
+            echo 'Issue is not in the thirdshift project; no change.'
             exit 0
           fi
 
+          # A live Claim puts a Todo or PR open issue In Progress. Ending it
+          # moves an In Progress issue to PR open while an open pull request
+          # closes it, otherwise back to Todo. Other statuses are left alone.
+          if [[ "$claimed" == true ]]; then
+            [[ "$current" == "$TODO_OPTION_ID" || "$current" == "$PR_OPEN_OPTION_ID" ]] || {
+              echo 'Claimed issue is not in Todo or PR open; no change.'; exit 0; }
+            target=$IN_PROGRESS_OPTION_ID; target_name='In Progress'
+          else
+            [[ "$current" == "$IN_PROGRESS_OPTION_ID" ]] || {
+              echo 'Unclaimed issue is not In Progress; no change.'; exit 0; }
+            if jq -e '[.[0].data.node.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN")] | length > 0' <<< "$items" >/dev/null; then
+              target=$PR_OPEN_OPTION_ID; target_name='PR open'
+            else
+              target=$TODO_OPTION_ID; target_name='Todo'
+            fi
+          fi
+
           gh api graphql --silent -f project="$PROJECT_ID" -f item="$item_id" \
-            -f field="$STATUS_FIELD_ID" -f option="$IN_PROGRESS_OPTION_ID" -f query='
+            -f field="$STATUS_FIELD_ID" -f option="$target" -f query='
             mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
               updateProjectV2ItemFieldValue(input: {
                 projectId: $project, itemId: $item, fieldId: $field,
                 value: { singleSelectOptionId: $option }
               }) { projectV2Item { id } }
             }'
-          echo "Moved issue #$ISSUE_NUMBER from Todo to In Progress."
+          echo "Moved issue #$ISSUE_NUMBER to $target_name."
