@@ -25,15 +25,19 @@ const FAILED_ON: &str = "failed_on";
 const FAILED_KIND: &str = "failed_kind";
 const FAILED_ACCOUNT: &str = "failed_account";
 
-/// The page's scope: `machine=fleet`, this machine's name, or a Fleet
-/// machine's. Only the page reads other machines; the API stays local.
+/// The page's scope: this machine's name or a Fleet machine's. Without one,
+/// the page shows the Fleet when it has one. Only the page reads other
+/// machines; the API stays local and refuses both keys.
 const MACHINE: &str = "machine";
 const FLEET: &str = "fleet";
 
 /// The machines a Metrics page can be scoped to, for its selector.
 struct Machines {
-    /// What the selector shows chosen: `fleet` or a machine's name.
-    chosen: String,
+    /// The machine chosen; missing for the whole Fleet. Any name, `fleet`
+    /// included, is a machine's.
+    chosen: Option<String>,
+    /// Whether the Fleet can be chosen: a machine is paired or saved.
+    fleet: bool,
     /// This machine's name, distinct from every Fleet entry's.
     local: String,
     /// Fleet machines and retired ones with a saved snapshot.
@@ -41,9 +45,17 @@ struct Machines {
 }
 
 impl Machines {
-    /// The `machine` pair links keep, so a scoped page stays scoped.
-    fn pair(&self) -> (&str, &str) {
-        (MACHINE, &self.chosen)
+    /// The `machine` pair a link to this machine's view keeps, needed only
+    /// where the page would otherwise open on the Fleet.
+    fn pair(&self) -> Option<(&str, &str)> {
+        self.chosen
+            .as_deref()
+            .filter(|_| self.fleet)
+            .map(|chosen| (MACHINE, chosen))
+    }
+
+    fn is(&self, name: &str) -> bool {
+        self.chosen.as_deref() == Some(name)
     }
 }
 
@@ -99,11 +111,9 @@ impl MetricsPage {
 
     /// This view narrowed to one `thirdshift` version.
     fn version_slice(&self, version: &str) -> String {
-        self.link(
-            "/metrics",
-            &["version"],
-            &[("version", version), self.machines.pair()],
-        )
+        let mut added = vec![("version", version)];
+        added.extend(self.machines.pair());
+        self.link("/metrics", &["version"], &added)
     }
 
     /// A Failed Command's Console details.
@@ -343,26 +353,25 @@ pub(super) async fn show(
             });
         }
         let local = super::fleet_control::local_name(&config);
-        let chosen = match machine.as_str() {
-            "" if fleet::default_view(&config) => FLEET.to_owned(),
-            "" => local.clone(),
-            chosen => chosen.to_owned(),
-        };
+        // The API never reaches this point with a `machine`: it stays local.
+        let fleet = format == super::api::Format::Html && fleet::default_view(&config);
         let machines = Machines {
-            others: fleet::names(&config),
+            chosen: match machine.as_str() {
+                "" if fleet => None,
+                "" => Some(local.clone()),
+                chosen => Some(chosen.to_owned()),
+            },
+            fleet,
+            others: fleet::others(&config),
             local,
-            chosen,
         };
-        if machines.chosen != machines.local {
+        if !machines.is(&machines.local) {
             let mut asked = asked;
-            let mut cli = vec!["metrics".to_owned(), "--fleet".to_owned()];
-            if machines.chosen != FLEET {
-                asked.machine = Some(machines.chosen.clone());
-                cli = vec![
-                    "metrics".into(),
-                    "--machine".into(),
-                    machines.chosen.clone(),
-                ];
+            asked.machine = machines.chosen.clone();
+            let mut cli = vec!["metrics".to_owned()];
+            match &asked.machine {
+                Some(name) => cli.extend(["--machine".to_owned(), name.clone()]),
+                None => cli.push("--fleet".to_owned()),
             }
             cli.extend(
                 pairs(&query, &FILTERS)?

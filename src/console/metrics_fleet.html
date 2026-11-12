@@ -3,8 +3,8 @@
 <html lang="en" data-theme="{{ page.theme }}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fleet metrics · {{ page.hostname }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
-<main class="metrics"><div class="page-title"><h1>Metrics{% if fleet.scope == "fleet" %} · Fleet{% else %} · {{ fleet.scope }}{% endif %}</h1><code>thirdshift {{ cli }}</code></div>
-<p>How {% if fleet.scope == "fleet" %}every Fleet machine's{% else %}{{ fleet.scope }}'s{% endif %} Commands ended, read from each machine's own Metrics. Each Command counts once, on the machine it ran on. A machine that cannot be reached shows the summary this Console last read from it, marked cached with when; its Commands' details open only while it answers. Choose this machine for its signal groups. Reload to see changes.</p>
+<main class="metrics"><div class="page-title"><h1>Metrics{% if let Some(machine) = fleet.machine %} · {{ machine }}{% else %} · Fleet{% endif %}</h1><code>thirdshift {{ cli }}</code></div>
+<p>How {% if let Some(machine) = fleet.machine %}{{ machine }}'s{% else %}every Fleet machine's{% endif %} Commands ended, read from each machine's own Metrics. Each Command counts once, on the machine it ran on. A machine that cannot be reached shows the summary this Console last read from it, marked cached with when; its Commands' details open only while it answers. Choose this machine for its signal groups. Reload to see changes.</p>
 {% if let Some(error) = error %}<p role="alert">{{ error }}</p>{% endif %}
 {% include "console/metrics_form.html" %}
 <p>Window: {% if let Some(preset) = fleet.window.preset %}{{ preset }}, {% endif %}{{ fleet.window.grain }} buckets{% if let Some(from) = fleet.window.from %} from {{ from }}{% endif %}{% if let Some(through) = fleet.window.through %} through {{ through }}{% endif %}.</p>

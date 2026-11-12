@@ -529,7 +529,7 @@ fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
         local_home.path(),
         &["metrics", "--fleet", "--window", "7d", "--json"],
     );
-    assert_eq!(fleet["scope"], "fleet");
+    assert!(fleet["machine"].is_null(), "{fleet}");
     let states: Vec<_> = fleet["machines"]
         .as_array()
         .unwrap()
@@ -623,7 +623,7 @@ fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
         local_home.path(),
         &["metrics", "--machine", "remote", "--window", "7d", "--json"],
     );
-    assert_eq!(only["scope"], "remote");
+    assert_eq!(only["machine"], "remote");
     assert_eq!(only["machines"].as_array().unwrap().len(), 1);
     assert_eq!(spec_runs(&only)["current"], theirs);
     let html = local
@@ -717,4 +717,80 @@ fn fleet_metrics_merge_paired_consoles_and_keep_an_offline_peer_cached() {
     let unknown = metrics(local_home.path(), &["--machine", "nowhere"]);
     assert!(!unknown.status.success());
     assert!(String::from_utf8_lossy(&unknown.stderr).contains("unknown Fleet machine"));
+}
+
+#[test]
+fn api_metrics_stays_local_once_a_peer_is_paired() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let local = Console::start(binary, local_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "remote", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let body = api::json(local.get("/api/v1/metrics?window=7d"));
+    assert!(
+        body.get("machine").is_none(),
+        "API answered with Fleet metrics: {body}"
+    );
+    assert!(body.get("machines").is_none(), "{body}");
+}
+
+#[test]
+fn a_fleet_machine_named_fleet_can_be_chosen_alone() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let local = Console::start(binary, local_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "fleet", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    let one = api::cli(
+        local_home.path(),
+        &["metrics", "--machine", "fleet", "--json"],
+    );
+    let fleet = api::cli(local_home.path(), &["metrics", "--fleet", "--json"]);
+    assert_ne!(
+        one["machine"], fleet["machine"],
+        "one machine reads as the whole Fleet"
+    );
+    let html = local.get("/metrics?machine=fleet").text().unwrap();
+    assert!(!html.contains("(this machine)"), "{html}");
+}
+
+#[test]
+fn fleet_metrics_keep_an_offline_peer_for_another_window() {
+    let local_home = tempfile::tempdir().unwrap();
+    let remote_home = tempfile::tempdir().unwrap();
+    configure(local_home.path());
+    configure(remote_home.path());
+    record(remote_home.path(), 73, Some("failed"), 0);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let remote = Console::start(binary, remote_home.path());
+    let token = tokens::create(remote_home.path(), "watcher", &[]);
+    let paired = super::fleet::add(local_home.path(), "remote", &remote.address, &token);
+    assert!(paired.status.success(), "{paired:?}");
+    api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "7d", "--json"],
+    );
+    drop(remote);
+    let other = api::cli(
+        local_home.path(),
+        &["metrics", "--fleet", "--window", "30d", "--json"],
+    );
+    assert!(
+        other["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["machine"] == "remote"),
+        "offline peer's last-fetched history missing: {other}"
+    );
 }

@@ -112,7 +112,7 @@ fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts
 
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
-    let report = if peers(&config, asked) {
+    let report = if reads_fleet(&config, asked) {
         let report = serde_json::to_value(fleet::load(&config, asked, None)?)?;
         if asked.json {
             report
@@ -133,7 +133,7 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
 
 /// Whether `metrics` reads Fleet machines: `--fleet`, or `--machine` naming
 /// any machine but this one.
-pub(crate) fn peers(config: &UserConfig, asked: &MetricsArgs) -> bool {
+pub(crate) fn reads_fleet(config: &UserConfig, asked: &MetricsArgs) -> bool {
     asked.fleet
         || asked
             .machine

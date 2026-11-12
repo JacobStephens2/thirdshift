@@ -62,6 +62,14 @@ fn summary(name: &str, current: Span, succeeded: usize, failed: usize) -> Summar
     .unwrap()
 }
 
+fn view(query: &str, filters: &str) -> View {
+    View {
+        query: query.into(),
+        filters: filters.into(),
+        weekly: false,
+    }
+}
+
 fn machine(name: &str, status: Status) -> Machine {
     Machine {
         name: name.into(),
@@ -77,7 +85,7 @@ fn machine(name: &str, status: Status) -> Machine {
 fn fleet_totals_add_each_machine_once_and_keep_its_own_rows() {
     let current = window().current().unwrap();
     let fleet = merge(
-        "fleet".into(),
+        None,
         window(),
         Filters::of(&MetricsArgs::default()),
         vec![
@@ -136,7 +144,7 @@ fn a_cached_comparison_for_other_dates_is_left_out_and_said() {
         through: current.through - chrono::Days::new(2),
     };
     let fleet = merge(
-        "fleet".into(),
+        None,
         window(),
         Filters::of(&MetricsArgs::default()),
         vec![(
@@ -165,11 +173,15 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
     let start = Utc::now();
     for index in 0..=VIEWS {
         let at = start + chrono::Duration::seconds(index as i64);
-        let query = format!("window={index}");
+        let view = View {
+            query: format!("window={index}"),
+            filters: String::new(),
+            weekly: false,
+        };
         save(
             logs.path(),
             "east/one",
-            &query,
+            &view,
             &summary("east", current, index, 0),
             at,
         )
@@ -190,11 +202,25 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
     );
     let mut cached_machine = machine("east/one", Status::Cached);
     let read = read_saved(&path(logs.path(), "east/one")).unwrap();
-    let summary = cached(&mut cached_machine, read, &format!("window={VIEWS}")).unwrap();
+    let summary = cached(
+        &mut cached_machine,
+        read,
+        &view(&format!("window={VIEWS}"), "x"),
+        &window(),
+    )
+    .unwrap();
     assert_eq!(summary.outcomes[0].tally.succeeded, VIEWS);
     assert!(cached_machine.error.is_none());
     let read = read_saved(&path(logs.path(), "east/one")).unwrap();
-    assert!(cached(&mut cached_machine, read, "window=never").is_none());
+    assert!(
+        cached(
+            &mut cached_machine,
+            read,
+            &view("window=never", "other"),
+            &window()
+        )
+        .is_none()
+    );
     assert_eq!(
         cached_machine.error.as_deref(),
         Some("no saved snapshot for this view")
@@ -215,7 +241,7 @@ fn the_view_query_is_fixed_whatever_order_the_flags_came_in() {
         let crate::args::Command::Metrics(asked) = crate::args::parse(&args).unwrap() else {
             unreachable!()
         };
-        query(&asked)
+        View::of(&asked, &window()).query
     };
     assert_eq!(
         parse(&["--kind", "Run", "--window", "7d", "--repo", "acme/widgets"]),
@@ -226,4 +252,71 @@ fn the_view_query_is_fixed_whatever_order_the_flags_came_in() {
         "window=7d&kind=Spec+run"
     );
     assert_eq!(parse(&[]), "");
+}
+
+#[test]
+fn a_cached_snapshot_counts_only_failures_in_todays_window() {
+    let current = window().current().unwrap();
+    let mut old = summary("east", current, 0, 1);
+    old.where_runs_failed.rows[0].commands[0].started_at = "2026-10-01T00:00:00Z".into();
+    let fleet = merge(
+        None,
+        window(),
+        Filters::of(&MetricsArgs::default()),
+        vec![(machine("east", Status::Cached), Some(old))],
+    );
+    assert_eq!(fleet.where_runs_failed.failed, 0);
+}
+
+#[test]
+fn another_windows_snapshot_stands_in_regrouped_by_week() {
+    let logs = tempfile::tempdir().unwrap();
+    let current = window().current().unwrap();
+    let daily = View::of(
+        &MetricsArgs {
+            window: Some(MetricsWindow::Days7),
+            ..MetricsArgs::default()
+        },
+        &window(),
+    );
+    save(
+        logs.path(),
+        "east",
+        &daily,
+        &summary("east", current, 2, 1),
+        Utc::now(),
+    )
+    .unwrap();
+    let weekly = Window::of(&MetricsArgs::default(), today());
+    let all = View::of(&MetricsArgs::default(), &weekly);
+    let mut east = machine("east", Status::Cached);
+    let read = read_saved(&path(logs.path(), "east")).unwrap();
+    let stood_in = cached(&mut east, read, &all, &weekly).unwrap();
+    assert!(stood_in.comparison.is_none());
+    let buckets: Vec<_> = stood_in
+        .outcomes
+        .iter()
+        .map(|row| (row.bucket.to_string(), row.tally.runs))
+        .collect();
+    // 2026-11-10 is in the week of Monday 2026-11-09; 2026-10-01 in 09-28's.
+    assert_eq!(
+        buckets,
+        [("2026-09-28".to_owned(), 1), ("2026-11-09".to_owned(), 3)]
+    );
+    assert_eq!(
+        east.error.as_deref(),
+        Some("showing its snapshot of another window")
+    );
+    // A weekly snapshot cannot stand in for a daily view.
+    save(
+        logs.path(),
+        "west",
+        &all,
+        &summary("west", current, 1, 0),
+        Utc::now(),
+    )
+    .unwrap();
+    let mut west = machine("west", Status::Cached);
+    let read = read_saved(&path(logs.path(), "west")).unwrap();
+    assert!(cached(&mut west, read, &daily, &window()).is_none());
 }

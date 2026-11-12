@@ -61,11 +61,10 @@ struct SummaryChange {
     prior: Tally,
 }
 
+/// Where runs failed. Its totals are counted again from the rows, so a saved
+/// snapshot's Commands outside today's window drop out of both.
 #[derive(Default, Serialize, Deserialize)]
 struct SummaryFailures {
-    failed: usize,
-    observed: usize,
-    missing: usize,
     rows: Vec<SummaryStopped>,
 }
 
@@ -91,8 +90,8 @@ pub(crate) struct SummaryCommand {
 #[derive(Serialize)]
 pub(crate) struct Fleet {
     pub(crate) version: u32,
-    /// `fleet`, or the one machine asked for.
-    pub(crate) scope: String,
+    /// The one machine asked for; missing for the whole Fleet.
+    pub(crate) machine: Option<String>,
     pub(crate) window: Window,
     pub(crate) filters: Filters,
     pub(crate) machines: Vec<Machine>,
@@ -218,12 +217,43 @@ struct Saved {
 #[derive(Serialize, Deserialize)]
 struct SavedView {
     fetched_at: DateTime<Utc>,
+    /// The view's filters, without its window, and whether it was weekly:
+    /// what lets it stand in for another window's view.
+    #[serde(default)]
+    filters: Option<String>,
+    #[serde(default)]
+    weekly: Option<bool>,
     summary: Value,
 }
 
-/// The `metrics` query an owning machine is asked, in a fixed order, so a
-/// view's saved snapshot is found again by the same text.
-pub(crate) fn query(asked: &MetricsArgs) -> String {
+/// What each machine is asked: the `metrics` query in a fixed order, so its
+/// saved snapshot is found again by the same text, and the parts that let a
+/// snapshot of another window stand in.
+pub(crate) struct View {
+    pub(crate) query: String,
+    filters: String,
+    weekly: bool,
+}
+
+impl View {
+    pub(crate) fn of(asked: &MetricsArgs, window: &Window) -> Self {
+        let (windowing, filters) = pairs(asked);
+        let encode = |pairs: &[(&str, String)]| {
+            serde_urlencoded::to_string(pairs).expect("metrics query pairs encode")
+        };
+        Self {
+            query: encode(&[windowing, filters.clone()].concat()),
+            filters: encode(&filters),
+            weekly: window.weekly(),
+        }
+    }
+}
+
+/// `metrics` query pairs, each a `--<key>` flag and its value.
+type Pairs = Vec<(&'static str, String)>;
+
+/// The window's query pairs, then the filters'.
+fn pairs(asked: &MetricsArgs) -> (Pairs, Pairs) {
     let mut pairs: Vec<(&str, String)> = Vec::new();
     if let Some(window) = asked.window {
         pairs.push(("window", window.name().into()));
@@ -236,6 +266,7 @@ pub(crate) fn query(asked: &MetricsArgs) -> String {
             pairs.push((key, date.to_string()));
         }
     }
+    let mut filters = Vec::new();
     for (key, values) in [
         ("repo", &asked.repositories),
         ("kind", &asked.kinds),
@@ -244,9 +275,9 @@ pub(crate) fn query(asked: &MetricsArgs) -> String {
         ("version", &asked.versions),
         ("account", &asked.accounts),
     ] {
-        pairs.extend(values.iter().map(|value| (key, value.clone())));
+        filters.extend(values.iter().map(|value| (key, value.clone())));
     }
-    serde_urlencoded::to_string(pairs).expect("metrics query pairs encode")
+    (pairs, filters)
 }
 
 /// Whether Fleet is the Console's default Metrics view: a paired machine, or
@@ -262,7 +293,7 @@ pub(crate) fn default_view(config: &UserConfig) -> bool {
 
 /// Every machine Fleet metrics can be scoped to besides this one: the Fleet
 /// in config order, then retired machines with a saved snapshot.
-pub(crate) fn names(config: &UserConfig) -> Vec<String> {
+pub(crate) fn others(config: &UserConfig) -> Vec<String> {
     let local = crate::console::fleet_control::local_name(config);
     let mut names: Vec<_> = config
         .console
@@ -289,14 +320,14 @@ pub(crate) fn load(
 ) -> Result<Fleet> {
     let now = Utc::now();
     let local = crate::console::fleet_control::local_name(config);
-    let one = asked.machine.as_deref();
-    if let Some(name) = one
-        && !names(config).iter().any(|known| known == name)
+    let chosen = asked.machine.as_deref();
+    if let Some(name) = chosen
+        && !others(config).iter().any(|known| known == name)
     {
         bail!("unknown Fleet machine: {name}");
     }
     let mut sources = Vec::new();
-    let window = if one.is_none() {
+    let window = if chosen.is_none() {
         let trends = super::trends(config, asked)?;
         let summary = serde_json::from_value(serde_json::to_value(&trends)?)?;
         sources.push((
@@ -314,19 +345,19 @@ pub(crate) fn load(
     } else {
         Window::of(asked, now.date_naive())
     };
-    let query = query(asked);
+    let view = View::of(asked, &window);
     let entries: Vec<_> = config
         .console
         .fleet
         .iter()
-        .filter(|entry| one.is_none_or(|name| name == entry.name))
+        .filter(|entry| chosen.is_none_or(|name| name == entry.name))
         .collect();
     // Independent requests, each bounded by the Fleet transport's three
     // seconds, so one stalled peer cannot hold the page.
     sources.extend(std::thread::scope(|threads| {
         let handles: Vec<_> = entries
             .iter()
-            .map(|entry| threads.spawn(|| remote(config, entry, person, &query, now)))
+            .map(|entry| threads.spawn(|| remote(config, entry, person, &view, &window, now)))
             .collect();
         handles
             .into_iter()
@@ -339,7 +370,7 @@ pub(crate) fn load(
         .filter(|saved| {
             saved.machine != local
                 && !paired.contains(&&saved.machine)
-                && one.is_none_or(|name| name == saved.machine)
+                && chosen.is_none_or(|name| name == saved.machine)
         })
         .collect();
     retired.sort_by(|a, b| a.machine.cmp(&b.machine));
@@ -352,11 +383,11 @@ pub(crate) fn load(
             last_seen: Some(saved.last_seen),
             error: Some("no longer in this Console's Fleet".into()),
         };
-        let summary = cached(&mut machine, saved, &query);
+        let summary = cached(&mut machine, saved, &view, &window);
         sources.push((machine, summary));
     }
     Ok(merge(
-        one.map_or_else(|| "fleet".to_owned(), str::to_owned),
+        chosen.map(str::to_owned),
         window,
         Filters::of(asked),
         sources,
@@ -367,7 +398,8 @@ fn remote(
     config: &UserConfig,
     entry: &Entry,
     person: Option<&str>,
-    query: &str,
+    view: &View,
+    window: &Window,
     now: DateTime<Utc>,
 ) -> (Machine, Option<Summary>) {
     let mut machine = Machine {
@@ -386,10 +418,10 @@ fn remote(
         }
         let remote = Remote::select(config, &entry.name, person.map(str::to_owned))?
             .context("expected a Fleet machine")?;
-        let route = if query.is_empty() {
+        let route = if view.query.is_empty() {
             "/metrics".to_owned()
         } else {
-            format!("/metrics?{query}")
+            format!("/metrics?{}", view.query)
         };
         let summary =
             serde_json::from_value(remote.get(&route)?).context("incompatible metrics summary")?;
@@ -404,7 +436,7 @@ fn remote(
             machine.last_seen = Some(now);
             // The saved snapshot is a convenience; failing to keep it must
             // not cost the live view.
-            if let Err(error) = save(&config.logs_dir, &entry.name, query, &summary, now) {
+            if let Err(error) = save(&config.logs_dir, &entry.name, view, &summary, now) {
                 machine.error = Some(format!("snapshot not saved: {error:#}"));
             }
             (machine, Some(summary))
@@ -427,22 +459,61 @@ fn remote(
             };
             machine.status = Status::Cached;
             machine.last_seen = Some(saved.last_seen);
-            let summary = cached(&mut machine, saved, query);
+            let summary = cached(&mut machine, saved, view, window);
             (machine, summary)
         }
     }
 }
 
-/// A saved view's summary, noting on the machine when this view was never read.
-fn cached(machine: &mut Machine, mut saved: Saved, query: &str) -> Option<Summary> {
-    let summary = saved
+/// A saved view's summary. Without this view's own, the newest one read with
+/// the same filters stands in, its buckets regrouped by week when this view
+/// is weekly; a weekly snapshot cannot stand in for a daily view.
+fn cached(
+    machine: &mut Machine,
+    mut saved: Saved,
+    view: &View,
+    window: &Window,
+) -> Option<Summary> {
+    if let Some(summary) = saved
         .views
-        .remove(query)
-        .and_then(|view| serde_json::from_value(view.summary).ok());
-    if summary.is_none() {
-        note(machine, "no saved snapshot for this view");
+        .remove(&view.query)
+        .and_then(|saved| serde_json::from_value(saved.summary).ok())
+    {
+        return Some(summary);
     }
-    summary
+    let stand_in = saved
+        .views
+        .into_values()
+        .filter(|saved| {
+            saved.filters.as_deref() == Some(view.filters.as_str())
+                && saved.weekly.is_some_and(|weekly| view.weekly || !weekly)
+        })
+        .max_by_key(|saved| saved.fetched_at)
+        .and_then(|saved| serde_json::from_value::<Summary>(saved.summary).ok());
+    let Some(mut summary) = stand_in else {
+        note(machine, "no saved snapshot for this view");
+        return None;
+    };
+    note(machine, "showing its snapshot of another window");
+    // Its comparison covers that window's dates, never this one's.
+    summary.comparison = None;
+    let mut buckets = BTreeMap::<_, SummaryBucket>::new();
+    for row in summary.outcomes {
+        let bucket = window.bucket_on(row.bucket);
+        let merged = buckets
+            .entry((bucket, row.account.clone(), row.kind.clone()))
+            .or_insert_with(|| SummaryBucket {
+                bucket,
+                account: row.account,
+                kind: row.kind,
+                tally: Tally::default(),
+                failed_commands: Vec::new(),
+            });
+        merged.tally.merge(&row.tally);
+        merged.failed_commands.extend(row.failed_commands);
+    }
+    summary.outcomes = buckets.into_values().collect();
+    Some(summary)
 }
 
 fn note(machine: &mut Machine, text: &str) {
@@ -453,7 +524,7 @@ fn note(machine: &mut Machine, text: &str) {
 }
 
 fn merge(
-    scope: String,
+    machine: Option<String>,
     window: Window,
     filters: Filters,
     sources: Vec<(Machine, Option<Summary>)>,
@@ -496,11 +567,26 @@ fn merge(
                 }
                 _ => {}
             }
-            let failed = summary.where_runs_failed;
-            failures.failed += failed.failed;
-            failures.observed += failed.observed;
-            failures.missing += failed.missing;
-            for row in failed.rows {
+            for mut row in summary.where_runs_failed.rows {
+                // A cached snapshot may predate today's window, as above.
+                row.commands.retain(|command| {
+                    match DateTime::parse_from_rfc3339(&command.started_at) {
+                        Ok(started) => {
+                            window.shows(window.bucket_on(started.with_timezone(&Utc).date_naive()))
+                        }
+                        // An unreadable start cannot place it outside the window.
+                        Err(_) => true,
+                    }
+                });
+                if row.commands.is_empty() {
+                    continue;
+                }
+                failures.failed += row.commands.len();
+                if row.recorded {
+                    failures.observed += row.commands.len();
+                } else {
+                    failures.missing += row.commands.len();
+                }
                 let entry = stopped
                     .entry((row.stopped_at.clone(), row.category.clone(), row.recorded))
                     .or_insert_with(|| Stopped {
@@ -532,7 +618,7 @@ fn merge(
         .sort_by_key(|row| std::cmp::Reverse(row.failed));
     Fleet {
         version: 1,
-        scope,
+        machine,
         window,
         filters,
         machines,
@@ -597,7 +683,7 @@ fn saved(logs_dir: &Path) -> Vec<Saved> {
 fn save(
     logs_dir: &Path,
     name: &str,
-    query: &str,
+    view: &View,
     summary: &Summary,
     at: DateTime<Utc>,
 ) -> Result<()> {
@@ -614,9 +700,11 @@ fn save(
         });
     saved.last_seen = at;
     saved.views.insert(
-        query.to_owned(),
+        view.query.clone(),
         SavedView {
             fetched_at: at,
+            filters: Some(view.filters.clone()),
+            weekly: Some(view.weekly),
             summary: serde_json::to_value(summary)?,
         },
     );
