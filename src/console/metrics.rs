@@ -3,11 +3,13 @@ use anyhow::Result;
 use askama::Template;
 use axum::Extension;
 use axum::extract::RawQuery;
+use axum::http::StatusCode;
 use axum::response::Response;
 
 use super::auth::Viewer;
 use crate::args::{MetricsArgs, MetricsWindow};
 use crate::config::UserConfig;
+use crate::logs::metrics::fleet::{self, FailedCommand, Fleet};
 use crate::logs::metrics::{Bucket, Class, Ending, Stopped, Timeline, Trends};
 
 /// The query keys that are `metrics` filters and window, each a `--<key>` flag.
@@ -23,6 +25,28 @@ const FAILED_ON: &str = "failed_on";
 const FAILED_KIND: &str = "failed_kind";
 const FAILED_ACCOUNT: &str = "failed_account";
 
+/// The page's scope: `machine=fleet`, this machine's name, or a Fleet
+/// machine's. Only the page reads other machines; the API stays local.
+const MACHINE: &str = "machine";
+const FLEET: &str = "fleet";
+
+/// The machines a Metrics page can be scoped to, for its selector.
+struct Machines {
+    /// What the selector shows chosen: `fleet` or a machine's name.
+    chosen: String,
+    /// This machine's name, distinct from every Fleet entry's.
+    local: String,
+    /// Fleet machines and retired ones with a saved snapshot.
+    others: Vec<String>,
+}
+
+impl Machines {
+    /// The `machine` pair links keep, so a scoped page stays scoped.
+    fn pair(&self) -> (&str, &str) {
+        (MACHINE, &self.chosen)
+    }
+}
+
 #[derive(Template)]
 #[template(path = "console/metrics.html")]
 struct MetricsPage {
@@ -35,6 +59,7 @@ struct MetricsPage {
     classes: [Class; 4],
     /// The page's own filters and window, as given, for links that keep them.
     view: Vec<(String, String)>,
+    machines: Machines,
 }
 
 impl MetricsPage {
@@ -74,12 +99,56 @@ impl MetricsPage {
 
     /// This view narrowed to one `thirdshift` version.
     fn version_slice(&self, version: &str) -> String {
-        self.link("/metrics", &["version"], &[("version", version)])
+        self.link(
+            "/metrics",
+            &["version"],
+            &[("version", version), self.machines.pair()],
+        )
     }
 
     /// A Failed Command's Console details.
     fn details(&self, selector: &str) -> String {
         crate::logs::status::inspect::url("/peek", selector, None)
+    }
+}
+
+/// Fleet metrics, or one Fleet machine's, the twin of `metrics --fleet`
+/// and `metrics --machine <name>`.
+#[derive(Template)]
+#[template(path = "console/metrics_fleet.html")]
+struct FleetPage {
+    page: super::PageContext,
+    fleet: Fleet,
+    error: Option<String>,
+    form: Form,
+    kinds: [&'static str; 9],
+    windows: [(&'static str, MetricsWindow); 4],
+    classes: [Class; 4],
+    machines: Machines,
+    /// The CLI twin, `metrics --fleet` or `metrics --machine <name>`.
+    cli: String,
+}
+
+impl FleetPage {
+    /// A Failed Command's details on the machine that holds it, while that
+    /// machine answers; a cached one's details cannot be opened from here.
+    fn details(&self, failed: &FailedCommand) -> Option<String> {
+        let machine = self
+            .fleet
+            .machines
+            .iter()
+            .find(|machine| machine.name == failed.machine)?;
+        let route = crate::logs::status::inspect::url("/peek", &failed.command.selector, None);
+        if machine.local {
+            Some(route)
+        } else if machine.status == fleet::Status::Ok {
+            Some(crate::logs::status::inspect::machine_url(
+                &route,
+                &machine.name,
+            ))
+        } else {
+            None
+        }
     }
 }
 
@@ -227,13 +296,36 @@ fn arguments(query: &Option<String>) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
+/// `query` less its `machine` pair, which names the page's scope, not a filter.
+fn without_machine(query: &Option<String>) -> Result<Option<String>> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let url = reqwest::Url::parse(&format!("http://localhost/?{query}"))?;
+    Ok(Some(serde_urlencoded::to_string(
+        url.query_pairs()
+            .filter(|(key, _)| key != MACHINE)
+            .collect::<Vec<_>>(),
+    )?))
+}
+
 pub(super) async fn show(
     Extension(viewer): Extension<Viewer>,
     Extension(format): Extension<super::api::Format>,
     RawQuery(query): RawQuery,
 ) -> Response {
+    if format == super::api::Format::Json
+        && pairs(&query, &[MACHINE, FLEET]).map_or(true, |pairs| !pairs.is_empty())
+    {
+        return super::api::error(
+            StatusCode::BAD_REQUEST,
+            "Fleet metrics are an explicit client view; call each owning machine's API directly",
+        );
+    }
+    let machine = super::query_value(&query, MACHINE);
     super::api::read(format, move || {
         let config = UserConfig::load()?;
+        let query = without_machine(&query)?;
         let (asked, error) = match arguments(&query) {
             Ok(asked) => (asked, None),
             // The page shows a refused filter beside the unfiltered view.
@@ -248,6 +340,50 @@ pub(super) async fn show(
                     "<pre>{}</pre>",
                     super::filters::escaped(&serde_json::to_string_pretty(&value)?)
                 ))
+            });
+        }
+        let local = super::fleet_control::local_name(&config);
+        let chosen = match machine.as_str() {
+            "" if fleet::default_view(&config) => FLEET.to_owned(),
+            "" => local.clone(),
+            chosen => chosen.to_owned(),
+        };
+        let machines = Machines {
+            others: fleet::names(&config),
+            local,
+            chosen,
+        };
+        if machines.chosen != machines.local {
+            let mut asked = asked;
+            let mut cli = vec!["metrics".to_owned(), "--fleet".to_owned()];
+            if machines.chosen != FLEET {
+                asked.machine = Some(machines.chosen.clone());
+                cli = vec![
+                    "metrics".into(),
+                    "--machine".into(),
+                    machines.chosen.clone(),
+                ];
+            }
+            cli.extend(
+                pairs(&query, &FILTERS)?
+                    .into_iter()
+                    .flat_map(|(key, value)| [format!("--{key}"), value]),
+            );
+            cli.push("--json".into());
+            let fleet = fleet::load(&config, &asked, viewer.fleet_person())?;
+            return format.render(fleet, |fleet| {
+                Ok(FleetPage {
+                    page: super::PageContext::new(&config, &viewer.scopes),
+                    fleet,
+                    error,
+                    form: Form::of(&asked),
+                    kinds: crate::logs::metrics::COUNTED.map(crate::logs::display_name),
+                    windows: MetricsWindow::NAMES,
+                    classes: Class::ENDED,
+                    machines,
+                    cli: crate::args::shell_command(cli),
+                }
+                .render()?)
             });
         }
         // A refused query shows the unfiltered view, so its links carry none.
@@ -266,6 +402,7 @@ pub(super) async fn show(
                 windows: MetricsWindow::NAMES,
                 classes: Class::ENDED,
                 view,
+                machines,
             }
             .render()?)
         })

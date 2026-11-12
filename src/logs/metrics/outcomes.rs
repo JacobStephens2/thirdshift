@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::super::reading::{Command, Entry, Observation, Snapshot};
 use super::scope::{Filters, Span, Window};
@@ -21,7 +21,7 @@ const WORK: [&str; 8] = [
 ];
 
 /// How a Command stands: one of four ended stacks, or still live.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Class {
     Succeeded,
@@ -125,8 +125,9 @@ pub(super) fn succeeded(command: &Command) -> bool {
 
 /// Counts of one group. `n` is the rate's denominator: Succeeded and Failed.
 /// `observed` Commands have ended or died; `missing` ones are live, with no
-/// outcome yet.
-#[derive(Default, Serialize)]
+/// outcome yet. A Fleet machine's tally is read back from its own JSON.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct Tally {
     pub(crate) runs: usize,
     pub(crate) succeeded: usize,
@@ -157,6 +158,31 @@ impl Tally {
             .or_default()
             .entry(counted.outcome.clone())
             .or_default() += 1;
+        self.settle();
+    }
+
+    /// Adds another machine's counts: each Command is counted where it ran.
+    pub(super) fn merge(&mut self, other: &Self) {
+        self.runs += other.runs;
+        self.succeeded += other.succeeded;
+        self.failed += other.failed;
+        self.paused += other.paused;
+        self.stopped += other.stopped;
+        self.live += other.live;
+        for (class, outcomes) in &other.sub_outcomes {
+            for (outcome, count) in outcomes {
+                *self
+                    .sub_outcomes
+                    .entry(*class)
+                    .or_default()
+                    .entry(outcome.clone())
+                    .or_default() += count;
+            }
+        }
+        self.settle();
+    }
+
+    fn settle(&mut self) {
         self.n = self.succeeded + self.failed;
         self.missing = self.live;
         self.observed = self.runs - self.live;
@@ -274,7 +300,7 @@ pub(crate) struct Delta {
 }
 
 impl Delta {
-    fn of(current: &Tally, prior: &Tally) -> Self {
+    pub(super) fn of(current: &Tally, prior: &Tally) -> Self {
         let change = |current: usize, prior: usize| current as i64 - prior as i64;
         Self {
             success_rate: current

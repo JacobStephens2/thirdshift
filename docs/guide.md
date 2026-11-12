@@ -410,6 +410,18 @@ The Command excerpt omits the common fields documented for `status --json`; all 
 
 `logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session trace as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the captured outer Command process exits, including output written after its outcome was recorded. A Ticket shares its Command's Command log but selects its own Session traces. The selected Command and Session trace stay fixed while following. Exact-file following (`logs --file <id> --follow`) and the Console also drain through writer exit; an exact Session trace becomes complete when its owning record names a later Session. Retained files without a captured writer are finite. Each exact-file or Console read first checks that the selected file is still in the log inventory: removing it, or replacing its owner, repository or kind folder or the file itself with a symlink, ends the read with an error. Following by Command is unaffected. The CLI emits raw bytes; the Console holds an unfinished live line until its newline arrives or the selected file is complete.
 
+### Fleet metrics
+
+`thirdshift metrics --fleet [--json]` reads `/api/v1/metrics` from every paired **Fleet** machine, with the same window and filters, and merges them with this machine's trends. Each Command counts once, on the machine it ran on. The version 1 JSON has `scope` (`fleet`), `window`, `filters`, `machines`, `outcomes`, `comparison` and `where_runs_failed`. Each `outcomes` row and each `comparison.rows` row names its `machine`; `comparison.fleet` adds every machine's counts for one Command kind, with its own `delta`. `where_runs_failed` adds the machines' Failed Commands by stage and category, with `machines` counting each machine's share and each Command naming its `machine`. The signal groups, versions and signal rows stay in each machine's own view.
+
+`machines` lists this machine, then the Fleet in config order, each with `status`: `ok`, `cached`, `unavailable`, `refused`, `incompatible` or `link-only`, `last_seen` and any `error`. A link-only machine is never asked. Each request is bounded by the Fleet transport's three seconds, so a stalled machine cannot hold the view.
+
+Every successful read saves that machine's summary (outcome buckets, the comparison and Where runs failed with its Commands) under `~/.thirdshift/logs/fleet-metrics/`, one file per machine, replaced in one rename and keeping its 16 most recently read views. When a paired machine cannot be reached, its saved summary for the same window and filters takes its place, marked `cached` with the time it was read in `last_seen`. A machine removed from the Fleet keeps its saved summary, marked `cached` too. A refused or incompatible machine shows no saved summary. A cached machine's buckets outside today's window are left out, and its comparison only counts when it covers the same dates.
+
+`thirdshift metrics --machine <name> [--json]` reads one Fleet machine the same way, cached or not; this machine's own name gives plain `metrics`. `/api/v1/metrics` stays local: it refuses `fleet` and `machine`, so an API caller never reads through this machine's saved Fleet tokens.
+
+On the Console, **Metrics** opens on the Fleet when a Fleet machine is paired or a saved summary exists. Its Machine selector picks **Fleet**, **This machine** (with the signal groups) or one Fleet machine (`/metrics?machine=<name>`). A Failed Command's name opens its details on the machine that holds it while that machine answers.
+
 ## Install
 
 ```sh
@@ -748,7 +760,7 @@ by later Console API tickets appear when they are served.
 | Waterfall | `/api/v1/waterfall?command=<selector>`, `/api/v1/spans?command=<selector>&span=<id>` | `show <selector> --spans` or `--span <id>` |
 | Command log or Session trace | `/api/v1/log?command=<selector>&session=<kind>` (omit `session` for the Command log) | `logs <selector> [--session <kind>]` |
 | Log inventory and exact file | `/api/v1/logs`, `/api/v1/logs/command/<id>`, `/api/v1/logs/<id>` | `logs`, `logs --command <id>`, `logs --file <id>` |
-| Run metrics | `/api/v1/metrics` (`command`, `window`, `grain`, `from`, `through`, repeated `repo`, `kind`, `harness`, `model`, `account`) | `metrics` |
+| Run metrics | `/api/v1/metrics` (`command`, `window`, `grain`, `from`, `through`, repeated `repo`, `kind`, `harness`, `model`, `account`); refuses `fleet` and `machine` | `metrics` (`--fleet` and `--machine` are CLI and page only) |
 | Scores, Bug origins | `/api/v1/scores?pull_request=<selector>`, `/api/v1/bug-origins` | `scores [<selector>]`, `bug-origins` |
 | Experiments, Trial Session evidence and blind pairs | `/api/v1/experiments`, `/api/v1/experiments/<id>`, `/api/v1/experiments/<id>/sessions/<session>`, `/api/v1/experiments/<id>/pairs/<pair>` | `experiments [<id>] [--session <session> \| --pair <pair>]` |
 | Cron jobs, Resources, Console log, Theme export | `/api/v1/cronjobs`, `/api/v1/resources`, `/api/v1/console-log`, `/api/v1/themes/<name>` | `cronjobs`, `resources`, `console log`, `console theme export <name>` (already JSON) |

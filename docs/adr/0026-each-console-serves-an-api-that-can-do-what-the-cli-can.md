@@ -16,7 +16,7 @@ Tokens carry the weight (#1142 Q3.1 to Q3.5):
   - `console fleet remove`: Fleet removal stays in the shell alongside pairing and its Credentials changes.
   - Details commands with `--machine`: Fleet detail forwarding uses the owning machine's API directly; API reads stay local and never relay through saved Fleet tokens.
   - `cronjobs --fleet`: Fleet schedule aggregation is an explicit client of owning-machine inventories; the API stays local and cannot lend saved Fleet credentials.
-  - `metrics --fleet`: Fleet metrics aggregation is an explicit client of owning-machine metrics and cached peer snapshots; the API stays local and cannot lend saved Fleet credentials.
+  - `metrics --fleet` and `metrics --machine`: Fleet metrics aggregation is an explicit client of owning-machine metrics and cached peer snapshots; the API stays local and cannot lend saved Fleet credentials.
   - `metrics --push`: Outbound metrics reporting sends this machine's local summary to a configured Console using saved credentials; the receiving Console exposes the report endpoint directly.
   - The Console sign-in list and `console sign-out`: Console sign-in administration, including revoking sign-ins, stays in the shell.
   - `console install`: Console installation writes the machine's proxy and service setup.

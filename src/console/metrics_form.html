@@ -1,0 +1,13 @@
+<form class="metrics-filters" method="get" action="/metrics" aria-label="Metrics filters">
+{% if !machines.others.is_empty() || machines.chosen != machines.local %}<label>Machine <select name="machine"><option value="fleet"{% if machines.chosen == "fleet" %} selected{% endif %}>Fleet</option><option value="{{ machines.local }}"{% if machines.chosen == machines.local %} selected{% endif %}>This machine ({{ machines.local }})</option>{% for name in machines.others %}<option value="{{ name }}"{% if machines.chosen.as_str() == name.as_str() %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>{% endif %}
+<label>Window <select name="window"><option value=""{% if form.window.is_empty() %} selected{% endif %}>Dates below</option>{% for (name, _) in windows %}<option value="{{ name }}"{% if form.window == **name %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+<label>Grain <select name="grain"><option value=""{% if form.grain.is_empty() %} selected{% endif %}>Default</option><option value="day"{% if form.grain == "day" %} selected{% endif %}>day</option><option value="week"{% if form.grain == "week" %} selected{% endif %}>week</option></select></label>
+<label>From <input type="date" name="from" value="{{ form.from }}"></label>
+<label>Through <input type="date" name="through" value="{{ form.through }}"></label>
+{% for value in form.repo %}<label>Repository <input name="repo" value="{{ value }}" placeholder="owner/repository"></label>{% endfor %}
+{% for value in form.kind %}<label>Kind <select name="kind"><option value=""{% if value.is_empty() %} selected{% endif %}>Any</option>{% for kind in kinds %}<option{% if value == kind %} selected{% endif %}>{{ kind }}</option>{% endfor %}</select></label>{% endfor %}
+{% for value in form.harness %}<label>Harness <input name="harness" value="{{ value }}"></label>{% endfor %}
+{% for value in form.model %}<label>Model <input name="model" value="{{ value }}"></label>{% endfor %}
+{% for value in form.version %}<label>Version <input name="version" value="{{ value }}" placeholder="thirdshift version"></label>{% endfor %}
+{% for value in form.account %}<label>Account <input name="account" value="{{ value }}" placeholder="OS account"></label>{% endfor %}
+<button>Show</button></form>
