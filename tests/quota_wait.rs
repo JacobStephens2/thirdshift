@@ -368,3 +368,36 @@ fn a_pass_that_waited_before_skipping_finishes_its_command_record() {
     let shown = scenario.run(&["status"]);
     assert!(!shown.stdout.contains("Died"), "{}", shown.stdout);
 }
+
+#[test]
+fn a_rate_limit_whose_probe_shows_the_reserve_retries_without_a_quota_wait() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("{COMMIT}{PR}"));
+    let mut state = scenario.gh_state();
+    state["fail_next"] = json!({"call":"pr ready", "times":1,
+        "error":"GraphQL: API rate limit exceeded (HTTP 403)"});
+    // The window reset between the failed request and the probe: a full
+    // quota whose next reset is far beyond any Command's wait cap.
+    state["rate_limits"] = json!({"graphql":{"remaining":4995,"reset":4102444800u64}});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("Quota wait until"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "ready").len(), 2);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    if path.exists() {
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            record["waits"].as_array().is_none_or(Vec::is_empty),
+            "{record}"
+        );
+    }
+}

@@ -308,3 +308,40 @@ fn every_pass_skips_below_either_reserve_and_reuses_the_wait_without_notificatio
         );
     }
 }
+
+#[test]
+fn a_stored_wait_with_the_reserve_available_does_not_skip_a_pass() {
+    let scenario = Scenario::new();
+    // A first Pass caches the account beside an empty wait list.
+    assert_eq!(scenario.run(&["pickup"]).code, Some(0));
+    let path = scenario.path("home/.thirdshift/github-quota.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let account = record["identities"][0]["account"].clone();
+    // A wait recorded after the window had already reset, as by v0.30.0.
+    record["waits"] = json!([{
+        "host": account["host"],
+        "login": account["login"],
+        "resource": "graphql",
+        "remaining": 4995,
+        "reset_at": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+    }]);
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let calls = scenario.gh_calls().len();
+    for args in [vec!["pickup"], vec!["status"]] {
+        let output = scenario.run(&args);
+        assert_eq!(output.code, Some(0), "{args:?}: {}", output.stderr);
+        assert!(
+            !format!("{}{}", output.stdout, output.stderr).contains("GitHub Quota wait until"),
+            "{args:?}: {}{}",
+            output.stdout,
+            output.stderr
+        );
+    }
+    assert!(
+        scenario.gh_calls()[calls..]
+            .iter()
+            .any(|call| !call.starts_with(&["api".into(), "rate_limit".into()])),
+        "Pickup did no GitHub work"
+    );
+}
