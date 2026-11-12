@@ -26,6 +26,8 @@ struct Memory {
     terminal_fails: bool,
     record_write_fails: bool,
     reused_pid: bool,
+    /// Session traces that read as observed, each with one tool error.
+    observed_sessions: Vec<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -124,16 +126,20 @@ impl Outside for Scripted {
         &mut self,
         log: &Path,
     ) -> Option<crate::logs::session_signals::SessionSignals> {
-        // A Session trace present in memory reads as an observed Session.
-        self.0.lock().unwrap().files.contains_key(log).then(|| {
-            crate::logs::session_signals::SessionSignals {
-                harness: Some("claude".into()),
-                harness_version: None,
-                signals: crate::logs::session_signals::Signals {
-                    tool_errors: 1,
-                    ..Default::default()
-                },
-            }
+        let observed = self
+            .0
+            .lock()
+            .unwrap()
+            .observed_sessions
+            .iter()
+            .any(|seen| seen == log);
+        observed.then(|| crate::logs::session_signals::SessionSignals {
+            harness: Some("claude".into()),
+            harness_version: None,
+            signals: crate::logs::session_signals::Signals {
+                tool_errors: 1,
+                ..Default::default()
+            },
         })
     }
 
@@ -478,44 +484,75 @@ fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
         Path::new("/sessions/repair-1.jsonl"),
         Path::new("/sessions/repair-2.jsonl"),
     ];
-    let cases: [(Begin, Work, &str, Vec<(StageName, Option<&Path>)>); 3] = [
-        (
-            Begin::ReviewRun { pass: false },
-            Work::ReviewRun(&repo),
-            "Review run",
-            vec![
+    struct Case<'a> {
+        begin: Begin<'a>,
+        work: Work<'a>,
+        kind: &'a str,
+        stages: Vec<(StageName, Option<&'a Path>)>,
+        observed: usize,
+        repairs: usize,
+        ci_rounds: usize,
+        // The first stage's Session's review findings.
+        review_findings: serde_json::Value,
+    }
+    let cases = [
+        Case {
+            begin: Begin::ReviewRun { pass: false },
+            work: Work::ReviewRun(&repo),
+            kind: "Review run",
+            stages: vec![
                 (StageName::CodeReview, Some(review)),
                 (StageName::PullRequest, None),
             ],
-        ),
-        (
-            Begin::TriageRun { pass: false },
-            Work::TriageRun {
+            observed: 1,
+            repairs: 0,
+            ci_rounds: 0,
+            review_findings: serde_json::json!({"standards": 2, "spec": 1}),
+        },
+        Case {
+            begin: Begin::TriageRun { pass: false },
+            work: Work::TriageRun {
                 repo: &repo,
                 issue: None,
             },
-            "Triage run",
-            vec![(StageName::Triage, Some(triage))],
-        ),
-        (
-            Begin::FixRun { pass: false },
-            Work::FixRun(&repo),
-            "Fix run",
-            vec![
+            kind: "Triage run",
+            stages: vec![(StageName::Triage, Some(triage))],
+            observed: 1,
+            repairs: 0,
+            ci_rounds: 0,
+            review_findings: serde_json::Value::Null,
+        },
+        Case {
+            begin: Begin::FixRun { pass: false },
+            work: Work::FixRun(&repo),
+            kind: "Fix run",
+            stages: vec![
                 (StageName::Repair, Some(repairs[0])),
                 (StageName::CiWatch, None),
                 (StageName::Repair, Some(repairs[1])),
                 (StageName::CiWatch, None),
             ],
-        ),
+            observed: 2,
+            repairs: 2,
+            ci_rounds: 2,
+            review_findings: serde_json::Value::Null,
+        },
     ];
-    for (begin, work, kind, stages) in cases {
+    for case in cases {
+        // Moving these fields out leaves the expectations readable on `case`.
+        let Case {
+            begin,
+            work,
+            kind,
+            stages,
+            ..
+        } = case;
         let memory = Scripted::default();
         {
             let mut memory = memory.0.lock().unwrap();
-            for log in [review, triage, repairs[0], repairs[1]] {
-                memory.files.insert(log.into(), String::new());
-            }
+            memory.observed_sessions = [review, triage, repairs[0], repairs[1]]
+                .map(PathBuf::from)
+                .to_vec();
             memory.files.insert(
                 "/sessions/review.review-summary.json".into(),
                 r#"{"standards": 2, "spec": 1}"#.into(),
@@ -560,22 +597,11 @@ fn review_triage_and_fix_runs_save_their_run_metrics_at_completion() {
         assert_eq!(session["session_signals"]["harness"], "claude", "{kind}");
         let summary = &metrics["session_signals"][name];
         assert_eq!(summary["missing_sessions"], 0, "{kind}");
-        match kind {
-            "Review run" => {
-                assert_eq!(summary["observed_sessions"], 1);
-                assert_eq!(
-                    session["review_findings"],
-                    serde_json::json!({"standards": 2, "spec": 1})
-                );
-            }
-            "Triage run" => assert_eq!(summary["observed_sessions"], 1),
-            _ => {
-                assert_eq!(summary["observed_sessions"], 2);
-                assert_eq!(summary["signals"]["tool_errors"], 2);
-                assert_eq!(metrics["repairs"], 2);
-                assert_eq!(metrics["ci_rounds"], 2);
-            }
-        }
+        assert_eq!(summary["observed_sessions"], case.observed, "{kind}");
+        assert_eq!(summary["signals"]["tool_errors"], case.observed, "{kind}");
+        assert_eq!(metrics["repairs"], case.repairs, "{kind}");
+        assert_eq!(metrics["ci_rounds"], case.ci_rounds, "{kind}");
+        assert_eq!(session["review_findings"], case.review_findings, "{kind}");
     }
 }
 
