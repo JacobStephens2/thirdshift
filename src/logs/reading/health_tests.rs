@@ -18,11 +18,15 @@ fn history(root: &Path, stage: &str, seconds: [i64; 3]) {
 #[test]
 fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
     for stage in ["implement", "CI watch", "Self-merge"] {
-        for (samples, lower, upper, threshold, suspended) in [
-            ([2, 4, 20], 3, 12, 312, 0),
-            ([2, 4, 20], 3, 12, 312, 3600),
-            ([600, 840, 1200], 720, 1020, 2040, 0),
-            ([600, 840, 1200], 720, 1020, 2040, 3600),
+        for (samples, lower, upper, threshold, suspended, quota_wait) in [
+            ([2, 4, 20], 3, 12, 312, 0, false),
+            ([2, 4, 20], 3, 12, 312, 1800, false),
+            ([2, 4, 20], 3, 12, 312, 1800, true),
+            ([2, 4, 20], 3, 12, 312, 3600, false),
+            ([600, 840, 1200], 720, 1020, 2040, 0, false),
+            ([600, 840, 1200], 720, 1020, 2040, 1800, false),
+            ([600, 840, 1200], 720, 1020, 2040, 1800, true),
+            ([600, 840, 1200], 720, 1020, 2040, 3600, false),
         ] {
             let dir = tempfile::tempdir().unwrap();
             history(dir.path(), stage, samples);
@@ -35,6 +39,9 @@ fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
                 "session_log": null,
                 "suspended_seconds": suspended,
             }]);
+            if quota_wait {
+                live["quota_wait_until"] = "2026-10-19T12:01:37-04:00".into();
+            }
             let path = write(dir.path(), "7-live.command.json", &live);
             fs::write(path.with_file_name("7-live.log"), "still working\n").unwrap();
             let original = fs::read(&path).unwrap();
@@ -89,7 +96,7 @@ fn slow_boundaries_keep_minor_overruns_in_working_or_landing() {
                     row["group"],
                     if age == threshold {
                         "needs you"
-                    } else if stage == "implement" {
+                    } else if stage == "implement" || quota_wait {
                         "working"
                     } else {
                         "landing"
