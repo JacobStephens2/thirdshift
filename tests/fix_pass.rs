@@ -5,6 +5,13 @@ mod support;
 use serde_json::json;
 use support::Scenario;
 
+const REPAIR_CI: &str = r#"
+echo repaired > ci-fix.txt
+git add ci-fix.txt
+git commit -qm 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#;
+
 #[test]
 fn pass_skips_a_claimed_issue_then_repairs_after_its_claim_ends() {
     for issue_labels in [json!(["spec", "in-progress"]), json!(["in-progress"])] {
@@ -17,14 +24,7 @@ fn pass_skips_a_claimed_issue_then_repairs_after_its_claim_ends() {
         state["labels"]["7"] = issue_labels.clone();
         state["checks"][head.trim()] = json!([{"name":"test","conclusion":"failure"}]);
         scenario.write_gh_state(&state);
-        scenario.agent_does(
-            r#"
-echo repaired > ci-fix.txt
-git add ci-fix.txt
-git commit -qm 'Fix branch CI'
-gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
-"#,
-        );
+        scenario.agent_does(REPAIR_CI);
 
         let held = scenario.run(&["fix", "base", "main", "no-email"]);
 
@@ -98,14 +98,7 @@ while read old new reference; do
 done
 "#,
     );
-    scenario.agent_does(
-        r#"
-echo repaired > ci-fix.txt
-git add ci-fix.txt
-git commit -qm 'Fix branch CI'
-gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
-"#,
-    );
+    scenario.agent_does(REPAIR_CI);
 
     let result = scenario.run(&["fix", "base", "main", "no-email"]);
 
