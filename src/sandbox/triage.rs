@@ -111,6 +111,22 @@ fn prepare_home(launch: &mut Launch, home: &Path, original: &Path, harness: Harn
         fs::create_dir_all(&path)?;
         launch.set_env(name, &path);
     }
+    // Installed toolchains stay on the read-only host. Leave an unset
+    // CARGO_HOME relative to the private HOME so new caches stay writable.
+    let rustup = from_environment("RUSTUP_HOME", original.join(".rustup"));
+    if rustup.is_dir() {
+        launch.set_env("RUSTUP_HOME", &rustup);
+    }
+    let cargo_bin = from_environment("CARGO_HOME", original.join(".cargo")).join("bin");
+    if cargo_bin.is_dir() {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let paths = std::iter::once(cargo_bin.clone())
+            .chain(std::env::split_paths(&path).filter(|path| path != &cargo_bin));
+        launch.set_env(
+            "PATH",
+            std::env::join_paths(paths).context("could not preserve Rust toolchain PATH")?,
+        );
+    }
     for (source, dest) in [
         (original.join(".ssh"), home.join(".ssh")),
         (original.join(".gitconfig"), home.join(".gitconfig")),
@@ -394,6 +410,107 @@ exit 0
             &user_home,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn read_machine_keeps_home_installed_rust_tools_available() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const FIXTURE: &str = "THIRDSHIFT_TRIAGE_RUSTUP_FIXTURE";
+        if std::env::var_os(FIXTURE).is_none() {
+            let Some(rustup) = crate::process::find_executable("rustup") else {
+                println!("SKIPPED (Triage Rust toolchain): rustup is not on PATH");
+                return;
+            };
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    std::thread::current().name().unwrap(),
+                    "--nocapture",
+                ])
+                .env(FIXTURE, rustup)
+                .env_remove("RUSTUP_HOME")
+                .env_remove("CARGO_HOME")
+                .env_remove("RUSTUP_TOOLCHAIN")
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let Some(bwrap) = starting_bwrap("Triage Rust toolchain") else {
+            return;
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let worktree = temp.path().join("worktree");
+        let user_home = temp.path().join("host home");
+        let cargo_bin = user_home.join(".cargo/bin");
+        let rustup_home = user_home.join(".rustup");
+        let toolchain = rustup_home.join("toolchains/thirdshift-fixture/bin");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::create_dir_all(&cargo_bin).unwrap();
+        std::fs::create_dir_all(&toolchain).unwrap();
+        std::fs::copy(std::env::var_os(FIXTURE).unwrap(), cargo_bin.join("rustup")).unwrap();
+        for tool in ["cargo", "rustc"] {
+            std::fs::hard_link(cargo_bin.join("rustup"), cargo_bin.join(tool)).unwrap();
+            let binary = toolchain.join(tool);
+            std::fs::write(
+                &binary,
+                format!("#!/bin/sh\necho '{tool} 1.99.0 (fixture)'\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let settings = "version = '12'\ndefault_toolchain = 'thirdshift-fixture'\n";
+        std::fs::write(rustup_home.join("settings.toml"), settings).unwrap();
+        let launch = super::prepare_around(
+            &worktree,
+            crate::harness::Harness::Agy,
+            &bwrap,
+            "/bin/sh".into(),
+            &user_home,
+        )
+        .unwrap();
+        let script = r#"set -e
+cargo --version
+rustc --version
+if (echo changed > "$RUSTUP_HOME/settings.toml") 2>/dev/null; then exit 31; fi
+if (echo changed > "$RUSTUP_HOME/../.cargo/blocked") 2>/dev/null; then exit 32; fi
+mkdir -p "$HOME/.cargo/registry"
+echo cached > "$HOME/.cargo/registry/cache"
+"#;
+        let output = launch
+            .command(&["-c".into(), script.into()])
+            .unwrap()
+            .current_dir(&worktree)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "cargo 1.99.0 (fixture)\nrustc 1.99.0 (fixture)\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(rustup_home.join("settings.toml")).unwrap(),
+            settings
+        );
+        assert!(!cargo_bin.join("blocked").exists());
+        assert!(!user_home.join(".cargo/registry").exists());
+        assert_eq!(
+            std::fs::read_to_string(worktree.join(".thirdshift-tmp/home/.cargo/registry/cache"))
+                .unwrap(),
+            "cached\n"
+        );
     }
 
     #[test]

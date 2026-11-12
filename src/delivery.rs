@@ -147,10 +147,18 @@ impl Delivery<'_> {
             Stage::RepairSession,
             |outside, goal| {
                 let worktree = outside.worktree;
+                let before = worktree.head()?;
                 outside.session(
                     Kind::Implementation,
                     &prompt::base_ci_fix(outside.base, worktree.branch(), failed),
                 )?;
+                if worktree.head()? == before {
+                    return Ok(Resolution::BaseCiUnchanged {
+                        url: format!("{}/commit/{before}", outside.issue.url),
+                        base: outside.base.into(),
+                        commit: before,
+                    });
+                }
                 outside.push()?;
                 outside.pull_request.open_if_absent(title, &body)?;
                 let identified = outside

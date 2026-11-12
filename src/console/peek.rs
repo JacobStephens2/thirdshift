@@ -173,7 +173,8 @@ impl Peek {
             issue.as_ref(),
             process,
         );
-        let issue_url = crate::logs::status::issue_url(issue.as_ref());
+        let issue_url = crate::logs::status::issue_url(issue.as_ref())
+            .filter(|url| crate::logs::status::subject_link_matches(&subject, Some(url)));
         let experiment_url = (value["kind"] == "Experiment")
             .then(|| value["experiment"]["id"].as_str())
             .flatten()

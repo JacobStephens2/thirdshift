@@ -114,6 +114,15 @@ See [its README](../prototype/go/README.md) for setup and static builds.
 Run local checks in Linux, including
 an ARM Linux VM when contributing from an Apple Silicon Mac.
 
+Non-nightly CI retains per-test nextest JUnit timings and JSON selection
+inventories as artifacts for 14 days. Each architecture's stable gate requires
+all its partitions and an exact coverage check; partition counts are configured
+in `.github/workflows/ci.yml`. Summaries show per-binary work, slow tests and
+partition balance. The nightly `cargo test` path and the local selector above
+remain the contributor validation paths. See the CI performance guide for the
+opt-in same-revision one/two/four-partition benchmark and its runner-minute
+accounting.
+
 Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 `/usr/bin/time -p cargo test` for the fallback), recording the command, result,
 wall time and whether compilation was included in the PR's evidence. Timings
