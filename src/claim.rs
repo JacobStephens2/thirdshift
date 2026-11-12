@@ -670,35 +670,19 @@ impl<'a> Claimed<'a> {
         if !self.changed_any() {
             return;
         }
-        let issue = self.issue;
-        if let Err(error) = retry_if_interrupted(outside, |outside| {
-            let (off, on) = self.release_labels();
-            let edit = Edit::of(issue, outside.labels(issue)?, off, on);
-            if !is_on(edit.labels()) {
-                return Ok(());
-            }
-            let number = issue.number;
-            outside.step(if self.removed_ready_for_agent {
-                format!(
-                    "releasing the Claim on #{number}, labelling it {READY_FOR_AGENT} again \
-                     without {AGENT_FAILED}: {}",
-                    crate::failed_run::OUT_OF_DISK
-                )
-            } else {
-                format!(
-                    "releasing the Claim on #{number}, removing {IN_PROGRESS} without \
-                     {AGENT_FAILED}: {}",
-                    crate::failed_run::OUT_OF_DISK
-                )
-            });
-            outside.apply(&edit)
-        }) {
+        let why = format!(
+            ", without {AGENT_FAILED}: {}",
+            crate::failed_run::OUT_OF_DISK
+        );
+        if let Err(error) =
+            retry_if_interrupted(outside, |outside| self.put_labels_back(outside, &why))
+        {
             outside.warn(
                 &error,
                 format!(
                     "could not release the Claim on #{} after the host ran out of disk space, so \
                      release it by hand: {}",
-                    issue.number,
+                    self.issue.number,
                     self.release_by_hand()
                 ),
             );
@@ -708,27 +692,33 @@ impl<'a> Claimed<'a> {
     /// [`Claimed::release_if_nothing_on_origin`], its failure as `git` or `gh`
     /// gave it.
     fn put_labels_back_unless_on_origin(&self, outside: &mut impl Outside) -> Result<bool> {
-        let issue = self.issue;
-        if outside.started(issue)? {
+        if outside.started(self.issue)? {
             return Ok(true);
         }
+        self.put_labels_back(outside, "").map(|()| false)
+    }
+
+    /// Put the issue's labels back as they were before the Claim, saying so
+    /// with `why` after the release line, unless it is no longer `in-progress`.
+    fn put_labels_back(&self, outside: &mut impl Outside, why: &str) -> Result<()> {
+        let issue = self.issue;
         let (off, on) = self.release_labels();
         let edit = Edit::of(issue, outside.labels(issue)?, off, on);
         if !is_on(edit.labels()) {
-            return Ok(false);
+            return Ok(());
         }
         let number = issue.number;
         outside.step(if !self.removed_ready_for_agent {
-            format!("releasing the Claim on #{number}: removing {IN_PROGRESS}")
+            format!("releasing the Claim on #{number}: removing {IN_PROGRESS}{why}")
         } else if self.added_in_progress {
             format!(
                 "releasing the Claim on #{number}: labelling it {READY_FOR_AGENT}, \
-                 in place of {IN_PROGRESS}"
+                 in place of {IN_PROGRESS}{why}"
             )
         } else {
-            format!("releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again")
+            format!("releasing the Claim on #{number}: labelling it {READY_FOR_AGENT} again{why}")
         });
-        outside.apply(&edit).map(|()| false)
+        outside.apply(&edit)
     }
 
     /// The labels releasing the Claim takes off and puts on, in that order:
@@ -1411,9 +1401,9 @@ mod tests {
             [
                 Call::Labels,
                 step(
-                    "releasing the Claim on #7, labelling it ready-for-agent again without \
-                     agent-failed: the host ran out of disk space; free disk space on it, then \
-                     retry the Command"
+                    "releasing the Claim on #7: labelling it ready-for-agent, in place of \
+                     in-progress, without agent-failed: the host ran out of disk space; free disk \
+                     space on it, then retry the Command"
                 ),
                 edit(
                     &["in-progress"],

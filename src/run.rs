@@ -186,6 +186,9 @@ pub(crate) fn run_process_to_end(
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
+        if crate::failed_run::out_of_disk(&failed.error) {
+            recovery.add_out_of_disk();
+        }
         recovery.add_child_work(base_fix.local_work().iter().cloned());
     }
     Ended {

@@ -90,14 +90,21 @@ pub const OUT_OF_DISK: &str =
 /// Whether the host running out of disk space caused `error`: a layer of its
 /// cause chain is the OS's error for no space left, or says so as the OS and
 /// git word it, as a failed `git` command's output does. Such a failure is
-/// the host's, not its issue's.
+/// the host's, not its issue's. A failed Harness Session's diagnostic is the
+/// agent's to write, and a Spec run's Tickets not done can mix causes, so a
+/// chain with either is never the host's.
 pub fn out_of_disk(error: &anyhow::Error) -> bool {
-    error.chain().any(|layer| {
-        layer
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
-            || says_out_of_disk(&layer.to_string())
-    })
+    let unowned = error.chain().any(|layer| {
+        layer.is::<crate::harness::interpretation::SessionFailure>()
+            || layer.is::<crate::spec_run::TicketsNotDone>()
+    });
+    !unowned
+        && error.chain().any(|layer| {
+            layer
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+                || says_out_of_disk(&layer.to_string())
+        })
 }
 
 /// Whether the rendered cause `text` says the host ran out of disk space, as
@@ -236,5 +243,20 @@ mod tests {
             .context("could not write Session trace");
         assert!(!out_of_disk(&other), "{other:#}");
         assert!(!out_of_disk(&anyhow!("claude exited 1")));
+    }
+
+    #[test]
+    fn an_agents_diagnostic_or_a_spec_runs_tickets_naming_a_full_disk_are_not_the_hosts() {
+        let mut session = crate::harness::interpretation::SessionFailure::exited("claude", 1);
+        session.diagnostic = Some("npm test failed: ENOSPC: No space left on device".into());
+        let session = anyhow::Error::new(session).context("Ticket session failed");
+        assert!(!out_of_disk(&session), "{session:#}");
+        // A Ticket's out-of-disk cause, among others, as the Spec run's
+        // Tickets not done would name it.
+        let mut tickets = crate::spec_run::TicketsNotDone::waiting();
+        tickets.only_waiting = false;
+        let tickets = anyhow::Error::new(tickets)
+            .context("#3 (failed: git worktree add failed: No space left on device)");
+        assert!(!out_of_disk(&tickets), "{tickets:#}");
     }
 }

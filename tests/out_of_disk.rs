@@ -5,8 +5,6 @@
 
 mod support;
 
-use std::path::Path;
-
 use support::Scenario;
 
 /// Put a `git` in front of the real one on the Scenario's `PATH` that fails
@@ -31,15 +29,12 @@ fn git_out_of_disk_on(scenario: &Scenario, commands: &[&str]) {
         "#!/bin/sh\ncase \" $* \" in\n{cases}esac\nexec {} \"$@\"\n",
         real.trim()
     );
-    let path = scenario.path("bin/git");
-    std::fs::write(&path, script).unwrap();
-    make_executable(&path);
+    support::write_executable(&scenario.path("bin/git"), &script);
 }
 
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-}
+/// The advice that follows an out-of-disk cause.
+const OUT_OF_DISK: &str = "the host ran out of disk space; free disk space on it, then retry the \
+                           Command";
 
 #[test]
 fn a_continuation_whose_worktree_cannot_be_written_for_lack_of_disk_is_handed_back_ready() {
@@ -57,21 +52,11 @@ fn a_continuation_whose_worktree_cannot_be_written_for_lack_of_disk_is_handed_ba
         "stderr: {}",
         result.stderr
     );
-    assert!(
-        result
-            .stderr
-            .contains("the host ran out of disk space; free disk space"),
-        "stderr: {}",
-        result.stderr
-    );
     // The Command's cause is followed by what to do about it.
     let lines = support::before_command_log(&result.stderr);
     assert_eq!(
         lines.last(),
-        Some(
-            &"thirdshift: the host ran out of disk space; free disk space on it, then retry the \
-              Command"
-        ),
+        Some(&format!("thirdshift: {OUT_OF_DISK}").as_str()),
         "stderr: {}",
         result.stderr
     );
@@ -111,11 +96,13 @@ fn a_push_that_runs_out_of_disk_hands_the_issue_back_and_keeps_earlier_work_on_o
         "stderr: {}",
         result.stderr
     );
+    // The push failed, so the new commit is kept locally, and the earlier
+    // work stays on origin.
     assert!(
-        result.stderr.contains("Preserved: remotely on issue-7")
-            || result
-                .stderr
-                .contains("Preserved: work may exist only locally"),
+        result.stderr.contains(&format!(
+            "thirdshift: Preserved: work may exist only locally on issue-7 at {}",
+            scenario.path("work/widgets-issue-7").display()
+        )),
         "stderr: {}",
         result.stderr
     );
@@ -124,10 +111,15 @@ fn a_push_that_runs_out_of_disk_hands_the_issue_back_and_keeps_earlier_work_on_o
         "Earlier work".to_string()
     );
     let log = command_log(&scenario);
-    assert!(
-        log.contains("the host ran out of disk space; free disk space on it"),
-        "log: {log}"
-    );
+    for line in [
+        format!(
+            "releasing the Claim on #7: labelling it ready-for-agent, in place of in-progress, \
+             without agent-failed: {OUT_OF_DISK}"
+        ),
+        format!("Before retrying: {OUT_OF_DISK}"),
+    ] {
+        assert!(log.contains(&line), "{line:?} not in log: {log}");
+    }
     assert!(scenario.issue_comments(7).is_empty());
 }
 
