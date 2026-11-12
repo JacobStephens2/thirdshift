@@ -462,135 +462,224 @@ fn pairs(asked: &MetricsArgs) -> (Pairs, Pairs) {
     (pairs, filters)
 }
 
-/// Whether Fleet is the Console's default Metrics view: a paired machine, or
-/// `person`'s saved snapshot of one or a reported one, exists.
-pub(crate) fn default_view(config: &UserConfig, person: Option<&str>) -> bool {
-    let credentials = Credentials::read().ok();
-    config.console.fleet.iter().any(|entry| {
-        credentials
-            .as_ref()
-            .is_some_and(|credentials| credentials.fleet_token(&entry.name).is_some())
-    }) || !saved(&config.logs_dir, person).is_empty()
+/// One operation's saved-source observations. Discovery and exact configured
+/// slots share reads, but retain their different eligibility rules. Failures
+/// are observations too; only a new capture sees subsequent file changes.
+pub(crate) struct Capture<'a> {
+    config: &'a UserConfig,
+    local: String,
+    person: Option<&'a str>,
+    observed: BTreeMap<PathBuf, Option<Saved>>,
+    discovered: BTreeMap<String, PathBuf>,
 }
 
-/// Every machine Fleet metrics can be scoped to besides this one: the Fleet
-/// in config order, then retired or reporting machines with a snapshot
-/// `person` may see.
-pub(crate) fn others(config: &UserConfig, person: Option<&str>) -> Vec<String> {
-    let local = crate::console::fleet_control::local_name(config);
-    let mut names: Vec<_> = config
-        .console
-        .fleet
-        .iter()
-        .map(|entry| entry.name.clone())
-        .collect();
-    let mut retired: Vec<_> = saved(&config.logs_dir, person)
-        .into_iter()
-        .map(|saved| saved.machine)
-        .filter(|name| *name != local && !names.contains(name))
-        .collect();
-    retired.sort();
-    names.extend(retired);
-    names
-}
-
-/// Fleet metrics, or one machine's when `asked.machine` names a peer. A
-/// caller handles this machine's own name as plain `metrics`.
-pub(crate) fn load(
-    config: &UserConfig,
-    asked: &MetricsArgs,
-    person: Option<&str>,
-) -> Result<Fleet> {
-    let now = Utc::now();
-    let local = crate::console::fleet_control::local_name(config);
-    let chosen = asked.machine.as_deref();
-    if let Some(name) = chosen
-        && !others(config, person).iter().any(|known| known == name)
-    {
-        bail!("unknown Fleet machine: {name}");
+impl<'a> Capture<'a> {
+    pub(crate) fn new(config: &'a UserConfig, person: Option<&'a str>) -> Self {
+        Self::with_filesystem(config, person, &NativeFiles)
     }
-    let mut sources = Vec::new();
-    let window = if chosen.is_none() {
-        let trends = super::trends(config, asked)?;
-        let summary = serde_json::from_value(serde_json::to_value(&trends)?)?;
-        sources.push((
-            Machine {
-                name: local.clone(),
+
+    fn with_filesystem(
+        config: &'a UserConfig,
+        person: Option<&'a str>,
+        files: &impl SavedFiles,
+    ) -> Self {
+        let entries: Vec<_> = files
+            .list(&config.logs_dir.join(CACHE))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        let mut candidates = entries.clone();
+        for entry in &config.console.fleet {
+            for slot in [Slot::Read(person), Slot::Reported] {
+                candidates.push(path(&config.logs_dir, &entry.name, slot));
+            }
+        }
+        let mut observed = BTreeMap::new();
+        for path in candidates {
+            observed.entry(path.clone()).or_insert_with(|| {
+                files
+                    .read(&path)
+                    .ok()
+                    .and_then(|bytes| decode_saved(&bytes))
+            });
+        }
+        let mut discovered = BTreeMap::<String, PathBuf>::new();
+        // Preserve directory order for timestamp ties. Exact slots that were
+        // not enumerated never become discovered retired machines.
+        for path in entries {
+            let Some(saved) = observed[&path].as_ref().filter(|saved| {
+                Slot::Read(person).holds(saved, &saved.machine)
+                    || Slot::Reported.holds(saved, &saved.machine)
+            }) else {
+                continue;
+            };
+            if discovered.get(&saved.machine).is_none_or(|kept| {
+                observed[kept]
+                    .as_ref()
+                    .expect("eligible discovered snapshot")
+                    .last_seen
+                    < saved.last_seen
+            }) {
+                discovered.insert(saved.machine.clone(), path);
+            }
+        }
+        Self {
+            config,
+            local: crate::console::fleet_control::local_name(config),
+            person,
+            observed,
+            discovered,
+        }
+    }
+
+    fn snapshots(&self) -> impl Iterator<Item = &Saved> {
+        self.discovered.values().map(|path| {
+            self.observed[path]
+                .as_ref()
+                .expect("eligible discovered snapshot")
+        })
+    }
+
+    fn exact(&self, name: &str, slot: Slot<'_>) -> Option<&Saved> {
+        self.observed
+            .get(&path(&self.config.logs_dir, name, slot))?
+            .as_ref()
+            .filter(|saved| slot.holds(saved, name))
+    }
+
+    /// Whether Fleet is the Console's default Metrics view: a paired machine, or
+    /// `person`'s saved snapshot of one or a reported one, exists.
+    pub(crate) fn default_view(&self) -> bool {
+        let credentials = Credentials::read().ok();
+        self.config.console.fleet.iter().any(|entry| {
+            credentials
+                .as_ref()
+                .is_some_and(|credentials| credentials.fleet_token(&entry.name).is_some())
+        }) || !self.discovered.is_empty()
+    }
+
+    /// Every machine Fleet metrics can be scoped to besides this one: the Fleet
+    /// in config order, then retired or reporting machines with a snapshot
+    /// `person` may see.
+    pub(crate) fn others(&self) -> Vec<String> {
+        let mut names: Vec<_> = self
+            .config
+            .console
+            .fleet
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect();
+        let mut retired: Vec<_> = self
+            .discovered
+            .keys()
+            .filter(|name| **name != self.local && !names.contains(name))
+            .cloned()
+            .collect();
+        retired.sort();
+        names.extend(retired);
+        names
+    }
+
+    /// Fleet metrics, or one machine's when `asked.machine` names a peer. A
+    /// caller handles this machine's own name as plain `metrics`.
+    pub(crate) fn load(&self, asked: &MetricsArgs) -> Result<Fleet> {
+        let config = self.config;
+        let now = Utc::now();
+        let local = &self.local;
+        let chosen = asked.machine.as_deref();
+        if let Some(name) = chosen
+            && !self.others().iter().any(|known| known == name)
+        {
+            bail!("unknown Fleet machine: {name}");
+        }
+        let mut sources = Vec::new();
+        let window = if chosen.is_none() {
+            let trends = super::trends(config, asked)?;
+            let summary = serde_json::from_value(serde_json::to_value(&trends)?)?;
+            sources.push((
+                Machine {
+                    name: local.clone(),
+                    address: None,
+                    local: true,
+                    status: Status::Ok,
+                    last_seen: Some(now),
+                    pushed_at: None,
+                    error: None,
+                },
+                Some(summary),
+            ));
+            trends.window
+        } else {
+            Window::of(asked, now.date_naive())
+        };
+        let view = View::of(asked, &window);
+        let entries: Vec<_> = config
+            .console
+            .fleet
+            .iter()
+            .filter(|entry| chosen.is_none_or(|name| name == entry.name))
+            .collect();
+        // Independent requests, each bounded by the Fleet transport's three
+        // seconds, so one stalled peer cannot hold the page.
+        sources.extend(std::thread::scope(|threads| {
+            let handles: Vec<_> = entries
+                .iter()
+                .map(|entry| threads.spawn(|| remote(self, entry, &view, &window, now)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("Fleet metrics reader panicked"))
+                .collect::<Vec<_>>()
+        }));
+        let paired: Vec<_> = config.console.fleet.iter().map(|e| &e.name).collect();
+        let mut retired: Vec<_> = self
+            .snapshots()
+            .filter(|saved| {
+                saved.machine != *local
+                    && !paired.contains(&&saved.machine)
+                    && chosen.is_none_or(|name| name == saved.machine)
+            })
+            .collect();
+        retired.sort_by(|a, b| a.machine.cmp(&b.machine));
+        for saved in retired {
+            let mut machine = Machine {
+                name: saved.machine.clone(),
                 address: None,
-                local: true,
-                status: Status::Ok,
-                last_seen: Some(now),
+                local: false,
+                status: Status::Cached,
+                last_seen: None,
                 pushed_at: None,
                 error: None,
-            },
-            Some(summary),
-        ));
-        trends.window
-    } else {
-        Window::of(asked, now.date_naive())
-    };
-    let view = View::of(asked, &window);
-    let entries: Vec<_> = config
-        .console
-        .fleet
-        .iter()
-        .filter(|entry| chosen.is_none_or(|name| name == entry.name))
-        .collect();
-    // Independent requests, each bounded by the Fleet transport's three
-    // seconds, so one stalled peer cannot hold the page.
-    sources.extend(std::thread::scope(|threads| {
-        let handles: Vec<_> = entries
-            .iter()
-            .map(|entry| threads.spawn(|| remote(config, entry, person, &view, &window, now)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("Fleet metrics reader panicked"))
-            .collect::<Vec<_>>()
-    }));
-    let paired: Vec<_> = config.console.fleet.iter().map(|e| &e.name).collect();
-    let mut retired: Vec<_> = saved(&config.logs_dir, person)
-        .into_iter()
-        .filter(|saved| {
-            saved.machine != local
-                && !paired.contains(&&saved.machine)
-                && chosen.is_none_or(|name| name == saved.machine)
-        })
-        .collect();
-    retired.sort_by(|a, b| a.machine.cmp(&b.machine));
-    for saved in retired {
-        let mut machine = Machine {
-            name: saved.machine.clone(),
-            address: None,
-            local: false,
-            status: Status::Cached,
-            last_seen: None,
-            pushed_at: None,
-            error: None,
-        };
-        machine.stands_in(&saved);
-        if machine.status == Status::Cached {
-            note(&mut machine, "no longer in this Console's Fleet");
+            };
+            machine.stands_in(saved);
+            if machine.status == Status::Cached {
+                note(&mut machine, "no longer in this Console's Fleet");
+            }
+            let summary = cached(&mut machine, saved, &view, &window);
+            sources.push((machine, summary));
         }
-        let summary = cached(&mut machine, saved, &view, &window);
-        sources.push((machine, summary));
+        Ok(merge(
+            chosen.map(str::to_owned),
+            window,
+            Filters::of(asked),
+            sources,
+        ))
     }
-    Ok(merge(
-        chosen.map(str::to_owned),
-        window,
-        Filters::of(asked),
-        sources,
-    ))
 }
 
 fn remote(
-    config: &UserConfig,
+    capture: &Capture<'_>,
     entry: &Entry,
-    person: Option<&str>,
     view: &View,
     window: &Window,
     now: DateTime<Utc>,
 ) -> (Machine, Option<Summary>) {
+    let config = capture.config;
+    let person = capture.person;
     let mut machine = Machine {
         name: entry.name.clone(),
         address: Some(entry.address.clone()),
@@ -617,15 +706,11 @@ fn remote(
             serde_json::from_value(remote.get(&route)?).context("incompatible metrics summary")?;
         Ok(Some(summary))
     };
-    let reported = || {
-        read_saved(&path(&config.logs_dir, &entry.name, Slot::Reported))
-            .filter(|saved| Slot::Reported.holds(saved, &entry.name))
-    };
     match read() {
         // A link-only machine may still push its own summary here.
-        Ok(None) => match reported() {
+        Ok(None) => match capture.exact(&entry.name, Slot::Reported) {
             Some(saved) => {
-                machine.stands_in(&saved);
+                machine.stands_in(saved);
                 let summary = cached(&mut machine, saved, view, window);
                 (machine, summary)
             }
@@ -662,15 +747,15 @@ fn remote(
                 return (machine, None);
             }
             // The newer of this person's last read and the machine's own report.
-            let Some(saved) = read_saved(&path(&config.logs_dir, &entry.name, Slot::Read(person)))
-                .filter(|saved| Slot::Read(person).holds(saved, &entry.name))
+            let Some(saved) = capture
+                .exact(&entry.name, Slot::Read(person))
                 .into_iter()
-                .chain(reported())
+                .chain(capture.exact(&entry.name, Slot::Reported))
                 .max_by_key(|saved| saved.last_seen)
             else {
                 return (machine, None);
             };
-            machine.stands_in(&saved);
+            machine.stands_in(saved);
             let summary = cached(&mut machine, saved, view, window);
             (machine, summary)
         }
@@ -680,28 +765,25 @@ fn remote(
 /// A saved view's summary. Without this view's own, the newest one read with
 /// the same filters stands in, its buckets regrouped by week when this view
 /// is weekly; a weekly snapshot cannot stand in for a daily view.
-fn cached(
-    machine: &mut Machine,
-    mut saved: Saved,
-    view: &View,
-    window: &Window,
-) -> Option<Summary> {
+fn cached(machine: &mut Machine, saved: &Saved, view: &View, window: &Window) -> Option<Summary> {
     if let Some(summary) = saved
         .views
-        .remove(&view.query)
-        .and_then(|saved| serde_json::from_value(saved.summary).ok())
+        .get(&view.query)
+        .and_then(|saved| serde_json::from_value(saved.summary.clone()).ok())
     {
         return Some(summary);
     }
     let stand_in = saved
         .views
-        .into_values()
+        .iter()
+        .filter(|(query, _)| **query != view.query)
+        .map(|(_, saved)| saved)
         .filter(|saved| {
             saved.filters.as_deref() == Some(view.filters.as_str())
                 && saved.weekly.is_some_and(|weekly| view.weekly || !weekly)
         })
         .max_by_key(|saved| saved.fetched_at)
-        .and_then(|saved| serde_json::from_value::<Summary>(saved.summary).ok());
+        .and_then(|saved| serde_json::from_value::<Summary>(saved.summary.clone()).ok());
     let Some(mut summary) = stand_in else {
         note(machine, "no saved snapshot for this view");
         return None;
@@ -882,39 +964,35 @@ fn path(logs_dir: &Path, name: &str, slot: Slot<'_>) -> PathBuf {
 }
 
 fn read_saved(path: &Path) -> Option<Saved> {
-    serde_json::from_slice(&std::fs::read(path).ok()?)
+    decode_saved(&std::fs::read(path).ok()?)
+}
+
+fn decode_saved(bytes: &[u8]) -> Option<Saved> {
+    serde_json::from_slice(bytes)
         .ok()
         .filter(|saved: &Saved| saved.version == 1)
 }
 
-/// The snapshots `person` may see, one per machine: the newer of their own
-/// last read and the machine's own report.
-fn saved(logs_dir: &Path, person: Option<&str>) -> Vec<Saved> {
-    let Ok(entries) = std::fs::read_dir(logs_dir.join(CACHE)) else {
-        return Vec::new();
-    };
-    let mut newest = BTreeMap::<String, Saved>::new();
-    for saved in entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .filter_map(|path| read_saved(&path))
-        .filter(|saved| {
-            Slot::Read(person).holds(saved, &saved.machine)
-                || Slot::Reported.holds(saved, &saved.machine)
-        })
-    {
-        if newest
-            .get(&saved.machine)
-            .is_none_or(|kept| kept.last_seen < saved.last_seen)
-        {
-            newest.insert(saved.machine.clone(), saved);
-        }
+/// Read-side filesystem seam. Writers deliberately reload under their lock
+/// instead of using any observation from a capture.
+trait SavedFiles {
+    fn list(&self, directory: &Path) -> std::io::Result<Vec<PathBuf>>;
+    fn read(&self, path: &Path) -> std::io::Result<Vec<u8>>;
+}
+
+struct NativeFiles;
+
+impl SavedFiles for NativeFiles {
+    fn list(&self, directory: &Path) -> std::io::Result<Vec<PathBuf>> {
+        Ok(std::fs::read_dir(directory)?
+            .flatten()
+            .map(|entry| entry.path())
+            .collect())
     }
-    newest.into_values().collect()
+
+    fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
 }
 
 /// Replaces the machine's snapshot of this view in one rename, so a reader
