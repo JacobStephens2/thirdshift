@@ -283,7 +283,7 @@ fn prompts() -> Vec<Prompt> {
                     false,
                 ),
                 Some("Triage recommendation: <rejected JSON>"),
-                "the Triage questionnaire is required only for needs-info or ready-for-human issues: <issue title>",
+                "the Triage questionnaire is required only for needs-info issues: <issue title>",
             ),
         },
         Prompt {

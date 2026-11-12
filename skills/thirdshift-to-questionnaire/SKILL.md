@@ -1,9 +1,9 @@
 ---
 name: thirdshift-to-questionnaire
-description: "Write a forwardable questionnaire when a Triage issue needs information or a human decision."
+description: "Write a forwardable questionnaire when a Triage issue needs information."
 ---
 
-Write a questionnaire for a Triage issue whose outcome is `needs-info` or `ready-for-human`, including confirmation blocked by credentials or production access. Use the Report and investigation as evidence. Continue investigating everything the repository can answer before asking a person.
+Write a questionnaire for a Triage issue whose outcome is `needs-info`. For `ready-for-human`, describe the needed decision or operator action in the issue body instead. Use the Report and investigation as evidence. Continue investigating everything the repository can answer before asking a person.
 
 Address the person or role with the answer: the reporter, an operator, or the Day shift making a decision. Open with enough context that the Day shift can forward the text on its own. Number the questions; ask for concrete missing observations or decisions and explain briefly what each answer will resolve. Ask only what the repository could not answer. Request redacted evidence rather than credentials or secrets.
 

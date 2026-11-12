@@ -129,12 +129,12 @@ fn add_details(
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
     let report = if reads_fleet(&config, asked) {
-        let report = serde_json::to_value(fleet::Capture::new(&config, None).load(asked)?)?;
+        let fleet = fleet::Capture::new(&config, None).load(asked)?;
         if asked.json {
-            report
+            serde_json::to_value(fleet)?
         } else {
             // Another machine's text must not start a line of its own.
-            one_line(report)
+            one_line(fleet.text()?)
         }
     } else {
         read(&config, asked)?

@@ -5,7 +5,7 @@
 //! under a `report` token: it is saved in that machine's reported slot and
 //! shown read-only (#2036 Q4.2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -30,6 +30,8 @@ const VIEWS: usize = 16;
 /// and all a saved peer snapshot keeps.
 #[derive(Serialize, Deserialize)]
 struct Summary {
+    #[serde(default)]
+    unavailable_accounts: BTreeSet<String>,
     outcomes: Vec<SummaryBucket>,
     #[serde(default)]
     comparison: Option<SummaryComparison>,
@@ -127,12 +129,24 @@ pub(crate) struct Fleet {
     pub(crate) where_runs_failed: WhereRunsFailed,
 }
 
+impl Fleet {
+    /// The same report, with each machine's diagnostics kept on its own line.
+    pub(super) fn text(&self) -> Result<Value> {
+        let mut report = serde_json::to_value(self)?;
+        report["machines"] =
+            serde_json::to_value(self.machines.iter().map(Machine::text).collect::<Vec<_>>())?;
+        Ok(report)
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct Machine {
     pub(crate) name: String,
     pub(crate) address: Option<String>,
     pub(crate) local: bool,
     pub(crate) status: Status,
+    /// Configured Other-account Commands omitted from this summary.
+    pub(crate) unavailable_accounts: BTreeSet<String>,
     /// When this machine's metrics were last read: now when live, the saved
     /// snapshot's time when cached.
     pub(crate) last_seen: Option<DateTime<Utc>>,
@@ -142,6 +156,37 @@ pub(crate) struct Machine {
 }
 
 impl Machine {
+    fn text(&self) -> String {
+        let mut line = format!(
+            "{}{} · status: {}",
+            self.name,
+            if self.local { " (this machine)" } else { "" },
+            self.status
+        );
+        for (label, at) in [("last_seen", self.last_seen), ("pushed_at", self.pushed_at)] {
+            if let Some(at) = at {
+                line.push_str(&format!(" · {label}: {}", at.to_rfc3339()));
+            }
+        }
+        if let Some(address) = &self.address {
+            line.push_str(&format!(" · address: {address}"));
+        }
+        if !self.unavailable_accounts.is_empty() {
+            line.push_str(&format!(
+                " · unreadable accounts: {}",
+                self.unavailable_accounts
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(error) = &self.error {
+            line.push_str(&format!(" · error: {error}"));
+        }
+        line
+    }
+
     /// Show `saved` in place of a live read: reported when the machine
     /// pushed it, else cached.
     fn stands_in(&mut self, saved: &Saved) {
@@ -606,6 +651,7 @@ impl<'a> Capture<'a> {
                     address: None,
                     local: true,
                     status: Status::Ok,
+                    unavailable_accounts: BTreeSet::new(),
                     last_seen: Some(now),
                     pushed_at: None,
                     error: None,
@@ -651,6 +697,7 @@ impl<'a> Capture<'a> {
                 address: None,
                 local: false,
                 status: Status::Cached,
+                unavailable_accounts: BTreeSet::new(),
                 last_seen: None,
                 pushed_at: None,
                 error: None,
@@ -685,6 +732,7 @@ fn remote(
         address: Some(entry.address.clone()),
         local: false,
         status: Status::Ok,
+        unavailable_accounts: BTreeSet::new(),
         last_seen: None,
         pushed_at: None,
         error: None,
@@ -832,6 +880,7 @@ fn merge(
     let mut machines = Vec::new();
     for (mut machine, summary) in sources {
         if let Some(summary) = summary {
+            machine.unavailable_accounts = summary.unavailable_accounts;
             let name = machine.name.clone();
             // A cached snapshot may predate today's window; show only its
             // buckets that are still in it.
