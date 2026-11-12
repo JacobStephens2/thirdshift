@@ -336,9 +336,15 @@ ARM worker start delays reached 39 seconds; normal CI workers started
 limits rather than assuming that four runners will always start together. Build archives were not
 introduced or benchmarked, and no archive-based saving is claimed.
 
-The actual workflow's [deliberate partition-failure probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43059533495)
-and [skipped-work probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43059538541)
-made both stable architecture gates fail. Local tests execute those gate
+On the delivered four-way workflow at `d8e6b3cb`, the [single-partition failure probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43131195970)
+failed only `run (1)` on each architecture while partitions 2–4 succeeded, and
+the [skipped-work probe](https://github.com/JacobStephens2/thirdshift/actions/runs/43131198843)
+skipped every partition; both made `complete`, `test` and `test-linux-arm`
+fail. Earlier probes [43059533495](https://github.com/JacobStephens2/thirdshift/actions/runs/43059533495)
+and [43059538541](https://github.com/JacobStephens2/thirdshift/actions/runs/43059538541)
+ran the one-partition workflow at `deb46450`. The probe fails before tests
+run, so hosted CI has not yet uploaded JUnit after a real test failure; that
+upload step uses `always()`. Local tests execute those gate
 commands for success, failure, cancellation, skipped and missing results, and
 reject missing artifacts, duplicate membership, differing revisions and
 incomplete execution. Every enabled diagnostic probe exits unsuccessfully,
