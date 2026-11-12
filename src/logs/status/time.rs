@@ -140,9 +140,7 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
             } else {
                 record.outcome.as_deref().unwrap_or("Unknown")
             };
-            let duration = seconds
-                .map(|seconds| super::age(seconds as i64))
-                .unwrap_or_else(|| "time unknown".into());
+            let duration = super::stage_time(seconds, stage.suspended_seconds);
             // Clip only the drawn interval; the text retains the full stage time.
             let (left, width) =
                 began

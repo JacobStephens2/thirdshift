@@ -92,19 +92,35 @@ pub(super) fn details(snapshot: &Snapshot, observation: Observation<'_>) -> Resu
     let mut details = serde_json::to_value(observation.details()?)?;
     if let Observation::Record(command) = observation {
         let origins = ConfirmedCounts::read(snapshot)?;
-        add_details(&mut details, command, &origins)?;
+        add_details(&mut details, command, &origins, snapshot.observed_at())?;
     }
     Ok(details)
 }
 
-fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts) -> Result<()> {
+fn add_details(
+    details: &mut Value,
+    command: &Command,
+    origins: &ConfirmedCounts,
+    now: chrono::DateTime<Local>,
+) -> Result<()> {
     details["run_metrics"] = serde_json::to_value(Metrics::of(command, origins))?;
+    for (index, timing) in command
+        .record
+        .stage_times((command.state == "live").then_some(now.fixed_offset()))
+        .enumerate()
+    {
+        details["stages"][index]["seconds"] = serde_json::json!(timing.seconds());
+        details["stages"][index]["time"] = serde_json::json!(super::status::stage_time(
+            timing.seconds(),
+            timing.stage.suspended_seconds
+        ));
+    }
     for (field, children) in [
         ("children", &command.children),
         ("dispatched", &command.dispatched),
     ] {
         for (index, child) in children.iter().enumerate() {
-            add_details(&mut details[field][index], child, origins)?;
+            add_details(&mut details[field][index], child, origins, now)?;
         }
     }
     Ok(())

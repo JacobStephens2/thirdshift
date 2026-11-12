@@ -207,9 +207,24 @@ Descendants outlive their Run as they do in production, until the `Scenario` is
 dropped by normal completion or assertion unwinding. Dropping it closes the
 lease every guardian polls. Each guardian then SIGKILLs and reaps what it owns,
 including commands that trap INT and TERM, and the drop waits up to the shared
-120-second bound for them before the temp root is removed. The lease also closes
+120-second bound for them before waiting for directory cleanup. The lease also closes
 when the harness dies by any signal. So after SIGKILL of the harness alone, or of
 its whole process group, the Run and its descendants end within milliseconds.
+
+Each Scenario also starts an exec'd directory guardian in a separate process
+group, before constructing the fixture. It captures only that Scenario's exact
+canonical root and reads a private close-on-exec pipe. The harness and every
+Run guardian hold writers; EOF means the harness has released ownership and
+every Run guardian has finished reaping its descendants. Only then does the
+directory guardian remove the root. This also works after harness-only or
+process-group SIGKILL, when `TempDir` cannot run its destructor. Normal completion
+and assertion unwinding wait up to the same 120-second bound for this guardian
+to finish. Concurrent Scenarios
+have separate pipes and roots; no temporary-directory scanning or historical
+cleanup is performed.
+The directory guardian retries transient nonempty-directory and disappearing-entry
+errors within that bound, so final filesystem activity from commands outside
+`OwnedRuns` does not make a partial removal count as success.
 
 Terminal Runs (`run_terminal`, `run_terminal_bounded`, `run_on_terminal`) follow
 the [Setup PTY child lifetime](#setup-pty-child-lifetime) contract instead.
@@ -221,3 +236,8 @@ detached command that ignores INT and TERM, and on a held fake `git`. It kills
 the fixture harness alone and with its process group, and also covers normal
 completion and assertion unwinding. A subreaping supervisor waits five seconds
 for each recorded process to be gone and names any survivor.
+It also reaps the directory guardian and asserts that the captured Scenario
+root is absent before its outer emergency-cleanup TempDir is dropped. A separate
+case keeps two Scenarios alive together and drops one while the other keeps
+running, checking that completed Runs retain their roots and each drop removes
+only its own root.

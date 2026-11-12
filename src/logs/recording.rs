@@ -5,11 +5,14 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
-use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
+use super::command_record::{
+    CommandRecord, CommandTree, Stage, StageName, Suspension, TicketRecord,
+};
 use super::effects::{Outside, Stream};
 use super::owner::{self, Owner};
 use super::{Begin, CommandKind, Pass, Work, root_under};
@@ -45,6 +48,18 @@ pub(super) struct Record<O: Outside> {
     parent_dispatch: Option<String>,
     record_warned: bool,
     unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    clocks: Option<Clocks>,
+}
+
+struct Clocks {
+    wall: chrono::DateTime<chrono::FixedOffset>,
+    monotonic: Duration,
+}
+
+#[derive(Clone, Copy)]
+enum LogActivity {
+    Work,
+    Suspension,
 }
 
 enum Log<W> {
@@ -90,6 +105,62 @@ impl Started {
 }
 
 impl<O: Outside> Record<O> {
+    pub(super) fn suspended_seconds(&self) -> u64 {
+        self.command_record.as_ref().map_or(0, |(_, tree)| {
+            tree.command.stages.iter().fold(0, |total, stage| {
+                total.saturating_add(stage.suspended_seconds)
+            })
+        })
+    }
+
+    /// Called by the periodic sampler and before transitions. Each reading
+    /// replaces the baseline, so smaller clock corrections never accumulate.
+    pub(super) fn check_suspension(&mut self) {
+        let clocks = Clocks {
+            wall: self.outside.now(),
+            monotonic: self.outside.monotonic(),
+        };
+        let Some(previous) = self.clocks.replace(clocks) else {
+            return;
+        };
+        let current = self.clocks.as_ref().unwrap();
+        let Ok(wall) = (current.wall - previous.wall).to_std() else {
+            return;
+        };
+        let suspended = wall.saturating_sub(current.monotonic.saturating_sub(previous.monotonic));
+        if suspended < Duration::from_secs(60) {
+            return;
+        }
+        let Some((_, tree)) = &mut self.command_record else {
+            return;
+        };
+        if tree.command.outcome.is_some() {
+            return;
+        }
+        for facts in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
+            if facts.outcome.is_none()
+                && let Some(stage) = facts.stages.last_mut()
+            {
+                stage.suspended_seconds =
+                    stage.suspended_seconds.saturating_add(suspended.as_secs());
+                stage.suspensions.push(Suspension {
+                    resumed_at: current.wall,
+                    seconds: suspended.as_secs(),
+                });
+            }
+        }
+        self.write_record();
+        // Child Ticket runs retain their own stage facts. Their owning
+        // Command emits the one log line, rather than relaying duplicates.
+        if !self.child {
+            let line = self.progress_line(format_args!(
+                "host was suspended {}",
+                super::status::age(suspended.as_secs() as i64)
+            ));
+            self.output(Stream::Stderr, line, LogActivity::Suspension);
+        }
+    }
+
     pub(super) fn new(outside: O) -> Self {
         Self {
             outside,
@@ -114,6 +185,7 @@ impl<O: Outside> Record<O> {
             parent_dispatch: None,
             record_warned: false,
             unaddressed_findings: None,
+            clocks: None,
         }
     }
 
@@ -210,7 +282,7 @@ impl<O: Outside> Record<O> {
             shown_early.push(lines.len());
             lines.push((Stream::Stderr, line));
         } else {
-            self.output(Stream::Stderr, line);
+            self.output(Stream::Stderr, line, LogActivity::Work);
         }
     }
 
@@ -409,6 +481,8 @@ impl<O: Outside> Record<O> {
                 dispatched: Vec::new(),
             },
         ));
+        self.clocks = None;
+        self.check_suspension();
         if let Some(stage) = work.initial_stage() {
             self.stage(stage, None);
         } else {
@@ -525,6 +599,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
+        self.check_suspension();
         let name = stage.name();
         let Some((_, tree)) = &mut self.command_record else {
             return;
@@ -538,6 +613,8 @@ impl<O: Outside> Record<O> {
                 name: name.into(),
                 began_at: self.outside.now().to_rfc3339(),
                 session_log: facts.session_log.clone(),
+                suspended_seconds: 0,
+                suspensions: Vec::new(),
             });
         } else if let Some(stage) = facts.stages.last_mut() {
             stage.session_log = facts.session_log.clone();
@@ -583,6 +660,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.check_suspension();
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(
@@ -625,6 +703,7 @@ impl<O: Outside> Record<O> {
 
     /// How a Command ended when it has no Run account: an Experiment or a Process.
     pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
+        self.check_suspension();
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
             tree.command.cause = cause.map(String::from);
@@ -634,6 +713,7 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        self.check_suspension();
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.active_dispatch()
@@ -654,6 +734,7 @@ impl<O: Outside> Record<O> {
         harness: &Choice,
         security_fix_findings: &[crate::security::RecordedFinding],
     ) {
+        self.check_suspension();
         // Entered while the pass is still the active record, timing the
         // dispatch. An Architect run keeps its Architecture review stage,
         // as #889 asked only for Pickup runs and Security runs.
@@ -807,15 +888,22 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn print(&mut self, line: &str) {
-        self.output(Stream::Stdout, line.to_string());
+        self.output(Stream::Stdout, line.to_string(), LogActivity::Work);
     }
     pub(super) fn eprint(&mut self, line: &str) {
-        self.output(Stream::Stderr, line.to_string());
+        // A child Command's wake annotation can be relayed through several
+        // parents. None of those copies is evidence that work resumed.
+        let activity = if progress::is_suspension_annotation(line) {
+            LogActivity::Suspension
+        } else {
+            LogActivity::Work
+        };
+        self.output(Stream::Stderr, line.to_string(), activity);
     }
 
     fn step(&mut self, message: impl Display) {
         let line = self.progress_line(message);
-        self.output(Stream::Stderr, line);
+        self.output(Stream::Stderr, line, LogActivity::Work);
     }
 
     fn progress_line(&mut self, message: impl Display) -> String {
@@ -824,9 +912,9 @@ impl<O: Outside> Record<O> {
 
     /// Warnings enter the same ordered output path without recursion. A
     /// failed writer is disabled before its warning is queued.
-    fn output(&mut self, stream: Stream, line: String) {
-        let mut pending = VecDeque::from([(stream, line)]);
-        while let Some((stream, line)) = pending.pop_front() {
+    fn output(&mut self, stream: Stream, line: String, activity: LogActivity) {
+        let mut pending = VecDeque::from([(stream, line, activity)]);
+        while let Some((stream, line, activity)) = pending.pop_front() {
             if !matches!(self.command_log, Log::Held { shown: false, .. }) {
                 let _ = self.outside.emit(stream, &line);
             }
@@ -834,7 +922,11 @@ impl<O: Outside> Record<O> {
                 Log::NotKept | Log::Failed { .. } => {}
                 Log::Held { lines, .. } => lines.push((stream, line)),
                 Log::Kept { path, writer } => {
-                    if let Err(error) = writeln!(writer, "{line}") {
+                    let written = match activity {
+                        LogActivity::Work => writeln!(writer, "{line}"),
+                        LogActivity::Suspension => self.outside.suspension_line(writer, &line),
+                    };
+                    if let Err(error) = written {
                         let error = anyhow::Error::new(error)
                             .context(format!("could not write {}", path.display()));
                         self.command_log = Log::Failed {
@@ -843,7 +935,7 @@ impl<O: Outside> Record<O> {
                         let warning = self.progress_line(format_args!(
                             "warning: could not keep the Command log: {error:#}"
                         ));
-                        pending.push_back((Stream::Stderr, warning));
+                        pending.push_back((Stream::Stderr, warning, LogActivity::Work));
                     }
                 }
             }

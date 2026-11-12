@@ -135,6 +135,22 @@ fn estimates_use_each_arms_own_history_and_include_frozen_costs() {
         "{}",
         run.stderr
     );
+    for entry in fs::read_dir(history.join("results")).unwrap() {
+        let path = entry.unwrap().path();
+        let mut result: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if result["arm"] == "candidate" {
+            result["attempts"][0]["timings"]["suspended_seconds"] = json!(120);
+            fs::write(path, result.to_string()).unwrap();
+        }
+    }
+    let run = fixture.run_on_terminal(&[], &[("Run these Trials? [y/N] ", "n")]);
+    assert!(
+        run.stderr.contains(
+            "Candidate arm (claude): 1 Trial, no earlier Trials to estimate from, $9.000000"
+        ),
+        "Suspended time must not affect the estimate, and its cost must still count: {}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -224,7 +240,7 @@ fn paired_ratios_are_medians_of_matched_trials_and_exclude_void_pairs() {
     let shown = fixture.experiment();
     assert_eq!(
         shown["accounting"]["paired_median_ratios"],
-        json!({"cost":2.0,"time":2.0,"pairs":3})
+        json!({"cost":2.0,"time":2.0,"pairs":3,"time_pairs":3})
     );
     for entry in fs::read_dir(&results).unwrap() {
         let path = entry.unwrap().path();
@@ -236,7 +252,7 @@ fn paired_ratios_are_medians_of_matched_trials_and_exclude_void_pairs() {
     }
     assert_eq!(
         fixture.experiment()["accounting"]["paired_median_ratios"],
-        json!({"cost":2.0,"time":2.0,"pairs":2})
+        json!({"cost":2.0,"time":2.0,"pairs":2,"time_pairs":2})
     );
 }
 

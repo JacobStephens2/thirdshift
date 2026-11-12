@@ -321,7 +321,7 @@ fn stage_details(
                 format!(
                     "{} · {}",
                     super::display_name(&stage.name),
-                    age(stage.age_seconds)
+                    stage_time(Some(stage.age_seconds as f64), stage.suspended_seconds)
                 )
             }
         },
@@ -367,6 +367,16 @@ fn ticket_text(ticket: &super::command_record::TicketRecord, repository: &str) -
         ),
     };
     format!("Ticket #{} · {state}", ticket.issue.number)
+}
+
+pub(super) fn stage_time(seconds: Option<f64>, suspended_seconds: u64) -> String {
+    let mut time = seconds
+        .map(|seconds| age(seconds as i64))
+        .unwrap_or_else(|| "time unknown".into());
+    if suspended_seconds > 0 {
+        time.push_str(&format!(" · {} suspended", age(suspended_seconds as i64)));
+    }
+    time
 }
 
 pub(super) fn age(seconds: i64) -> String {

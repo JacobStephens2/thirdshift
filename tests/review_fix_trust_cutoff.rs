@@ -29,22 +29,7 @@ fn slow_worktree_acquisition_keeps_the_fix_run_trust_window() {
     let real_git = String::from_utf8(located.stdout).unwrap();
     let real_git = real_git.trim();
     let library = scenario.path("fix-clock.so");
-    let compiled = Command::new("cc")
-        .args(["-shared", "-fPIC"])
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/console/session-clock.c"
-        ))
-        .arg("-o")
-        .arg(&library)
-        .arg("-ldl")
-        .output()
-        .unwrap();
-    assert!(
-        compiled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
+    support::clock::compile(&library);
     let offset = scenario.path("fix-clock-offset");
     std::fs::write(&offset, "0").unwrap();
     support::write_executable(

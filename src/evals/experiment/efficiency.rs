@@ -49,7 +49,9 @@ impl Efficiency {
         for pair in accounting::paired_ratios(results) {
             let key = (pair.suite, pair.task);
             costs.entry(key).or_insert_with(Vec::new).push(pair.cost);
-            times.entry(key).or_insert_with(Vec::new).push(pair.time);
+            if !pair.timing_excluded {
+                times.entry(key).or_insert_with(Vec::new).push(pair.time);
+            }
         }
         Self {
             quality_verdict,

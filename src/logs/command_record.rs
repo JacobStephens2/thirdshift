@@ -223,6 +223,52 @@ pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
     pub session_log: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub suspended_seconds: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suspensions: Vec<Suspension>,
+}
+
+/// The sampled end of a suspension locates it relative to log activity.
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Suspension {
+    pub resumed_at: DateTime<FixedOffset>,
+    pub seconds: u64,
+}
+
+impl Stage {
+    pub fn suspended_between(
+        &self,
+        since: DateTime<FixedOffset>,
+        until: DateTime<FixedOffset>,
+    ) -> u64 {
+        // Older aggregate-only records can locate their Suspended time only
+        // when the quiet interval covers the whole stage.
+        if self.suspensions.is_empty() {
+            return DateTime::parse_from_rfc3339(&self.began_at)
+                .ok()
+                .filter(|began| since <= *began)
+                .map_or(0, |_| self.suspended_seconds);
+        }
+        self.suspensions
+            .iter()
+            .filter_map(|suspension| {
+                let duration =
+                    chrono::Duration::try_seconds(i64::try_from(suspension.seconds).ok()?)?;
+                let began = suspension.resumed_at.checked_sub_signed(duration)?;
+                Some(
+                    (suspension.resumed_at.min(until) - began.max(since))
+                        .num_seconds()
+                        .max(0) as u64,
+                )
+            })
+            .fold(0, u64::saturating_add)
+            .min(self.suspended_seconds)
+    }
+}
+
+fn is_zero(seconds: &u64) -> bool {
+    *seconds == 0
 }
 
 /// A retained stage interval, optionally extended to an observation of live work.

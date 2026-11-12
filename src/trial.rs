@@ -161,6 +161,13 @@ impl std::fmt::Display for VoidCause {
 pub(crate) struct Timings {
     pub total_ms: u128,
     pub session_ms: u128,
+    /// Added by the owning Experiment, whose Command measures suspension.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub suspended_seconds: u64,
+}
+
+fn is_zero(seconds: &u64) -> bool {
+    *seconds == 0
 }
 
 impl Output {
@@ -171,6 +178,7 @@ impl Output {
             timings: Timings {
                 total_ms,
                 session_ms: total_ms,
+                suspended_seconds: 0,
             },
             void_cause: None,
             cause: Some(cause.into()),
@@ -201,6 +209,7 @@ impl Output {
             timings: Timings {
                 total_ms,
                 session_ms: 0,
+                suspended_seconds: 0,
             },
             void_cause,
             cause: Some(format!("{error:#}")),
@@ -379,6 +388,7 @@ pub fn run(path: &Path) -> Result<String> {
         timings: Timings {
             total_ms: started.elapsed().as_millis(),
             session_ms,
+            suspended_seconds: 0,
         },
         void_cause,
         cause,
