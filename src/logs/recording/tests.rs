@@ -699,23 +699,8 @@ fn completion_metrics_place_each_stage_against_repository_history() {
 
 #[test]
 fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end() {
-    let ending = |failure: anyhow::Error,
-                  recovery: Option<crate::recovery::Stage>,
-                  outcome: &str,
-                  stages: &[StageName]| {
-        let memory = Scripted::default();
-        let mut record = Record::new(memory.clone());
-        record.begin(Begin::Run(&issue()));
-        record.configured(&config(false));
-        record.started(Work::Run(&issue()), &harness());
-        let path = record.record_path().unwrap();
-        let started: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
-        assert_eq!(started["thirdshift_version"], env!("CARGO_PKG_VERSION"));
-        assert!(started.get("stopped_at").is_none() && started.get("failure_category").is_none());
-        for stage in stages {
-            record.stage(*stage, None);
-        }
-        let ended = crate::run::Ended {
+    let failed =
+        |failure: anyhow::Error, recovery: Option<crate::recovery::Stage>| crate::run::Ended {
             outcome: Err(crate::failed_run::FailedRun {
                 recovery: recovery.map(|stage| {
                     Box::new(crate::recovery::Recovery::new(
@@ -732,6 +717,23 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
             base_fix: None,
             advice: Vec::new(),
         };
+    let ending = |failure: anyhow::Error,
+                  recovery: Option<crate::recovery::Stage>,
+                  outcome: &str,
+                  stages: &[StageName]| {
+        let memory = Scripted::default();
+        let mut record = Record::new(memory.clone());
+        record.begin(Begin::Run(&issue()));
+        record.configured(&config(false));
+        record.started(Work::Run(&issue()), &harness());
+        let path = record.record_path().unwrap();
+        let started: serde_json::Value = serde_json::from_str(&memory.file(&path)).unwrap();
+        assert_eq!(started["thirdshift_version"], env!("CARGO_PKG_VERSION"));
+        assert!(started.get("stopped_at").is_none() && started.get("failure_category").is_none());
+        for stage in stages {
+            record.stage(*stage, None);
+        }
+        let ended = failed(failure, recovery);
         let account = crate::run_ending::Account::of_run(&ended);
         assert_eq!(account.outcome, outcome);
         record.finished(&account);
@@ -786,7 +788,8 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
             "{recovery:?}"
         );
     }
-    // Cleanup alone is still where it stopped.
+    // Cleanup alone is still where it stopped. `started` always enters the
+    // Work's initial stage, so this record is finished directly.
     let memory = Scripted::default();
     let mut record = Record::new(memory.clone());
     record.begin(Begin::Run(&issue()));
@@ -796,18 +799,7 @@ fn a_command_records_its_version_at_start_and_where_a_failure_stopped_at_its_end
         serde_json::from_str(&memory.file(record.record_path().unwrap())).unwrap();
     cleaned.stages.truncate(1);
     cleaned.stages[0].name = Cleanup.name().into();
-    let ended = crate::run::Ended {
-        outcome: Err(crate::failed_run::FailedRun {
-            recovery: None,
-            error: anyhow::anyhow!("origin mismatch"),
-            pr_url: None,
-            log: None,
-            interrupted: false,
-            ticket_lines: Vec::new(),
-        }),
-        base_fix: None,
-        advice: Vec::new(),
-    };
+    let ended = failed(anyhow::anyhow!("origin mismatch"), None);
     cleaned.finish(
         &crate::run_ending::Account::of_run(&ended),
         &mut memory.clone(),
