@@ -354,7 +354,8 @@ pub(super) async fn show(
         }
         let local = super::fleet_control::local_name(&config);
         // The API never reaches this point with a `machine`: it stays local.
-        let fleet = format == super::api::Format::Html && fleet::default_view(&config);
+        let fleet = format == super::api::Format::Html
+            && fleet::default_view(&config, viewer.fleet_person());
         let machines = Machines {
             chosen: match machine.as_str() {
                 "" if fleet => None,
@@ -362,7 +363,7 @@ pub(super) async fn show(
                 chosen => Some(chosen.to_owned()),
             },
             fleet,
-            others: fleet::others(&config),
+            others: fleet::others(&config, viewer.fleet_person()),
             local,
         };
         if !machines.is(&machines.local) {

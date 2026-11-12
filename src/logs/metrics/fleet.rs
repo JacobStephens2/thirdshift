@@ -205,11 +205,16 @@ pub(crate) struct FailedCommand {
     pub(crate) command: SummaryCommand,
 }
 
-/// A saved peer snapshot file: the machine's last read views.
+/// A saved peer snapshot file: the machine's last read views for one
+/// person. A peer answers each person by its own sign-in list, so a snapshot
+/// stands in only for the person whose read it keeps; missing for this
+/// machine's owner.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     version: u32,
     machine: String,
+    #[serde(default)]
+    person: Option<String>,
     last_seen: DateTime<Utc>,
     views: BTreeMap<String, SavedView>,
 }
@@ -281,19 +286,19 @@ fn pairs(asked: &MetricsArgs) -> (Pairs, Pairs) {
 }
 
 /// Whether Fleet is the Console's default Metrics view: a paired machine, or
-/// a saved snapshot of one, exists.
-pub(crate) fn default_view(config: &UserConfig) -> bool {
+/// `person`'s saved snapshot of one, exists.
+pub(crate) fn default_view(config: &UserConfig, person: Option<&str>) -> bool {
     let credentials = Credentials::read().ok();
     config.console.fleet.iter().any(|entry| {
         credentials
             .as_ref()
             .is_some_and(|credentials| credentials.fleet_token(&entry.name).is_some())
-    }) || !saved(&config.logs_dir).is_empty()
+    }) || !saved(&config.logs_dir, person).is_empty()
 }
 
 /// Every machine Fleet metrics can be scoped to besides this one: the Fleet
-/// in config order, then retired machines with a saved snapshot.
-pub(crate) fn others(config: &UserConfig) -> Vec<String> {
+/// in config order, then retired machines with `person`'s saved snapshot.
+pub(crate) fn others(config: &UserConfig, person: Option<&str>) -> Vec<String> {
     let local = crate::console::fleet_control::local_name(config);
     let mut names: Vec<_> = config
         .console
@@ -301,7 +306,7 @@ pub(crate) fn others(config: &UserConfig) -> Vec<String> {
         .iter()
         .map(|entry| entry.name.clone())
         .collect();
-    let mut retired: Vec<_> = saved(&config.logs_dir)
+    let mut retired: Vec<_> = saved(&config.logs_dir, person)
         .into_iter()
         .map(|saved| saved.machine)
         .filter(|name| *name != local && !names.contains(name))
@@ -322,7 +327,7 @@ pub(crate) fn load(
     let local = crate::console::fleet_control::local_name(config);
     let chosen = asked.machine.as_deref();
     if let Some(name) = chosen
-        && !others(config).iter().any(|known| known == name)
+        && !others(config, person).iter().any(|known| known == name)
     {
         bail!("unknown Fleet machine: {name}");
     }
@@ -365,7 +370,7 @@ pub(crate) fn load(
             .collect::<Vec<_>>()
     }));
     let paired: Vec<_> = config.console.fleet.iter().map(|e| &e.name).collect();
-    let mut retired: Vec<_> = saved(&config.logs_dir)
+    let mut retired: Vec<_> = saved(&config.logs_dir, person)
         .into_iter()
         .filter(|saved| {
             saved.machine != local
@@ -436,7 +441,7 @@ fn remote(
             machine.last_seen = Some(now);
             // The saved snapshot is a convenience; failing to keep it must
             // not cost the live view.
-            if let Err(error) = save(&config.logs_dir, &entry.name, view, &summary, now) {
+            if let Err(error) = save(&config.logs_dir, &entry.name, person, view, &summary, now) {
                 machine.error = Some(format!("snapshot not saved: {error:#}"));
             }
             (machine, Some(summary))
@@ -452,8 +457,8 @@ fn remote(
             if machine.status != Status::Unavailable {
                 return (machine, None);
             }
-            let Some(saved) = read_saved(&path(&config.logs_dir, &entry.name))
-                .filter(|saved| saved.machine == entry.name)
+            let Some(saved) = read_saved(&path(&config.logs_dir, &entry.name, person))
+                .filter(|saved| saved.machine == entry.name && saved.person.as_deref() == person)
             else {
                 return (machine, None);
             };
@@ -646,10 +651,17 @@ fn merge(
     }
 }
 
-/// A name's saved snapshot file. Names are printable but may hold any
-/// character, so the file is named by a digest; the file names the machine.
-fn path(logs_dir: &Path, name: &str) -> PathBuf {
-    let digest = Sha256::digest(name.as_bytes());
+/// A name's saved snapshot file for `person`. Names are printable but may
+/// hold any character, so the file is named by a digest; the file names the
+/// machine and the person.
+fn path(logs_dir: &Path, name: &str, person: Option<&str>) -> PathBuf {
+    let mut digest = Sha256::new();
+    digest.update(name.as_bytes());
+    if let Some(person) = person {
+        digest.update([0]);
+        digest.update(person.as_bytes());
+    }
+    let digest = digest.finalize();
     let hex: String = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -663,7 +675,8 @@ fn read_saved(path: &Path) -> Option<Saved> {
         .filter(|saved: &Saved| saved.version == 1)
 }
 
-fn saved(logs_dir: &Path) -> Vec<Saved> {
+/// `person`'s saved snapshots, one per machine.
+fn saved(logs_dir: &Path, person: Option<&str>) -> Vec<Saved> {
     let Ok(entries) = std::fs::read_dir(logs_dir.join(CACHE)) else {
         return Vec::new();
     };
@@ -675,6 +688,7 @@ fn saved(logs_dir: &Path) -> Vec<Saved> {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| read_saved(&path))
+        .filter(|saved| saved.person.as_deref() == person)
         .collect()
 }
 
@@ -683,18 +697,20 @@ fn saved(logs_dir: &Path) -> Vec<Saved> {
 fn save(
     logs_dir: &Path,
     name: &str,
+    person: Option<&str>,
     view: &View,
     summary: &Summary,
     at: DateTime<Utc>,
 ) -> Result<()> {
-    let path = path(logs_dir, name);
+    let path = path(logs_dir, name, person);
     let directory = path.parent().expect("cache file has a directory");
     std::fs::create_dir_all(directory)?;
     let mut saved = read_saved(&path)
-        .filter(|saved| saved.machine == name)
+        .filter(|saved| saved.machine == name && saved.person.as_deref() == person)
         .unwrap_or_else(|| Saved {
             version: 1,
             machine: name.to_owned(),
+            person: person.map(str::to_owned),
             last_seen: at,
             views: BTreeMap::new(),
         });

@@ -181,13 +181,14 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
         save(
             logs.path(),
             "east/one",
+            None,
             &view,
             &summary("east", current, index, 0),
             at,
         )
         .unwrap();
     }
-    let saved = saved(logs.path());
+    let saved = saved(logs.path(), None);
     assert_eq!(saved.len(), 1);
     let saved = &saved[0];
     assert_eq!(saved.machine, "east/one");
@@ -201,7 +202,7 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
         start + chrono::Duration::seconds(VIEWS as i64)
     );
     let mut cached_machine = machine("east/one", Status::Cached);
-    let read = read_saved(&path(logs.path(), "east/one")).unwrap();
+    let read = read_saved(&path(logs.path(), "east/one", None)).unwrap();
     let summary = cached(
         &mut cached_machine,
         read,
@@ -211,7 +212,7 @@ fn a_saved_snapshot_keeps_each_view_and_only_the_newest_views() {
     .unwrap();
     assert_eq!(summary.outcomes[0].tally.succeeded, VIEWS);
     assert!(cached_machine.error.is_none());
-    let read = read_saved(&path(logs.path(), "east/one")).unwrap();
+    let read = read_saved(&path(logs.path(), "east/one", None)).unwrap();
     assert!(
         cached(
             &mut cached_machine,
@@ -282,6 +283,7 @@ fn another_windows_snapshot_stands_in_regrouped_by_week() {
     save(
         logs.path(),
         "east",
+        None,
         &daily,
         &summary("east", current, 2, 1),
         Utc::now(),
@@ -290,7 +292,7 @@ fn another_windows_snapshot_stands_in_regrouped_by_week() {
     let weekly = Window::of(&MetricsArgs::default(), today());
     let all = View::of(&MetricsArgs::default(), &weekly);
     let mut east = machine("east", Status::Cached);
-    let read = read_saved(&path(logs.path(), "east")).unwrap();
+    let read = read_saved(&path(logs.path(), "east", None)).unwrap();
     let stood_in = cached(&mut east, read, &all, &weekly).unwrap();
     assert!(stood_in.comparison.is_none());
     let buckets: Vec<_> = stood_in
@@ -311,12 +313,13 @@ fn another_windows_snapshot_stands_in_regrouped_by_week() {
     save(
         logs.path(),
         "west",
+        None,
         &all,
         &summary("west", current, 1, 0),
         Utc::now(),
     )
     .unwrap();
     let mut west = machine("west", Status::Cached);
-    let read = read_saved(&path(logs.path(), "west")).unwrap();
+    let read = read_saved(&path(logs.path(), "west", None)).unwrap();
     assert!(cached(&mut west, read, &daily, &window()).is_none());
 }
