@@ -522,6 +522,7 @@ impl<A: Adapter> PullRequest<A> {
     fn settled_ready_snapshot(&mut self) -> Result<PrSnapshot> {
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
         let mut waiting_line = poll::WaitingLine::new();
+        let mut backoff = poll::Backoff::new();
         loop {
             let snapshot = self.observe(false)?.context("no PR found")?;
             self.validate(&snapshot, true)?;
@@ -533,7 +534,9 @@ impl<A: Adapter> PullRequest<A> {
                             snapshot.pr.url
                         ));
                     }
-                    self.adapter.pause()?;
+                    let state = (snapshot.head_commit, snapshot.mergeable);
+                    self.adapter
+                        .pause(backoff.observe(state, std::time::Instant::now()))?;
                 }
                 Mergeable::Yes | Mergeable::No | Mergeable::Unknown => return Ok(snapshot),
             }
@@ -738,8 +741,8 @@ pub(crate) trait Adapter {
     ) -> Result<String>;
     fn review_blocks_merge(&mut self, issue: &IssueUrl, number: u64) -> bool;
     fn merge(&mut self, issue: &IssueUrl, number: u64, head: &str) -> Result<()>;
-    fn pause(&mut self) -> Result<()> {
-        poll::pause()
+    fn pause(&mut self, delay: std::time::Duration) -> Result<()> {
+        poll::sleep(delay)
     }
     fn grace_period(&self) -> std::time::Duration {
         poll::grace_period()
@@ -1054,7 +1057,7 @@ mod tests {
             }
             Ok(())
         }
-        fn pause(&mut self) -> Result<()> {
+        fn pause(&mut self, _: Duration) -> Result<()> {
             Ok(())
         }
         fn grace_period(&self) -> Duration {

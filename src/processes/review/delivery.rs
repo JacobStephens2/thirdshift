@@ -222,6 +222,7 @@ impl Delivery<'_> {
     }
 
     fn require_mergeable(&self, head: &str) -> Result<()> {
+        let mut backoff = crate::poll::Backoff::new();
         loop {
             self.unchanged_head(head)?;
             let observed = self
@@ -246,7 +247,10 @@ impl Delivery<'_> {
                     "pull request needs updating before merge; the author must resolve the conflict with {}",
                     self.snapshot.base
                 ),
-                crate::github::Mergeable::Unknown => crate::poll::pause()?,
+                crate::github::Mergeable::Unknown => {
+                    let state = (observed.head_commit, observed.mergeable);
+                    crate::poll::sleep(backoff.observe(state, std::time::Instant::now()))?;
+                }
             }
         }
     }
