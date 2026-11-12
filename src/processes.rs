@@ -588,7 +588,7 @@ fn run(command: &ProcessRun) -> Result<String> {
     // other Passes, the check is before a skip, so a Process that would be
     // skipped fails on it too.
     let goal = Goal::from_flag(command.goal, config.merge_always);
-    let notification = RunNotification::new(
+    let mut notification = RunNotification::new(
         Flags {
             email: command.email.clone(),
             ..Flags::default()
@@ -643,6 +643,7 @@ fn run(command: &ProcessRun) -> Result<String> {
         logs::begin(Begin::Process { name, pass: false });
         logs::configured(&config);
         logs::preflight_issue(issue);
+        notification.issue(issue);
     }
     if let Err(error) = require_issue(&path, &file, issue.as_ref()) {
         return Err(failed_before_steps(notification, error));

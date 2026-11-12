@@ -150,6 +150,23 @@ fn existing_finding_category_preservation_does_not_accept_a_factory_recommendati
 }
 
 #[test]
+fn failed_issue_triage_retains_its_target_in_status() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
+    scenario.agent_does("exit 1");
+    let result = scenario.run(&["triage", "7"]);
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Triage run");
+    assert_eq!(command["issue"]["number"], 7, "{command}");
+    assert_eq!(command["issue"]["url"], scenario.issue_url(7));
+    assert_eq!(command["outcome"], "failed");
+}
+
+#[test]
 fn issue_triage_updates_the_target_and_holds_readiness_for_the_day_shift() {
     let scenario = Scenario::new();
     scenario.repo_has_labels(&["bug", "enhancement"]);

@@ -20,6 +20,9 @@ mod metrics_tests;
 #[path = "run_kinds_tests.rs"]
 mod run_kinds_tests;
 
+#[path = "health_tests.rs"]
+mod health_tests;
+
 fn now() -> DateTime<Local> {
     DateTime::parse_from_rfc3339("2026-10-19T12:00:00-04:00")
         .unwrap()

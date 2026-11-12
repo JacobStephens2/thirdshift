@@ -520,11 +520,17 @@ pub fn run(
 ) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
-    logs::started(logs::Work::TriageRun(&repo), harness);
     let target = match input {
         Input::Issue(issue) => Some(issue),
         Input::Report(_) => None,
     };
+    logs::started(
+        logs::Work::TriageRun {
+            repo: &repo,
+            issue: target,
+        },
+        harness,
+    );
     let base = match target {
         Some(issue) => {
             let directory = launch::LaunchDirectory::open_for_run(issue)?;

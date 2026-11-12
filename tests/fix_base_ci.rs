@@ -211,6 +211,32 @@ git commit -qm 'Fix base CI'
 "#;
 
 #[test]
+fn base_ci_notification_keeps_the_authored_pr_title() {
+    let scenario = Scenario::new();
+    failed_base(&scenario, 2);
+    scenario.agent_does(FIX);
+    let resend = support::resend::ResendStandIn::replying(200, r#"{"id":"accepted"}"#);
+    let result = scenario.run_with_env(
+        &["fix", "no-merge", "email", "me@example.com"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_titles"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert_eq!(
+        request.body["subject"],
+        "[thirdshift] acme/widgets Fix run #1 Fix CI on main: test: ready for review"
+    );
+    let text = request.body["text"].as_str().unwrap();
+    assert!(text.contains("Pull request: https://github.com/acme/widgets/pull/1\nTitle:        Fix CI on main: test\n"), "{text}");
+    support::resend::assert_saved_notification(&scenario, "fix", request);
+}
+
+#[test]
 fn persistent_base_failure_opens_a_ready_pr_at_the_origin_tip() {
     let scenario = Scenario::new();
     let head = failed_base(&scenario, 2);

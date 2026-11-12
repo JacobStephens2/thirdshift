@@ -875,7 +875,8 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
     let now = chrono::Local::now();
     for (number, age, stage) in [
         (7, 3600, "CI watch"),
-        (8, 120, "implement"),
+        // Step-2 Slow must also be five minutes past the one-minute top.
+        (8, 420, "implement"),
         (9, 1, "Self-merge"),
         (10, 1, "implement"),
     ] {
