@@ -379,6 +379,8 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          - deploy/preview: https://deploy.example/7\n\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
+         Keep disposable command/test logs inside `.validation-logs/` in this worktree, never in `/tmp`. This directory is excluded from Git and discarded by worktree cleanup. Never stage or commit validation logs. Remove untracked validation logs before committing and before ending the session. Reproduce with the failing test file or filter before running a full suite. Do not run full test suites with `--debug` or verbose trace flags to isolate a failure. Do not use `sleep`/`tail` polling loops; run commands in the foreground with a sufficient timeout. Inspect large logs with bounded streaming tools rather than reading entire files into memory.\n\
+         \n\
          Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\
@@ -1303,6 +1305,8 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
          - test: https://ci.example/test\n\
          \n\
          Read the failure logs (e.g. `gh run view <run-id> --log-failed`), find the root cause, and fix it. Do not skip, disable, or weaken tests or checks to make them pass.\n\
+         Keep disposable command/test logs inside `.validation-logs/` in this worktree, never in `/tmp`. This directory is excluded from Git and discarded by worktree cleanup. Never stage or commit validation logs. Remove untracked validation logs before committing and before ending the session. Reproduce with the failing test file or filter before running a full suite. Do not run full test suites with `--debug` or verbose trace flags to isolate a failure. Do not use `sleep`/`tail` polling loops; run commands in the foreground with a sufficient timeout. Inspect large logs with bounded streaming tools rather than reading entire files into memory.\n\
+         \n\
          Run the affected checks locally. Commit only changed files, and push issue-7 only when needed to publish real changes or required upstream reconciliation.\n\
          \n\
          Compare the failing test or check with the branch's diff against main. A failing test or check this branch added or changed is this branch's to fix, even when it is intermittent. Fix the root cause without skipping, disabling, or weakening the test or check.\n\

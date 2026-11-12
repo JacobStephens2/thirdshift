@@ -214,7 +214,8 @@ git commit -qm 'Fix base CI'
 fn unchanged_base_ci_fix_publishes_nothing_and_is_not_repeated() {
     let scenario = Scenario::new();
     let head = failed_base(&scenario, 2);
-    scenario.agent_does("true");
+    scenario
+        .agent_does("mkdir -p .validation-logs\nprintf 'test output' > .validation-logs/check.log");
     let result = scenario.run(PASS);
     assert!(
         scenario.gh_calls_of("pr", "create").is_empty(),
