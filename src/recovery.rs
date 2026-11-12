@@ -127,6 +127,8 @@ pub struct Recovery {
     /// The Spec PR changed under the Spec run, so no command resumes it.
     spec_pr_changed: bool,
     fix_run: bool,
+    /// The host ran out of disk space, which retrying needs freed first.
+    out_of_disk: bool,
 }
 
 impl Recovery {
@@ -141,6 +143,7 @@ impl Recovery {
             local_child_work: Vec::new(),
             spec_pr_changed: false,
             fix_run: false,
+            out_of_disk: false,
         }
     }
 
@@ -187,6 +190,11 @@ impl Recovery {
         self.spec_pr_changed = true;
     }
 
+    /// The host ran out of disk space: free some before retrying.
+    pub fn add_out_of_disk(&mut self) {
+        self.out_of_disk = true;
+    }
+
     /// The Security review's Harness when `security.harness` chose one
     /// different from the Run's; the Recovery command still names the Run's.
     pub fn add_security_review_harness(&mut self, harness: Harness) {
@@ -200,6 +208,12 @@ impl Recovery {
             let review = if reviewed { "complete" } else { "incomplete" };
             lines.push(format!(
                 "{PROGRESS}{landed}/{total} Tickets landed; final review {review}"
+            ));
+        }
+        if self.out_of_disk {
+            lines.push(format!(
+                "{BEFORE_RETRYING}{}",
+                crate::failed_run::OUT_OF_DISK
             ));
         }
         let Some(context) = &self.continuation else {

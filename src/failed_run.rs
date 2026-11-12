@@ -83,6 +83,38 @@ pub fn category(error: &anyhow::Error) -> crate::logs::FailureCategory {
     }
 }
 
+/// The Command log line for a failure [`out_of_disk`] recognises.
+pub const OUT_OF_DISK: &str =
+    "the host ran out of disk space; free disk space on it, then retry the Command";
+
+/// Whether the host running out of disk space caused `error`: a layer of its
+/// cause chain is the OS's error for no space left, or says so as the OS and
+/// git word it, as a failed `git` command's output does. Such a failure is
+/// the host's, not its issue's. A failed Harness Session's diagnostic is the
+/// agent's to write, and a Spec run's Tickets not done can mix causes, as can
+/// a Base fix's ending, which can carry its agent's words, so a chain with
+/// any of them is never the host's.
+pub fn out_of_disk(error: &anyhow::Error) -> bool {
+    let unowned = error.chain().any(|layer| {
+        layer.is::<crate::harness::interpretation::SessionFailure>()
+            || layer.is::<crate::spec_run::TicketsNotDone>()
+            || layer.is::<crate::base_fix::ChildEnded>()
+    });
+    !unowned
+        && error.chain().any(|layer| {
+            layer
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+                || says_out_of_disk(&layer.to_string())
+        })
+}
+
+/// Whether the rendered cause `text` says the host ran out of disk space, as
+/// the OS and git word it.
+fn says_out_of_disk(text: &str) -> bool {
+    text.contains("No space left on device")
+}
+
 /// Whether `error` is a policy, security or merge hold: a Self-merge held
 /// with its pull request already ready.
 pub fn is_hold(error: &anyhow::Error) -> bool {
@@ -196,5 +228,37 @@ mod tests {
         ] {
             assert_eq!(super::category(&error), category, "{error:#}");
         }
+    }
+
+    #[test]
+    fn running_out_of_disk_is_recognised_anywhere_in_the_cause_chain() {
+        let full = anyhow::Error::new(std::io::Error::from_raw_os_error(libc::ENOSPC))
+            .context("could not write Session trace");
+        let git = anyhow!(
+            "git write-tree failed: error: unable to write loose object file: No space left on \
+             device"
+        )
+        .context("could not push the failed ticket run's work");
+        assert!(out_of_disk(&full), "{full:#}");
+        assert!(out_of_disk(&git), "{git:#}");
+        let other = anyhow::Error::new(std::io::Error::from_raw_os_error(libc::EACCES))
+            .context("could not write Session trace");
+        assert!(!out_of_disk(&other), "{other:#}");
+        assert!(!out_of_disk(&anyhow!("claude exited 1")));
+    }
+
+    #[test]
+    fn an_agents_diagnostic_or_a_spec_runs_tickets_naming_a_full_disk_are_not_the_hosts() {
+        let mut session = crate::harness::interpretation::SessionFailure::exited("claude", 1);
+        session.diagnostic = Some("npm test failed: ENOSPC: No space left on device".into());
+        let session = anyhow::Error::new(session).context("Ticket session failed");
+        assert!(!out_of_disk(&session), "{session:#}");
+        // A Ticket's out-of-disk cause, among others, as the Spec run's
+        // Tickets not done would name it.
+        let mut tickets = crate::spec_run::TicketsNotDone::waiting();
+        tickets.only_waiting = false;
+        let tickets = anyhow::Error::new(tickets)
+            .context("#3 (failed: git worktree add failed: No space left on device)");
+        assert!(!out_of_disk(&tickets), "{tickets:#}");
     }
 }
