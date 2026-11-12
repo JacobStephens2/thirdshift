@@ -1,10 +1,14 @@
 //! Local, read-only metrics views; every signal retains its own units.
 
 mod bug_origins;
+mod outcomes;
+mod scope;
 mod trends;
 
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail};
-use chrono::Local;
+use chrono::{Local, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -14,6 +18,9 @@ use crate::args::MetricsArgs;
 use crate::config::UserConfig;
 
 use bug_origins::ConfirmedCounts;
+pub(crate) use outcomes::{Bucket, COUNTED, Class, Comparison};
+pub(crate) use scope::{Filters, Window};
+pub(crate) use trends::Row;
 
 #[derive(Serialize)]
 struct Metrics<'a> {
@@ -101,22 +108,86 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Trends across every Command on this machine the serving account can read,
+/// with Other-account Commands tagged by OS account.
+#[derive(Serialize)]
+pub(crate) struct Trends {
+    pub(crate) version: u32,
+    pub(crate) hostname: String,
+    pub(crate) window: Window,
+    pub(crate) filters: Filters,
+    pub(crate) unavailable_accounts: BTreeSet<String>,
+    pub(crate) outcomes: Vec<Bucket>,
+    pub(crate) comparison: Option<Comparison>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) weeks: Option<Vec<Row>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) days: Option<Vec<Row>>,
+}
+
+impl Trends {
+    pub(crate) fn rows(&self) -> &[Row] {
+        self.weeks
+            .as_deref()
+            .or(self.days.as_deref())
+            .unwrap_or_default()
+    }
+}
+
+fn hostname() -> String {
+    crate::host::name().unwrap_or_else(|| "unknown".into())
+}
+
+/// `asked` must name no Command; [`read`] shows one Command's metrics.
+pub(crate) fn trends(config: &UserConfig, asked: &MetricsArgs) -> Result<Trends> {
+    let now = Local::now();
+    let snapshot = Snapshot::metrics_for_user(config, now)?;
+    let origins = ConfirmedCounts::read(&snapshot)?;
+    let window = Window::of(asked, now.with_timezone(&Utc).date_naive());
+    let filters = Filters::of(asked);
+    let serving = super::accounts::serving_name();
+    let outcomes = outcomes::read(&snapshot, &window, &filters, serving.as_deref());
+    let rows = trends::signals(
+        &snapshot,
+        &trends::Scope {
+            window: &window,
+            filters: &filters,
+            serving: serving.as_deref(),
+        },
+        &origins,
+    );
+    let (weeks, days) = if window.weekly() {
+        (Some(rows), None)
+    } else {
+        (None, Some(rows))
+    };
+    Ok(Trends {
+        version: 1,
+        hostname: hostname(),
+        window,
+        filters,
+        unavailable_accounts: snapshot.unavailable_accounts.clone(),
+        outcomes: outcomes.buckets,
+        comparison: outcomes.comparison,
+        weeks,
+        days,
+    })
+}
+
 pub(crate) fn read(config: &UserConfig, asked: &MetricsArgs) -> Result<Value> {
+    let Some(input) = &asked.command else {
+        return Ok(serde_json::to_value(trends(config, asked)?)?);
+    };
     let snapshot = Snapshot::load_metrics(&config.logs_dir, Local::now())?;
     let origins = ConfirmedCounts::read(&snapshot)?;
-    let mut report = serde_json::json!({
+    let Observation::Record(command) = snapshot.resolve(input)?.observation else {
+        bail!("metrics need a Command record; this Command has only logs");
+    };
+    Ok(serde_json::json!({
         "version": 1,
-        "hostname": crate::host::name().unwrap_or_else(|| "unknown".into())
-    });
-    if let Some(input) = &asked.command {
-        let Observation::Record(command) = snapshot.resolve(input)?.observation else {
-            bail!("metrics need a Command record; this Command has only logs");
-        };
-        report["command"] = serde_json::to_value(Run::of(command, &origins))?;
-    } else {
-        report["weeks"] = serde_json::to_value(trends::weekly(&snapshot, asked, &origins))?;
-    }
-    Ok(report)
+        "hostname": hostname(),
+        "command": Run::of(command, &origins),
+    }))
 }
 
 // Both renderers walk the same document, so text cannot silently drop a signal.

@@ -1253,7 +1253,8 @@ fn weekly_trends_keep_signals_and_setup_groups_separate_and_filters_narrow_weeks
             "--json",
         ],
     );
-    assert_eq!(two_repos, all);
+    assert_eq!(two_repos["weeks"], all["weeks"]);
+    assert_eq!(two_repos["outcomes"], all["outcomes"]);
     let empty = metrics(&scenario, &["metrics", "--from", "2026-10-26", "--json"]);
     assert_eq!(empty["weeks"], json!([]));
     let text = scenario.run(&["metrics"]);
@@ -1351,7 +1352,9 @@ fn absent_completion_times_and_live_metrics_stay_missing() {
         row["repairs"],
         json!({"observed": 1, "missing": 1, "sum": 0.0, "mean": 0.0})
     );
-    assert_eq!(row["missing_outcomes"], 1);
+    // Its writer is gone: a crash, not a live run with no outcome yet.
+    assert_eq!(row["missing_outcomes"], 0);
+    assert_eq!(row["outcomes"]["died"], 1);
 }
 
 #[test]
@@ -1408,4 +1411,295 @@ fn metrics_rejects_invalid_filters_and_explains_log_only_history() {
     );
     let empty = metrics(&scenario, &["metrics", "--json"]);
     assert_eq!(empty["weeks"], json!([]));
+}
+
+/// A Run record started `days` ago (UTC), ended with `outcome`, or died.
+fn dated(number: u32, kind: &str, outcome: Option<&str>, days: i64) -> Value {
+    let started = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+    let mut value = record(number);
+    value["kind"] = kind.into();
+    value["started_at"] = json!(started);
+    value["ended_at"] = json!(outcome.map(|_| started.clone()));
+    value["stages"] = json!([{"name": "implement", "began_at": started}]);
+    value["outcome"] = json!(outcome);
+    value
+}
+
+fn outcome_rows<'a>(report: &'a Value, kind: &str) -> Vec<&'a Value> {
+    report["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["kind"] == kind)
+        .collect()
+}
+
+#[test]
+fn outcomes_stack_by_kind_without_pass_through_pickups_or_skipped_passes() {
+    let scenario = Scenario::new();
+    // A Pickup run that dispatched a Ticket run counts only the Ticket run.
+    let mut pickup = dated(1, "Pickup run", Some("merged"), 0);
+    pickup["dispatched"] = json!([dated(2, "Run", Some("merged"), 0)]);
+    write(&scenario, "1-fixture.command.json", &pickup);
+    // A Pickup run that failed before dispatching anything counts.
+    write(
+        &scenario,
+        "3-fixture.command.json",
+        &dated(3, "Pickup run", Some("failed"), 0),
+    );
+    // Skipped idle Passes count nowhere.
+    write(
+        &scenario,
+        "4-fixture.command.json",
+        &dated(4, "Pickup run", Some("skipped"), 0),
+    );
+    write(
+        &scenario,
+        "5-fixture.command.json",
+        &dated(5, "Triage run", Some("skipped"), 0),
+    );
+    // A Spec run and its Ticket run stay in their own kinds.
+    let spec = write(
+        &scenario,
+        "20-fixture.command.json",
+        &dated(20, "Spec run", Some("failed"), 0),
+    );
+    let mut ticket = dated(21, "Run", Some("ready for review"), 0);
+    ticket["parent_record"] = json!(spec);
+    write(&scenario, "20-fixture.issue-21.child.json", &ticket);
+    // A crash is Failed, a plan limit Paused, and a Stop is Stopped. An
+    // interruption no one asked for is Failed.
+    write(
+        &scenario,
+        "6-fixture.command.json",
+        &dated(6, "Run", None, 0),
+    );
+    write(
+        &scenario,
+        "7-fixture.command.json",
+        &dated(7, "Review run", Some("paused"), 0),
+    );
+    let stopped = write(
+        &scenario,
+        "8-fixture.command.json",
+        &dated(8, "Run", Some("interrupted"), 0),
+    );
+    fs::write(
+        stopped.with_extension("stop.json"),
+        r#"{"who": "jacob", "requeue": false}"#,
+    )
+    .unwrap();
+    write(
+        &scenario,
+        "9-fixture.command.json",
+        &dated(9, "Run", Some("interrupted"), 0),
+    );
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    assert_eq!(report["window"]["grain"], "week", "{report:#}");
+    let tickets = outcome_rows(&report, "Ticket run");
+    assert_eq!(tickets.len(), 1, "{report:#}");
+    let tickets = tickets[0];
+    assert_eq!(
+        (
+            &tickets["succeeded"],
+            &tickets["failed"],
+            &tickets["paused"],
+            &tickets["stopped"],
+            &tickets["live"]
+        ),
+        (&json!(2), &json!(2), &json!(0), &json!(1), &json!(0)),
+        "{tickets:#}"
+    );
+    assert_eq!(
+        tickets["sub_outcomes"],
+        json!({
+            "succeeded": {"merged": 1, "ready for review": 1},
+            "failed": {"died": 1, "interrupted": 1},
+            "stopped": {"interrupted": 1}
+        })
+    );
+    assert_eq!(tickets["n"], 4);
+    assert_eq!(tickets["success_rate"], 0.5);
+    assert_eq!(
+        (&tickets["observed"], &tickets["missing"]),
+        (&json!(5), &json!(0))
+    );
+    let pickups = outcome_rows(&report, "Pickup run");
+    assert_eq!(pickups.len(), 1);
+    assert_eq!(pickups[0]["runs"], 1);
+    assert_eq!(pickups[0]["failed"], 1);
+    let specs = outcome_rows(&report, "Spec run");
+    assert_eq!(
+        (&specs[0]["runs"], &specs[0]["failed"]),
+        (&json!(1), &json!(1))
+    );
+    let reviews = outcome_rows(&report, "Review run");
+    assert_eq!(reviews[0]["paused"], 1);
+    assert_eq!(reviews[0]["success_rate"], Value::Null);
+    assert!(outcome_rows(&report, "Triage run").is_empty());
+}
+
+#[test]
+fn bounded_windows_compare_with_the_preceding_window() {
+    let scenario = Scenario::new();
+    for (number, outcome, days) in [
+        (1, Some("merged"), 0),
+        (2, Some("failed"), 1),
+        (3, Some("merged"), 2),
+        (4, Some("merged"), 8),
+        (5, Some("failed"), 9),
+        (6, Some("failed"), 10),
+        (7, Some("merged"), 20),
+    ] {
+        write(
+            &scenario,
+            &format!("{number}-fixture.command.json"),
+            &dated(number, "Run", outcome, days),
+        );
+    }
+    let report = metrics(&scenario, &["metrics", "--window", "7d", "--json"]);
+    let today = chrono::Utc::now().date_naive();
+    let day = |days: u64| (today - chrono::Days::new(days)).to_string();
+    assert_eq!(
+        report["window"],
+        json!({"preset": "7d", "grain": "day", "from": day(6), "through": day(0),
+            "prior": {"from": day(13), "through": day(7)}})
+    );
+    assert!(report["weeks"].is_null());
+    let runs = report["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["session_kind"].is_null())
+        .count();
+    assert_eq!(runs, 3, "{report:#}");
+    assert_eq!(report["outcomes"].as_array().unwrap().len(), 3);
+    let comparison = &report["comparison"];
+    assert_eq!(
+        comparison["current"],
+        json!({"from": day(6), "through": day(0)})
+    );
+    let row = &comparison["rows"][0];
+    assert_eq!(row["kind"], "Ticket run");
+    assert_eq!(
+        (&row["current"]["n"], &row["prior"]["n"]),
+        (&json!(3), &json!(3))
+    );
+    assert_eq!(
+        (&row["current"]["observed"], &row["current"]["missing"]),
+        (&json!(3), &json!(0))
+    );
+    let change = row["delta"]["success_rate"].as_f64().unwrap();
+    assert!((change - 1.0 / 3.0).abs() < 1e-9, "{row:#}");
+    assert_eq!(row["delta"]["failed"], -1);
+
+    // Explicit daily bounds are any dates; a preset cannot also take them.
+    let bounded = metrics(
+        &scenario,
+        &[
+            "metrics",
+            "--grain",
+            "day",
+            "--from",
+            &day(10),
+            "--through",
+            &day(8),
+            "--json",
+        ],
+    );
+    assert_eq!(
+        bounded["comparison"]["prior"],
+        json!({"from": day(13), "through": day(11)})
+    );
+    assert_eq!(bounded["comparison"]["rows"][0]["current"]["runs"], 3);
+    assert_eq!(bounded["comparison"]["rows"][0]["prior"]["runs"], 0);
+    for args in [
+        vec!["metrics", "--window", "7d", "--grain", "week"],
+        vec!["metrics", "--window", "7d", "--from", "2026-10-19"],
+        vec!["metrics", "--window", "fortnight"],
+        vec!["metrics", "--grain", "hour"],
+        vec!["metrics", "--grain", "week", "--from", "2026-10-20"],
+        vec!["metrics", "widgets#7", "--window", "7d"],
+        vec!["metrics", "widgets#7", "--kind", "Run"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);
+    }
+}
+
+#[test]
+fn kind_harness_and_model_filters_narrow_outcomes_and_signals() {
+    let scenario = Scenario::new();
+    write(
+        &scenario,
+        "1-fixture.command.json",
+        &dated(1, "Run", Some("merged"), 0),
+    );
+    let mut other = dated(2, "Review run", Some("failed"), 0);
+    other["harness"] = "claude".into();
+    other["model"] = "opus".into();
+    write(&scenario, "2-fixture.command.json", &other);
+    for (args, kinds) in [
+        (vec!["--kind", "Ticket run"], vec!["Ticket run"]),
+        (vec!["--kind", "Review run"], vec!["Review run"]),
+        (vec!["--harness", "claude"], vec!["Review run"]),
+        (vec!["--model", "sol"], vec!["Ticket run"]),
+        (
+            vec!["--model", "sol", "--model", "opus"],
+            vec!["Review run", "Ticket run"],
+        ),
+        (vec!["--account", "nobody"], vec![]),
+    ] {
+        let mut full = vec!["metrics"];
+        full.extend(&args);
+        full.push("--json");
+        let report = metrics(&scenario, &full);
+        let shown: Vec<_> = report["outcomes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(shown, kinds, "{args:?}");
+        let signals: std::collections::BTreeSet<_> = report["weeks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            signals.len(),
+            kinds.len(),
+            "{args:?}: {:#}",
+            report["weeks"]
+        );
+    }
+}
+
+#[test]
+fn signal_rows_keep_died_apart_from_live_and_drop_pass_through_pickups() {
+    let scenario = Scenario::new();
+    let mut pickup = dated(1, "Pickup run", Some("merged"), 0);
+    pickup["dispatched"] = json!([dated(2, "Run", Some("merged"), 0)]);
+    write(&scenario, "1-fixture.command.json", &pickup);
+    write(
+        &scenario,
+        "3-fixture.command.json",
+        &dated(3, "Run", None, 0),
+    ); // died
+    let report = metrics(&scenario, &["metrics", "--json"]);
+    let totals: Vec<_> = report["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["session_kind"].is_null())
+        .collect();
+    assert!(
+        totals.iter().all(|row| row["kind"] != "Pickup run"),
+        "{report:#}"
+    );
+    assert!(
+        totals.iter().all(|row| row["missing_outcomes"] == 0),
+        "{report:#}"
+    );
 }
