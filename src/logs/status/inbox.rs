@@ -564,14 +564,48 @@ pub(crate) enum ArchivePage {
     Security,
 }
 
+/// The History filters asked for. `commands` are selectors, as Metrics links
+/// a failure cluster: a row shows when it or a Command it owns is one.
+pub(super) struct Chosen<'a> {
+    pub(super) outcome: &'a str,
+    pub(super) repository: &'a str,
+    pub(super) commands: &'a [String],
+}
+
+impl Chosen<'_> {
+    fn names(&self, entry: &Entry) -> bool {
+        fn owns(command: &Command, commands: &[String]) -> bool {
+            Observation::Record(command)
+                .selector()
+                .is_some_and(|selector| commands.contains(&selector))
+                || command
+                    .children
+                    .iter()
+                    .chain(&command.dispatched)
+                    .any(|child| owns(child, commands))
+        }
+        self.commands.is_empty()
+            || match entry {
+                Entry::Record(command) => owns(command, self.commands),
+                Entry::History(command) => Observation::History(command)
+                    .selector()
+                    .is_some_and(|selector| self.commands.contains(&selector)),
+            }
+    }
+}
+
 pub(super) fn archive_from_read(
     config: &UserConfig,
     page: ArchivePage,
-    outcome: &str,
-    repository: &str,
+    chosen: &Chosen<'_>,
     snapshot: &Snapshot,
     now: DateTime<Local>,
 ) -> Result<Archive> {
+    let Chosen {
+        outcome,
+        repository,
+        ..
+    } = *chosen;
     let mut entries: Vec<_> = snapshot
         .entries()
         .iter()
@@ -622,6 +656,7 @@ pub(super) fn archive_from_read(
             let (repo, result, _) = facts(entry);
             (repository.is_empty() || repository == repo)
                 && (outcome.is_empty() || outcome == outcome_kind(result) || outcome == result)
+                && chosen.names(entry)
         })
         .map(|entry| {
             entry_row(

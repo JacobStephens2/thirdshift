@@ -100,8 +100,19 @@ impl Read {
         page: ArchivePage,
         outcome: &str,
         repository: &str,
+        commands: &[String],
     ) -> Result<Archive> {
-        inbox::archive_from_read(config, page, outcome, repository, &self.snapshot, self.now)
+        inbox::archive_from_read(
+            config,
+            page,
+            &inbox::Chosen {
+                outcome,
+                repository,
+                commands,
+            },
+            &self.snapshot,
+            self.now,
+        )
     }
 
     pub fn times(&self, hours: f64, by_repository: bool) -> Result<time::Views> {

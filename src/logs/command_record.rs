@@ -91,6 +91,13 @@ pub(super) struct CommandRecord {
     pub issue: Option<Issue>,
     pub hostname: String,
     pub process_id: u32,
+    /// The `thirdshift` release that started this Command. Older records
+    /// lack it; readers recover it from their Session traces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thirdshift_version: Option<String>,
+    /// Reader-only provenance: the version came from a Session trace, not this record.
+    #[serde(skip)]
+    pub version_recovered: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<super::Actor>,
     pub process_start: String,
@@ -111,6 +118,11 @@ pub(super) struct CommandRecord {
     #[serde(default)]
     pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
+    /// The stage a failure ending stopped at, in Command record stage words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<FailureCategory>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +153,32 @@ pub(super) struct CommandRecord {
     /// Process provenance is independent of the run type and Command selector.
     #[serde(flatten)]
     pub process: crate::processes::Identity,
+}
+
+/// How a failure ending stopped, decided from its typed error, never from
+/// its cause's text. A Command that died never ended, so it has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FailureCategory {
+    /// A policy, security or merge hold held its Self-merge.
+    Held,
+    /// A Spec run ended only waiting on a person or on other work.
+    Waiting,
+    /// A Harness Session failed: it exited non-zero, by signal, or its turn failed.
+    Crashed,
+    /// Any other failure of the stage it stopped at.
+    StageFailed,
+}
+
+impl FailureCategory {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Held => "held",
+            Self::Waiting => "waiting",
+            Self::Crashed => "crashed",
+            Self::StageFailed => "stage_failed",
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -381,6 +419,20 @@ impl CommandRecord {
                 .err()
                 .map(|cause| cause.full().to_owned())
         });
+        // A plan limit pauses work; it is not a failure to attribute.
+        let failure = account
+            .ended
+            .as_ref()
+            .err()
+            .filter(|_| account.outcome != "paused");
+        self.stopped_at = failure.and_then(|_| {
+            account
+                .recovery
+                .and_then(|recovery| recovery.stage().recorded())
+                .map(|stage| stage.name().to_owned())
+                .or_else(|| self.stages.last().map(|stage| stage.name.clone()))
+        });
+        self.failure_category = failure.map(|cause| cause.category(account.interrupted));
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
@@ -454,6 +506,8 @@ impl CommandRecord {
             issue,
             hostname: String::new(),
             process_id: std::process::id(),
+            thirdshift_version: Some(env!("CARGO_PKG_VERSION").into()),
+            version_recovered: false,
             started_by: super::Actor::starting(),
             process_start: String::new(),
             harness: harness.harness.name().into(),
@@ -468,6 +522,8 @@ impl CommandRecord {
             outcome: None,
             run_metrics: None,
             cause: None,
+            stopped_at: None,
+            failure_category: None,
             waiting_for: Vec::new(),
             limit: None,
             resume_command: None,

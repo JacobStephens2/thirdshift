@@ -1,10 +1,12 @@
 //! Local, read-only metrics views; every signal retains its own units.
 
 mod bug_origins;
+mod failures;
 mod groups;
 mod outcomes;
 mod scope;
 mod trends;
+mod versions;
 
 use std::collections::BTreeSet;
 
@@ -19,10 +21,12 @@ use crate::args::MetricsArgs;
 use crate::config::UserConfig;
 
 use bug_origins::ConfirmedCounts;
+pub(crate) use failures::WhereRunsFailed;
 pub(crate) use groups::Groups;
 pub(crate) use outcomes::{Bucket, COUNTED, Class, Comparison};
 pub(crate) use scope::{Filters, Window};
 pub(crate) use trends::Row;
+pub(crate) use versions::{Transition, Versions};
 
 #[derive(Serialize)]
 struct Metrics<'a> {
@@ -48,7 +52,10 @@ struct Run<'a> {
     harness: &'a str,
     model: Option<&'a str>,
     effort: Option<&'a str>,
+    thirdshift_version: Option<&'a str>,
     started_at: &'a str,
+    stopped_at: Option<&'a str>,
+    failure_category: Option<crate::logs::FailureCategory>,
     metrics: Option<Metrics<'a>>,
     children: Vec<Run<'a>>,
 }
@@ -63,7 +70,10 @@ impl<'a> Run<'a> {
             harness: &record.harness,
             model: record.model.as_deref(),
             effort: record.effort.as_deref(),
+            thirdshift_version: record.thirdshift_version.as_deref(),
             started_at: &record.started_at,
+            stopped_at: record.stopped_at.as_deref(),
+            failure_category: record.failure_category,
             metrics: Metrics::of(command, origins),
             children: command
                 .dispatched
@@ -121,6 +131,8 @@ pub(crate) struct Trends {
     pub(crate) unavailable_accounts: BTreeSet<String>,
     pub(crate) outcomes: Vec<Bucket>,
     pub(crate) comparison: Option<Comparison>,
+    pub(crate) where_runs_failed: WhereRunsFailed,
+    pub(crate) versions: Versions,
     pub(crate) groups: Groups,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) weeks: Option<Vec<Row>>,
@@ -135,6 +147,31 @@ impl Trends {
             .or(self.days.as_deref())
             .unwrap_or_default()
     }
+
+    /// The outcome rows in bucket order, each bucket's transitions first.
+    pub(crate) fn timeline(&self) -> Vec<Timeline<'_>> {
+        let mut lines = Vec::new();
+        let mut marked = None;
+        for bucket in &self.outcomes {
+            if marked != Some(bucket.bucket) {
+                marked = Some(bucket.bucket);
+                lines.extend(
+                    self.versions
+                        .transitions
+                        .iter()
+                        .filter(|transition| transition.bucket == bucket.bucket)
+                        .map(Timeline::Transition),
+                );
+            }
+            lines.push(Timeline::Bucket(bucket));
+        }
+        lines
+    }
+}
+
+pub(crate) enum Timeline<'a> {
+    Transition(&'a Transition),
+    Bucket(&'a Bucket),
 }
 
 fn hostname() -> String {
@@ -151,6 +188,8 @@ pub(crate) fn trends(config: &UserConfig, asked: &MetricsArgs) -> Result<Trends>
     let serving = super::accounts::serving_name();
     let facts = outcomes::facts(&snapshot, &window, &filters, serving.as_deref());
     let outcomes = outcomes::read(&facts, &window);
+    let where_runs_failed = failures::read(&facts, &window);
+    let versions = versions::read(&facts, &window, &filters);
     let groups = groups::read(
         &facts,
         &window,
@@ -183,6 +222,8 @@ pub(crate) fn trends(config: &UserConfig, asked: &MetricsArgs) -> Result<Trends>
         unavailable_accounts: snapshot.unavailable_accounts.clone(),
         outcomes: outcomes.buckets,
         comparison: outcomes.comparison,
+        where_runs_failed,
+        versions,
         groups,
         weeks,
         days,

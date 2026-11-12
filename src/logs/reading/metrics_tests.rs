@@ -242,12 +242,24 @@ fn saved_session_signals_do_not_read_the_historical_trace() {
     let dir = tempfile::tempdir().unwrap();
     let trace = historical(dir.path(), 1);
     let snapshot = Snapshot::load_metrics(dir.path(), now()).unwrap();
-    let value = serde_json::to_value(snapshot.resolve("widgets#1").unwrap().observation).unwrap();
+    let mut value =
+        serde_json::to_value(snapshot.resolve("widgets#1").unwrap().observation).unwrap();
+    // A record naming its release needs nothing else from its trace.
+    value["thirdshift_version"] = serde_json::json!("0.30.0");
     write(dir.path(), "1-fixture.command.json", &value);
     fs::write(&trace, "invalid trace, saved signals must win\n").unwrap();
-    let mut opens = Opens::new(&[trace]);
+    let mut opens = Opens::new(std::slice::from_ref(&trace));
     let snapshot = Snapshot::load_metrics(dir.path(), now()).unwrap();
     assert!(opens.take().is_empty());
     let saved = serde_json::to_value(snapshot.resolve("widgets#1").unwrap().observation).unwrap();
     assert_eq!(saved["run_metrics"], value["run_metrics"]);
+    // Without one, the trace is read for its release alone; an unreadable
+    // trace leaves it missing and the saved signals still win.
+    value.as_object_mut().unwrap().remove("thirdshift_version");
+    write(dir.path(), "1-fixture.command.json", &value);
+    let snapshot = Snapshot::load_metrics(dir.path(), now()).unwrap();
+    assert_eq!(opens.take(), [trace].into());
+    let saved = serde_json::to_value(snapshot.resolve("widgets#1").unwrap().observation).unwrap();
+    assert_eq!(saved["run_metrics"], value["run_metrics"]);
+    assert!(saved["thirdshift_version"].is_null());
 }

@@ -8,7 +8,7 @@ use axum::response::Response;
 use super::auth::Viewer;
 use crate::args::{MetricsArgs, MetricsWindow};
 use crate::config::UserConfig;
-use crate::logs::metrics::{Class, Trends};
+use crate::logs::metrics::{Class, Timeline, Trends};
 
 #[derive(Template)]
 #[template(path = "console/metrics.html")]
@@ -20,6 +20,22 @@ struct MetricsPage {
     kinds: [&'static str; 9],
     windows: [(&'static str, MetricsWindow); 4],
     classes: [Class; 4],
+}
+
+impl MetricsPage {
+    /// History showing just these Commands, as a failure cluster links to it.
+    fn history<'a>(&self, selectors: impl IntoIterator<Item = &'a String>) -> String {
+        let mut url = reqwest::Url::parse("http://localhost/history").expect("fixed URL");
+        for selector in selectors {
+            url.query_pairs_mut().append_pair("command", selector);
+        }
+        format!("{}?{}", url.path(), url.query().unwrap_or_default())
+    }
+
+    /// A Failed Command's Console details.
+    fn details(&self, selector: &str) -> String {
+        crate::logs::status::inspect::url("/peek", selector, None)
+    }
 }
 
 /// The filters as asked, to fill the form again. A repeated filter shows one
@@ -34,6 +50,7 @@ struct Form {
     kind: Vec<String>,
     harness: Vec<String>,
     model: Vec<String>,
+    version: Vec<String>,
     account: Vec<String>,
 }
 
@@ -63,6 +80,7 @@ impl Form {
             kind: fields(&asked.kinds),
             harness: fields(&asked.harnesses),
             model: fields(&asked.models),
+            version: fields(&asked.versions),
             account: fields(&asked.accounts),
         }
     }
@@ -82,7 +100,7 @@ fn arguments(query: &Option<String>) -> Result<MetricsArgs> {
             match key.as_ref() {
                 "command" => arguments.push(value.into_owned()),
                 "window" | "grain" | "from" | "through" | "repo" | "kind" | "harness" | "model"
-                | "account" => {
+                | "version" | "account" => {
                     arguments.push(format!("--{key}"));
                     arguments.push(value.into_owned());
                 }

@@ -602,6 +602,17 @@ pub(crate) struct TicketsNotDone {
 }
 
 impl TicketsNotDone {
+    /// A Spec run whose one Ticket not done waits on a person.
+    #[cfg(test)]
+    pub(crate) fn waiting() -> Self {
+        Self {
+            not_done: vec!["#2 waits on you".into()],
+            in_public: vec!["#2 waits on you".into()],
+            only_waiting: true,
+            untrusted: None,
+        }
+    }
+
     /// The comment a waiting Spec run posts on its Spec: each Ticket not
     /// done and what it waits on.
     pub(crate) fn comment(&self) -> String {

@@ -432,16 +432,24 @@ impl Command {
     /// parent's record path. Usual ranges and health already include every record.
     fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
         let enrich = selected.is_none_or(|identity| identity.matches(self));
+        let signals = if self.account.is_some() {
+            cache::readonly_session_signals
+        } else {
+            cache::session_signals
+        };
         if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
-            metrics.add_session_signals(
-                &self.record,
-                if self.account.is_some() {
-                    cache::readonly_session_signals
-                } else {
-                    cache::session_signals
-                },
-            );
+            metrics.add_session_signals(&self.record, signals);
             self.record.run_metrics = Some(metrics);
+        }
+        // An older record names no release: its first Session trace that
+        // does supplies it, through the same retained signals, in memory only.
+        if enrich && self.record.thirdshift_version.is_none() {
+            let recovered = self
+                .record
+                .session_references()
+                .find_map(|log| signals(log)?.service_version);
+            self.record.thirdshift_version = recovered;
+            self.record.version_recovered = self.record.thirdshift_version.is_some();
         }
         let nested = if enrich { None } else { selected };
         for child in self.dispatched.iter_mut().chain(&mut self.children) {

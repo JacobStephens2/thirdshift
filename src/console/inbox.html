@@ -30,8 +30,10 @@
       <input type="hidden" name="page" value="history">
       <label>Outcome <select name="outcome"><option value="">Every outcome</option>{% for value in archive.outcomes %}<option {% if value.as_str() == outcome.as_str() %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
       <label>Repository <select name="repository"><option value="">Every repository</option>{% for value in archive.repositories %}<option {% if value.as_str() == repository.as_str() %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      {% for command in commands %}<input type="hidden" name="command" value="{{ command }}">{% endfor %}
       <button>Filter</button>
     </form>
+    {% if !commands.is_empty() %}<p class="chosen-commands">Showing the {{ commands.len() }} Commands a Metrics link chose. <a href="/history">Show all History</a></p>{% endif %}
     {% endif %}
     <details class="group archive" data-group="{{ title }}" open><summary>{{ title }} <span class="count">{{ archive.rows.len() }}</span></summary>
       {% if archive.rows.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}

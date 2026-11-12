@@ -128,7 +128,9 @@ fn triage_and_review_render_in_inbox_history_and_catalog() {
         .iter()
         .flat_map(|section| &section.rows)
         .collect();
-    let history = read.archive(&config, ArchivePage::History, "", "").unwrap();
+    let history = read
+        .archive(&config, ArchivePage::History, "", "", &[])
+        .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(history.rows.len(), 2);
     for (_, sessions) in &expected {
