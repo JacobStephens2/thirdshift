@@ -2294,6 +2294,17 @@ fn where_runs_failed_groups_recorded_endings_and_falls_back_for_older_and_died_c
         .unwrap()
         .push(json!({"name": "CI watch", "began_at": began}));
     write(&scenario, "11-fixture.command.json", &older);
+    // A Worktree dropped while the failure unwound enters cleanup last;
+    // the fallback names the stage before it (#2107), unless cleanup is all.
+    let mut cleaned = dated(15, "Run", Some("failed"), 0);
+    cleaned["stages"] = json!(
+        ["pull request", "Self-merge", "cleanup"]
+            .map(|name| json!({"name": name, "began_at": began}))
+    );
+    write(&scenario, "15-fixture.command.json", &cleaned);
+    let mut only_cleanup = dated(16, "Run", None, 0);
+    only_cleanup["stages"] = json!([{"name": "cleanup", "began_at": began}]);
+    write(&scenario, "16-fixture.command.json", &only_cleanup);
     // A Command that died never ended, so it never recorded how.
     write(
         &scenario,
@@ -2313,7 +2324,7 @@ fn where_runs_failed_groups_recorded_endings_and_falls_back_for_older_and_died_c
             &failures["observed"],
             &failures["missing"]
         ),
-        (&json!(4), &json!(2), &json!(2)),
+        (&json!(6), &json!(2), &json!(4)),
         "{failures:#}"
     );
     let mut rows: Vec<_> = failures["rows"]
@@ -2345,7 +2356,9 @@ fn where_runs_failed_groups_recorded_endings_and_falls_back_for_older_and_died_c
         [
             row("CI watch", "failed", false, 11, "Ticket run"),
             row("Code review", "crashed", true, 14, "Review run"),
+            row("Self-merge", "failed", false, 15, "Ticket run"),
             row("Self-merge", "held", true, 10, "Ticket run"),
+            row("cleanup", "died", false, 16, "Ticket run"),
             row("implement", "died", false, 12, "Ticket run"),
         ]
     );
