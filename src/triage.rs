@@ -13,6 +13,7 @@ use crate::issue::{IssueInput, IssueUrl, Repo};
 use crate::labels::{self, Label};
 use crate::{command_limit, launch, logs, prompt, session, worktree};
 
+mod correction;
 mod existing;
 mod images;
 mod pass;
@@ -510,11 +511,17 @@ pub fn run(
 ) -> Result<Ended, FailedRun> {
     let repo = launch::repo()?;
     command_limit::hold_slot(&repo);
-    logs::started(logs::Work::TriageRun(&repo), harness);
     let target = match input {
         Input::Issue(issue) => Some(issue),
         Input::Report(_) => None,
     };
+    logs::started(
+        logs::Work::TriageRun {
+            repo: &repo,
+            issue: target,
+        },
+        harness,
+    );
     let base = match target {
         Some(issue) => {
             let directory = launch::LaunchDirectory::open_for_run(issue)?;
@@ -564,16 +571,8 @@ fn investigate(
                 prompt::triage_issue(&skill.path, issue, options.read_machine)
             }
         };
-        let message = sessions.run_to_final_message(
-            session::Purpose::Ordinary,
-            session::Kind::Triage,
-            &session_prompt,
-        )?;
-        let mut recommendation = parse_recommendation(message.as_deref())?;
+        let mut recommendation = correction::recommendation(sessions, &session_prompt, target)?;
         let github = GitHub::new();
-        if let Some(target) = target {
-            existing::check_recommendation(&mut recommendation, target)?;
-        }
         let publication = check_publication(
             &recommendation,
             repo,

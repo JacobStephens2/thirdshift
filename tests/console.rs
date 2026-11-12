@@ -298,6 +298,30 @@ fn console_pages_show_the_running_thirdshift_version() {
 }
 
 #[test]
+fn quota_wait_stage_is_shared_by_status_show_and_console_and_resumes() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut value = record(home.path(), 7, None, 0);
+    value["quota_wait_until"] = "2026-11-11T12:01:37Z".into();
+    write_record(home.path(), 7, &value);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let name = "Quota wait until";
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair("command", "widgets#7");
+    let peek_path = format!("/peek?{}", url.query().unwrap());
+    for path in ["/", &peek_path] {
+        let text = console.get(path).text().unwrap();
+        assert!(text.contains(name), "{path}: {text}");
+    }
+    value["quota_wait_until"] = Value::Null;
+    write_record(home.path(), 7, &value);
+    let text = console.get(&peek_path).text().unwrap();
+    assert!(!text.contains(name), "{text}");
+    assert!(text.contains("implement"), "{text}");
+}
+
+#[test]
 fn command_changes_push_events_over_http() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

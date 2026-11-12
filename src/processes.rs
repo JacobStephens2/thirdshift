@@ -636,6 +636,14 @@ fn run(command: &ProcessRun) -> Result<String> {
         Ok(issue) => issue,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    if let Some(issue) = &issue {
+        // Issue validation, branch selection and Claim creation all use
+        // GitHub before the first Step. They share the Command's wait budget
+        // and must already have a visible, stoppable record when they wait.
+        logs::begin(Begin::Process { name, pass: false });
+        logs::configured(&config);
+        logs::preflight_issue(issue);
+    }
     if let Err(error) = require_issue(&path, &file, issue.as_ref()) {
         return Err(failed_before_steps(notification, error));
     }
@@ -648,12 +656,21 @@ fn run(command: &ProcessRun) -> Result<String> {
     if issue.is_none() {
         logs::begin(Begin::Process { name, pass: true });
         logs::configured(&config);
-        let base = match launch::checked_out_base() {
-            Ok(base) => base,
-            Err(error) => return Err(failed_before_steps(notification, error)),
-        };
         let repo = match launch::repo() {
             Ok(repo) => repo,
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        };
+        let skip = |reason: &command_limit::NotAdmitted| {
+            let choice = Choice::of(&command.asked, &config.harness);
+            progress::step(reason);
+            logs::skipped_process(&repo, name, &choice, reason);
+            String::new()
+        };
+        if let Some(skipped) = command_limit::early_skip(&repo, config.command_limit) {
+            return Ok(skip(&skipped));
+        }
+        let base = match launch::checked_out_base() {
+            Ok(base) => base,
             Err(error) => return Err(failed_before_steps(notification, error)),
         };
         match command_limit::hold_pass(
@@ -662,11 +679,7 @@ fn run(command: &ProcessRun) -> Result<String> {
             command_limit::Sharing::UpToTheLimit,
         ) {
             Ok(Some(running)) => {
-                let reason = running.to_string();
-                let choice = Choice::of(&command.asked, &config.harness);
-                progress::step(&reason);
-                logs::skipped_process(&repo, name, &choice, &reason);
-                return Ok(String::new());
+                return Ok(skip(&running));
             }
             Ok(None) => {}
             Err(error) => return Err(failed_before_steps(notification, error)),
@@ -738,17 +751,18 @@ fn run(command: &ProcessRun) -> Result<String> {
         Ok(repo) => repo,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
-    logs::begin(Begin::Process { name, pass: false });
-    logs::configured(&config);
     finish_run(name, &repo, prepared, notification)
 }
 
 /// A stop after the email check and before any Step is still a failed Process.
 fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
     let cause = format!("{error:#}");
+    let outcome = failure_outcome();
+    logs::ended(outcome);
+    logs::complete(outcome, Some(&cause));
     notify(
         notification,
-        "failed",
+        outcome,
         Some(&cause),
         &CompletedRuns::default(),
     );
