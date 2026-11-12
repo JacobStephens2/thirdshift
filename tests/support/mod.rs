@@ -1326,7 +1326,11 @@ test -f {root}/{COPY_REPLACED}
     pub fn origin_has_commit(&self, branch: &str, file: &str, contents: &str, subject: &str) {
         self.push_from_seed(branch, |seed| {
             git(seed, &["checkout", "-q", branch]);
-            fs::write(seed.join(file), contents).unwrap();
+            let path = seed.join(file);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
             git(seed, &["add", file]);
             git(seed, &["commit", "-q", "-m", subject]);
         });

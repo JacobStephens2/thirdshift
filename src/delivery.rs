@@ -10,7 +10,11 @@
 //! [`FailedOutside`]: [`InWorktree`] and [`OnFailure`] do each for real;
 //! `Scripted`, in tests, from a script, recording each call.
 
-use std::fs;
+use std::ffi::CString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -543,7 +547,7 @@ fn run_checked<T, S>(
         // CI-fix sessions leave disposable logs here. Keep them out of both
         // agent commits and automatic Failed run preservation; owned cleanup
         // already removes ignored files with the rest of the Worktree.
-        skills::exclude(&Git::new(&path), "/.validation-logs/")?;
+        conceal_validation_logs(&path)?;
         match context {
             RepairContext::PullRequest(pr) => {
                 hand_over_pull_request(pr, base, &branch, &path, true, started)
@@ -586,6 +590,122 @@ fn run_checked<T, S>(
     };
     crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
     result
+}
+
+/// Keep `.validation-logs/` unpublished. `info/exclude` loses to a branch
+/// `.gitignore` that re-includes the directory, and it does not hide a path
+/// that is already tracked. An inner ignore file covers the first, and
+/// removing the path from the index covers the second. Skip that index edit
+/// while a merge, cherry-pick, rebase, or revert owns it.
+fn conceal_validation_logs(worktree: &Path) -> Result<()> {
+    let git = Git::new(worktree);
+    skills::exclude(&git, "/.validation-logs/")?;
+    let directory = validation_log_directory(worktree)?;
+    write_validation_log_gitignore(&directory)?;
+    if !index_operation_in_progress(&git)? {
+        git.run(&[
+            "rm",
+            "-r",
+            "--cached",
+            "--ignore-unmatch",
+            "--",
+            ".validation-logs",
+        ])?;
+    }
+    Ok(())
+}
+
+/// Open `.validation-logs` as a real directory. A symlink or file at that
+/// name is removed without following it, so the ignore file cannot be
+/// written outside the worktree.
+fn validation_log_directory(worktree: &Path) -> Result<File> {
+    let path = worktree.join(".validation-logs");
+    match open_directory(&path) {
+        Ok(directory) => return Ok(directory),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) if not_a_directory(&error) => {
+            fs::remove_file(&path)
+                .with_context(|| format!("could not replace {}", path.display()))?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not open {}", path.display()));
+        }
+    }
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not create {}", path.display()));
+        }
+    }
+    open_directory(&path).with_context(|| format!("could not open {}", path.display()))
+}
+
+fn open_directory(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
+
+/// Linux reports an unfollowed symlink opened with `O_DIRECTORY` as
+/// `ENOTDIR`. A regular file at the same name does too.
+fn not_a_directory(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ELOOP) | Some(libc::ENOTDIR)
+    )
+}
+
+fn write_validation_log_gitignore(directory: &File) -> Result<()> {
+    let name = CString::new(".gitignore").context("validation log ignore name")?;
+    let mut file = create_nofollow(directory, &name)?;
+    file.write_all(b"*\n")
+        .context("could not write .validation-logs/.gitignore")
+}
+
+/// Create or replace `.gitignore` inside `directory`. `O_NOFOLLOW` refuses a
+/// symlink at that name; the symlink is unlinked and the file created again.
+fn create_nofollow(directory: &File, name: &CString) -> Result<File> {
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    match open_at(directory, name, flags) {
+        Ok(file) => Ok(file),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+            // SAFETY: `directory` is live and `name` is NUL-terminated. Zero
+            // flags remove only that entry and do not follow a symlink.
+            if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+                return Err(io::Error::last_os_error())
+                    .context("could not replace .validation-logs/.gitignore symlink");
+            }
+            open_at(directory, name, flags).context("could not write .validation-logs/.gitignore")
+        }
+        Err(error) => Err(error).context("could not write .validation-logs/.gitignore"),
+    }
+}
+
+fn open_at(directory: &File, name: &CString, flags: libc::c_int) -> io::Result<File> {
+    // SAFETY: `directory` is live and `name` is NUL-terminated for this call.
+    // openat retains neither. A non-negative fd is a new descriptor we own.
+    let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, 0o644) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat succeeded and returned a new, uniquely owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn index_operation_in_progress(git: &Git) -> Result<bool> {
+    for marker in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REBASE_HEAD",
+        "REVERT_HEAD",
+    ] {
+        if git.succeeds(&["rev-parse", "-q", "--verify", marker])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// [`Delivery::publish`]'s steps: push, open a draft when none exists, write

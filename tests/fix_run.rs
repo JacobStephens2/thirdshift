@@ -99,6 +99,72 @@ fn unchanged_failed_repair_drafts_without_an_empty_commit_and_offers_fix_retry()
     );
 }
 
+/// Delivery's info-exclude entry is supposed to keep local validation logs off
+/// the remote. A branch `.gitignore` outranks that entry, and a tracked path
+/// ignores it, so failed-run preservation must still not publish the log.
+#[test]
+fn reincluded_validation_logs_stay_unpublished_once_delivery_excludes_them() {
+    for tracked in [false, true] {
+        let scenario = Scenario::new();
+        scenario.origin_has_branch("colleague", "main", &["Colleague feature"]);
+        scenario.origin_has_commit(
+            "colleague",
+            ".gitignore",
+            "!/.validation-logs/\n!/.validation-logs/**\n",
+            "Re-include validation logs",
+        );
+        if tracked {
+            scenario.origin_has_commit(
+                "colleague",
+                ".validation-logs/check.log",
+                "seed\n",
+                "Track a validation log",
+            );
+        }
+        let url = scenario.github_has_pr("colleague", "main", "OPEN");
+        let head = scenario.origin_git(&["rev-parse", "colleague"]);
+        let mut state = scenario.gh_state();
+        state["checks"][head.trim()] =
+            json!([{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]);
+        scenario.write_gh_state(&state);
+        scenario.agent_does(
+            "mkdir -p .validation-logs\nprintf 'local-only-marker\\n' > .validation-logs/check.log\necho repaired > ci-fix.txt\nexit 1",
+        );
+
+        let result = scenario.run(&["fix", &url, "no-merge", "no-base-fix", "no-email"]);
+
+        assert_eq!(result.code, Some(1), "tracked {tracked}: {}", result.stderr);
+        assert_eq!(
+            scenario.origin_file("colleague", "ci-fix.txt").as_deref(),
+            Some("repaired\n"),
+            "tracked {tracked}: preservation did not publish the repair\n{}",
+            result.stderr
+        );
+        let published = scenario.origin_file("colleague", ".validation-logs/check.log");
+        let exclude = std::fs::read_to_string(scenario.launch_dir().join(".git/info/exclude"))
+            .unwrap_or_default();
+        if exclude.lines().any(|line| line == "/.validation-logs/") {
+            assert!(
+                !published
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("local-only-marker"),
+                "tracked {tracked}: local validation log was published: {published:?}\n{}",
+                result.stderr
+            );
+        } else {
+            assert!(
+                published
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("local-only-marker"),
+                "tracked {tracked}: untouched preservation did not publish the log: {published:?}\n{}",
+                result.stderr
+            );
+        }
+    }
+}
+
 #[test]
 fn ci_fix_discards_validation_logs_without_committing_them() {
     for fails in [false, true] {
@@ -116,7 +182,7 @@ fn ci_fix_discards_validation_logs_without_committing_them() {
             "git add -A\ngit commit -qm 'Fix branch CI'\ngh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"success\"}]'"
         };
         scenario.agent_does(&format!(
-            "mkdir .validation-logs\nprintf 'test output' > .validation-logs/check.log\necho repaired > ci-fix.txt\n{finish}"
+            "mkdir -p .validation-logs\nprintf 'test output' > .validation-logs/check.log\necho repaired > ci-fix.txt\n{finish}"
         ));
 
         let result = scenario.run(&["fix", &url, "no-merge", "no-base-fix", "no-email"]);
