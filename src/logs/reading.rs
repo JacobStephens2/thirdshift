@@ -51,7 +51,22 @@ impl Snapshot {
         config: &crate::config::UserConfig,
         now: DateTime<Local>,
     ) -> Result<Self> {
-        Self::user_capture(config, now, None)
+        Self::user_capture(config, now, None, false)
+    }
+
+    /// Past metrics and Session signals for every Command, opted-in accounts
+    /// included.
+    pub(super) fn metrics_for_user(
+        config: &crate::config::UserConfig,
+        now: DateTime<Local>,
+    ) -> Result<Self> {
+        let mut snapshot = Self::user_capture(config, now, None, true)?;
+        for entry in &mut snapshot.commands {
+            if let Entry::Record(command) = entry {
+                command.add_session_signals(None);
+            }
+        }
+        Ok(snapshot)
     }
 
     pub(super) fn details_for_user(
@@ -59,20 +74,22 @@ impl Snapshot {
         now: DateTime<Local>,
         input: &str,
     ) -> Result<Self> {
-        Self::user_capture(config, now, Some(input))
+        Self::user_capture(config, now, Some(input), false)
     }
 
     fn user_capture(
         config: &crate::config::UserConfig,
         now: DateTime<Local>,
         input: Option<&str>,
+        metrics: bool,
     ) -> Result<Self> {
+        let past_metrics = metrics || input.is_some();
         let mut snapshot = Self::capture_records(
             Arc::new(inventory::Native),
             &config.logs_dir,
             now,
             config.silent_interval,
-            input.is_some(),
+            past_metrics,
         )?;
         let sources = super::accounts::discover(config);
         snapshot.unavailable_accounts = sources.unavailable;
@@ -82,7 +99,7 @@ impl Snapshot {
                 &source.root,
                 now,
                 config.silent_interval,
-                input.is_some(),
+                past_metrics,
             ) else {
                 if matches!(
                     config.console.other_accounts,

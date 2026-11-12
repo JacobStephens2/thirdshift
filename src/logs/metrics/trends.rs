@@ -1,8 +1,8 @@
-//! Weekly independent signal summaries, with explicit observation coverage.
+//! Daily or weekly independent signal summaries, with explicit observation
+//! coverage.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Datelike, Days, Utc};
 use serde::Serialize;
 
 use super::super::command_record::StageName;
@@ -10,12 +10,17 @@ use super::super::reading::{Command, Entry, Snapshot};
 use super::super::run_metrics::{Position, StageMetrics};
 use super::super::session_signals::{ModelTokens, SessionSignals};
 use super::bug_origins::ConfirmedCounts;
-use crate::args::MetricsArgs;
+use super::scope::{Filters, Window};
 use crate::session::recording::SessionModels;
 
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize)]
 struct Group {
-    week: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    week: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    day: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
     repository: String,
     harness: Option<String>,
     harness_version: Option<String>,
@@ -26,15 +31,15 @@ struct Group {
 }
 
 #[derive(Default, Serialize)]
-pub(super) struct Week {
+pub(crate) struct Row {
     #[serde(flatten)]
     group: Group,
-    runs: usize,
+    pub(crate) runs: usize,
     outcomes: BTreeMap<String, usize>,
     missing_outcomes: usize,
-    repairs: Signal,
-    ci_rounds: Signal,
-    total_minutes: Signal,
+    pub(crate) repairs: Signal,
+    pub(crate) ci_rounds: Signal,
+    pub(crate) total_minutes: Signal,
     confirmed_bug_origins: Signal,
     unaddressed_findings: UnaddressedFindings,
     stages: BTreeMap<String, Stage>,
@@ -42,9 +47,9 @@ pub(super) struct Week {
 }
 
 #[derive(Default, Serialize)]
-struct Signal {
-    observed: usize,
-    missing: usize,
+pub(crate) struct Signal {
+    pub(crate) observed: usize,
+    pub(crate) missing: usize,
     sum: Option<f64>,
     mean: Option<f64>,
 }
@@ -130,6 +135,18 @@ impl TraceSignals {
 }
 
 impl Signal {
+    /// `1.5 (2 observed, 1 missing)`.
+    pub(crate) fn text(&self) -> String {
+        format!(
+            "{} ({} observed, {} missing)",
+            self.mean
+                .map(|mean| format!("{mean:.1}"))
+                .unwrap_or_else(|| "missing".into()),
+            self.observed,
+            self.missing
+        )
+    }
+
     fn add(&mut self, value: Option<f64>) {
         match value {
             Some(value) => {
@@ -192,15 +209,48 @@ impl Stage {
     }
 }
 
-pub(super) fn weekly(
+impl Row {
+    pub(crate) fn bucket(&self) -> &str {
+        self.group
+            .week
+            .as_deref()
+            .or(self.group.day.as_deref())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn account(&self) -> Option<&str> {
+        self.group.account.as_deref()
+    }
+
+    pub(crate) fn repository(&self) -> &str {
+        &self.group.repository
+    }
+
+    pub(crate) fn kind(&self) -> &str {
+        crate::logs::display_name(&self.group.kind)
+    }
+
+    pub(crate) fn session_kind(&self) -> Option<&str> {
+        self.group.session_kind.as_deref()
+    }
+}
+
+pub(super) struct Scope<'a> {
+    pub(super) window: &'a Window,
+    pub(super) filters: &'a Filters,
+    /// The serving OS account, which its own Commands do not name.
+    pub(super) serving: Option<&'a str>,
+}
+
+pub(super) fn signals(
     snapshot: &Snapshot,
-    asked: &MetricsArgs,
+    scope: &Scope<'_>,
     origins: &ConfirmedCounts,
-) -> Vec<Week> {
+) -> Vec<Row> {
     let mut weeks = BTreeMap::new();
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            collect(command, asked, origins, &mut weeks);
+            collect(command, scope, origins, &mut weeks);
         }
     }
     weeks
@@ -214,31 +264,32 @@ pub(super) fn weekly(
 
 fn collect(
     command: &Command,
-    asked: &MetricsArgs,
+    scope: &Scope<'_>,
     origins: &ConfirmedCounts,
-    weeks: &mut BTreeMap<Group, Week>,
+    weeks: &mut BTreeMap<Group, Row>,
 ) {
     // Traverse ownership once, even when the parent falls outside the filters.
     for child in command.dispatched.iter().chain(&command.children) {
-        collect(child, asked, origins, weeks);
+        collect(child, scope, origins, weeks);
     }
     let record = &command.record;
-    let Ok(start) = DateTime::parse_from_rfc3339(&record.started_at) else {
+    let account = command.account.as_deref().or(scope.serving);
+    let Some(bucket) = scope.window.bucket(command) else {
         return;
     };
-    let date = start.with_timezone(&Utc).date_naive();
-    let Some(week) = date.checked_sub_days(Days::new(date.weekday().num_days_from_monday().into()))
-    else {
-        return;
-    };
-    if asked.from.is_some_and(|from| week < from)
-        || asked.through.is_some_and(|through| week > through)
-        || (!asked.repositories.is_empty() && !asked.repositories.contains(&record.repository))
-    {
+    if !scope.window.shows(bucket) || !scope.filters.admit(command, account) {
         return;
     }
+    let bucket = Some(bucket.to_string());
+    let (week, day) = if scope.window.weekly() {
+        (bucket, None)
+    } else {
+        (None, bucket)
+    };
     let group = Group {
-        week: week.to_string(),
+        week,
+        day,
+        account: account.map(str::to_owned),
         repository: record.repository.clone(),
         harness: Some(record.harness.clone()),
         harness_version: None,

@@ -23,6 +23,7 @@ pub use identity::whoami;
 mod live;
 mod logs;
 mod look;
+mod metrics;
 pub use look::{export_theme, import_theme, sections, theme};
 mod openapi;
 pub use openapi::print as openapi;
@@ -1092,7 +1093,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
             (View::ResourceStatus, Method::GET) => get(resources::status),
-            (View::Metrics, Method::GET) => get(metrics),
+            (View::Metrics, Method::GET) => get(metrics::show),
             (View::Inbox, Method::GET) => {
                 get(move |viewer, format, fleet, query| inbox(path, viewer, format, fleet, query))
             }
@@ -1446,42 +1447,6 @@ async fn render_page(
             }
             .render()?)
         })
-    })
-    .await
-}
-
-async fn metrics(
-    axum::Extension(format): axum::Extension<api::Format>,
-    RawQuery(query): RawQuery,
-) -> Response {
-    api::read(format, move || {
-        let mut arguments = vec!["metrics".to_owned(), "--json".to_owned()];
-        if let Some(query) = &query {
-            for (key, value) in
-                reqwest::Url::parse(&format!("http://localhost/?{query}"))?.query_pairs()
-            {
-                match key.as_ref() {
-                    "command" => arguments.push(value.into_owned()),
-                    "from" | "through" | "repo" => {
-                        arguments.push(format!("--{key}"));
-                        arguments.push(value.into_owned());
-                    }
-                    _ => anyhow::bail!("unknown metrics argument: {key}"),
-                }
-            }
-        }
-        let crate::args::Command::Metrics(asked) = crate::args::parse(&arguments)? else {
-            unreachable!("fixed metrics command")
-        };
-        format.render(
-            crate::logs::metrics::read(&UserConfig::load()?, &asked)?,
-            |value| {
-                Ok(format!(
-                    "<pre>{}</pre>",
-                    filters::escaped(&serde_json::to_string_pretty(&value)?)
-                ))
-            },
-        )
     })
     .await
 }

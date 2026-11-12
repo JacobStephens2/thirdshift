@@ -165,3 +165,50 @@ fn peek_shows_retained_run_metrics_and_marks_missing_signals() {
         assert!(metrics.contains(expected), "missing {expected}: {metrics}");
     }
 }
+
+#[test]
+fn metrics_page_shows_outcome_stacks_and_tables_and_keeps_single_command_inspection() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("merged"), 0);
+    record(home.path(), 8, Some("failed"), 0);
+    record(home.path(), 9, Some("paused"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let response = console.get("/metrics?window=7d&kind=Spec+run&repo=&harness=");
+    assert_eq!(response.status(), 200);
+    let html = response.text().unwrap();
+    for expected in [
+        "<a href=\"/metrics\" data-jump=\"m\">Metrics</a>",
+        "<h1>Metrics</h1>",
+        "aria-label=\"Compared with the preceding window\"",
+        "<svg class=\"metrics-bar\"",
+        "<rect class=\"succeeded\"",
+        "<title>Succeeded 1: merged 1</title>",
+        "<title>Failed 1: failed 1</title>",
+        "<title>Paused 1: paused 1</title>",
+        "<td>50% (1/2)</td>",
+        "<option value=\"7d\" selected>",
+        "<option selected>Spec run</option>",
+        "--window 7d --kind 'Spec run' --json",
+    ] {
+        assert!(html.contains(expected), "missing {expected}: {html}");
+    }
+    assert!(!html.contains("<pre>"), "{html}");
+    let refused = console.get("/metrics?window=7d&grain=week");
+    assert_eq!(refused.status(), 200);
+    let refused = refused.text().unwrap();
+    assert!(
+        refused.contains("<p role=\"alert\">--window sets its own grain and dates"),
+        "{refused}"
+    );
+    let single = console.get("/metrics?command=widgets%237").text().unwrap();
+    assert!(single.starts_with("<pre>{"), "{single}");
+    let css = console.get("/assets/console.css").text().unwrap();
+    for line in css.lines().filter(|line| line.contains("metrics")) {
+        assert!(
+            !line.contains("animation") && !line.contains("transition"),
+            "{line}"
+        );
+        assert!(!line.contains('#'), "Theme tokens only: {line}");
+    }
+}
