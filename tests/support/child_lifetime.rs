@@ -252,6 +252,12 @@ pub struct OwnedRuns {
     done_reader: File,
 }
 
+/// Removes the captured root once its owner and all Run guardians have
+/// closed `done`, even if the harness cannot run destructors.
+pub struct ScenarioRoot {
+    guardian: Child,
+}
+
 /// A thirdshift process started by [`OwnedRuns::spawn`]. Its guardian keeps
 /// it unreaped until its status is read, as for a [`Child`], so its process
 /// id stays its own until then.
@@ -274,6 +280,25 @@ impl OwnedRuns {
             done: Some(done),
             done_reader: File::from(done_reader),
         }
+    }
+
+    /// Add directory ownership for a Scenario. Process-only users of
+    /// OwnedRuns do not own the directories their commands run in.
+    pub fn guard_root(&self, root: &std::path::Path) -> ScenarioRoot {
+        let guardian = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "support::child_lifetime::scenario_root_guardian",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("THIRDSHIFT_SCENARIO_ROOT", root)
+            .process_group(0)
+            .stdin(Stdio::from(self.done_reader.try_clone().unwrap()))
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("could not start Scenario root guardian");
+        ScenarioRoot { guardian }
     }
 
     /// Spawn `command` with its stdio as configured, under a new guardian.
@@ -333,6 +358,66 @@ impl Drop for OwnedRuns {
                 );
                 return;
             }
+        }
+    }
+}
+
+impl ScenarioRoot {
+    pub fn id(&self) -> u32 {
+        self.guardian.id()
+    }
+}
+
+impl Drop for ScenarioRoot {
+    fn drop(&mut self) {
+        let deadline = Instant::now() + super::WAIT_BOUND;
+        loop {
+            if let Some(status) = self.guardian.try_wait().unwrap() {
+                assert!(status.success(), "Scenario root guardian failed: {status}");
+                return;
+            }
+            if Instant::now() >= deadline {
+                assert!(
+                    thread::panicking(),
+                    "a Scenario's root guardian was still cleaning up after {:?}",
+                    super::WAIT_BOUND
+                );
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// Unlike the forked Run guardians, this process execs, so filesystem
+/// cleanup may allocate and lock. Its private pipe has a writer in the
+/// harness and every Run guardian: EOF means all owned descendants ended.
+#[test]
+#[ignore = "subprocess entry point for Scenario directory cleanup"]
+fn scenario_root_guardian() {
+    let root = std::path::PathBuf::from(std::env::var_os("THIRDSHIFT_SCENARIO_ROOT").unwrap());
+    // SAFETY: this dedicated process owns no unrelated work.
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+        unsafe { libc::signal(signal, libc::SIG_IGN) };
+    }
+    std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()).unwrap();
+    let deadline = Instant::now() + super::WAIT_BOUND;
+    loop {
+        match fs::remove_dir_all(&root) {
+            Ok(()) => return,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !root.exists() => return,
+            // A fixture can also have commands outside OwnedRuns (such as
+            // the Console). Tolerate their final filesystem activity without
+            // accepting an incompletely removed root as successful cleanup.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("could not remove Scenario root {}: {error}", root.display()),
         }
     }
 }

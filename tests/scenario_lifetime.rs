@@ -1,7 +1,7 @@
-//! What a `Scenario`'s Runs start must end with the scenario, even when its
-//! test harness is killed. A supervisor survives the harness and, as a Linux
-//! subreaper, adopts whatever outlives it, so each check names exact recorded
-//! processes rather than depending on PID 1.
+//! A `Scenario`'s directory and what its Runs start must end with the
+//! scenario, even when its test harness is killed. A supervisor survives the
+//! harness and, as a Linux subreaper, adopts whatever outlives it, so each
+//! check names exact recorded processes rather than depending on PID 1.
 
 mod support;
 
@@ -17,10 +17,17 @@ use tempfile::TempDir;
 
 const BOUND: Duration = Duration::from_secs(5);
 
-/// The processes a held Run records, its guardian last since it exits only
-/// after reaping the rest.
-const AGENT_OWNED: [&str; 5] = ["thirdshift", "agent", "script", "detached", "guardian"];
-const GIT_OWNED: [&str; 3] = ["thirdshift", "git", "guardian"];
+/// The processes a held Run records, then its Run and root guardians, which
+/// exit after reaping the rest and removing the directory respectively.
+const AGENT_OWNED: [&str; 6] = [
+    "thirdshift",
+    "agent",
+    "script",
+    "detached",
+    "guardian",
+    "root-guardian",
+];
+const GIT_OWNED: [&str; 4] = ["thirdshift", "git", "guardian", "root-guardian"];
 
 struct Fixture {
     harness: Child,
@@ -39,8 +46,8 @@ impl Fixture {
             .args(["--exact", "fixture_process", "--ignored", "--nocapture"])
             .env("SCENARIO_LIFETIME_MODE", mode)
             .env("SCENARIO_LIFETIME_ROOT", root.path())
-            // The supervisor owns the scenario's temp root even if SIGKILL
-            // keeps the fixture from dropping it.
+            // Emergency cleanup only: assertions check that the Scenario
+            // root disappears before this outer TempDir is dropped.
             .env("TMPDIR", root.path())
             .stdout(Stdio::from(output.try_clone().unwrap()))
             .stderr(Stdio::from(output))
@@ -153,6 +160,17 @@ impl Fixture {
             }
         }
         self.owned.clear();
+        let scenario_root =
+            PathBuf::from(fs::read_to_string(self.root.path().join("scenario-root")).unwrap());
+        let deadline = Instant::now() + BOUND;
+        while scenario_root.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "Scenario root survived its fixture: {}",
+                scenario_root.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -211,6 +229,29 @@ fn a_held_run_ends_after_assertion_unwinding() {
     assert!(fixture.output().contains("intentional fixture assertion"));
 }
 
+#[test]
+fn concurrent_scenarios_keep_their_roots_until_their_own_drop() {
+    let first = Scenario::new();
+    let second = Scenario::new();
+    let first_root = first.path("");
+    let second_root = second.path("");
+    assert_eq!(first.run(&["--help"]).code, Some(0));
+    assert_eq!(second.run(&["--help"]).code, Some(0));
+    assert!(
+        first_root.exists(),
+        "a completed Run removed its Scenario root"
+    );
+    drop(first);
+    assert!(!first_root.exists());
+    assert!(
+        second_root.exists(),
+        "another Scenario removed the live root"
+    );
+    assert_eq!(second.run(&["--help"]).code, Some(0));
+    drop(second);
+    assert!(!second_root.exists());
+}
+
 /// Record `name`'s pid in the supervisor's root, by the shell expression
 /// `pid`.
 fn record(root: &Path, name: &str, pid: &str) -> String {
@@ -227,6 +268,16 @@ fn fixture_process() {
     let root = PathBuf::from(std::env::var_os("SCENARIO_LIFETIME_ROOT").unwrap());
     let mode = std::env::var("SCENARIO_LIFETIME_MODE").unwrap();
     let scenario = Scenario::new();
+    fs::write(
+        root.join("scenario-root"),
+        scenario.path("").as_os_str().as_encoded_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("root-guardian"),
+        scenario.root_guardian_id().to_string(),
+    )
+    .unwrap();
     let started = scenario.path("started");
     if mode == "git" {
         let git = Command::new("which").arg("git").output().unwrap();

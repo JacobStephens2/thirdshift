@@ -2,7 +2,12 @@ name: Issue label to project status
 
 on:
   issues:
-    types: [labeled]
+    types: [labeled, unlabeled]
+  # Re-synchronize the issues a pull request closes when it is opened or its
+  # body changes. Only issue and project data is read; no pull request code is
+  # checked out, so pull_request_target is safe here.
+  pull_request_target:
+    types: [opened, reopened, edited]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -13,26 +18,28 @@ on:
 permissions: {}
 
 concurrency:
-  group: issue-project-status-${{ github.event.issue.number || inputs.issue_number }}
+  group: issue-project-status-${{ github.event.issue.number || inputs.issue_number || format('pr-{0}', github.event.pull_request.number) }}
   cancel-in-progress: false
 
 jobs:
-  set-in-progress:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'in-progress'
+  sync-status:
+    if: github.event_name != 'issues' || github.event.label.name == 'in-progress'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # A user project requires a separate token; GITHUB_TOKEN cannot access it.
       # PROJECT_STATUS_TOKEN must be able to read issues and write Projects.
-      - name: Move labeled Todo issue to In Progress
+      - name: Match project status to the in-progress label
         env:
           GH_TOKEN: ${{ secrets.PROJECT_STATUS_TOKEN }}
           GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PROJECT_ID: PVT_kwHOAzaH4M4BmapY
           STATUS_FIELD_ID: PVTSSF_lAHOAzaH4M4BmapYzhlDz3Y
           TODO_OPTION_ID: f75ad846
           IN_PROGRESS_OPTION_ID: 47fc9ee4
+          PR_OPEN_OPTION_ID: ca510e75
         shell: bash
         run: |
           set -euo pipefail
@@ -41,46 +48,89 @@ jobs:
             exit 1
           fi
 
-          # Read the current issue rather than trusting a possibly stale event.
-          issue=$(gh api "repos/$GH_REPO/issues/$ISSUE_NUMBER")
-          if ! jq -e '.state == "open" and (.labels | any(.name == "in-progress"))' <<< "$issue" >/dev/null; then
-            echo 'Issue is closed or no longer labeled in-progress; no change.'
-            exit 0
-          fi
+          sync_issue() {
+            # Read the current issue rather than trusting a possibly stale event.
+            issue=$(gh api "repos/$GH_REPO/issues/$1")
+            if ! jq -e '.state == "open"' <<< "$issue" >/dev/null; then
+              echo 'Issue is closed; no change.'
+              return 0
+            fi
+            claimed=$(jq -r '.labels | any(.name == "in-progress")' <<< "$issue")
 
-          issue_id=$(jq -r '.node_id' <<< "$issue")
-          items=$(gh api graphql --paginate --slurp -f issue="$issue_id" -f query='
-            query($issue: ID!, $endCursor: String) {
-              node(id: $issue) {
-                ... on Issue {
-                  projectItems(first: 100, after: $endCursor) {
-                    nodes {
-                      id
-                      project { id }
-                      fieldValueByName(name: "Status") {
-                        ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+            issue_id=$(jq -r '.node_id' <<< "$issue")
+            items=$(gh api graphql --paginate --slurp -f issue="$issue_id" -f query='
+              query($issue: ID!, $endCursor: String) {
+                node(id: $issue) {
+                  ... on Issue {
+                    projectItems(first: 100, after: $endCursor) {
+                      nodes {
+                        id
+                        project { id }
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                        }
                       }
+                      pageInfo { hasNextPage endCursor }
                     }
-                    pageInfo { hasNextPage endCursor }
+                    closedByPullRequestsReferences(first: 20) {
+                      nodes { state }
+                    }
                   }
                 }
-              }
-            }')
-          item_id=$(jq -r --arg project "$PROJECT_ID" --arg todo "$TODO_OPTION_ID" '
-            [.[].data.node.projectItems.nodes[]
-              | select(.project.id == $project and .fieldValueByName.optionId == $todo)
-              | .id] | first // empty' <<< "$items")
-          if [[ -z "$item_id" ]]; then
-            echo 'Issue is not in Todo in the thirdshift project; no change.'
-            exit 0
-          fi
+              }')
+            read -r item_id current < <(jq -r --arg project "$PROJECT_ID" '
+              [.[].data.node.projectItems.nodes[]
+                | select(.project.id == $project)
+                | "\(.id) \(.fieldValueByName.optionId // "")"] | first // ""' <<< "$items")
+            if [[ -z "${item_id:-}" ]]; then
+              echo 'Issue is not in the thirdshift project; no change.'
+              return 0
+            fi
 
-          gh api graphql --silent -f project="$PROJECT_ID" -f item="$item_id" \
-            -f field="$STATUS_FIELD_ID" -f option="$IN_PROGRESS_OPTION_ID" -f query='
-            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: $project, itemId: $item, fieldId: $field,
-                value: { singleSelectOptionId: $option }
-              }) { projectV2Item { id } }
-            }'
-          echo "Moved issue #$ISSUE_NUMBER from Todo to In Progress."
+            # A live Claim puts a Todo or PR open issue In Progress, even after
+            # a pull request is linked. Without a Claim, an open pull request
+            # that closes the issue puts a Todo or In Progress issue in PR open;
+            # with none, an In Progress issue goes back to Todo. Other statuses
+            # are left alone.
+            if [[ "$claimed" == true ]]; then
+              [[ "$current" == "$TODO_OPTION_ID" || "$current" == "$PR_OPEN_OPTION_ID" ]] || {
+                echo 'Claimed issue is not in Todo or PR open; no change.'; return 0; }
+              target=$IN_PROGRESS_OPTION_ID; target_name='In Progress'
+            elif jq -e '[.[0].data.node.closedByPullRequestsReferences.nodes[] | select(.state == "OPEN")] | length > 0' <<< "$items" >/dev/null; then
+              [[ "$current" == "$TODO_OPTION_ID" || "$current" == "$IN_PROGRESS_OPTION_ID" ]] || {
+                echo 'Unclaimed issue with an open pull request is not in Todo or In Progress; no change.'; return 0; }
+              target=$PR_OPEN_OPTION_ID; target_name='PR open'
+            else
+              [[ "$current" == "$IN_PROGRESS_OPTION_ID" ]] || {
+                echo 'Unclaimed issue without an open pull request is not In Progress; no change.'; return 0; }
+              target=$TODO_OPTION_ID; target_name='Todo'
+            fi
+
+            gh api graphql --silent -f project="$PROJECT_ID" -f item="$item_id" \
+              -f field="$STATUS_FIELD_ID" -f option="$target" -f query='
+              mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project, itemId: $item, fieldId: $field,
+                  value: { singleSelectOptionId: $option }
+                }) { projectV2Item { id } }
+              }'
+            echo "Moved issue #$1 to $target_name."
+          }
+
+          if [[ -n "$PR_NUMBER" ]]; then
+            # The issues this pull request closes, as GitHub has linked them.
+            issues=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
+              --json closingIssuesReferences \
+              --jq ".closingIssuesReferences[]
+                | select(\"\\(.repository.owner.login)/\\(.repository.name)\" == \"$GH_REPO\")
+                | .number")
+            if [[ -z "$issues" ]]; then
+              echo "Pull request #$PR_NUMBER closes no issue here; no change."
+            fi
+            for number in $issues; do
+              echo "Issue #$number:"
+              sync_issue "$number"
+            done
+          else
+            sync_issue "$ISSUE_NUMBER"
+          fi
