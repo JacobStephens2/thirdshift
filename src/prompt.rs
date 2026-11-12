@@ -596,7 +596,7 @@ fn review_validation_instructions(commands: &[String]) -> String {
         "run final validation as required by the repository's agent instructions in this Review run's worktree. \
         Also run every extra shell command in this JSON list, in order, in that worktree: {commands}. \
         An empty list still requires the repository's final validation. A failed command must not skip the remaining commands. \
-        Keep disposable validation logs inside the worktree, never in `/tmp`, so worktree cleanup can remove them. \
+        Keep disposable validation logs inside the worktree under `.review-logs/`, never in `/tmp`, so worktree cleanup can remove them. \
         Do not re-run full test suites with `--debug` or verbose trace flags to isolate a failure; re-run the failing test file or filter instead. \
         Inspect large logs with bounded streaming tools (`tail`, `head`, `grep`) rather than reading entire files into memory. \
         If the repository's agent instructions say a suite is invalid from a worktree, do not run it elsewhere as a substitute: report it as `not run against the branch`, with the reason, and never report it as passing. \
@@ -1282,7 +1282,7 @@ mod tests {
             pull_request_ci_fix_repair(&pr, "main", "issue-7", &failed, &[]),
         ] {
             for instruction in [
-                "Keep disposable validation logs inside the worktree, never in `/tmp`",
+                "Keep disposable validation logs inside the worktree under `.review-logs/`, never in `/tmp`",
                 "Do not re-run full test suites with `--debug` or verbose trace flags",
                 "re-run the failing test file or filter instead",
                 "Inspect large logs with bounded streaming tools",

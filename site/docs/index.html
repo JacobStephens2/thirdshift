@@ -3343,7 +3343,11 @@ only clean committed fixes descending from that head. Recovery discards leftover
 untracked validation artifacts and reruns review and delivery with the preserved
 commits. Recommendation retries restart that owned checkout at the captured head.
 Uncommitted tracked edits, unfinished Git operations, locked checkouts, changed
-ownership evidence and other local branches are preserved for human attention.</p>
+ownership evidence and other local branches are preserved for human attention.
+A Review run that ends without delivering still removes its worktree and local
+branch when the only leftovers are validation logs under <code>.review-logs/</code> or
+root entries named <code>.validation-*</code>; other untracked files, tracked edits and
+unpushed commits keep it.</p>
 <p>The session gets the pull request body, linked closing issues and comments from
 Trusted accounts only. The linked issues are the Spec; without one, the body is
 the Spec and the posted comment says it used the pull request body alone.
