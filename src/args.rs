@@ -108,6 +108,7 @@ pub enum Command {
     },
     ConsoleToken(crate::console::tokens::Action),
     ConsoleFleet(crate::console::fleet::Action),
+    ConsoleReport(crate::console::report::Action),
     ConsoleScopes(crate::console::Scopes),
     ConsoleWhoami {
         json: bool,
@@ -224,6 +225,11 @@ pub struct MetricsArgs {
     pub fleet: bool,
     /// `--machine <name>`: one Fleet machine's trends, or this machine's.
     pub machine: Option<String>,
+    /// `--push [<destination>]`: send this machine's trends to its report
+    /// destinations, or the one named.
+    pub push: bool,
+    /// The one report destination `--push` names, if it names one.
+    pub push_to: Option<String>,
 }
 
 /// A `metrics --window` preset: its length, ending today, and its grain.
@@ -545,6 +551,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("console") => {
             if args.get(1).is_some_and(|action| action == "fleet") {
                 return crate::console::fleet::Action::parse(&args[2..]).map(Command::ConsoleFleet);
+            }
+            if args.get(1).is_some_and(|action| action == "report") {
+                return crate::console::report::Action::parse(&args[2..])
+                    .map(Command::ConsoleReport);
             }
             if args.get(1).is_some_and(|action| action == "scopes") {
                 return crate::console::Scopes::parse(&args[2..]).map(Command::ConsoleScopes);
@@ -1026,13 +1036,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
 
 fn metrics(args: &[String]) -> Result<MetricsArgs> {
     use chrono::Datelike;
-    let usage = "usage: thirdshift metrics [<command>] [--json] [--fleet | --machine <name>] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--fleet | --machine <name> | --push [<destination>]] [--window 7d|30d|12w|all] [--grain day|week] [--from <date>] [--through <date>] [--repo <owner/repository>] [--kind <kind>] [--harness <harness>] [--model <model>] [--version <thirdshift version>] [--account <account>]";
     let mut asked = MetricsArgs::default();
     let mut words = args.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
             "--json" if !asked.json => asked.json = true,
             "--fleet" if !asked.fleet => asked.fleet = true,
+            "--push" if !asked.push => asked.push = true,
             "--machine" => {
                 let name = words.next().context("--machine needs a Fleet name")?;
                 crate::config::console::fleet::validate_name(name)?;
@@ -1102,6 +1113,17 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
                 asked.command = Some(word.into())
             }
             _ => bail!(usage),
+        }
+    }
+    if asked.push {
+        anyhow::ensure!(
+            !asked.fleet && asked.machine.is_none() && !asked.json,
+            "--push sends this machine's own trends; give no --fleet, --machine or --json"
+        );
+        // With --push, the one name given is the report destination.
+        if let Some(name) = asked.command.take() {
+            crate::config::console::fleet::validate_name(&name)?;
+            asked.push_to = Some(name);
         }
     }
     anyhow::ensure!(

@@ -1,6 +1,9 @@
 //! Explicit Fleet metrics client: each owning machine's own `/metrics`, merged
 //! with this machine's, and the last summary read from each peer, saved so an
 //! offline or retired machine stays visible. Owning-machine APIs stay local.
+//! A machine that cannot be reached inbound pushes its own summary instead,
+//! under a `report` token: it is saved in that machine's reported slot and
+//! shown read-only (#2036 Q4.2).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +112,23 @@ pub(crate) struct Machine {
     /// When this machine's metrics were last read: now when live, the saved
     /// snapshot's time when cached.
     pub(crate) last_seen: Option<DateTime<Utc>>,
+    /// When the summary shown was pushed by the machine itself, if it was.
+    pub(crate) pushed_at: Option<DateTime<Utc>>,
     pub(crate) error: Option<String>,
+}
+
+impl Machine {
+    /// Show `saved` in place of a live read: reported when the machine
+    /// pushed it, else cached.
+    fn stands_in(&mut self, saved: &Saved) {
+        self.status = if saved.pushed_at.is_some() {
+            Status::Reported
+        } else {
+            Status::Cached
+        };
+        self.last_seen = Some(saved.last_seen);
+        self.pushed_at = saved.pushed_at;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -118,6 +137,8 @@ pub(crate) enum Status {
     Ok,
     /// Unreachable now, or no longer in the Fleet: its saved snapshot shows.
     Cached,
+    /// Not read from here: the summary it last pushed shows, read-only.
+    Reported,
     Unavailable,
     Refused,
     Incompatible,
@@ -129,6 +150,7 @@ impl std::fmt::Display for Status {
         f.write_str(match self {
             Self::Ok => "ok",
             Self::Cached => "cached",
+            Self::Reported => "reported",
             Self::Unavailable => "unavailable",
             Self::Refused => "refused",
             Self::Incompatible => "incompatible",
@@ -208,7 +230,9 @@ pub(crate) struct FailedCommand {
 /// A saved peer snapshot file: the machine's last read views for one
 /// person. A peer answers each person by its own sign-in list, so a snapshot
 /// stands in only for the person whose read it keeps; missing for this
-/// machine's owner.
+/// machine's owner. A reported snapshot holds the views the machine pushed
+/// itself, under a `report` token this Console issued to it, and stands in
+/// for everyone who can read this Console.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     version: u32,
@@ -216,7 +240,130 @@ struct Saved {
     #[serde(default)]
     person: Option<String>,
     last_seen: DateTime<Utc>,
+    /// When the machine last pushed; missing on a snapshot read from it.
+    #[serde(default)]
+    pushed_at: Option<DateTime<Utc>>,
     views: BTreeMap<String, SavedView>,
+}
+
+/// Which saved snapshot of a machine: one person's reads, or what the
+/// machine reported itself.
+#[derive(Clone, Copy)]
+enum Slot<'a> {
+    Read(Option<&'a str>),
+    Reported,
+}
+
+impl<'a> Slot<'a> {
+    /// Whose reads the slot keeps; a reported slot keeps no person's.
+    fn person(self) -> Option<&'a str> {
+        match self {
+            Self::Read(person) => person,
+            Self::Reported => None,
+        }
+    }
+
+    fn reported(self) -> bool {
+        matches!(self, Self::Reported)
+    }
+
+    fn holds(self, saved: &Saved, name: &str) -> bool {
+        saved.machine == name
+            && saved.pushed_at.is_some() == self.reported()
+            && saved.person.as_deref() == self.person()
+    }
+}
+
+/// What a machine pushes under its `report` token: its own summary of one
+/// `metrics` view, named for the machine the token was issued to.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MetricsReport {
+    pub(crate) version: u32,
+    pub(crate) machine: String,
+    /// The view's `metrics` query: its window and filters.
+    view: String,
+    summary: Summary,
+}
+
+/// Why a pushed report was refused.
+#[derive(Debug)]
+pub(crate) enum Refusal {
+    /// The report names a machine other than the token's holder.
+    Mismatch,
+    /// The report is not one this Console can read.
+    Invalid(String),
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mismatch => f.write_str("a report token uploads only its holder's own metrics"),
+            Self::Invalid(why) => write!(f, "invalid metrics report: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+impl MetricsReport {
+    /// This machine's summary of the view `asked` names. Its `machine` is
+    /// left blank: the sender names, per destination, the holder that
+    /// destination issued its token to.
+    pub(crate) fn local(config: &UserConfig, asked: &MetricsArgs) -> Result<Self> {
+        let trends = super::trends(config, asked)?;
+        let summary = serde_json::from_value(serde_json::to_value(&trends)?)?;
+        Ok(Self {
+            version: 1,
+            machine: String::new(),
+            view: View::of(asked, &trends.window).query,
+            summary,
+        })
+    }
+
+    /// Save a report pushed under `holder`'s `report` token in `holder`'s
+    /// reported slot, and nowhere else. `local` is this Console's own name,
+    /// which no report may take: it would never be shown.
+    pub(crate) fn receive(
+        self,
+        logs_dir: &Path,
+        holder: &str,
+        local: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        if self.machine != holder {
+            return Err(Refusal::Mismatch.into());
+        }
+        if holder == local {
+            return Err(Refusal::Invalid(format!(
+                "{holder} is this Console's own name; issue the report token to the machine's own Fleet name"
+            ))
+            .into());
+        }
+        if self.version != 1 {
+            return Err(Refusal::Invalid(format!("unsupported version {}", self.version)).into());
+        }
+        let asked = view_arguments(&self.view)
+            .map_err(|error| Refusal::Invalid(format!("view: {error:#}")))?;
+        let view = View::of(&asked, &Window::of(&asked, now.date_naive()));
+        save(logs_dir, holder, Slot::Reported, &view, &self.summary, now)
+    }
+}
+
+/// A pushed view's query as the `metrics` arguments it names: only a window
+/// and filters, never a Command, `--fleet` or `--machine`.
+fn view_arguments(query: &str) -> Result<MetricsArgs> {
+    let mut arguments = vec!["metrics".to_owned(), "--json".to_owned()];
+    for (key, value) in serde_urlencoded::from_str::<Vec<(String, String)>>(query)? {
+        if !VIEW_KEYS.contains(&key.as_str()) {
+            bail!("unknown metrics argument: {key}");
+        }
+        arguments.extend([format!("--{key}"), value]);
+    }
+    let crate::args::Command::Metrics(asked) = crate::args::parse(&arguments)? else {
+        bail!("not a metrics view");
+    };
+    Ok(asked)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -230,6 +377,12 @@ struct SavedView {
     weekly: Option<bool>,
     summary: Value,
 }
+
+/// The query keys that are `metrics` window and filters, each a `--<key>`
+/// flag: all a view's query may hold.
+pub(crate) const VIEW_KEYS: [&str; 10] = [
+    "window", "grain", "from", "through", "repo", "kind", "harness", "model", "version", "account",
+];
 
 /// What each machine is asked: the `metrics` query in a fixed order, so its
 /// saved snapshot is found again by the same text, and the parts that let a
@@ -286,7 +439,7 @@ fn pairs(asked: &MetricsArgs) -> (Pairs, Pairs) {
 }
 
 /// Whether Fleet is the Console's default Metrics view: a paired machine, or
-/// `person`'s saved snapshot of one, exists.
+/// `person`'s saved snapshot of one or a reported one, exists.
 pub(crate) fn default_view(config: &UserConfig, person: Option<&str>) -> bool {
     let credentials = Credentials::read().ok();
     config.console.fleet.iter().any(|entry| {
@@ -297,7 +450,8 @@ pub(crate) fn default_view(config: &UserConfig, person: Option<&str>) -> bool {
 }
 
 /// Every machine Fleet metrics can be scoped to besides this one: the Fleet
-/// in config order, then retired machines with `person`'s saved snapshot.
+/// in config order, then retired or reporting machines with a snapshot
+/// `person` may see.
 pub(crate) fn others(config: &UserConfig, person: Option<&str>) -> Vec<String> {
     let local = crate::console::fleet_control::local_name(config);
     let mut names: Vec<_> = config
@@ -342,6 +496,7 @@ pub(crate) fn load(
                 local: true,
                 status: Status::Ok,
                 last_seen: Some(now),
+                pushed_at: None,
                 error: None,
             },
             Some(summary),
@@ -385,9 +540,14 @@ pub(crate) fn load(
             address: None,
             local: false,
             status: Status::Cached,
-            last_seen: Some(saved.last_seen),
-            error: Some("no longer in this Console's Fleet".into()),
+            last_seen: None,
+            pushed_at: None,
+            error: None,
         };
+        machine.stands_in(&saved);
+        if machine.status == Status::Cached {
+            note(&mut machine, "no longer in this Console's Fleet");
+        }
         let summary = cached(&mut machine, saved, &view, &window);
         sources.push((machine, summary));
     }
@@ -413,6 +573,7 @@ fn remote(
         local: false,
         status: Status::Ok,
         last_seen: None,
+        pushed_at: None,
         error: None,
     };
     let read = || -> Result<Option<Summary>> {
@@ -432,16 +593,35 @@ fn remote(
             serde_json::from_value(remote.get(&route)?).context("incompatible metrics summary")?;
         Ok(Some(summary))
     };
+    let reported = || {
+        read_saved(&path(&config.logs_dir, &entry.name, Slot::Reported))
+            .filter(|saved| Slot::Reported.holds(saved, &entry.name))
+    };
     match read() {
-        Ok(None) => {
-            machine.status = Status::LinkOnly;
-            (machine, None)
-        }
+        // A link-only machine may still push its own summary here.
+        Ok(None) => match reported() {
+            Some(saved) => {
+                machine.stands_in(&saved);
+                let summary = cached(&mut machine, saved, view, window);
+                (machine, summary)
+            }
+            None => {
+                machine.status = Status::LinkOnly;
+                (machine, None)
+            }
+        },
         Ok(Some(summary)) => {
             machine.last_seen = Some(now);
             // The saved snapshot is a convenience; failing to keep it must
             // not cost the live view.
-            if let Err(error) = save(&config.logs_dir, &entry.name, person, view, &summary, now) {
+            if let Err(error) = save(
+                &config.logs_dir,
+                &entry.name,
+                Slot::Read(person),
+                view,
+                &summary,
+                now,
+            ) {
                 machine.error = Some(format!("snapshot not saved: {error:#}"));
             }
             (machine, Some(summary))
@@ -457,13 +637,16 @@ fn remote(
             if machine.status != Status::Unavailable {
                 return (machine, None);
             }
-            let Some(saved) = read_saved(&path(&config.logs_dir, &entry.name, person))
-                .filter(|saved| saved.machine == entry.name && saved.person.as_deref() == person)
+            // The newer of this person's last read and the machine's own report.
+            let Some(saved) = read_saved(&path(&config.logs_dir, &entry.name, Slot::Read(person)))
+                .filter(|saved| Slot::Read(person).holds(saved, &entry.name))
+                .into_iter()
+                .chain(reported())
+                .max_by_key(|saved| saved.last_seen)
             else {
                 return (machine, None);
             };
-            machine.status = Status::Cached;
-            machine.last_seen = Some(saved.last_seen);
+            machine.stands_in(&saved);
             let summary = cached(&mut machine, saved, view, window);
             (machine, summary)
         }
@@ -651,15 +834,20 @@ fn merge(
     }
 }
 
-/// A name's saved snapshot file for `person`. Names are printable but may
-/// hold any character, so the file is named by a digest; the file names the
-/// machine and the person.
-fn path(logs_dir: &Path, name: &str, person: Option<&str>) -> PathBuf {
+/// A name's saved snapshot file in `slot`. Names are printable but may hold
+/// any character, so the file is named by a digest; the file names the
+/// machine, and the person or that the machine reported it.
+fn path(logs_dir: &Path, name: &str, slot: Slot<'_>) -> PathBuf {
     let mut digest = Sha256::new();
     digest.update(name.as_bytes());
-    if let Some(person) = person {
-        digest.update([0]);
-        digest.update(person.as_bytes());
+    match slot {
+        Slot::Read(None) => {}
+        Slot::Read(Some(person)) => {
+            digest.update([0]);
+            digest.update(person.as_bytes());
+        }
+        // No printable name or person holds a 1 byte.
+        Slot::Reported => digest.update([1]),
     }
     let digest = digest.finalize();
     let hex: String = digest[..16]
@@ -675,12 +863,14 @@ fn read_saved(path: &Path) -> Option<Saved> {
         .filter(|saved: &Saved| saved.version == 1)
 }
 
-/// `person`'s saved snapshots, one per machine.
+/// The snapshots `person` may see, one per machine: the newer of their own
+/// last read and the machine's own report.
 fn saved(logs_dir: &Path, person: Option<&str>) -> Vec<Saved> {
     let Ok(entries) = std::fs::read_dir(logs_dir.join(CACHE)) else {
         return Vec::new();
     };
-    entries
+    let mut newest = BTreeMap::<String, Saved>::new();
+    for saved in entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
@@ -688,8 +878,19 @@ fn saved(logs_dir: &Path, person: Option<&str>) -> Vec<Saved> {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| read_saved(&path))
-        .filter(|saved| saved.person.as_deref() == person)
-        .collect()
+        .filter(|saved| {
+            Slot::Read(person).holds(saved, &saved.machine)
+                || Slot::Reported.holds(saved, &saved.machine)
+        })
+    {
+        if newest
+            .get(&saved.machine)
+            .is_none_or(|kept| kept.last_seen < saved.last_seen)
+        {
+            newest.insert(saved.machine.clone(), saved);
+        }
+    }
+    newest.into_values().collect()
 }
 
 /// Replaces the machine's snapshot of this view in one rename, so a reader
@@ -697,24 +898,36 @@ fn saved(logs_dir: &Path, person: Option<&str>) -> Vec<Saved> {
 fn save(
     logs_dir: &Path,
     name: &str,
-    person: Option<&str>,
+    slot: Slot<'_>,
     view: &View,
     summary: &Summary,
     at: DateTime<Utc>,
 ) -> Result<()> {
-    let path = path(logs_dir, name, person);
+    let path = path(logs_dir, name, slot);
     let directory = path.parent().expect("cache file has a directory");
     std::fs::create_dir_all(directory)?;
+    // Hold the slot across its read and replacement, so two writes at once
+    // each keep their view.
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
     let mut saved = read_saved(&path)
-        .filter(|saved| saved.machine == name && saved.person.as_deref() == person)
+        .filter(|saved| slot.holds(saved, name))
         .unwrap_or_else(|| Saved {
             version: 1,
             machine: name.to_owned(),
-            person: person.map(str::to_owned),
+            person: slot.person().map(str::to_owned),
             last_seen: at,
+            pushed_at: None,
             views: BTreeMap::new(),
         });
     saved.last_seen = at;
+    if slot.reported() {
+        saved.pushed_at = Some(at);
+    }
     saved.views.insert(
         view.query.clone(),
         SavedView {

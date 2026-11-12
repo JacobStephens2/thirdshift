@@ -1277,6 +1277,7 @@ port = 8711
 allowed_emails = []
 address_scopes = {}
 fleet = []
+report = []
 other_accounts = \"none\"
 theme = \"focus-auto\"
 hidden_sections = []

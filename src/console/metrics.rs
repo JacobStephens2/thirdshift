@@ -2,9 +2,10 @@
 use anyhow::Result;
 use askama::Template;
 use axum::Extension;
+use axum::body::Bytes;
 use axum::extract::RawQuery;
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 
 use super::auth::Viewer;
 use crate::args::{MetricsArgs, MetricsWindow};
@@ -13,9 +14,7 @@ use crate::logs::metrics::fleet::{self, FailedCommand, Fleet};
 use crate::logs::metrics::{Bucket, Class, Ending, Stopped, Timeline, Trends};
 
 /// The query keys that are `metrics` filters and window, each a `--<key>` flag.
-const FILTERS: [&str; 10] = [
-    "window", "grain", "from", "through", "repo", "kind", "harness", "model", "version", "account",
-];
+const FILTERS: [&str; 10] = fleet::VIEW_KEYS;
 
 /// The keys a failure drilldown adds to the view's own filters: a Where runs
 /// failed row's stage and category, or a Failed bucket's day, kind and account.
@@ -140,6 +139,27 @@ struct FleetPage {
 }
 
 impl FleetPage {
+    /// How long ago `at` was, roughly, as of now.
+    fn age(&self, at: &chrono::DateTime<chrono::Utc>) -> String {
+        let seconds = (chrono::Utc::now() - *at).num_seconds().max(0);
+        let (count, unit) = match seconds {
+            0..60 => return "just now".into(),
+            60..3_600 => (seconds / 60, "minute"),
+            3_600..86_400 => (seconds / 3_600, "hour"),
+            _ => (seconds / 86_400, "day"),
+        };
+        format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
+    }
+
+    /// Why a Failed Command's details cannot be opened: its machine's
+    /// summary is a saved read or one it pushed.
+    fn unopened(&self, failed: &FailedCommand) -> &'static str {
+        let reported = self.fleet.machines.iter().any(|machine| {
+            machine.name == failed.machine && machine.status == fleet::Status::Reported
+        });
+        if reported { "reported" } else { "cached" }
+    }
+
     /// A Failed Command's details on the machine that holds it, while that
     /// machine answers; a cached one's details cannot be opened from here.
     fn details(&self, failed: &FailedCommand) -> Option<String> {
@@ -418,4 +438,56 @@ pub(super) async fn show(
         })
     })
     .await
+}
+
+/// The largest metrics report a machine may push: a summary lists each
+/// Failed Command in its window.
+pub(super) const REPORT_LIMIT: usize = 4 * 1024 * 1024;
+
+/// The receiving end of `metrics --push`: save the summary a `report` token's
+/// holder pushed in that machine's own reported slot. Any other caller, or a
+/// report naming another machine, is refused.
+pub(super) async fn receive(Extension(viewer): Extension<Viewer>, body: Bytes) -> Response {
+    let super::identity::Identity::Token { holder, .. } = viewer.identity else {
+        return super::api::error(StatusCode::FORBIDDEN, "Missing scope: report");
+    };
+    // Through a Value, as Fleet reads are: a flattened tally's rate cannot
+    // be read straight from the bytes.
+    let report = serde_json::from_slice::<serde_json::Value>(&body)
+        .and_then(serde_json::from_value::<fleet::MetricsReport>);
+    let report = match report {
+        Ok(report) => report,
+        Err(error) => {
+            return super::api::error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("invalid metrics report: {error}"),
+            );
+        }
+    };
+    let result = tokio::task::spawn_blocking(move || -> Result<_> {
+        let config = UserConfig::load()?;
+        let now = chrono::Utc::now();
+        let local = super::fleet_control::local_name(&config);
+        report.receive(&config.logs_dir, &holder, &local, now)?;
+        Ok(serde_json::json!({"machine": holder, "pushed_at": now}))
+    })
+    .await;
+    let error = match result {
+        Ok(Ok(receipt)) => return axum::Json(receipt).into_response(),
+        Ok(Err(error)) => match error.downcast_ref::<fleet::Refusal>() {
+            Some(refusal @ fleet::Refusal::Mismatch) => {
+                return super::api::error(StatusCode::FORBIDDEN, refusal);
+            }
+            Some(refusal) => {
+                return super::api::error(StatusCode::UNPROCESSABLE_ENTITY, refusal);
+            }
+            None => error,
+        },
+        Err(error) => error.into(),
+    };
+    eprintln!("thirdshift Console: metrics report not saved: {error:?}");
+    super::api::error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Could not save the metrics report.",
+    )
 }

@@ -152,7 +152,10 @@ fn operation(route: &PageRoute) -> (Vec<Value>, Value) {
                 object(json!({"kind": {"const": "session"}, "address": text})),
                 object(json!({"kind": {"const": "local"}, "uid": integer}))
             ]},
-            "scopes": array(json!({"type": "string", "enum": super::Scope::ALL}))
+            "scopes": array(json!({"type": "string", "enum": super::Scope::TOKEN}))
+        })),
+        View::ReportMetrics => object(json!({
+            "machine": text, "pushed_at": {"type": "string", "format": "date-time"}
         })),
         View::OpenApi => object(json!({
             "openapi": {"type": "string", "const": "3.1.1"},
@@ -446,6 +449,19 @@ fn action_body(view: View) -> Value {
             }
             return json!({"required":true,"content":{"application/x-www-form-urlencoded":{"schema":{
                 "type":"object", "properties":properties,"required":required
+            }}}});
+        }
+        View::ReportMetrics => {
+            let record = json!({"type": "object"});
+            return json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "additionalProperties": false,
+                "required": ["version", "machine", "view", "summary"],
+                "properties": {
+                    "version": {"type": "integer", "const": 1},
+                    "machine": {"type": "string", "description": "The report token's holder; any other name is refused with 403."},
+                    "view": {"type": "string", "description": "The summarized view's metrics query: window and filter keys only."},
+                    "summary": object(json!({"outcomes": array(record.clone()), "comparison": {"oneOf": [{"type": "null"}, record.clone()]}, "where_runs_failed": record}))
+                }
             }}}});
         }
         View::ApproveEvalTask | View::RunUpdate | View::ImportReplays => (json!({}), vec![]),

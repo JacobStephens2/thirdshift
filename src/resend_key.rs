@@ -8,7 +8,8 @@
 //! The same Credentials also keep `claude.setup_token`, `opencode.api_key`
 //! and per-provider OpenCode keys under `[opencode.keys]`, reserved for
 //! Trials; ordinary Runs never receive them.
-//! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name.
+//! Fleet pairing stores holder tokens under `[fleet]`, keyed by entry name,
+//! and report destinations their `report` tokens under `[report]`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -97,6 +98,7 @@ struct Secrets {
     claude_setup_token: Option<String>,
     opencode: OpenCodeKeys,
     fleet: BTreeMap<String, String>,
+    report: BTreeMap<String, String>,
 }
 
 /// OpenCode's provider keys: one per provider, from `[opencode.keys]` by the
@@ -193,12 +195,26 @@ impl Credentials {
 
     /// Fleet holders retain the raw token; issuers retain only its hash.
     pub fn save_fleet_token(&self, name: &str, token: Option<&str>) -> Result<()> {
+        self.save_named("fleet", name, token)
+    }
+
+    /// The `report` token saved for the report destination `name`.
+    pub(crate) fn report_token(&self, name: &str) -> Option<&str> {
+        self.secrets.report.get(name).map(String::as_str)
+    }
+
+    /// A report destination's token, kept like a Fleet holder's.
+    pub fn save_report_token(&self, name: &str, token: Option<&str>) -> Result<()> {
+        self.save_named("report", name, token)
+    }
+
+    fn save_named(&self, section: &str, name: &str, token: Option<&str>) -> Result<()> {
         let text = self.text.as_deref().unwrap_or_default();
         let text = if let Some(token) = token {
-            with_secret(text, "fleet", name, token)?
+            with_secret(text, section, name, token)?
         } else {
             let mut document: DocumentMut = text.parse()?;
-            if let Some(table) = document.get_mut("fleet").and_then(Item::as_table_like_mut) {
+            if let Some(table) = document.get_mut(section).and_then(Item::as_table_like_mut) {
                 table.remove(name);
             }
             document.to_string()
@@ -322,8 +338,10 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let mut found = Secrets::default();
     for (section, value) in &table {
         let settings = match (section.as_str(), value) {
-            ("resend" | "claude" | "opencode" | "fleet", Value::Table(settings)) => settings,
-            ("resend" | "claude" | "opencode" | "fleet", _) => {
+            ("resend" | "claude" | "opencode" | "fleet" | "report", Value::Table(settings)) => {
+                settings
+            }
+            ("resend" | "claude" | "opencode" | "fleet" | "report", _) => {
                 bail!("{section} must be the section [{section}] in {file}")
             }
             (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
@@ -337,6 +355,12 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
                     }
                 }
                 ("fleet", _, _) => bail!("fleet tokens must be quoted strings in {file}"),
+                ("report", name, Value::String(token)) => {
+                    if let Some(token) = nonempty(token) {
+                        found.report.insert(name.to_owned(), token);
+                    }
+                }
+                ("report", _, _) => bail!("report tokens must be quoted strings in {file}"),
                 ("resend", "key", Value::String(key)) => found.key = nonempty(key),
                 ("resend", "key", _) => {
                     bail!("resend.key must be a quoted Resend API key in {file}")

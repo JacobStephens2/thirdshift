@@ -414,13 +414,35 @@ The Command excerpt omits the common fields documented for `status --json`; all 
 
 `thirdshift metrics --fleet [--json]` reads `/api/v1/metrics` from every paired **Fleet** machine, with the same window and filters, and merges them with this machine's trends. Each Command counts once, on the machine it ran on. The version 1 JSON has `machine` (null for the whole Fleet), `window`, `filters`, `machines`, `outcomes`, `comparison` and `where_runs_failed`. Each `outcomes` row and each `comparison.rows` row names its `machine`; `comparison.fleet` adds every machine's counts for one Command kind, with its own `delta`. `where_runs_failed` adds the machines' Failed Commands by stage and category, with `machines` counting each machine's share and each Command naming its `machine`. The signal groups, versions and signal rows stay in each machine's own view.
 
-`machines` lists this machine, then the Fleet in config order, each with `status`: `ok`, `cached`, `unavailable`, `refused`, `incompatible` or `link-only`, `last_seen` and any `error`. A link-only machine is never asked. Each request is bounded by the Fleet transport's three seconds, so a stalled machine cannot hold the view.
+`machines` lists this machine, then the Fleet in config order, then retired and reporting machines, each with `status`: `ok`, `cached`, `reported`, `unavailable`, `refused`, `incompatible` or `link-only`, `last_seen`, `pushed_at` (when the summary shown was pushed by the machine itself) and any `error`. A link-only machine is never asked. Each request is bounded by the Fleet transport's three seconds, so a stalled machine cannot hold the view.
 
 Every successful read saves that machine's summary (outcome buckets, the comparison and Where runs failed with its Commands) under `~/.thirdshift/logs/fleet-metrics/`, one file per machine and reader, replaced in one rename and keeping its 16 most recently read views. A machine answers each signed-in Console person by its own sign-in list, so a saved summary stands in only for the person whose read saved it; the CLI and a Console without sign-in share the owner's. When a paired machine cannot be reached, its saved summary for the same window and filters takes its place, marked `cached` with the time it was read in `last_seen`. Without one, its newest summary with the same filters stands in, without its comparison and with its day buckets added into weeks for a weekly view; a weekly summary cannot stand in for a daily view. A machine removed from the Fleet keeps its saved summary, marked `cached` too. A refused or incompatible machine shows no saved summary. A cached machine's buckets and failed Commands outside today's window are left out, and its comparison only counts when it covers the same dates.
 
 `thirdshift metrics --machine <name> [--json]` reads one Fleet machine the same way, cached or not; this machine's own name gives plain `metrics`. `/api/v1/metrics` stays local: it refuses `fleet` and `machine`, so an API caller never reads through this machine's saved Fleet tokens.
 
-On the Console, **Metrics** opens on the Fleet when a Fleet machine is paired or the viewer has a saved summary. Its Machine selector picks **Fleet**, **This machine** (with the signal groups) or one Fleet machine (`/metrics?machine=<name>`, any name, `fleet` included); without `machine` the page opens on the Fleet. The API's `/api/v1/metrics` always answers with this machine's own trends. A Failed Command's name opens its details on the machine that holds it while that machine answers.
+On the Console, **Metrics** opens on the Fleet when a Fleet machine is paired, the viewer has a saved summary, or a machine has reported. Its Machine selector picks **Fleet**, **This machine** (with the signal groups) or one Fleet machine (`/metrics?machine=<name>`, any name, `fleet` included); without `machine` the page opens on the Fleet. The API's `/api/v1/metrics` always answers with this machine's own trends. A Failed Command's name opens its details on the machine that holds it while that machine answers; a cached or reported machine's Failed Commands are named without a link.
+
+#### Reporting outward
+
+A machine the watching Console cannot reach, such as a laptop VM that sleeps or sits behind NAT, can push its own summary instead. On the watching Console, issue a `report` token to the machine's Fleet name; on the reporting machine, save it as a report destination:
+
+```sh
+# On the always-on Console (prints the token once):
+thirdshift console token create lima-thirdshift --scopes report
+# On the reporting machine (paste the token at the hidden prompt):
+thirdshift console report add hub https://console.example.com
+thirdshift console report list
+thirdshift console report list --json
+thirdshift console report remove hub
+thirdshift metrics --push
+thirdshift metrics --push hub --window 30d
+```
+
+A `report` token is bound to its holder, which must be a Fleet name, and carries no other scope. It can call only `POST /api/v1/metrics/report`, over HTTPS or 127.0.0.1, and that endpoint saves the summary only in its holder's own reported slot under `~/.thirdshift/logs/fleet-metrics/`; a report naming another machine is refused with 403, one under the Console's own name with 422, and every `read`, `security`, `act`, `run` and `admin` endpoint answers it with 403. A person's `console scopes` never include `report`.
+
+`console report add` checks the token with `/api/v1/whoami`, refuses one that carries anything but `report`, and saves the destination's name, address and the holder the Console named under `console.report` in the User config; the token goes to `[report]` in the Credentials. `metrics --push [<destination>]` sends this machine's summary of the view its window and filters name (the default view without them) to every report destination, or to the one named, and fails unless each accepts it. After every Command that finishes (not a skipped Pass, nor a child Run), a configured machine pushes its default view to each destination too, waiting at most five seconds on each; an offline or refusing Console only prints `warning: metrics not reported to <name>: …` and never changes the Command's exit code. These commands are CLI-only.
+
+On the watching Console, a reporting machine appears in **Metrics** and its Machine selector with status `reported` and `pushed_at`, shown as read-only with how long ago it pushed. Any viewer who can read that Console sees it, since the Console's owner issued the token. When the machine is also a paired Fleet entry, its reported summary stands in while it cannot be reached, or the newer of it and the viewer's own cached read. Its Failed Commands are named without links, as their details are not reachable from here.
 
 ## Install
 
@@ -641,8 +663,10 @@ thirdshift console token revoke laptop
 
 Create prints the `ts_` token once; copy it into the client's Credentials.
 Holders are unique on this machine. The default scope is `read`. The five
-accepted scopes are `read` (views), `security` (Security run details and findings),
-`act` (actions), `run` (starting Commands) and `admin` (administration).
+viewer scopes are `read` (views), `security` (Security run details and findings),
+`act` (actions), `run` (starting Commands) and `admin` (administration). A sixth,
+`report`, is given alone to a Fleet machine that pushes its own Run metrics
+summary here (see [Reporting outward](#reporting-outward)).
 A token without `security` still receives the other fields of a read route, but
 not Security finding records: `security_findings`, `security_fix_findings`, and
 a true `security_findings_waiting` flag are omitted or cleared. It also cannot
@@ -783,6 +807,7 @@ address's scopes, including the Security finding limits above.
 | `act` | Stop, Dismissal, judgments, selecting a Theme and hidden sections |
 | `run` | `POST /api/v1/runs` starts Ticket, Spec, Architect, Pickup, Security, Review, Custom process, skill, Scoring, Triage and Experiment work; Process checks |
 | `admin` | User config writes, Update, Theme and Eval data imports, Other-account settings, test email, Experiment names and Difficulty recording |
+| `report` | Only `POST /api/v1/metrics/report`: a JSON body with `version`, `machine` (the token's holder), `view` and `summary`, sent by `metrics --push` |
 
 The actions in the following table take `application/x-www-form-urlencoded`
 bodies using the listed fields; Theme import takes `application/json` instead.
